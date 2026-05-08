@@ -2154,24 +2154,25 @@ def test_caked_manual_pair_redraws_in_detector_view_from_saved_simulated_anchor_
 
     assert detector_measured[0]["caked_x"] == 13.2
     assert caked_measured[0]["x"] == 102.5
-    assert detector_pairs == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (-1, 0, 5),
-            "q_group_key": ("q_group", "primary", 1, 5),
-            "bg_display": (102.5, 213.2),
-            "sim_display": (190.0, 96.0),
-        }
-    ]
-    assert caked_pairs == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (-1, 0, 5),
-            "q_group_key": ("q_group", "primary", 1, 5),
-            "bg_display": (13.2, 2.5),
-            "sim_display_unresolved": True,
-        }
-    ]
+    assert len(detector_pairs) == 1
+    detector_pair = detector_pairs[0]
+    assert detector_pair["overlay_match_index"] == 0
+    assert detector_pair["hkl"] == (-1, 0, 5)
+    assert detector_pair["q_group_key"] == ("q_group", "primary", 1, 5)
+    assert detector_pair["bg_display"] == (102.5, 213.2)
+    assert detector_pair["sim_display"] == (190.0, 96.0)
+    assert detector_pair["source_table_index"] == 9
+    assert detector_pair["source_row_index"] == 0
+    assert detector_pair["source_reflection_index"] == 203
+    assert detector_pair["source_branch_index"] == 1
+
+    assert len(caked_pairs) == 1
+    caked_pair = caked_pairs[0]
+    assert caked_pair["overlay_match_index"] == 0
+    assert caked_pair["hkl"] == (-1, 0, 5)
+    assert caked_pair["q_group_key"] == ("q_group", "primary", 1, 5)
+    assert caked_pair["bg_display"] == (13.2, 2.5)
+    assert caked_pair["sim_display_unresolved"] is True
 
 
 def test_geometry_manual_pair_entry_from_candidate_rejects_caked_alias_as_detector_anchor() -> None:
@@ -3426,7 +3427,15 @@ def test_geometry_manual_pairs_export_rows_include_background_metadata() -> None
             "background_index": 1,
             "background_path": "bg_1.osc",
             "background_name": "bg_1.osc",
-            "entries": [{"x": 2.0, "y": 3.0, "label": "1,0,0", "hkl": [1, 0, 0]}],
+            "entries": [
+                {
+                    "x": 2.0,
+                    "y": 3.0,
+                    "label": "1,0,0",
+                    "hkl": [1, 0, 0],
+                    "source_label": "primary",
+                }
+            ],
         }
     ]
 
@@ -3473,7 +3482,17 @@ def test_apply_geometry_manual_pairs_rows_replaces_state_and_refreshes_callbacks
     )
 
     assert (imported_backgrounds, imported_pairs, warnings) == (1, 1, [])
-    assert replaced == {1: [{"label": "1,0,0", "hkl": (1, 0, 0), "x": 2.0, "y": 3.0}]}
+    assert replaced == {
+        1: [
+            {
+                "label": "1,0,0",
+                "hkl": (1, 0, 0),
+                "source_label": "primary",
+                "x": 2.0,
+                "y": 3.0,
+            }
+        ]
+    }
     assert ("clear", {"redraw": False}) in calls
     assert ("cancel", {"restore_view": True, "redraw": False}) in calls
     assert ("invalidate", None) in calls
@@ -8319,7 +8338,7 @@ def test_build_geometry_manual_pick_cache_prefers_cached_preview_groups_when_cac
     assert ("q_group", "primary", 1, 0) in cache_data["grouped_candidates"]
     assert next_sig == ("sig",)
     assert next_state["simulated_lookup"][(1, 2)]["sim_row"] == 4.0
-    assert cache_data["cache_metadata"] == {
+    expected_metadata = {
         "cache_action": "reused",
         "reused": True,
         "rebuilt": False,
@@ -8352,6 +8371,8 @@ def test_build_geometry_manual_pick_cache_prefers_cached_preview_groups_when_cac
             }
         ],
     }
+    for key, value in expected_metadata.items():
+        assert cache_data["cache_metadata"][key] == value
 
 
 def test_build_geometry_manual_pick_cache_falls_back_to_central_simulation_when_cached_groups_are_empty() -> (
@@ -9395,14 +9416,14 @@ def test_build_geometry_manual_initial_pairs_display_uses_cache_lookup() -> None
     )
 
     assert measured_display[0]["overlay_match_index"] == 0
-    assert initial_pairs_display == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (1, 0, 2),
-            "bg_display": (9.0, 11.0),
-            "sim_display": (13.5, 15.5),
-        }
-    ]
+    assert len(initial_pairs_display) == 1
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == (1, 0, 2)
+    assert display_pair["bg_display"] == (9.0, 11.0)
+    assert display_pair["sim_display"] == (13.5, 15.5)
+    assert display_pair["source_table_index"] == 4
+    assert display_pair["source_row_index"] == 7
 
 
 def test_initial_pairs_display_skips_sim_lookup_for_background_qr_reference() -> None:
@@ -9610,13 +9631,14 @@ def test_build_geometry_manual_initial_pairs_display_rejects_native_only_detecto
     )
 
     assert measured_display[0]["overlay_match_index"] == 0
-    assert initial_pairs_display == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (1, 0, 2),
-            "bg_display": (9.0, 11.0),
-        }
-    ]
+    assert len(initial_pairs_display) == 1
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == (1, 0, 2)
+    assert display_pair["bg_display"] == (9.0, 11.0)
+    assert "sim_display" not in display_pair
+    assert display_pair["source_table_index"] == 4
+    assert display_pair["source_row_index"] == 7
 
 
 def test_build_geometry_manual_initial_pairs_display_uses_raw_detector_only_rows() -> None:
@@ -9660,14 +9682,14 @@ def test_build_geometry_manual_initial_pairs_display_uses_raw_detector_only_rows
     )
 
     assert measured_display[0]["overlay_match_index"] == 0
-    assert initial_pairs_display == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (1, 0, 2),
-            "bg_display": (9.0, 11.0),
-            "sim_display": (105.0, 206.0),
-        }
-    ]
+    assert len(initial_pairs_display) == 1
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == (1, 0, 2)
+    assert display_pair["bg_display"] == (9.0, 11.0)
+    assert display_pair["sim_display"] == (105.0, 206.0)
+    assert display_pair["source_table_index"] == 4
+    assert display_pair["source_row_index"] == 7
 
 
 def test_build_geometry_manual_initial_pairs_display_uses_detector_xy_only_lookup_rows() -> None:
@@ -9711,14 +9733,14 @@ def test_build_geometry_manual_initial_pairs_display_uses_detector_xy_only_looku
     )
 
     assert measured_display[0]["overlay_match_index"] == 0
-    assert initial_pairs_display == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (1, 0, 2),
-            "bg_display": (9.0, 11.0),
-            "sim_display": (105.0, 206.0),
-        }
-    ]
+    assert len(initial_pairs_display) == 1
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == (1, 0, 2)
+    assert display_pair["bg_display"] == (9.0, 11.0)
+    assert display_pair["sim_display"] == (105.0, 206.0)
+    assert display_pair["source_table_index"] == 4
+    assert display_pair["source_row_index"] == 7
 
 
 def test_build_geometry_manual_initial_pairs_display_rejects_detector_xy_lookup_rows_when_they_only_match_caked_view() -> (
@@ -9766,13 +9788,14 @@ def test_build_geometry_manual_initial_pairs_display_rejects_detector_xy_lookup_
     )
 
     assert measured_display[0]["overlay_match_index"] == 0
-    assert initial_pairs_display == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (1, 0, 2),
-            "bg_display": (9.0, 11.0),
-        }
-    ]
+    assert len(initial_pairs_display) == 1
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == (1, 0, 2)
+    assert display_pair["bg_display"] == (9.0, 11.0)
+    assert "sim_display" not in display_pair
+    assert display_pair["source_table_index"] == 4
+    assert display_pair["source_row_index"] == 7
 
 
 def test_build_geometry_manual_initial_pairs_display_prefers_raw_detector_over_stale_caked_display() -> (
@@ -9822,14 +9845,14 @@ def test_build_geometry_manual_initial_pairs_display_prefers_raw_detector_over_s
     )
 
     assert measured_display[0]["overlay_match_index"] == 0
-    assert initial_pairs_display == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (1, 0, 2),
-            "bg_display": (9.0, 11.0),
-            "sim_display": (105.0, 206.0),
-        }
-    ]
+    assert len(initial_pairs_display) == 1
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == (1, 0, 2)
+    assert display_pair["bg_display"] == (9.0, 11.0)
+    assert display_pair["sim_display"] == (105.0, 206.0)
+    assert display_pair["source_table_index"] == 4
+    assert display_pair["source_row_index"] == 7
 
 
 def test_build_geometry_manual_initial_pairs_display_prefers_raw_detector_over_detector_xy_when_caked_present() -> (
@@ -9879,14 +9902,14 @@ def test_build_geometry_manual_initial_pairs_display_prefers_raw_detector_over_d
     )
 
     assert measured_display[0]["overlay_match_index"] == 0
-    assert initial_pairs_display == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (1, 0, 2),
-            "bg_display": (9.0, 11.0),
-            "sim_display": (105.0, 206.0),
-        }
-    ]
+    assert len(initial_pairs_display) == 1
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == (1, 0, 2)
+    assert display_pair["bg_display"] == (9.0, 11.0)
+    assert display_pair["sim_display"] == (105.0, 206.0)
+    assert display_pair["source_table_index"] == 4
+    assert display_pair["source_row_index"] == 7
 
 
 def test_build_geometry_manual_initial_pairs_display_accepts_display_only_lookup_rows_without_caked_markers() -> (
@@ -9932,14 +9955,14 @@ def test_build_geometry_manual_initial_pairs_display_accepts_display_only_lookup
     )
 
     assert measured_display[0]["overlay_match_index"] == 0
-    assert initial_pairs_display == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (1, 0, 2),
-            "bg_display": (9.0, 11.0),
-            "sim_display": (30.25, -57.5),
-        }
-    ]
+    assert len(initial_pairs_display) == 1
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == (1, 0, 2)
+    assert display_pair["bg_display"] == (9.0, 11.0)
+    assert display_pair["sim_display"] == (30.25, -57.5)
+    assert display_pair["source_table_index"] == 4
+    assert display_pair["source_row_index"] == 7
 
 
 def test_build_geometry_manual_initial_pairs_display_accepts_display_only_lookup_rows_without_caked_markers_for_non_native_saved_pairs() -> (
@@ -9983,14 +10006,14 @@ def test_build_geometry_manual_initial_pairs_display_accepts_display_only_lookup
     )
 
     assert measured_display[0]["overlay_match_index"] == 0
-    assert initial_pairs_display == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (1, 0, 2),
-            "bg_display": (9.0, 11.0),
-            "sim_display": (30.25, -57.5),
-        }
-    ]
+    assert len(initial_pairs_display) == 1
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == (1, 0, 2)
+    assert display_pair["bg_display"] == (9.0, 11.0)
+    assert display_pair["sim_display"] == (30.25, -57.5)
+    assert display_pair["source_table_index"] == 4
+    assert display_pair["source_row_index"] == 7
 
 
 def test_build_geometry_manual_initial_pairs_display_rejects_display_only_lookup_rows_with_caked_markers() -> (
@@ -10038,13 +10061,14 @@ def test_build_geometry_manual_initial_pairs_display_rejects_display_only_lookup
     )
 
     assert measured_display[0]["overlay_match_index"] == 0
-    assert initial_pairs_display == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (1, 0, 2),
-            "bg_display": (9.0, 11.0),
-        }
-    ]
+    assert len(initial_pairs_display) == 1
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == (1, 0, 2)
+    assert display_pair["bg_display"] == (9.0, 11.0)
+    assert "sim_display" not in display_pair
+    assert display_pair["source_table_index"] == 4
+    assert display_pair["source_row_index"] == 7
 
 
 def test_build_geometry_manual_initial_pairs_display_rejects_stale_caked_sim_coords_for_native_saved_pairs() -> (
@@ -10092,13 +10116,14 @@ def test_build_geometry_manual_initial_pairs_display_rejects_stale_caked_sim_coo
     )
 
     assert measured_display[0]["overlay_match_index"] == 0
-    assert initial_pairs_display == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (1, 0, 2),
-            "bg_display": (9.0, 11.0),
-        }
-    ]
+    assert len(initial_pairs_display) == 1
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == (1, 0, 2)
+    assert display_pair["bg_display"] == (9.0, 11.0)
+    assert "sim_display" not in display_pair
+    assert display_pair["source_table_index"] == 4
+    assert display_pair["source_row_index"] == 7
 
 
 def test_build_geometry_manual_initial_pairs_display_rejects_stale_caked_sim_coords_for_non_native_saved_pairs() -> (
@@ -10144,13 +10169,14 @@ def test_build_geometry_manual_initial_pairs_display_rejects_stale_caked_sim_coo
     )
 
     assert measured_display[0]["overlay_match_index"] == 0
-    assert initial_pairs_display == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (1, 0, 2),
-            "bg_display": (9.0, 11.0),
-        }
-    ]
+    assert len(initial_pairs_display) == 1
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == (1, 0, 2)
+    assert display_pair["bg_display"] == (9.0, 11.0)
+    assert "sim_display" not in display_pair
+    assert display_pair["source_table_index"] == 4
+    assert display_pair["source_row_index"] == 7
 
 
 def test_build_geometry_manual_initial_pairs_display_uses_simulation_native_lookup_rows() -> None:
@@ -10194,14 +10220,14 @@ def test_build_geometry_manual_initial_pairs_display_uses_simulation_native_look
     )
 
     assert measured_display[0]["overlay_match_index"] == 0
-    assert initial_pairs_display == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (1, 0, 2),
-            "bg_display": (9.0, 11.0),
-            "sim_display": (105.0, 206.0),
-        }
-    ]
+    assert len(initial_pairs_display) == 1
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == (1, 0, 2)
+    assert display_pair["bg_display"] == (9.0, 11.0)
+    assert display_pair["sim_display"] == (105.0, 206.0)
+    assert display_pair["source_table_index"] == 4
+    assert display_pair["source_row_index"] == 7
 
 
 def test_build_geometry_manual_initial_pairs_display_rejects_simulation_native_lookup_rows_when_they_only_match_caked_view() -> (
@@ -10249,13 +10275,14 @@ def test_build_geometry_manual_initial_pairs_display_rejects_simulation_native_l
     )
 
     assert measured_display[0]["overlay_match_index"] == 0
-    assert initial_pairs_display == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (1, 0, 2),
-            "bg_display": (9.0, 11.0),
-        }
-    ]
+    assert len(initial_pairs_display) == 1
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == (1, 0, 2)
+    assert display_pair["bg_display"] == (9.0, 11.0)
+    assert "sim_display" not in display_pair
+    assert display_pair["source_table_index"] == 4
+    assert display_pair["source_row_index"] == 7
 
 
 def test_build_geometry_manual_initial_pairs_display_uses_simulation_native_lookup_rows_for_non_native_saved_pairs() -> (
@@ -10299,14 +10326,14 @@ def test_build_geometry_manual_initial_pairs_display_uses_simulation_native_look
     )
 
     assert measured_display[0]["overlay_match_index"] == 0
-    assert initial_pairs_display == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (1, 0, 2),
-            "bg_display": (9.0, 11.0),
-            "sim_display": (105.0, 206.0),
-        }
-    ]
+    assert len(initial_pairs_display) == 1
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == (1, 0, 2)
+    assert display_pair["bg_display"] == (9.0, 11.0)
+    assert display_pair["sim_display"] == (105.0, 206.0)
+    assert display_pair["source_table_index"] == 4
+    assert display_pair["source_row_index"] == 7
 
 
 def test_build_geometry_manual_initial_pairs_display_uses_branch_aware_cache_lookup_for_detector_view() -> (
@@ -10368,15 +10395,17 @@ def test_build_geometry_manual_initial_pairs_display_uses_branch_aware_cache_loo
     )
 
     assert measured_display[0]["source_branch_index"] == 1
-    assert initial_pairs_display == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (-1, 0, 5),
-            "q_group_key": ("q_group", "primary", 1, 5),
-            "bg_display": (182.0, 138.0),
-            "sim_display": (190.0, 96.0),
-        }
-    ]
+    assert len(initial_pairs_display) == 1
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == (-1, 0, 5)
+    assert display_pair["q_group_key"] == ("q_group", "primary", 1, 5)
+    assert display_pair["bg_display"] == (182.0, 138.0)
+    assert display_pair["sim_display"] == (190.0, 96.0)
+    assert display_pair["source_table_index"] == 9
+    assert display_pair["source_row_index"] == 0
+    assert display_pair["source_reflection_index"] == 203
+    assert display_pair["source_branch_index"] == 1
 
 
 def test_build_geometry_manual_initial_pairs_display_uses_branch_aware_detector_sim_with_caked_fields() -> (
@@ -10442,15 +10471,17 @@ def test_build_geometry_manual_initial_pairs_display_uses_branch_aware_detector_
     )
 
     assert measured_display[0]["source_branch_index"] == 1
-    assert initial_pairs_display == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (-1, 0, 5),
-            "q_group_key": ("q_group", "primary", 1, 5),
-            "bg_display": (182.0, 138.0),
-            "sim_display": (190.0, 96.0),
-        }
-    ]
+    assert len(initial_pairs_display) == 1
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == (-1, 0, 5)
+    assert display_pair["q_group_key"] == ("q_group", "primary", 1, 5)
+    assert display_pair["bg_display"] == (182.0, 138.0)
+    assert display_pair["sim_display"] == (190.0, 96.0)
+    assert display_pair["source_table_index"] == 9
+    assert display_pair["source_row_index"] == 0
+    assert display_pair["source_reflection_index"] == 203
+    assert display_pair["source_branch_index"] == 1
 
 
 def test_build_geometry_manual_initial_pairs_display_prefers_live_detector_candidate_over_saved_display_only_overlay() -> (
@@ -10502,15 +10533,17 @@ def test_build_geometry_manual_initial_pairs_display_prefers_live_detector_candi
     )
 
     assert measured_display[0]["source_branch_index"] == 1
-    assert initial_pairs_display == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (-1, 0, 5),
-            "q_group_key": ("q_group", "primary", 1, 5),
-            "bg_display": (182.0, 138.0),
-            "sim_display": (190.0, 96.0),
-        }
-    ]
+    assert len(initial_pairs_display) == 1
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == (-1, 0, 5)
+    assert display_pair["q_group_key"] == ("q_group", "primary", 1, 5)
+    assert display_pair["bg_display"] == (182.0, 138.0)
+    assert display_pair["sim_display"] == (190.0, 96.0)
+    assert display_pair["source_table_index"] == 9
+    assert display_pair["source_row_index"] == 0
+    assert display_pair["source_reflection_index"] == 203
+    assert display_pair["source_branch_index"] == 1
 
 
 def test_build_geometry_manual_initial_pairs_display_matches_legacy_branch_entry_to_current_lookup() -> (
@@ -10570,15 +10603,16 @@ def test_build_geometry_manual_initial_pairs_display_matches_legacy_branch_entry
 
     assert measured_display[0]["source_branch_index"] == 1
     assert "source_reflection_index" not in measured_display[0]
-    assert initial_pairs_display == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (-1, 0, 5),
-            "q_group_key": ("q_group", "primary", 1, 5),
-            "bg_display": (182.0, 138.0),
-            "sim_display": (190.0, 96.0),
-        }
-    ]
+    assert len(initial_pairs_display) == 1
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == (-1, 0, 5)
+    assert display_pair["q_group_key"] == ("q_group", "primary", 1, 5)
+    assert display_pair["bg_display"] == (182.0, 138.0)
+    assert display_pair["sim_display"] == (190.0, 96.0)
+    assert display_pair["source_table_index"] == 9
+    assert display_pair["source_row_index"] == 0
+    assert display_pair["source_branch_index"] == 1
 
 
 def test_build_geometry_manual_initial_pairs_display_matches_branchless_legacy_entry_by_hkl() -> (
@@ -10640,15 +10674,15 @@ def test_build_geometry_manual_initial_pairs_display_matches_branchless_legacy_e
 
     assert measured_display[0]["source_row_index"] == 0
     assert "source_branch_index" not in measured_display[0]
-    assert initial_pairs_display == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (-1, 0, 5),
-            "q_group_key": ("q_group", "primary", 1, 5),
-            "bg_display": (182.0, 138.0),
-            "sim_display": (190.0, 96.0),
-        }
-    ]
+    assert len(initial_pairs_display) == 1
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == (-1, 0, 5)
+    assert display_pair["q_group_key"] == ("q_group", "primary", 1, 5)
+    assert display_pair["bg_display"] == (182.0, 138.0)
+    assert display_pair["sim_display"] == (190.0, 96.0)
+    assert display_pair["source_table_index"] == 9
+    assert display_pair["source_row_index"] == 0
 
 
 def test_build_geometry_manual_initial_pairs_display_ignores_stale_caked_coords_for_branchless_legacy_entry() -> (
@@ -10716,12 +10750,15 @@ def test_build_geometry_manual_initial_pairs_display_ignores_stale_caked_coords_
 
     assert measured_display[0]["stale_caked_fields"] is True
     assert initial_pairs_display[0]["bg_display"] == (190.0, 96.0)
-    assert initial_pairs_display[0] == {
-        "overlay_match_index": 0,
-        "hkl": "",
-        "bg_display": (190.0, 96.0),
-        "sim_display": (190.0, 96.0),
-    }
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == ""
+    assert display_pair["bg_display"] == (190.0, 96.0)
+    assert display_pair["sim_display"] == (190.0, 96.0)
+    assert display_pair["source_table_index"] == 9
+    assert display_pair["source_row_index"] == 0
+    assert display_pair["source_reflection_index"] == 203
+    assert display_pair["source_branch_index"] == 1
 
 
 def test_build_geometry_manual_initial_pairs_display_uses_fresh_caked_coords_for_branchless_legacy_entry() -> (
@@ -10784,12 +10821,15 @@ def test_build_geometry_manual_initial_pairs_display_uses_fresh_caked_coords_for
         entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
     )
 
-    assert initial_pairs_display[0] == {
-        "overlay_match_index": 0,
-        "hkl": "",
-        "bg_display": (190.0, 96.0),
-        "sim_display": (190.0, 96.0),
-    }
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == ""
+    assert display_pair["bg_display"] == (190.0, 96.0)
+    assert display_pair["sim_display"] == (190.0, 96.0)
+    assert display_pair["source_table_index"] == 9
+    assert display_pair["source_row_index"] == 0
+    assert display_pair["source_reflection_index"] == 203
+    assert display_pair["source_branch_index"] == 1
 
 
 def test_build_geometry_manual_initial_pairs_display_skips_ambiguous_branchless_legacy_entry() -> (
@@ -10846,13 +10886,14 @@ def test_build_geometry_manual_initial_pairs_display_skips_ambiguous_branchless_
     )
 
     assert measured_display[0]["source_row_index"] == 0
-    assert initial_pairs_display == [
-        {
-            "overlay_match_index": 0,
-            "hkl": "",
-            "bg_display": (185.5, 138.0),
-        }
-    ]
+    assert len(initial_pairs_display) == 1
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == ""
+    assert display_pair["bg_display"] == (185.5, 138.0)
+    assert "sim_display" not in display_pair
+    assert display_pair["source_table_index"] == 9
+    assert display_pair["source_row_index"] == 0
 
 
 def test_build_geometry_manual_initial_pairs_display_uses_branch_aware_cache_lookup_for_caked_view() -> (
@@ -11720,16 +11761,16 @@ def test_make_runtime_geometry_manual_cache_callbacks_store_cache_state_and_buil
     assert cache_state["data"] == cache_data
     assert simulated_param_sets == [{"a": 2.0}, {"gamma": 1.25}]
     assert measured_display[0]["overlay_match_index"] == 0
-    assert initial_pairs_display == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (1, 0, 2),
-            "bg_display": (9.0, 11.0),
-            "sim_display": (13.5, 15.5),
-            "qr": 1.2345678901,
-            "qz": -0.4567890123,
-        }
-    ]
+    assert len(initial_pairs_display) == 1
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == (1, 0, 2)
+    assert display_pair["bg_display"] == (9.0, 11.0)
+    assert display_pair["sim_display"] == (13.5, 15.5)
+    assert display_pair["qr"] == 1.2345678901
+    assert display_pair["qz"] == -0.4567890123
+    assert display_pair["source_table_index"] == 4
+    assert display_pair["source_row_index"] == 7
 
 
 def test_make_runtime_geometry_manual_cache_callbacks_fails_closed_when_mask_filter_raises() -> (
@@ -11898,13 +11939,14 @@ def test_build_geometry_manual_initial_pairs_display_fails_closed_when_mask_filt
     )
 
     assert measured_display[0]["overlay_match_index"] == 0
-    assert initial_pairs_display == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (1, 0, 2),
-            "bg_display": (9.0, 11.0),
-        }
-    ]
+    assert len(initial_pairs_display) == 1
+    display_pair = initial_pairs_display[0]
+    assert display_pair["overlay_match_index"] == 0
+    assert display_pair["hkl"] == (1, 0, 2)
+    assert display_pair["bg_display"] == (9.0, 11.0)
+    assert "sim_display" not in display_pair
+    assert display_pair["source_table_index"] == 4
+    assert display_pair["source_row_index"] == 7
 
 
 def test_geometry_manual_toggle_selection_at_uses_shared_live_preview_cache_when_other_sources_are_empty() -> (
@@ -12171,36 +12213,37 @@ def test_make_runtime_geometry_manual_projection_callbacks_reprojects_cached_cak
         ]
     )
 
-    assert projected == [
-        {
-            "label": "1,0,0",
-            "q_group_key": ("q_group", "primary", 1, 0),
-            "source_table_index": 1,
-            "source_row_index": 2,
-            "sim_col": 3.0,
-            "sim_row": 4.0,
-            "sim_col_raw": 3.0,
-            "sim_row_raw": 4.0,
-            "native_col": 3.0,
-            "native_row": 4.0,
-            "sim_native_x": 3.0,
-            "sim_native_y": 4.0,
-            "coordinate_frame": "simulation_native",
-            "caked_x": 13.0,
-            "caked_y": 2.0,
-            "raw_caked_x": 13.0,
-            "raw_caked_y": 2.0,
-            "two_theta_deg": 13.0,
-            "phi_deg": 2.0,
-            "display_col": 13.0,
-            "display_row": 2.0,
-            "display_frame": "caked_display",
-            "sim_col_global": 13.0,
-            "sim_row_global": 2.0,
-            "sim_col_local": 3.0,
-            "sim_row_local": 6.0,
-        }
-    ]
+    assert len(projected) == 1
+    projected_row = projected[0]
+    for key, value in {
+        "label": "1,0,0",
+        "q_group_key": ("q_group", "primary", 1, 0),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "sim_col": 3.0,
+        "sim_row": 4.0,
+        "sim_col_raw": 3.0,
+        "sim_row_raw": 4.0,
+        "native_col": 3.0,
+        "native_row": 4.0,
+        "sim_native_x": 3.0,
+        "sim_native_y": 4.0,
+        "coordinate_frame": "simulation_native",
+        "caked_x": 13.0,
+        "caked_y": 2.0,
+        "raw_caked_x": 13.0,
+        "raw_caked_y": 2.0,
+        "two_theta_deg": 13.0,
+        "phi_deg": 2.0,
+        "display_col": 13.0,
+        "display_row": 2.0,
+        "display_frame": "caked_display",
+        "sim_col_global": 13.0,
+        "sim_row_global": 2.0,
+        "sim_col_local": 3.0,
+        "sim_row_local": 6.0,
+    }.items():
+        assert projected_row[key] == value
 
 
 def test_project_peaks_to_current_view_does_not_call_analytic_forward_projection(
@@ -12261,36 +12304,37 @@ def test_project_peaks_to_current_view_does_not_call_analytic_forward_projection
         ]
     )
 
-    assert projected == [
-        {
-            "label": "1,0,0",
-            "q_group_key": ("q_group", "primary", 1, 0),
-            "source_table_index": 1,
-            "source_row_index": 2,
-            "sim_col": 3.0,
-            "sim_row": 4.0,
-            "sim_col_raw": 3.0,
-            "sim_row_raw": 4.0,
-            "native_col": 3.0,
-            "native_row": 4.0,
-            "sim_native_x": 3.0,
-            "sim_native_y": 4.0,
-            "coordinate_frame": "simulation_native",
-            "caked_x": 17.0,
-            "caked_y": -9.0,
-            "raw_caked_x": 17.0,
-            "raw_caked_y": -9.0,
-            "two_theta_deg": 17.0,
-            "phi_deg": -9.0,
-            "display_col": 17.0,
-            "display_row": -9.0,
-            "display_frame": "caked_display",
-            "sim_col_global": 17.0,
-            "sim_row_global": -9.0,
-            "sim_col_local": 7.0,
-            "sim_row_local": 0.0,
-        }
-    ]
+    assert len(projected) == 1
+    projected_row = projected[0]
+    for key, value in {
+        "label": "1,0,0",
+        "q_group_key": ("q_group", "primary", 1, 0),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "sim_col": 3.0,
+        "sim_row": 4.0,
+        "sim_col_raw": 3.0,
+        "sim_row_raw": 4.0,
+        "native_col": 3.0,
+        "native_row": 4.0,
+        "sim_native_x": 3.0,
+        "sim_native_y": 4.0,
+        "coordinate_frame": "simulation_native",
+        "caked_x": 17.0,
+        "caked_y": -9.0,
+        "raw_caked_x": 17.0,
+        "raw_caked_y": -9.0,
+        "two_theta_deg": 17.0,
+        "phi_deg": -9.0,
+        "display_col": 17.0,
+        "display_row": -9.0,
+        "display_frame": "caked_display",
+        "sim_col_global": 17.0,
+        "sim_row_global": -9.0,
+        "sim_col_local": 7.0,
+        "sim_row_local": 0.0,
+    }.items():
+        assert projected_row[key] == value
 
 
 def test_project_peaks_to_current_view_preserves_display_only_rows_as_frozen_caked_overlays() -> (
@@ -12853,11 +12897,11 @@ def test_project_peaks_to_current_view_keeps_refined_detector_display_on_non_squ
 
     assert len(projected) == 1
     projected_entry = projected[0]
-    expected_native = mg._default_rotate_point(
+    expected_native = mg._default_display_point_to_native_for_rotation(
         float(refined_display[0]),
         float(refined_display[1]),
         background_shape,
-        -3,
+        3,
     )
     assert projected_entry["native_col"] == float(expected_native[0])
     assert projected_entry["native_row"] == float(expected_native[1])
@@ -21353,24 +21397,29 @@ def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:
         assert measured_display[0]["source_branch_index"] == 1
         assert measured_display[0]["source_peak_index"] == 1
 
-    assert detector_pairs == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (-1, 0, 5),
-            "q_group_key": ("q_group", "primary", 1, 5),
-            "bg_display": (182.0, 138.0),
-            "sim_display": (190.0, 96.0),
-        }
-    ]
-    assert caked_pairs == [
-        {
-            "overlay_match_index": 0,
-            "hkl": (-1, 0, 5),
-            "q_group_key": ("q_group", "primary", 1, 5),
-            "bg_display": (29.5, -58.0),
-            "sim_display": (29.75, -57.8),
-        }
-    ]
+    assert len(detector_pairs) == 1
+    detector_pair = detector_pairs[0]
+    assert detector_pair["overlay_match_index"] == 0
+    assert detector_pair["hkl"] == (-1, 0, 5)
+    assert detector_pair["q_group_key"] == ("q_group", "primary", 1, 5)
+    assert detector_pair["bg_display"] == (182.0, 138.0)
+    assert detector_pair["sim_display"] == (190.0, 96.0)
+    assert detector_pair["source_table_index"] == 9
+    assert detector_pair["source_row_index"] == 0
+    assert detector_pair["source_reflection_index"] == 203
+    assert detector_pair["source_branch_index"] == 1
+
+    assert len(caked_pairs) == 1
+    caked_pair = caked_pairs[0]
+    assert caked_pair["overlay_match_index"] == 0
+    assert caked_pair["hkl"] == (-1, 0, 5)
+    assert caked_pair["q_group_key"] == ("q_group", "primary", 1, 5)
+    assert caked_pair["bg_display"] == (29.5, -58.0)
+    assert caked_pair["sim_display"] == (29.75, -57.8)
+    assert caked_pair["source_table_index"] == 9
+    assert caked_pair["source_row_index"] == 0
+    assert caked_pair["source_reflection_index"] == 203
+    assert caked_pair["source_branch_index"] == 1
 
     peak_records = [
         {
@@ -23325,7 +23374,7 @@ def _diag_entry_table_line(
 ):
     display = _diag_detector_display_point(entry)
     native = _diag_detector_native_point(entry)
-    identity = _diag_source_identity(entry)
+    identity = _diag_source_identity_key(entry)
     return " | ".join(
         [
             repr(_diag_q_group_key(entry)),
@@ -23482,7 +23531,7 @@ def test_qr_sim_peak_caked_blank_image_is_not_refined() -> None:
     )
 
     assert refined is not None
-    assert refined["sim_refinement_status"] == "no_peak_found"
+    assert refined["sim_refinement_status"] == "unavailable_zero_intensity_window"
     assert "sim_refined_caked_deg" not in refined
     assert "refined_sim_caked_x" not in refined
     assert refined["sim_visual_deg"] == refined["sim_nominal_caked_deg"]
@@ -24173,9 +24222,9 @@ def test_qr_picker_detector_pixel_positions(tmp_path) -> None:
     source_rows = [
         row for row in rows["collapsed_source_rows"] if _diag_q_group_key(row) is not None
     ]
-    picker_keys = {_diag_source_identity(row) for row in picker_rows}
-    overlay_keys = {_diag_source_identity(row) for row in overlay_rows}
-    source_keys = {_diag_source_identity(row) for row in source_rows}
+    picker_keys = {_diag_source_identity_key(row) for row in picker_rows}
+    overlay_keys = {_diag_source_identity_key(row) for row in overlay_rows}
+    source_keys = {_diag_source_identity_key(row) for row in source_rows}
     drawn_not_selectable = sorted(overlay_keys - picker_keys, key=repr)
     selectable_not_drawn = sorted(picker_keys - overlay_keys, key=repr)
 
@@ -25660,9 +25709,9 @@ def test_minus_1_0_10_caked_preview_after_refresh_uses_preserved_visual_source(
 ) -> None:
     probe = _diag_minus_1_0_10_caked_refresh_probe(tmp_path, monkeypatch)
     print("\ncaked_preview_after_refresh_uses_preserved_visual_source")
-    for branch, preview, check, bounds in (
-        (0, probe["preview0"], probe["check0"], (0.6, 1.05)),
-        (1, probe["preview1"], probe["check1"], (0.75, 1.05)),
+    for branch, preview, check in (
+        (0, probe["preview0"], probe["check0"]),
+        (1, probe["preview1"], probe["check1"]),
     ):
         message = str(preview["message"])
         visual = preview["status_sim_visual_caked_deg"]
@@ -25677,7 +25726,15 @@ def test_minus_1_0_10_caked_preview_after_refresh_uses_preserved_visual_source(
                 cache=_diag_point_text(cache),
             )
         )
-        assert bounds[0] <= float(preview["status_distance_value"]) <= bounds[1]
+        assert _diag_matches_distance(
+            preview["status_distance_value"],
+            check["visual_distance"],
+        )
+        assert not _diag_matches_distance(
+            preview["status_distance_value"],
+            check["cache_current_distance"],
+        )
+        assert float(preview["status_distance_value"]) < 2.0
         assert "77." not in message
         assert "78." not in message
         assert "79." not in message
@@ -28025,12 +28082,14 @@ def test_minus_1_0_10_live_cmd_log_validator(tmp_path) -> None:
 
     assert "No simulated Qr/Qz groups are available" not in full_transcript
     assert "q_group_key=('q_group', 'primary', 1, 10)" in full_transcript
-    assert picker_resolved[0]["source_table_index"] == 160
-    assert picker_resolved[0]["source_row_index"] == 24
-    assert picker_resolved[0]["source_branch_index"] == 0
-    assert picker_resolved[1]["source_table_index"] == 167
-    assert picker_resolved[1]["source_row_index"] == 24
-    assert picker_resolved[1]["source_branch_index"] == 1
+    for branch in (0, 1):
+        assert picker_resolved[branch]["source_table_index"] == detector_targets[branch][
+            "source_table_index"
+        ]
+        assert picker_resolved[branch]["source_row_index"] == detector_targets[branch][
+            "source_row_index"
+        ]
+        assert picker_resolved[branch]["source_branch_index"] == branch
     assert set(_diag_branch_map(detector_saved)) == {0, 1}
     assert set(_diag_branch_map(caked_saved)) == {0, 1}
     assert current_lines

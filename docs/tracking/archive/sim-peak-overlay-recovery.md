@@ -5,7 +5,7 @@ Type: bug
 Owner:
 Issue: [#248](https://github.com/DVBeckwitt/ra_sim/issues/248)
 Priority: p1
-Last updated: 2026-04-23
+Last updated: 2026-05-07
 
 This page records the resolved detector/caked manual-picking problem for Qr/Qz
 group selection and HKL selection. It replaces the earlier in-progress
@@ -34,6 +34,14 @@ Follow-up status on 2026-04-23: the caked-origin Qr saved-redraw drift is fixed
 by routing source-backed caked Qr hit testing, active selected markers, and
 saved-pair redraw through one detector-to-caked projection cache. Automated
 helper coverage is green; live GUI recheck is still not recorded in repo docs.
+
+Follow-up status on 2026-05-07: bare `caked_x/y` is no longer accepted as
+simulated fit/cache truth unless the row has explicit simulated caked-projection
+provenance. The remaining allowed use of bare `caked_x/y` is display-only:
+caked-view candidate distance may read the current-view caked point when visual
+aliases are absent, but saved fit/cache fields stay separate. Bug/error status:
+fixed in the helper path. Feature status: no new operator workflow, no schema
+migration, and no deprecation path required.
 
 ## Implementation Summary
 
@@ -180,6 +188,22 @@ proves:
 - caked background refinement moves only `bg_display`; the simulated Qr marker
   stays on the cached projected source candidate;
 - changing caked axes/binning changes the caked projection cache signature.
+
+Additional 2026-05-07 coverage proves:
+
+- background-shaped `caked_x/y` does not populate simulated fit/cache caked
+  fields on saved manual pair creation;
+- explicit simulated caked projection rows may still use bare `caked_x/y` as
+  fit/cache input because their provenance is unambiguous;
+- explicit simulated fit/cache fields beat conflicting bare `caked_x/y`;
+- caked-view candidate distance keeps a display-only fallback to current-view
+  caked coordinates when visual aliases are absent.
+
+The same validation pass kept related manual-picker guardrails green: stale
+background detector anchors refresh from caked authority only when provenance
+allows it, projection-cache poison rows do not overwrite current caked visual
+coordinates, mask-filter failures publish diagnostic source rows without active
+picker rows, and cache metadata is stored before cache state publication.
 
 Validation recorded for this closure:
 

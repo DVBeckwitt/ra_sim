@@ -1016,6 +1016,11 @@ def refresh_geometry_manual_pair_entry(
                 (("sim_col_raw", "sim_row_raw"),),
             )
         if seeded_xy is None:
+            seeded_xy = _geometry_manual_finite_point(
+                entry_for_normalize,
+                (("sim_detector_display_col", "sim_detector_display_row"),),
+            )
+        if seeded_xy is None:
             display_point = _geometry_manual_finite_point(
                 entry_for_normalize,
                 (("display_col", "display_row"),),
@@ -1110,6 +1115,23 @@ def refresh_geometry_manual_pair_entry(
     background_detector_origin = _geometry_manual_saved_background_detector_origin(
         raw_entry if raw_entry is not None else normalized
     )
+    explicit_detector_tokens = {
+        "detector",
+        "detector_display",
+        "detector_native",
+        "native_detector",
+    }
+    raw_background_origin = raw_entry if raw_entry is not None else normalized
+    explicit_background_detector_origin = bool(
+        _geometry_manual_normalized_frame_token(
+            raw_background_origin.get("manual_background_input_origin")
+        )
+        in explicit_detector_tokens
+        or _geometry_manual_normalized_frame_token(
+            raw_background_origin.get("manual_background_input_frame")
+        )
+        in explicit_detector_tokens
+    )
     caked_background_is_authoritative = bool(
         saved_background_caked_point is not None and not background_detector_origin
     )
@@ -1124,7 +1146,9 @@ def refresh_geometry_manual_pair_entry(
         background_detector_origin
         or (saved_background_caked_point is None and saved_detector_point is not None)
     )
-    caked_point = None if background_detector_origin else saved_background_caked_point
+    caked_point = (
+        None if explicit_background_detector_origin else saved_background_caked_point
+    )
     if caked_point is None and not detector_fields_are_authoritative:
         caked_point = _finite_pair("caked_x", "caked_y")
     if caked_point is None and not detector_fields_are_authoritative:
@@ -1490,8 +1514,10 @@ def refresh_geometry_manual_pair_entry(
         saved_background_caked_point if caked_background_is_authoritative else recomputed_caked
     )
     if output_caked is not None:
-        if caked_background_is_authoritative and callable(
-            caked_angles_to_background_display_coords
+        if (
+            caked_background_is_authoritative
+            and display_point is None
+            and callable(caked_angles_to_background_display_coords)
         ):
             projected_output_display = _finite_tuple_pair(
                 caked_angles_to_background_display_coords(
@@ -3358,15 +3384,23 @@ def _geometry_manual_caked_qr_projection_source(
             or key.startswith("reflection_")
         ):
             copied[key] = value
-    visual_caked = _geometry_manual_tuple_point(copied, "sim_visual_deg")
+    visual_caked = _geometry_manual_tuple_point(copied, "sim_visual_caked_deg")
+    if visual_caked is None:
+        visual_caked = _geometry_manual_tuple_point(copied, "sim_visual_deg")
     if visual_caked is None:
         visual_caked = _geometry_manual_tuple_point(copied, "sim_caked")
     if visual_caked is None:
+        visual_caked = _geometry_manual_tuple_point(copied, "sim_refined_caked_deg")
+    if (
+        visual_caked is None
+        and _geometry_manual_entry_display_frame(entry) == "detector"
+    ):
         visual_caked = _geometry_manual_finite_point(
             copied,
             (("refined_sim_caked_x", "refined_sim_caked_y"),),
         )
     if visual_caked is not None:
+        copied["sim_visual_caked_deg"] = (float(visual_caked[0]), float(visual_caked[1]))
         copied["sim_visual_deg"] = (float(visual_caked[0]), float(visual_caked[1]))
         copied["sim_caked"] = (float(visual_caked[0]), float(visual_caked[1]))
         copied.setdefault("sim_visual_source", "sim_visual_caked_deg")
@@ -3404,7 +3438,7 @@ def _geometry_manual_caked_qr_projection_entry(
         return None
     if _geometry_manual_caked_qr_projection_key(entry) is None:
         return None
-    if (
+    has_native_point = (
         _geometry_manual_finite_point(
             entry,
             (
@@ -3413,8 +3447,9 @@ def _geometry_manual_caked_qr_projection_entry(
                 ("sim_native_x", "sim_native_y"),
             ),
         )
-        is None
-    ):
+        is not None
+    )
+    if not has_native_point and not bool(entry.get("_caked_qr_projection_cache", False)):
         return None
     caked_point = _geometry_manual_finite_point(
         entry,
@@ -4172,13 +4207,32 @@ def _geometry_manual_entry_detector_display_point(
         )
         if detector_point is not None:
             return detector_point
+        has_source_identity = bool(
+            isinstance(entry, Mapping)
+            and any(
+                _geometry_manual_identity_value_present(entry.get(key))
+                for key in (
+                    "source_table_index",
+                    "source_row_index",
+                    "source_reflection_index",
+                    "source_branch_index",
+                    "source_ray_id",
+                    "branch_id",
+                )
+            )
+        )
+        if has_source_identity:
+            detector_point = _geometry_manual_finite_point(
+                entry,
+                (("sim_col_raw", "sim_row_raw"),),
+            )
+            if detector_point is not None:
+                return detector_point
         return None
 
-    detector_point = _valid_detector_point(
-        _geometry_manual_finite_point(
-            entry,
-            (("sim_col_raw", "sim_row_raw"),),
-        )
+    detector_point = _geometry_manual_finite_point(
+        entry,
+        (("sim_col_raw", "sim_row_raw"),),
     )
     if detector_point is not None:
         return detector_point
@@ -5815,12 +5869,6 @@ def _geometry_manual_q_group_physical_branch_slot(
     normalized_key = _geometry_manual_real_q_group_key(group_key)
     if normalized_key is None:
         normalized_key = _geometry_manual_real_q_group_key(entry)
-    source_identity_slot = _geometry_manual_q_group_unknown_source_identity_slot(
-        entry,
-        group_key=normalized_key,
-    )
-    if source_identity_slot is not None:
-        return source_identity_slot
     branch_id, _branch_source = gui_mosaic_top.normalize_branch_id(
         entry,
         target_key=normalized_key,
@@ -5832,6 +5880,15 @@ def _geometry_manual_q_group_physical_branch_slot(
         return ("branch", 0)
     if branch_id == "-x":
         return ("branch", 1)
+    if branch_id and not str(branch_id).startswith("unknown:"):
+        return ("branch_id", str(branch_id))
+    if entry.get("source_reflection_index") is not None or entry.get("source_ray_id") is not None:
+        source_identity_slot = _geometry_manual_q_group_unknown_source_identity_slot(
+            entry,
+            group_key=normalized_key,
+        )
+        if source_identity_slot is not None:
+            return source_identity_slot
     if branch_id:
         return ("branch_id", str(branch_id))
     return None
@@ -6809,7 +6866,7 @@ def geometry_manual_pick_placed_cache_signature(
     """Return stable signature for placed manual-pick rows before Q-group masks."""
 
     bg_token = None
-    if background_image is not None and not bool(use_caked_space):
+    if background_image is not None:
         raw_arr = np.asarray(background_image)
         try:
             bg_ptr = int(raw_arr.__array_interface__["data"][0])
@@ -7286,6 +7343,8 @@ def _geometry_manual_detector_point_is_caked(
     point: tuple[float, float] | None,
 ) -> bool:
     if not isinstance(entry, Mapping) or point is None:
+        return False
+    if _geometry_manual_entry_has_stale_caked_fields(entry):
         return False
     if _geometry_manual_entry_display_frame(entry) == "detector":
         return False
@@ -8493,6 +8552,9 @@ def geometry_manual_merge_refined_qr_sim_fields(
         {
             "refined_sim_native_x",
             "refined_sim_native_y",
+            "sim_nominal_detector_display_px",
+            "sim_nominal_detector_native_px",
+            "sim_nominal_caked_deg",
             "sim_refined_detector_display_px",
             "sim_refined_detector_native_px",
             "sim_refined_caked_deg",
@@ -9903,14 +9965,24 @@ def build_geometry_manual_pick_cache(
             current_signature,
         )
 
+    detector_read_can_reuse_warmed_sidecar = bool(
+        not reuse_requires_caked_projection
+        and isinstance(existing_cache_data, dict)
+        and _manual_pick_cache_has_caked_projection_sidecar(existing_cache_data)
+        and isinstance(resolved_existing_placed_signature, tuple)
+        and isinstance(placed_cache_sig, tuple)
+        and len(resolved_existing_placed_signature) >= 5
+        and len(placed_cache_sig) >= 5
+        and tuple(resolved_existing_placed_signature[:4]) == tuple(placed_cache_sig[:4])
+    )
     if (
         prefer_cache
         and bg_index == current_bg_index
         and not build_requires_caked_projection
         and isinstance(existing_cache_data, dict)
-        and _manual_pick_cache_groups_reusable(
-            resolved_existing_placed_signature,
-            placed_cache_sig,
+        and (
+            resolved_existing_placed_signature == placed_cache_sig
+            or detector_read_can_reuse_warmed_sidecar
         )
         and _active_mask_signature_matches(resolved_existing_signature, cache_sig)
         and geometry_manual_pick_cache_has_detector_picker_sources(
@@ -10064,13 +10136,28 @@ def build_geometry_manual_pick_cache(
 
         try:
             filtered_active_rows = filter_active_rows(normalized_rows)
+            active_filter_failed = False
         except Exception:
             filtered_active_rows = []
+            active_filter_failed = True
         candidate_groups = build_grouped_candidates(filtered_active_rows)
 
         local_active_simulated_peaks = [
             dict(entry) for entry in filtered_active_rows if isinstance(entry, Mapping)
         ]
+        if active_filter_failed:
+            simulated_peaks = normalized_rows
+            active_simulated_peaks = []
+            detector_picker_source_rows = []
+            detector_picker_rows = []
+            detector_picker_grouped_candidates = {}
+            grouped_candidates = {}
+            simulated_lookup = {}
+            cache_action = str(action)
+            cache_source = str(source)
+            cache_provenance = [str(step) for step in provenance]
+            stale_reason = stale_reason_override
+            return True
         if raw_detector_picker_rows:
             detector_source_candidates = raw_source_rows
             local_detector_picker_rows = [dict(entry) for entry in raw_detector_picker_rows]
@@ -11460,6 +11547,9 @@ def _geometry_manual_candidate_visual_caked_sim_point(
     fallback_caked = _geometry_manual_candidate_caked_sim_point(candidate)
     if fallback_caked is not None:
         return fallback_caked, "sim_visual_caked_deg"
+    current_view_caked = _geometry_manual_entry_matching_current_view_point(candidate)
+    if current_view_caked is not None:
+        return current_view_caked, "current_view_caked"
     return None, "<unavailable>"
 
 
@@ -13599,15 +13689,6 @@ def build_geometry_manual_initial_pairs_display(
         def _live_caked_point(
             candidate: Mapping[str, object] | None,
         ) -> tuple[float, float] | None:
-            caked_point = _geometry_manual_finite_point(
-                candidate,
-                (
-                    ("caked_x", "caked_y"),
-                    ("two_theta_deg", "phi_deg"),
-                ),
-            )
-            if caked_point is not None:
-                return caked_point
             display_frame = (
                 str(
                     candidate.get("display_frame", candidate.get("current_view_frame", ""))
@@ -13617,6 +13698,46 @@ def build_geometry_manual_initial_pairs_display(
                 .strip()
                 .lower()
             )
+            current_caked_projection = bool(
+                isinstance(candidate, Mapping)
+                and (
+                    candidate.get("_caked_qr_projection_cache")
+                    or display_frame == "caked_display"
+                )
+            )
+            visual_caked = _geometry_manual_tuple_point(candidate, "sim_visual_caked_deg")
+            if visual_caked is None:
+                visual_caked = _geometry_manual_tuple_point(candidate, "sim_visual_deg")
+            if visual_caked is None:
+                visual_caked = _geometry_manual_tuple_point(candidate, "sim_caked")
+            if visual_caked is not None:
+                return visual_caked
+
+            refined_caked = _geometry_manual_tuple_point(candidate, "sim_refined_caked_deg")
+            refinement_status = (
+                str(candidate.get("sim_refinement_status", "") or "").strip().lower()
+                if isinstance(candidate, Mapping)
+                else ""
+            )
+            if refined_caked is None and (
+                not current_caked_projection or refinement_status == "refined"
+            ):
+                refined_caked = _geometry_manual_finite_point(
+                    candidate,
+                    (("refined_sim_caked_x", "refined_sim_caked_y"),),
+                )
+            if refined_caked is not None:
+                return refined_caked
+
+            caked_point = _geometry_manual_finite_point(
+                candidate,
+                (
+                    ("caked_x", "caked_y"),
+                    ("two_theta_deg", "phi_deg"),
+                ),
+            )
+            if caked_point is not None:
+                return caked_point
             if display_frame == "caked_display":
                 caked_point = _geometry_manual_finite_point(
                     candidate,
@@ -13624,10 +13745,7 @@ def build_geometry_manual_initial_pairs_display(
                 )
             if caked_point is not None:
                 return caked_point
-            return _geometry_manual_finite_point(
-                candidate,
-                (("refined_sim_caked_x", "refined_sim_caked_y"),),
-            )
+            return None
 
         def _normalize_sim_identity_value(value: object) -> object:
             if isinstance(value, list):
@@ -14435,10 +14553,7 @@ def make_runtime_geometry_manual_cache_callbacks(
         ]
         if not callable(filter_active_rows):
             return normalized_rows
-        try:
-            filtered_rows = filter_active_rows(normalized_rows)
-        except Exception:
-            filtered_rows = []
+        filtered_rows = filter_active_rows(normalized_rows)
         return [dict(entry) for entry in (filtered_rows or ()) if isinstance(entry, Mapping)]
 
     def _placed_pick_cache_signature(
@@ -14939,19 +15054,24 @@ def make_runtime_geometry_manual_cache_callbacks(
             return _attach_source_snapshot_diagnostics(refined)
 
         cache_data = _refine_cache_once(cache_data)
+        cache_data["cache_metadata"] = _geometry_manual_cache_metadata_update(
+            cache_data,
+            get_pick_cache_total_wall_ms=_geometry_manual_elapsed_ms(get_start),
+            get_pick_cache_build_wall_ms=get_build_wall_ms,
+        )
         if isinstance(next_cache_data, dict):
             if same_next_cache:
                 next_cache_data = cache_data
             else:
                 next_cache_data = _refine_cache_once(next_cache_data)
+                next_cache_data["cache_metadata"] = _geometry_manual_cache_metadata_update(
+                    next_cache_data,
+                    get_pick_cache_total_wall_ms=_geometry_manual_elapsed_ms(get_start),
+                    get_pick_cache_build_wall_ms=get_build_wall_ms,
+                )
         replace_cache_state(
             next_signature,
             dict(next_cache_data) if isinstance(next_cache_data, dict) else {},
-        )
-        cache_data["cache_metadata"] = _geometry_manual_cache_metadata_update(
-            cache_data,
-            get_pick_cache_total_wall_ms=_geometry_manual_elapsed_ms(get_start),
-            get_pick_cache_build_wall_ms=get_build_wall_ms,
         )
         return cache_data
 
@@ -17315,11 +17435,24 @@ def geometry_manual_toggle_selection_at(
         return False, current_session, False
 
     cache_ready = not (isinstance(cache_data, Mapping) and cache_data.get("cache_ready") is False)
+    cache_metadata = (
+        cache_data.get("cache_metadata")
+        if isinstance(cache_data, Mapping) and isinstance(cache_data.get("cache_metadata"), Mapping)
+        else {}
+    )
+    cache_build_disabled = bool(
+        isinstance(cache_data, Mapping)
+        and cache_data.get("manual_no_build_cache", False)
+        and cache_metadata.get("cache_action") != "miss"
+    )
+    if isinstance(cache_metadata, Mapping) and cache_metadata.get("allow_cache_build") is False:
+        cache_build_disabled = True
     if (
         not grouped_candidates
         and not bool(use_caked_space)
         and not bool(saved_pair_move_only)
         and not cache_ready
+        and not cache_build_disabled
         and not geometry_manual_pick_session_active(
             current_session,
             current_background_index=current_background_index,
@@ -17363,12 +17496,12 @@ def geometry_manual_toggle_selection_at(
                 )
                 if empty_reason == "no_detector_picker_source_rows":
                     set_status_text(
-                        "Manual Qr picker has no detector source rows. "
+                        "Manual Qr picker cache is not ready: no detector source rows. "
                         "Update simulation or refresh the Qr/Qz list."
                     )
                 else:
                     set_status_text(
-                        "Manual Qr picker cache is warming; click again after the current "
+                        "Manual Qr picker cache is not ready; click again after the current "
                         "simulation update settles."
                     )
             else:
