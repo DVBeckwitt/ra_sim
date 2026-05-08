@@ -11555,15 +11555,10 @@ def _geometry_manual_entry_current_view_caked_display_point(
 def _geometry_manual_candidate_visual_caked_sim_point(
     candidate: Mapping[str, object] | None,
 ) -> tuple[tuple[float, float], str] | tuple[None, str]:
-    visual_caked = _geometry_manual_tuple_point(candidate, "sim_visual_caked_deg")
-    if visual_caked is not None:
-        return visual_caked, "sim_visual_caked_deg"
-    visual_caked = _geometry_manual_tuple_point(candidate, "sim_visual_deg")
-    if visual_caked is not None:
-        return visual_caked, "sim_visual_caked_deg"
-    visual_caked = _geometry_manual_tuple_point(candidate, "sim_caked")
-    if visual_caked is not None:
-        return visual_caked, "sim_visual_caked_deg"
+    for visual_key in ("sim_visual_caked_deg", "sim_visual_deg", "sim_caked"):
+        visual_caked = _geometry_manual_tuple_point(candidate, visual_key)
+        if visual_caked is not None:
+            return visual_caked, "sim_visual_caked_deg"
     current_view_caked = _geometry_manual_entry_current_view_caked_display_point(candidate)
     if current_view_caked is not None and _geometry_manual_candidate_allows_caked_alias_fallback(
         candidate
