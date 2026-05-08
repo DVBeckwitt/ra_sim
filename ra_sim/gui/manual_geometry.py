@@ -11565,10 +11565,10 @@ def _geometry_manual_candidate_visual_caked_sim_point(
     if visual_caked is not None:
         return visual_caked, "sim_visual_caked_deg"
     current_view_caked = _geometry_manual_entry_current_view_caked_display_point(candidate)
-    if current_view_caked is not None:
-        if _geometry_manual_candidate_allows_caked_alias_fallback(candidate):
-            return current_view_caked, "current_view_caked"
-        return None, "<unavailable>"
+    if current_view_caked is not None and _geometry_manual_candidate_allows_caked_alias_fallback(
+        candidate
+    ):
+        return current_view_caked, "current_view_caked"
     fallback_caked = _geometry_manual_candidate_caked_sim_point(candidate)
     if fallback_caked is not None:
         return fallback_caked, "sim_visual_caked_deg"

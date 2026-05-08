@@ -1886,6 +1886,24 @@ def test_visual_caked_helper_keeps_refined_only_candidate_as_fit_cache_fallback(
     )
 
 
+def test_visual_caked_helper_uses_fit_cache_fallback_when_current_view_caked_is_background_shaped() -> (
+    None
+):
+    candidate = {
+        "refined_sim_caked_x": 40.176704,
+        "refined_sim_caked_y": 36.25,
+        "caked_x": 113.5,
+        "caked_y": -12.5,
+        "background_two_theta_deg": 113.5,
+        "background_phi_deg": -12.5,
+    }
+
+    assert mg._geometry_manual_candidate_visual_caked_sim_point(candidate) == (
+        (40.176704, 36.25),
+        "sim_visual_caked_deg",
+    )
+
+
 def test_geometry_manual_choose_group_at_does_not_match_detector_pixels_in_caked_view() -> None:
     group_key, entries, dist = mg.geometry_manual_choose_group_at(
         {
