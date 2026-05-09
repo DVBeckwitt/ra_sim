@@ -19,6 +19,7 @@ PROFILE_FIT_WORKERS_OVERRIDE = "16"
 ROD_PROFILE_FIT_WORKERS_OVERRIDE = "16"
 USE_GPU_OVERRIDE = "1"
 QR_ROD_PEAK_EDIT_MODE_OVERRIDE = ""
+DETECTOR_LABEL_SETTINGS_PATH_OVERRIDE = ""
 RESET_PRE_EDITOR_CACHE_OVERRIDE = ""
 
 # Faster development output. Use 300 / 1 for final vector figures.
@@ -35,9 +36,11 @@ import pickle
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from concurrent.futures.process import BrokenProcessPool
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -116,12 +119,12 @@ def _safe_run_name(value: object) -> str:
 
 
 QR_ROD_PROFILE_CACHE_SCHEMA = "ra_sim.qr_rod_profile_cache.v1"
-QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_v2"
+QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_specular_theta_i0_l8_v4"
 PRE_EDITOR_CACHE_SCHEMA = "ra_sim.background_pre_editor_cache.v1"
 PRE_EDITOR_CACHE_SIGNATURE = "pre_qr_rod_marker_editor_inputs_v1"
 PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE = "background_peak_fit_results_v1"
 PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE = "profile_fit_cache_v1"
-PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_v1"
+PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_specular_theta_i0_l8_v3"
 
 
 def _cache_normalize_value(value: object) -> object:
@@ -467,6 +470,44 @@ def qz_l_linear_coeff_from_marker_rows(marker_rows: object) -> tuple[float, floa
     if not (np.isfinite(slope) and np.isfinite(intercept)) or abs(float(slope)) <= 1.0e-12:
         return 1.0, 0.0
     return float(slope), float(intercept)
+
+
+def qz_bounds_for_l_window(
+    qz_values: object,
+    marker_rows: object,
+    *,
+    l_min: float = 0.0,
+    l_max: float = 8.0,
+    positive_qz_min: float = 0.0,
+) -> tuple[float, float] | None:
+    qz = np.asarray(qz_values, dtype=np.float64)
+    qz = qz[np.isfinite(qz) & (qz > float(positive_qz_min))]
+    if qz.size < 2:
+        return None
+    marker_table = pd.DataFrame(marker_rows).copy()
+    if marker_table.empty or "qz_marker" not in marker_table:
+        return None
+    l_col = "fit_l" if "fit_l" in marker_table else "l" if "l" in marker_table else "display_l"
+    if l_col not in marker_table:
+        return None
+    ref_qz = pd.to_numeric(marker_table["qz_marker"], errors="coerce").to_numpy(dtype=np.float64)
+    ref_l = pd.to_numeric(marker_table[l_col], errors="coerce").to_numpy(dtype=np.float64)
+    if np.count_nonzero(np.isfinite(ref_qz) & np.isfinite(ref_l)) < 1:
+        return None
+    slope, intercept = qz_l_linear_coeff_from_marker_rows(marker_table)
+    if not (np.isfinite(slope) and np.isfinite(intercept)) or abs(float(slope)) <= 1.0e-12:
+        return None
+    l_lo, l_hi = sorted((float(l_min), float(l_max)))
+    qz_l_lo = (l_lo - float(intercept)) / float(slope)
+    qz_l_hi = (l_hi - float(intercept)) / float(slope)
+    if not (np.isfinite(qz_l_lo) and np.isfinite(qz_l_hi)):
+        return None
+    qz_window_lo, qz_window_hi = sorted((float(qz_l_lo), float(qz_l_hi)))
+    qz_lo = max(float(np.nanmin(qz)), float(qz_window_lo), float(positive_qz_min))
+    qz_hi = min(float(np.nanmax(qz)), float(qz_window_hi))
+    if not (np.isfinite(qz_lo) and np.isfinite(qz_hi)) or qz_hi <= qz_lo:
+        return None
+    return qz_lo, qz_hi
 
 
 def drawable_rod_profile_keys(
@@ -967,8 +1008,10 @@ def show_qr_rod_peak_marker_popup(
     except Exception as exc:
         raise RuntimeError(f"Matplotlib editor widgets are unavailable: {exc}") from exc
 
-    original = pd.DataFrame(marker_table).copy()
-    edited = original.copy()
+    edited = pd.DataFrame(marker_table).copy()
+    if required_marker_table is not None:
+        edited = marker_table_with_specular_l_markers(edited, required_marker_table)
+    original = edited.copy()
     profiles = pd.DataFrame(rod_profile_table).copy()
     if edited.empty or profiles.empty or not {"m", "branch", "qz_center"}.issubset(profiles):
         return edited, False
@@ -1175,12 +1218,13 @@ def show_qr_rod_peak_marker_popup(
             ax.clear()
             x_qz, y = profile_xy(m_value, branch_value)
             x_l = qz_to_editor_l(m_value, branch_value, x_qz)
+            y_plot = positive_log_plot_values(y)
             finite_profile = np.isfinite(x_l) & np.isfinite(y)
             if np.any(finite_profile):
                 order = np.argsort(x_l[finite_profile])
                 ax.plot(
                     x_l[finite_profile][order],
-                    y[finite_profile][order],
+                    y_plot[finite_profile][order],
                     color="0.25",
                     linewidth=0.9,
                 )
@@ -1188,6 +1232,7 @@ def show_qr_rod_peak_marker_popup(
             marker_l = qz_to_editor_l(m_value, branch_value, markers)
             marker_rows = group_marker_rows(m_value, branch_value)
             y_markers = marker_y_values(markers, x_qz, y)
+            y_markers_plot = positive_log_plot_values(y_markers)
             finite = np.isfinite(marker_l) & np.isfinite(y_markers)
             if np.any(finite):
                 colors = ["white"] * int(np.count_nonzero(finite))
@@ -1200,7 +1245,7 @@ def show_qr_rod_peak_marker_popup(
                         pass
                 ax.scatter(
                     marker_l[finite],
-                    y_markers[finite],
+                    y_markers_plot[finite],
                     s=24.0,
                     marker="o",
                     facecolors=colors,
@@ -1227,6 +1272,8 @@ def show_qr_rod_peak_marker_popup(
             title_color = "#d95f02" if selected_group == group else "black"
             ax.set_title(f"HK={m_value} {branch_value}", fontsize=9, color=title_color)
             ax.set_xlabel("L", fontsize=8)
+            ax.set_ylabel("Intensity (log)", fontsize=8)
+            apply_positive_log_y_axis(ax, y, y_markers)
             ax.xaxis.set_major_locator(mpl.ticker.MaxNLocator(integer=True))
             ax.tick_params(labelsize=7)
         fig.canvas.draw_idle()
@@ -1693,6 +1740,7 @@ PEAK_FIT_BACKGROUND_HUBER_K = 1.5
 PEAK_FIT_MULTISTART_WIDTH_FACTORS = (1.0, 1.8, 2.8)
 PEAK_FIT_MAX_NFEV = 1400
 ROD_PROFILE_QZ_BINS = 96
+SPECULAR_QR_ROD_L_MAX = 8.0
 refresh_figure_stems()
 ROD_PROFILE_MAX_TWO_THETA_DEG = 70.3
 ROD_QZ_FORWARD_FIT_CENTER_THETA_BOUND_DEG = 0.45
@@ -2491,16 +2539,14 @@ def robust_display_limits(
     return float(vmin), float(vmax)
 
 
-def hk0_star_crop_bounds(
+def hk0_00l_region_crop_bounds(
     image_shape: tuple[int, int],
     beam_center: tuple[float, float],
-    peak_center: tuple[float, float],
+    region_mask: object,
     *,
-    lateral_half_width_px: int = 96,
-    above_peak_padding_px: int = 96,
-    below_beam_padding_px: int = 24,
+    lateral_half_width_px: int = 48,
 ) -> tuple[slice, slice] | None:
-    """Return detector row/column slices spanning beam center to a target 00L peak."""
+    """Return detector row/column slices spanning the visible 00L mask top to the beam center."""
     if len(image_shape) < 2:
         return None
     height = int(image_shape[0])
@@ -2509,109 +2555,47 @@ def hk0_star_crop_bounds(
         return None
     try:
         beam_x, beam_y = float(beam_center[0]), float(beam_center[1])
-        peak_x, peak_y = float(peak_center[0]), float(peak_center[1])
     except Exception:
         return None
-    if not all(np.isfinite(value) for value in (beam_x, beam_y, peak_x, peak_y)):
+    if not all(np.isfinite(value) for value in (beam_x, beam_y)):
+        return None
+    if region_mask is None:
+        return None
+    mask = np.asarray(region_mask, dtype=bool)
+    if mask.ndim != 2 or mask.shape != (height, width):
+        return None
+    valid_rows = np.flatnonzero(np.any(mask, axis=1))
+    if valid_rows.size < 1:
+        return None
+    valid_rows = valid_rows[valid_rows <= int(math.floor(beam_y))]
+    if valid_rows.size < 1:
         return None
     lateral = max(int(lateral_half_width_px), 1)
-    above = max(int(above_peak_padding_px), 0)
-    below = max(int(below_beam_padding_px), 0)
-    row_start = max(0, int(math.floor(min(beam_y, peak_y) - above)))
-    row_stop = min(height, int(math.ceil(max(beam_y, peak_y) + below)) + 1)
-    col_start = max(0, int(math.floor(min(beam_x, peak_x) - lateral)))
-    col_stop = min(width, int(math.ceil(max(beam_x, peak_x) + lateral)) + 1)
+    row_start = max(0, int(np.min(valid_rows)))
+    row_stop = min(height, int(math.ceil(beam_y)) + 1)
+    col_start = max(0, int(math.floor(beam_x - lateral)))
+    col_stop = min(width, int(math.ceil(beam_x + lateral)) + 1)
     if row_start >= row_stop or col_start >= col_stop:
         return None
     return slice(row_start, row_stop), slice(col_start, col_stop)
 
 
-def hk0_star_marker_center(
-    marker_table: pd.DataFrame,
-    *,
-    projector,
-    target_l: float = 3.0,
-) -> tuple[float, float] | None:
-    """Project the drawable HK=0 target-L marker row to detector x/y pixels."""
-    if marker_table is None or marker_table.empty:
-        return None
-    try:
-        target_l_value = float(target_l)
-    except Exception:
-        return None
-    if not np.isfinite(target_l_value):
-        return None
-    records = marker_table.to_dict("records")
-    candidates: list[tuple[float, dict[str, object]]] = []
-    for row in records:
-        try:
-            m_value = int(row.get("m", row.get("hk", 999999)))
-        except Exception:
-            continue
-        if m_value != 0:
-            continue
-        l_value = None
-        for key in ("fit_l", "l", "display_l"):
-            try:
-                candidate_l = float(row.get(key))
-            except Exception:
-                continue
-            if np.isfinite(candidate_l):
-                l_value = candidate_l
-                break
-        if l_value is None:
-            hkl_value = row.get("hkl", "")
-            parts = str(hkl_value).strip("()[]").replace(",", " ").split()
-            if len(parts) >= 3:
-                try:
-                    l_value = float(parts[2])
-                except Exception:
-                    l_value = None
-        if l_value is None or not np.isfinite(l_value):
-            continue
-        distance_to_target_l = abs(float(l_value) - target_l_value)
-        if distance_to_target_l > 1.0e-6:
-            continue
-        candidates.append((distance_to_target_l, row))
-    for _distance, row in sorted(candidates, key=lambda item: item[0]):
-        try:
-            theta = float(row["refined_two_theta_deg"])
-            phi = float(row["refined_phi_deg"])
-        except Exception:
-            continue
-        if not (np.isfinite(theta) and np.isfinite(phi)):
-            continue
-        xy = projector(theta, phi)
-        if xy is None:
-            continue
-        try:
-            x_value, y_value = float(xy[0]), float(xy[1])
-        except Exception:
-            continue
-        if np.isfinite(x_value) and np.isfinite(y_value):
-            return x_value, y_value
-    return None
-
-
-def save_hk0_star_crop(
+def save_hk0_00l_region_crop(
     detector_image: np.ndarray,
     output_path: Path | str,
     *,
+    horizontal_output_path: Path | str | None = None,
     beam_center: tuple[float, float],
-    peak_center: tuple[float, float],
-    lateral_half_width_px: int = 96,
-    above_peak_padding_px: int = 96,
-    below_beam_padding_px: int = 24,
-) -> Path | None:
-    """Save the HK=0 target-L raw detector crop as a colored log-scale PNG."""
+    region_mask: object,
+    lateral_half_width_px: int = 48,
+) -> tuple[Path, Path | None] | None:
+    """Save the 00L detector region as colored log-scale vertical and horizontal PNGs."""
     image = np.ma.asarray(detector_image, dtype=np.float64)
-    bounds = hk0_star_crop_bounds(
+    bounds = hk0_00l_region_crop_bounds(
         tuple(image.shape),
         beam_center,
-        peak_center,
+        region_mask,
         lateral_half_width_px=lateral_half_width_px,
-        above_peak_padding_px=above_peak_padding_px,
-        below_beam_padding_px=below_beam_padding_px,
     )
     if bounds is None:
         return None
@@ -2626,7 +2610,13 @@ def save_hk0_star_crop(
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     plt.imsave(path, rgba_crop, origin="upper")
-    return path
+    horizontal_path = None
+    if horizontal_output_path is not None:
+        horizontal_path = Path(horizontal_output_path)
+        horizontal_path.parent.mkdir(parents=True, exist_ok=True)
+        horizontal_rgba_crop = np.rot90(rgba_crop, k=1)
+        plt.imsave(horizontal_path, horizontal_rgba_crop, origin="upper")
+    return path, horizontal_path
 
 
 def label_from_entry(entry: dict[str, object]) -> str:
@@ -4234,6 +4224,22 @@ def detector_display_bbox(mask: object) -> tuple[tuple[float, float], tuple[floa
     )
 
 
+def detector_bottom_left_axis_tick_labels(
+    x_ticks: object,
+    y_ticks: object,
+    *,
+    xlim: tuple[float, float],
+    ylim: tuple[float, float],
+) -> tuple[list[str], list[str]]:
+    x_values = np.asarray(x_ticks, dtype=np.float64)
+    y_values = np.asarray(y_ticks, dtype=np.float64)
+    x_left = float(min(xlim))
+    y_bottom = float(max(ylim))
+    x_labels = [f"{max(0.0, float(value) - x_left):.0f}" for value in x_values]
+    y_labels = [f"{max(0.0, y_bottom - float(value)):.0f}" for value in y_values]
+    return x_labels, y_labels
+
+
 def detector_display_union_bbox(
     masks: list[np.ndarray],
 ) -> tuple[tuple[float, float], tuple[float, float]]:
@@ -4430,6 +4436,7 @@ def add_panel_label(
 
 
 def add_panel_labels(axes, labels: tuple[str, ...] | None = None, *, outside: bool = True) -> None:
+    return
     flat_axes = np.asarray(axes, dtype=object).ravel()
     if labels is None:
         labels = tuple(f"({chr(97 + idx)})" for idx in range(len(flat_axes)))
@@ -4439,7 +4446,7 @@ def add_panel_labels(axes, labels: tuple[str, ...] | None = None, *, outside: bo
 
 
 def maybe_suptitle(fig, text: str, **kwargs) -> None:
-    if PRL_SHOW_IN_PANEL_TITLES:
+    if False and PRL_SHOW_IN_PANEL_TITLES:
         fig.suptitle(text, **kwargs)
 
 
@@ -5874,7 +5881,6 @@ display(Image(filename=str(fig7c_png)))
 # $Q_r$-rod profiles from detector-space $Q_r$/$Q_z$ integration for one selected background.
 import importlib
 from collections import Counter
-import matplotlib.patheffects as pe
 from ra_sim.simulation import exact_qspace_portable
 from ra_sim.simulation.exact_cake import integrate_detector_to_cake_lut
 
@@ -6578,12 +6584,18 @@ def _detector_profile_dataframe_from_arrays(
     two_theta_min: np.ndarray,
     two_theta_max: np.ndarray,
     two_theta_mean: np.ndarray,
+    theta_initial_deg_used_for_q: float | None = None,
     qz_map_source: str = "detector_qspace_per_pixel",
     qr_integration_source: str = "detector_qr_band_per_qz_bin",
 ) -> pd.DataFrame:
     counts = np.asarray(counts, dtype=np.int64)
     background_sums = np.asarray(background_sums, dtype=np.float64)
     fit_sums = np.asarray(fit_sums, dtype=np.float64)
+    theta_initial_for_q = (
+        float(bg["qr_overlay_config"].theta_initial_deg)
+        if theta_initial_deg_used_for_q is None
+        else float(theta_initial_deg_used_for_q)
+    )
     nonempty = counts > 0
     background_mean = np.full(counts.shape, np.nan, dtype=np.float64)
     fit_mean = np.full(counts.shape, np.nan, dtype=np.float64)
@@ -6593,8 +6605,7 @@ def _detector_profile_dataframe_from_arrays(
         {
             "sample_name": [SAMPLE_NAME] * int(counts.size),
             "tilt_deg": [float(bg["tilt_deg"])] * int(counts.size),
-            "theta_initial_deg_used_for_q": [float(bg["qr_overlay_config"].theta_initial_deg)]
-            * int(counts.size),
+            "theta_initial_deg_used_for_q": [theta_initial_for_q] * int(counts.size),
             "qz_map_source": [str(qz_map_source)] * int(counts.size),
             "qr_integration_source": [str(qr_integration_source)] * int(counts.size),
             "solid_angle_corrected": [bool(solid_angle_corrected)] * int(counts.size),
@@ -6871,6 +6882,10 @@ def detector_two_theta_map_for_background(bg: dict[str, object]) -> np.ndarray |
         return None
 
 
+def detector_qspace_config_with_theta_initial(config: object, theta_initial_deg: float) -> object:
+    return replace(config, theta_initial_deg=float(theta_initial_deg))
+
+
 def profile_from_detector_qr_qz(
     bg: dict[str, object],
     rod: dict[str, object],
@@ -6884,6 +6899,7 @@ def profile_from_detector_qr_qz(
     detector_phi_map: np.ndarray,
     detector_solid_angle: np.ndarray | None,
     detector_two_theta_map: np.ndarray | None,
+    theta_initial_deg_used_for_q: float | None = None,
 ) -> pd.DataFrame:
     image = np.asarray(bg["detector_image"], dtype=np.float64)
     model = np.asarray(positive_l_detector_peak_model_for_display(bg), dtype=np.float64)
@@ -6933,6 +6949,11 @@ def profile_from_detector_qr_qz(
     delta_qr = float(qr_rod_delta_qr)
     qr_lo = max(0.0, qr0 - delta_qr)
     qr_hi = qr0 + delta_qr
+    theta_initial_for_q = (
+        float(bg["qr_overlay_config"].theta_initial_deg)
+        if theta_initial_deg_used_for_q is None
+        else float(theta_initial_deg_used_for_q)
+    )
 
     edge_steps = np.diff(edges)
     edges_uniform = bool(
@@ -7027,6 +7048,7 @@ def profile_from_detector_qr_qz(
                 two_theta_min=theta_min_fast,
                 two_theta_max=theta_max_fast,
                 two_theta_mean=theta_mean_fast,
+                theta_initial_deg_used_for_q=theta_initial_for_q,
                 qr_integration_source="detector_qr_band_per_qz_bin_fast",
             )
 
@@ -7082,8 +7104,7 @@ def profile_from_detector_qr_qz(
         {
             "sample_name": [SAMPLE_NAME] * int(counts.size),
             "tilt_deg": [float(bg["tilt_deg"])] * int(counts.size),
-            "theta_initial_deg_used_for_q": [float(bg["qr_overlay_config"].theta_initial_deg)]
-            * int(counts.size),
+            "theta_initial_deg_used_for_q": [theta_initial_for_q] * int(counts.size),
             "qz_map_source": ["detector_qspace_per_pixel"] * int(counts.size),
             "qr_integration_source": ["detector_qr_band_per_qz_bin"] * int(counts.size),
             "solid_angle_corrected": [solid_angle_corrected] * int(counts.size),
@@ -9482,6 +9503,17 @@ profile_detector_q_maps = notebook_detector_qr_qz_maps(
 )
 if profile_detector_q_maps is None:
     raise RuntimeError("detector Qr/Qz maps are required for detector-space Qr rod profiles")
+specular_detector_theta_initial_deg = 3.0 * float(ROD_PROFILE_TILT_DEG)
+specular_detector_q_config = detector_qspace_config_with_theta_initial(
+    profile_bg["qr_overlay_config"],
+    specular_detector_theta_initial_deg,
+)
+specular_detector_q_maps = notebook_detector_qr_qz_maps(
+    config=specular_detector_q_config,
+    detector_shape=tuple(profile_bg["detector_image"].shape),
+)
+if specular_detector_q_maps is None:
+    raise RuntimeError("detector Qr/Qz maps are required for m=0 detector-space Qr profiles")
 profile_detector_phi_map = detector_gui_phi_map_for_background(profile_bg)
 if profile_detector_phi_map is None:
     raise RuntimeError("detector phi map is required for detector-space Qr rod profiles")
@@ -9769,62 +9801,28 @@ specular_region_mask = (
     & (phi_region_axis[:, None] < float(specular_phi_max_deg))
     & positive_qz_mask(profile_qz_map)
 )
-
-phi_windows = [
-    ("-", -90.0, 0.0, "- branch"),
-    ("+", 0.0, 90.0, "+ branch"),
-]
-profile_rows = []
-marker_rows = []
-region_overlays = []
-profile_failures = []
-if qr_rod_pre_editor_cache_hit:
-    rod_profile_table_cached = pd.DataFrame(
-        qr_rod_pre_editor_stage["rod_profile_table"]
-    ).copy()
-    marker_table_cached = pd.DataFrame(qr_rod_pre_editor_stage["marker_table"]).copy()
-    profile_rows = [rod_profile_table_cached]
-    marker_rows = marker_table_cached.to_dict("records")
-    region_overlays = list(qr_rod_pre_editor_stage.get("region_overlays", []) or [])
-    profile_failures = list(qr_rod_pre_editor_stage.get("profile_failures", []) or [])
-    specular_l_marker_table = pd.DataFrame(
-        qr_rod_pre_editor_stage.get("specular_l_marker_table", pd.DataFrame())
-    ).copy()
-specular_rod_entry = {
-    "key": ("q_group", "primary", 0, "qz_rod"),
-    "source": "primary",
-    "m": 0,
-    "qr": 0.0,
-}
-specular_qz_values = profile_qz_map[specular_region_mask & np.isfinite(profile_qz_map)]
-if not qr_rod_pre_editor_cache_hit:
-    if specular_qz_values.size >= 2:
-        specular_edges = np.linspace(
-            float(np.nanmin(specular_qz_values)),
-            float(np.nanmax(specular_qz_values)),
-            ROD_PROFILE_QZ_BINS + 1,
-            dtype=np.float64,
-        )
-        profile_rows.append(
-            profile_from_full_mask(
-                profile_bg,
-                specular_rod_entry,
-                branch_name="qz",
-                branch_label=rf"(0,L) strip, ${specular_theta_min_deg:.1f}^\circ<2\theta<{specular_theta_max_deg:.1f}^\circ$",
-                qz_edges=specular_edges,
-                mask=specular_region_mask,
-                qz_map=profile_qz_map,
-            )
-        )
-    else:
-        profile_failures.append(
-            (
-                ROD_PROFILE_TILT_DEG,
-                0.0,
-                "(0,L)",
-                "no caked qz values in dynamic specular window",
-            )
-        )
+specular_detector_qr_map = np.asarray(specular_detector_q_maps[0], dtype=np.float64)
+specular_detector_qz_map = np.asarray(specular_detector_q_maps[1], dtype=np.float64)
+specular_detector_valid_q = np.asarray(specular_detector_q_maps[2], dtype=bool)
+if float(specular_phi_min_deg) <= float(specular_phi_max_deg):
+    specular_detector_phi_mask = (
+        np.asarray(profile_detector_phi_map, dtype=np.float64) >= float(specular_phi_min_deg)
+    ) & (np.asarray(profile_detector_phi_map, dtype=np.float64) <= float(specular_phi_max_deg))
+else:
+    specular_detector_phi_mask = (
+        np.asarray(profile_detector_phi_map, dtype=np.float64) >= float(specular_phi_min_deg)
+    ) | (np.asarray(profile_detector_phi_map, dtype=np.float64) <= float(specular_phi_max_deg))
+specular_detector_region_mask = (
+    specular_detector_valid_q
+    & specular_detector_phi_mask
+    & np.isfinite(specular_detector_qr_map)
+    & np.isfinite(specular_detector_qz_map)
+    & np.isfinite(profile_detector_two_theta_map)
+    & (np.asarray(profile_detector_two_theta_map, dtype=np.float64) <= float(ROD_PROFILE_MAX_TWO_THETA_DEG))
+    & (specular_detector_qz_map > POSITIVE_QZ_MIN)
+    & (specular_detector_qr_map >= 0.0)
+    & (specular_detector_qr_map <= float(qr_rod_delta_qr))
+)
 
 
 def specular_l_marker_rows_for_background(
@@ -9867,6 +9865,90 @@ def specular_l_marker_rows_for_background(
             }
         )
     return pd.DataFrame(rows)
+
+
+phi_windows = [
+    ("-", -90.0, 0.0, "-"),
+    ("+", 0.0, 90.0, "+"),
+]
+profile_rows = []
+marker_rows = []
+region_overlays = []
+profile_failures = []
+if qr_rod_pre_editor_cache_hit:
+    rod_profile_table_cached = pd.DataFrame(
+        qr_rod_pre_editor_stage["rod_profile_table"]
+    ).copy()
+    marker_table_cached = pd.DataFrame(qr_rod_pre_editor_stage["marker_table"]).copy()
+    profile_rows = [rod_profile_table_cached]
+    marker_rows = marker_table_cached.to_dict("records")
+    region_overlays = list(qr_rod_pre_editor_stage.get("region_overlays", []) or [])
+    profile_failures = list(qr_rod_pre_editor_stage.get("profile_failures", []) or [])
+    specular_l_marker_table = pd.DataFrame(
+        qr_rod_pre_editor_stage.get("specular_l_marker_table", pd.DataFrame())
+    ).copy()
+else:
+    specular_l_marker_table = specular_l_marker_rows_for_background(profile_bg, profile_qz_map)
+specular_rod_entry = {
+    "key": ("q_group", "primary", 0, "qz_rod"),
+    "source": "primary",
+    "m": 0,
+    "qr": 0.0,
+}
+specular_all_qz_values = specular_detector_qz_map[
+    specular_detector_region_mask & np.isfinite(specular_detector_qz_map)
+]
+specular_qz_bounds = qz_bounds_for_l_window(
+    specular_all_qz_values,
+    specular_l_marker_table,
+    l_min=0.0,
+    l_max=SPECULAR_QR_ROD_L_MAX,
+    positive_qz_min=POSITIVE_QZ_MIN,
+)
+if specular_qz_bounds is None:
+    specular_qz_values = np.asarray([], dtype=np.float64)
+else:
+    specular_qz_lo, specular_qz_hi = specular_qz_bounds
+    specular_detector_region_mask = specular_detector_region_mask & (
+        (specular_detector_qz_map >= float(specular_qz_lo))
+        & (specular_detector_qz_map <= float(specular_qz_hi))
+    )
+    specular_qz_values = specular_detector_qz_map[
+        specular_detector_region_mask & np.isfinite(specular_detector_qz_map)
+    ]
+if not qr_rod_pre_editor_cache_hit:
+    if specular_qz_values.size >= 2:
+        specular_edges = np.linspace(
+            float(np.nanmin(specular_qz_values)),
+            float(np.nanmax(specular_qz_values)),
+            ROD_PROFILE_QZ_BINS + 1,
+            dtype=np.float64,
+        )
+        profile_rows.append(
+            profile_from_detector_qr_qz(
+                profile_bg,
+                specular_rod_entry,
+                branch_name="qz",
+                branch_label="m = 0",
+                qz_edges=specular_edges,
+                phi_min=float(specular_phi_min_deg),
+                phi_max=float(specular_phi_max_deg),
+                detector_q_maps=specular_detector_q_maps,
+                detector_phi_map=profile_detector_phi_map,
+                detector_solid_angle=profile_detector_solid_angle,
+                detector_two_theta_map=profile_detector_two_theta_map,
+                theta_initial_deg_used_for_q=specular_detector_theta_initial_deg,
+            )
+        )
+    else:
+        profile_failures.append(
+            (
+                ROD_PROFILE_TILT_DEG,
+                0.0,
+                "(0,L)",
+                f"no detector Qr/Qz values in dynamic specular window for L <= {SPECULAR_QR_ROD_L_MAX:g}",
+            )
+        )
 
 
 for rod in ([] if qr_rod_pre_editor_cache_hit else rod_entries):
@@ -10009,8 +10091,6 @@ if rod_profile_table.empty:
     raise RuntimeError(
         f"no positive-Qz {ROD_PROFILE_TILT_LABEL} deg Qr rod profiles were generated"
     )
-if not qr_rod_pre_editor_cache_hit:
-    specular_l_marker_table = specular_l_marker_rows_for_background(profile_bg, profile_qz_map)
 marker_table = marker_table_with_specular_l_markers(marker_table, specular_l_marker_table)
 if not qr_rod_pre_editor_cache_hit:
     pre_editor_cache = pre_editor_cache_with_stage(
@@ -10182,148 +10262,6 @@ def qz_values_to_l_axis(
     return qz.copy()
 
 
-def draw_rod_profile_fit_markers(
-    ax: object,
-    *,
-    m_value: int,
-    branch_value: str,
-    line_x: object,
-    line_y: object,
-    marker_source: pd.DataFrame | None = None,
-) -> None:
-    source = plot_marker_table if marker_source is None else marker_source
-    refs = l_reference_rows(
-        m_value=int(m_value), branch_value=str(branch_value), marker_source=source
-    )
-    if refs.empty:
-        return
-    marker_l = np.asarray(
-        qz_values_to_l_axis(
-            refs["qz_marker"],
-            m_value=int(m_value),
-            branch_value=str(branch_value),
-            marker_source=source,
-        ),
-        dtype=np.float64,
-    )
-    line_x_values = np.asarray(line_x, dtype=np.float64)
-    line_y_values = np.asarray(line_y, dtype=np.float64)
-    finite_line = np.isfinite(line_x_values) & np.isfinite(line_y_values)
-    if np.count_nonzero(finite_line) < 2:
-        return
-    line_x_values = line_x_values[finite_line]
-    line_y_values = line_y_values[finite_line]
-    order = np.argsort(line_x_values)
-    line_x_values = line_x_values[order]
-    line_y_values = line_y_values[order]
-    line_x_values, unique_indices = np.unique(line_x_values, return_index=True)
-    line_y_values = line_y_values[unique_indices]
-    if line_x_values.size < 2:
-        return
-    marker_y = np.interp(marker_l, line_x_values, line_y_values, left=np.nan, right=np.nan)
-    finite = np.isfinite(marker_l) & np.isfinite(marker_y)
-    if not np.any(finite):
-        return
-    ax.scatter(
-        marker_l[finite],
-        marker_y[finite],
-        s=15.0,
-        marker="o",
-        facecolors="white",
-        edgecolors="black",
-        linewidths=0.55,
-        alpha=0.95,
-        label="Fit marker",
-        zorder=7.2,
-    )
-
-
-def rod_marker_annotation_label(marker_row: dict[str, object] | pd.Series, m_value: int) -> str:
-    return marker_row_title(marker_row, int(m_value))
-
-
-def annotate_rod_profile_hk_locations(
-    ax: object,
-    *,
-    m_value: int,
-    branch_value: str,
-    line_x: object,
-    line_y: object,
-    marker_source: pd.DataFrame | None = None,
-) -> None:
-    source = plot_marker_table if marker_source is None else marker_source
-    refs = l_reference_rows(
-        m_value=int(m_value), branch_value=str(branch_value), marker_source=source
-    )
-    if refs.empty:
-        return
-    marker_l = qz_values_to_l_axis(
-        refs["qz_marker"],
-        m_value=int(m_value),
-        branch_value=str(branch_value),
-        marker_source=source,
-    )
-    marker_l = np.asarray(marker_l, dtype=np.float64)
-    line_x_values = np.asarray(line_x, dtype=np.float64)
-    line_y_values = np.asarray(line_y, dtype=np.float64)
-    finite_line = np.isfinite(line_x_values) & np.isfinite(line_y_values)
-    if np.count_nonzero(finite_line) < 2:
-        return
-    line_x_values = line_x_values[finite_line]
-    line_y_values = line_y_values[finite_line]
-    order = np.argsort(line_x_values)
-    line_x_values = line_x_values[order]
-    line_y_values = line_y_values[order]
-    line_x_values, unique_indices = np.unique(line_x_values, return_index=True)
-    line_y_values = line_y_values[unique_indices]
-    if line_x_values.size < 2:
-        return
-    line_y_at_markers = np.interp(marker_l, line_x_values, line_y_values, left=np.nan, right=np.nan)
-    finite = np.isfinite(marker_l) & np.isfinite(line_y_at_markers)
-    if not np.any(finite):
-        return
-    x_lo, x_hi = ax.get_xlim()
-    y_lo, y_hi = ax.get_ylim()
-    y_span = float(y_hi) - float(y_lo)
-    if not np.isfinite(y_span) or y_span <= 0.0:
-        return
-    visible_lo, visible_hi = sorted((float(x_lo), float(x_hi)))
-    visible_refs = refs.loc[finite].reset_index(drop=True)
-    for marker_index, (marker_row, x_value, y_value) in enumerate(
-        zip(visible_refs.to_dict("records"), marker_l[finite], line_y_at_markers[finite])
-    ):
-        x_value = float(x_value)
-        if x_value < visible_lo or x_value > visible_hi:
-            continue
-        ax.annotate(
-            rod_marker_annotation_label(marker_row, int(m_value)),
-            xy=(x_value, float(y_value)),
-            xycoords="data",
-            xytext=(12.0, 12.0 + 5.0 * (marker_index % 3)),
-            textcoords="offset points",
-            ha="left",
-            va="bottom",
-            fontsize=5.0,
-            color="black",
-            bbox={
-                "boxstyle": "round,pad=0.08",
-                "facecolor": "white",
-                "edgecolor": "0.25",
-                "linewidth": 0.30,
-                "alpha": 0.90,
-            },
-            arrowprops={
-                "arrowstyle": "->",
-                "color": "0.20",
-                "linewidth": 0.55,
-                "shrinkA": 1.0,
-                "shrinkB": 2.0,
-            },
-            annotation_clip=True,
-            zorder=7,
-        )
-
-
 def qz_to_l_linear_coeff(*, m_value: int, branch_value: str) -> tuple[float, float]:
     refs = l_reference_rows(m_value=int(m_value), branch_value=str(branch_value))
     if refs.empty:
@@ -10370,6 +10308,124 @@ def positive_l_rows(table: pd.DataFrame, *, m_value: int, branch_value: str) -> 
     return table[np.asarray(l_values, dtype=np.float64) > 0.0].copy()
 
 
+def rod_profile_panel_label(m_value: int, branch_value: str) -> str:
+    if int(m_value) == 0:
+        return "$m = 0$"
+    return f"$m = {int(m_value)}\\ {str(branch_value).strip()}$"
+
+
+def shared_rod_profile_l_axis_limits(
+    profile_table: pd.DataFrame,
+    marker_source: pd.DataFrame,
+    plot_entries: list[dict[str, object]],
+    branch_windows: object,
+    *,
+    min_l: float = 2.0,
+    fallback_span: float = 1.0,
+) -> tuple[float, float]:
+    l_values: list[np.ndarray] = []
+    table = pd.DataFrame(profile_table).copy()
+    markers = pd.DataFrame(marker_source).copy()
+    for rod in plot_entries:
+        m_value = int(rod["m"])
+        branches = ("qz",) if m_value == 0 else tuple(str(item[0]) for item in branch_windows)
+        for branch_value in branches:
+            refs = l_reference_rows(
+                m_value=m_value, branch_value=branch_value, marker_source=markers
+            )
+            if not refs.empty:
+                l_values.append(np.asarray(refs["fit_l"], dtype=np.float64))
+            if table.empty or "qz_center" not in table:
+                continue
+            sub = table[
+                (np.asarray(table["m"], dtype=int) == m_value)
+                & (table["branch"].astype(str) == str(branch_value))
+            ]
+            if sub.empty:
+                continue
+            l_values.append(
+                qz_values_to_l_axis(
+                    sub["qz_center"],
+                    m_value=m_value,
+                    branch_value=branch_value,
+                    marker_source=markers,
+                )
+            )
+    if not l_values:
+        return float(min_l), float(min_l + max(float(fallback_span), 1.0e-6))
+    finite = np.concatenate([np.asarray(values, dtype=np.float64).reshape(-1) for values in l_values])
+    finite = finite[np.isfinite(finite) & (finite > 0.0)]
+    if finite.size == 0:
+        return float(min_l), float(min_l + max(float(fallback_span), 1.0e-6))
+    upper = max(float(np.nanmax(finite)), float(min_l) + max(float(fallback_span), 1.0e-6))
+    return float(min_l), float(upper)
+
+
+def shared_nonzero_rod_profile_y_axis_limits(
+    profile_table: pd.DataFrame,
+    marker_source: pd.DataFrame,
+    plot_entries: list[dict[str, object]],
+    branch_windows: object,
+    *,
+    fallback_limits: tuple[float, float] = (-1.0, 1.0),
+    margin_fraction: float = 0.08,
+) -> tuple[float, float]:
+    table = pd.DataFrame(profile_table).copy()
+    markers = pd.DataFrame(marker_source).copy()
+    y_values: list[np.ndarray] = []
+    if table.empty:
+        return tuple(float(value) for value in fallback_limits)
+    for rod in plot_entries:
+        m_value = int(rod["m"])
+        if m_value == 0:
+            continue
+        for branch_value in tuple(str(item[0]) for item in branch_windows):
+            sub = table[
+                (np.asarray(table["m"], dtype=int) == m_value)
+                & (table["branch"].astype(str) == str(branch_value))
+            ].copy()
+            if "pixel_count" in sub:
+                sub = sub[np.asarray(sub["pixel_count"], dtype=np.float64) > 0.0].copy()
+            if sub.empty:
+                continue
+            if "qz_center" in sub:
+                l_values = qz_values_to_l_axis(
+                    sub["qz_center"],
+                    m_value=m_value,
+                    branch_value=branch_value,
+                    marker_source=markers,
+                )
+                sub = sub[np.asarray(l_values, dtype=np.float64) > 0.0].copy()
+            if sub.empty or "background_density" not in sub:
+                continue
+            if "joint_peak_density" in sub:
+                peak_density = sub["joint_peak_density"]
+            elif "fit_density" in sub:
+                peak_density = sub["fit_density"]
+            else:
+                continue
+            norm_payload = normalized_data_simulation_payload(
+                sub["background_density"],
+                peak_density,
+                sub.get("joint_linear_baseline_density", None),
+            )
+            y_values.append(np.asarray(norm_payload["data"], dtype=np.float64))
+            y_values.append(np.asarray(norm_payload["simulation"], dtype=np.float64))
+    if not y_values:
+        return tuple(float(value) for value in fallback_limits)
+    finite = np.concatenate([np.asarray([0.0], dtype=np.float64), *y_values])
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        return tuple(float(value) for value in fallback_limits)
+    y_min = float(np.nanmin(finite))
+    y_max = float(np.nanmax(finite))
+    span = y_max - y_min
+    if not np.isfinite(span) or span <= 0.0:
+        span = max(abs(y_max), 1.0)
+    pad = max(span * float(margin_fraction), 1.0e-6)
+    return float(y_min - pad), float(y_max + pad)
+
+
 support_diagnostic_stem = f"{ROD_PROFILE_STEM}_support_diagnostics"
 fig, support_axes = plt.subplots(
     2, 2, figsize=(JOURNAL_FULL_WIDTH_IN, 4.8), constrained_layout=True
@@ -10413,22 +10469,24 @@ rod_note_lines = [
     f"Detector distance for rod Q-space: `{float(rod_qspace_calibration.get('distance_original_m', distance_m)):.8g}` m -> `{float(rod_qspace_calibration.get('distance_fitted_m', distance_m)):.8g}` m.",
     f"Qr RMS: `{float(rod_qspace_calibration.get('rms_before_qr', np.nan)):.5g}` -> `{float(rod_qspace_calibration.get('rms_after_qr', np.nan)):.5g}` Å^-1; Qz diagnostic RMS: `{float(rod_qspace_calibration.get('rms_before_qz', np.nan)):.5g}` -> `{float(rod_qspace_calibration.get('rms_after_qz', np.nan)):.5g}` Å^-1.",
     f"Displayed/integrated detector support is limited to `2theta <= {ROD_PROFILE_MAX_TWO_THETA_DEG:.1f}°` and `Qz > 0`.",
-    "Branches: `- branch` and `+ branch`.",
+    "Phi signs: `-` and `+`.",
     "",
     f"The figure uses only the {ROD_PROFILE_TILT_LABEL}° background. Non-specular traces are integrated directly in detector Qr/Qz space.",
+    f"Nonzero rods use detector Q maps at `theta_i = {float(ROD_PROFILE_TILT_DEG):.6g}°`.",
+    f"Specular `m = 0` Qr integration uses detector Q maps at `theta_i0 = 3*theta_i = {float(specular_detector_theta_initial_deg):.6g}°` and is limited to `L <= {SPECULAR_QR_ROD_L_MAX:g}`.",
     "Before integration, each non-specular HK rod center is adjusted from fitted detector peak Qr samples; every Qz bin then uses the adjusted Qr0 +/- delta_Qr, branch, positive Qz, and the 2theta display limit before summing intensity.",
-    "The detector-region figure is a detector-space Qr overlay diagnostic: the background is linear detector intensity with robust percentile clipping, translucent ribbons show the active Delta Qr support with dashed edge pixels, solid curves are projected fitted-geometry rod centerlines, and text labels identify each HK/00L line.",
+    "The detector-region figure is a detector-space Qr overlay diagnostic: the background is linear detector intensity with robust percentile clipping, translucent ribbons show the active Delta Qr support with dashed boundary strokes, solid curves are projected fitted-geometry rod centerlines, and solid-white m labels start from the default geometry before manual adjustment; the intensity scale is saved as a separate file.",
     "The plotted traces are acceptance-normalized detector-count densities unless BACKGROUND_SOLID_ANGLE_CORRECTION is enabled. Raw summed columns are retained for audit only.",
     f"Solid-angle correction enabled: `{bool(BACKGROUND_SOLID_ANGLE_CORRECTION)}`.",
     "When caked sum fields are available, density uses sum_signal / sum_normalization. Otherwise it falls back to acceptance weights, then pixel_count.",
     "For nonzero HK rods, plotted `Data` is `background_density - joint_linear_baseline_density` and plotted `Simulation` is peak-only `joint_peak_density`.",
-    "For HK=0 only, plotted `Data` is raw `background_density` and plotted `Simulation` is `joint_peak_density + joint_linear_baseline_density`.",
+    "For m=0 only, plotted `Data` is raw `background_density` and plotted `Simulation` is `joint_peak_density + joint_linear_baseline_density`.",
     "The CSV includes `joint_peak_density`, `joint_linear_baseline_density`, and `joint_fit_density = joint_peak_density + joint_linear_baseline_density`.",
     "The CSV includes `peak_subtracted_density = background_density - joint_peak_density`; this fitted-peak removal is the only subtraction product. `fit_residual_density = background_density - joint_fit_density` is reported only as a fit diagnostic.",
     "The detector-space fit model remains in the CSV as `fit_density`; the plotted line uses peak-only `joint_peak_density`. Individual component distributions are saved to the component CSV but not drawn.",
-    "Titles show HK = H^2 + H*K + K^2; marker tick labels show compressed (HK,L) values for the fitted branch points.",
-    "HK branch masks still use detector-space Qr/Qz internally and extend to the projected branch endpoint.",
-    "The detector-region figure labels specular fitted peaks as `00L`; the dynamic specular strip remains a profile-extraction support, not a displayed diagnostic overlay.",
+    "Subplot labels show `m = H^2 + H*K + K^2`; marker tick labels show compressed (HK,L) values for the fitted points.",
+    "Nonzero-m masks still use detector-space Qr/Qz internally and extend to the projected sign endpoint.",
+    "The detector-region figure labels the specular rod as `m = 0`; the displayed support is the same detector Qr/Qz region used for profile extraction.",
     "",
     "## Rods",
     "",
@@ -10532,16 +10590,59 @@ if skipped_empty_plot_hk:
     )
 if not plot_rod_entries:
     raise RuntimeError("no drawable Qr-rod profile rows are available for the final figure")
-fig = plt.figure(
-    figsize=(JOURNAL_FULL_WIDTH_IN, max(2.05 * len(plot_rod_entries), 5.0)), constrained_layout=True
+nonzero_plot_rod_entries = [rod for rod in plot_rod_entries if int(rod["m"]) != 0]
+rod_profile_l_axis_limits = shared_rod_profile_l_axis_limits(
+    rod_profile_table,
+    plot_marker_table,
+    nonzero_plot_rod_entries,
+    phi_windows,
 )
-profile_grid = fig.add_gridspec(len(plot_rod_entries), len(phi_windows))
+rod_profile_nonzero_y_axis_limits = shared_nonzero_rod_profile_y_axis_limits(
+    rod_profile_table,
+    plot_marker_table,
+    nonzero_plot_rod_entries,
+    phi_windows,
+)
+rod_profile_hk0_l_axis_limits = (0.0, SPECULAR_QR_ROD_L_MAX)
+last_nonzero_plot_row = max(
+    (row for row, rod in enumerate(plot_rod_entries) if int(rod["m"]) != 0),
+    default=-1,
+)
+has_hk0_profile_row = any(int(rod["m"]) == 0 for rod in plot_rod_entries)
+fig = plt.figure(
+    figsize=(JOURNAL_FULL_WIDTH_IN, max(2.05 * len(plot_rod_entries), 5.0)),
+    constrained_layout=False,
+)
+fig.subplots_adjust(left=0.075, right=0.995, bottom=0.075, top=0.955)
+if nonzero_plot_rod_entries and has_hk0_profile_row:
+    profile_grid = fig.add_gridspec(
+        2,
+        1,
+        height_ratios=[float(len(nonzero_plot_rod_entries)), 1.0],
+        hspace=0.18,
+    )
+    nonzero_profile_grid = profile_grid[0].subgridspec(
+        len(nonzero_plot_rod_entries), len(phi_windows), wspace=0.0, hspace=0.0
+    )
+    hk0_profile_grid = profile_grid[1].subgridspec(1, len(phi_windows))
+elif nonzero_plot_rod_entries:
+    profile_grid = fig.add_gridspec(1, 1)
+    nonzero_profile_grid = profile_grid[0].subgridspec(
+        len(nonzero_plot_rod_entries), len(phi_windows), wspace=0.0, hspace=0.0
+    )
+    hk0_profile_grid = None
+else:
+    profile_grid = fig.add_gridspec(1, len(phi_windows))
+    nonzero_profile_grid = None
+    hk0_profile_grid = profile_grid
 axes = np.empty((len(plot_rod_entries), len(phi_windows)), dtype=object)
+nonzero_profile_row = 0
 for row, rod in enumerate(plot_rod_entries):
     if int(rod["m"]) == 0:
-        ax = fig.add_subplot(profile_grid[row, :])
+        ax = fig.add_subplot(hk0_profile_grid[0, :])
         axes[row, 0] = ax
         axes[row, 1] = ax
+        ax.set_xlim(*rod_profile_hk0_l_axis_limits)
         sub = rod_profile_table[
             (rod_profile_table["m"] == 0)
             & (rod_profile_table["branch"] == "qz")
@@ -10584,28 +10685,35 @@ for row, rod in enumerate(plot_rod_entries):
             )
             hk0_y_values = np.concatenate([data_norm, simulation_norm])
             hk0_positive_y = hk0_y_values[np.isfinite(hk0_y_values) & (hk0_y_values > 0.0)]
-            draw_rod_profile_fit_markers(
-                ax, m_value=0, branch_value="qz", line_x=x, line_y=data_norm
-            )
-            annotate_rod_profile_hk_locations(
-                ax, m_value=0, branch_value="qz", line_x=x, line_y=data_norm
-            )
         ax.grid(True, color=JOURNAL_GRID_COLOR, linewidth=0.45)
         ax.set_yscale("log")
         if hk0_positive_y.size:
             hk0_y_min = max(float(np.nanmin(hk0_positive_y)) * 0.80, 1.0e-6)
             hk0_y_max = max(float(np.nanmax(hk0_positive_y)) * 1.18, hk0_y_min * 10.0)
             ax.set_ylim(hk0_y_min, hk0_y_max)
-        ax.set_title(r"$HK = 0$")
+        ax.text(
+            0.5,
+            0.985,
+            rod_profile_panel_label(0, "qz"),
+            transform=ax.transAxes,
+            ha="center",
+            va="top",
+            fontsize=6.4,
+            color="black",
+            bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.78, "pad": 1.2},
+            zorder=8.0,
+        )
         ax.set_xlabel(r"$L$")
         ax.set_ylabel("Intensity (a.u.)")
         ax.tick_params(length=2.0, width=0.45, labelsize=6.1, direction="in", top=True, right=True)
         for spine in ax.spines.values():
             spine.set_linewidth(0.55)
         continue
-    for col, (branch_name, _phi_min, _phi_max, branch_label) in enumerate(phi_windows):
-        ax = fig.add_subplot(profile_grid[row, col])
+    for col, (branch_name, _phi_min, _phi_max, _phi_sign_label) in enumerate(phi_windows):
+        ax = fig.add_subplot(nonzero_profile_grid[nonzero_profile_row, col])
         axes[row, col] = ax
+        ax.set_xlim(*rod_profile_l_axis_limits)
+        ax.set_ylim(*rod_profile_nonzero_y_axis_limits)
         sub = rod_profile_table[
             (rod_profile_table["m"] == int(rod["m"]))
             & (rod_profile_table["branch"] == branch_name)
@@ -10646,40 +10754,38 @@ for row, rod in enumerate(plot_rod_entries):
                 label="Simulation",
                 zorder=5,
             )
-            finite_x = x[np.isfinite(x)]
-            if finite_x.size:
-                x_max = float(np.nanmax(finite_x))
-                if np.isfinite(x_max) and x_max > 2.0:
-                    ax.set_xlim(2.0, x_max)
-            draw_rod_profile_fit_markers(
-                ax, m_value=int(rod["m"]), branch_value=branch_name, line_x=x, line_y=data_norm
-            )
-            annotate_rod_profile_hk_locations(
-                ax, m_value=int(rod["m"]), branch_value=branch_name, line_x=x, line_y=data_norm
-            )
         ax.axhline(0.0, color="0.80", linewidth=0.45)
         ax.grid(True, color=JOURNAL_GRID_COLOR, linewidth=0.45)
-        ax.set_title(branch_label if row == 0 else "")
-        if col == 0:
-            ax.set_ylabel(f"$HK = {int(rod['m'])}$")
-        ax.tick_params(length=2.0, width=0.45, labelsize=6.1, direction="in", top=True, right=True)
+        ax.text(
+            0.5,
+            0.985,
+            rod_profile_panel_label(int(rod["m"]), branch_name),
+            transform=ax.transAxes,
+            ha="center",
+            va="top",
+            fontsize=6.4,
+            color="black",
+            bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.78, "pad": 1.2},
+            zorder=8.0,
+        )
+        ax.tick_params(
+            length=2.0,
+            width=0.45,
+            labelsize=6.1,
+            direction="in",
+            top=True,
+            right=True,
+            labelleft=col == 0,
+            labelbottom=row == last_nonzero_plot_row,
+        )
         for spine in ax.spines.values():
             spine.set_linewidth(0.55)
+    nonzero_profile_row += 1
 
 legend_handles = [
     mpl.lines.Line2D([], [], color=JOURNAL_DATA_COLOR, linewidth=1.0, label="Data"),
     mpl.lines.Line2D(
         [], [], color=JOURNAL_FIT_COLOR, linewidth=1.0, linestyle="--", label="Simulation"
-    ),
-    mpl.lines.Line2D(
-        [],
-        [],
-        color="black",
-        marker="o",
-        markerfacecolor="white",
-        markersize=3.7,
-        linewidth=0.0,
-        label="Fit marker",
     ),
 ]
 legend_ax = axes[0, -1]
@@ -10735,10 +10841,167 @@ detector_region_cmap.set_bad("#050505")
 detector_region_centerline_lw = 1.1
 detector_region_band_alpha = 0.11
 detector_region_boundary_alpha = 0.72
+detector_region_boundary_lw = 1.45
+detector_region_boundary_linestyle = "dashed"
 detector_region_specular_centerline_lw = detector_region_centerline_lw
 detector_region_specular_band_alpha = 0.42
 detector_region_specular_boundary_alpha = 1.0
 detector_region_specular_boundary_expand_px = 2
+detector_region_label_fontsize = 8.6
+
+
+def save_detector_region_intensity_scale(
+    cmap: object,
+    *,
+    vmin: float,
+    vmax: float,
+    stem: str,
+) -> tuple[Path, Path]:
+    scale_fig, scale_ax = plt.subplots(figsize=(0.55, 2.35), constrained_layout=True)
+    norm = mpl.colors.Normalize(vmin=float(vmin), vmax=float(vmax))
+    mappable = mpl.cm.ScalarMappable(norm=norm, cmap=cmap)
+    mappable.set_array([])
+    scale_cbar = scale_fig.colorbar(mappable, cax=scale_ax, orientation="vertical")
+    scale_cbar.set_label("Intensity", fontsize=6.5)
+    scale_cbar.ax.tick_params(labelsize=5.8, length=2.0, width=0.45)
+    paths = save_manuscript_figure(scale_fig, stem)
+    plt.close(scale_fig)
+    return paths
+
+
+def detector_rod_label(m_value: int, branch_suffix: str) -> str:
+    return f"m = {int(m_value)} {str(branch_suffix).strip()}"
+
+
+def detector_specular_label() -> str:
+    return "m = 0"
+
+
+def detector_rod_label_id(m_value: int, branch_suffix: str) -> str:
+    return f"m={int(m_value)}:{str(branch_suffix).strip()}"
+
+
+def detector_specular_label_id() -> str:
+    return "m=0"
+
+
+def detector_label_id(entry: dict[str, object]) -> str:
+    existing = str(entry.get("label_id", "")).strip()
+    if existing:
+        return existing
+    text = str(entry.get("text", "")).strip()
+    match = re.fullmatch(r"m\s*=\s*(-?\d+)\s*([+-])?", text)
+    if match:
+        suffix = "" if match.group(2) is None else f":{match.group(2)}"
+        return f"m={int(match.group(1))}{suffix}"
+    return re.sub(r"\s+", "", text) or "label"
+
+
+def detector_label_fontsize(entry: dict[str, object]) -> float:
+    default = float(globals().get("detector_region_label_fontsize", 11.0))
+    try:
+        value = float(entry.get("fontsize", default))
+    except Exception:
+        value = default
+    if not np.isfinite(value):
+        value = default
+    return float(np.clip(value, 4.0, 32.0))
+
+
+def detector_label_xy(entry: dict[str, object]) -> np.ndarray | None:
+    if "label_xy" not in entry:
+        return None
+    pos = np.asarray(entry.get("label_xy"), dtype=np.float64).reshape(-1)
+    if pos.size < 2 or not np.all(np.isfinite(pos[:2])):
+        return None
+    return pos[:2].copy()
+
+
+def detector_label_settings_payload(label_entries: list[dict[str, object]]) -> dict[str, object]:
+    labels: list[dict[str, object]] = []
+    for entry in label_entries:
+        payload: dict[str, object] = {
+            "label_id": detector_label_id(entry),
+            "text": str(entry.get("text", "")),
+            "fontsize": detector_label_fontsize(entry),
+        }
+        pos = detector_label_xy(entry)
+        if pos is not None:
+            payload["label_xy"] = [float(pos[0]), float(pos[1])]
+        labels.append(payload)
+    return {"schema": "ra_sim.detector_label_settings.v1", "labels": labels}
+
+
+def apply_detector_label_settings(
+    label_entries: list[dict[str, object]], payload: object
+) -> list[dict[str, object]]:
+    if not isinstance(payload, dict) or payload.get("schema") != "ra_sim.detector_label_settings.v1":
+        return [dict(entry) for entry in label_entries]
+    lookup: dict[str, dict[str, object]] = {}
+    for item in payload.get("labels", []):
+        if isinstance(item, dict):
+            label_id = str(item.get("label_id", "")).strip()
+            if label_id:
+                lookup[label_id] = item
+    updated: list[dict[str, object]] = []
+    for entry in label_entries:
+        new_entry = dict(entry)
+        settings = lookup.get(detector_label_id(new_entry))
+        if settings is not None:
+            pos = detector_label_xy(settings)
+            if pos is not None:
+                new_entry["label_xy"] = pos
+            if "fontsize" in settings:
+                new_entry["fontsize"] = detector_label_fontsize(settings)
+        updated.append(new_entry)
+    return updated
+
+
+def load_detector_label_settings(path: object) -> dict[str, object]:
+    return json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+
+
+def save_detector_label_settings(path: object, label_entries: list[dict[str, object]]) -> Path:
+    output_path = Path(path).expanduser()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(detector_label_settings_payload(label_entries), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return output_path
+
+
+def draw_detector_region_label_artists(
+    ax: object, label_entries: list[dict[str, object]]
+) -> list[object]:
+    artists: list[object] = []
+    for index, entry in enumerate(label_entries):
+        if entry.get("label_xy", None) is None:
+            continue
+        pos = detector_label_xy(entry)
+        if pos is None:
+            continue
+        artist = ax.text(
+            float(pos[0]),
+            float(pos[1]),
+            str(entry.get("text", "")),
+            color="white",
+            fontsize=detector_label_fontsize(entry),
+            fontweight="semibold",
+            ha="center",
+            va="center",
+            zorder=9.0,
+            clip_on=True,
+        )
+        artist._ra_sim_label_entry_index = int(index)
+        artists.append(artist)
+    return artists
+
+
+def detector_label_edit_runtime_mode(
+    mode: object = "auto", *, backend_name: object = None, env: dict[str, str] | None = None
+) -> str:
+    return qr_rod_peak_edit_runtime_mode(mode, backend_name=backend_name, env=env)
 
 
 def detector_xy_from_caked_angles(
@@ -10824,6 +11087,49 @@ def projected_qr_detector_lines(
         )
         for payload in projected_qr_detector_trace_payloads(rod, config=config)
     ]
+
+
+def clipped_detector_trace_to_qz_bounds(
+    x_line: object,
+    y_line: object,
+    qz_line: object,
+    qz_bounds: tuple[float, float],
+) -> tuple[np.ndarray, np.ndarray]:
+    x = np.asarray(x_line, dtype=np.float64).copy()
+    y = np.asarray(y_line, dtype=np.float64).copy()
+    qz = np.asarray(qz_line, dtype=np.float64).reshape(-1)
+    if x.shape != y.shape or x.size != qz.size:
+        return (
+            np.full(np.asarray(x_line, dtype=np.float64).shape, np.nan, dtype=np.float64),
+            np.full(np.asarray(y_line, dtype=np.float64).shape, np.nan, dtype=np.float64),
+        )
+    qz_min, qz_max = sorted((float(qz_bounds[0]), float(qz_bounds[1])))
+    keep = np.isfinite(x) & np.isfinite(y) & np.isfinite(qz) & (qz >= qz_min) & (qz <= qz_max)
+    x[~keep] = np.nan
+    y[~keep] = np.nan
+    return x, y
+
+
+def detector_qz_values_for_polyline(
+    x_line: object,
+    y_line: object,
+    detector_qz_map: object,
+) -> np.ndarray:
+    x = np.asarray(x_line, dtype=np.float64).reshape(-1)
+    y = np.asarray(y_line, dtype=np.float64).reshape(-1)
+    qz_map_values = np.asarray(detector_qz_map, dtype=np.float64)
+    qz = np.full(x.shape, np.nan, dtype=np.float64)
+    if x.shape != y.shape or qz_map_values.ndim != 2:
+        return qz
+    finite = np.isfinite(x) & np.isfinite(y)
+    cols = np.zeros(x.shape, dtype=np.int64)
+    rows = np.zeros(y.shape, dtype=np.int64)
+    cols[finite] = np.rint(x[finite]).astype(np.int64, copy=False)
+    rows[finite] = np.rint(y[finite]).astype(np.int64, copy=False)
+    valid = finite & (rows >= 0) & (rows < qz_map_values.shape[0]) & (cols >= 0) & (cols < qz_map_values.shape[1])
+    if np.any(valid):
+        qz[valid] = qz_map_values[rows[valid], cols[valid]]
+    return qz
 
 
 def detector_point_in_region(x: object, y: object) -> bool:
@@ -10965,6 +11271,33 @@ def draw_detector_mask_layer(mask: np.ndarray, color: str, *, alpha: float, zord
     )
 
 
+def draw_detector_boundary_contour(
+    mask: np.ndarray,
+    color: str,
+    *,
+    alpha: float,
+    zorder: float,
+) -> None:
+    boundary = np.asarray(mask, dtype=bool) & detector_region_shape_mask
+    if boundary.shape != detector_region_shape or not np.any(boundary):
+        return
+    if not np.any((~boundary) & detector_region_shape_mask):
+        return
+    values = np.ma.masked_where(
+        ~detector_region_shape_mask, np.asarray(boundary, dtype=np.float64)
+    )
+    ax.contour(
+        values,
+        levels=[0.5],
+        colors=[color],
+        linewidths=detector_region_boundary_lw,
+        linestyles=detector_region_boundary_linestyle,
+        alpha=float(alpha),
+        antialiased=True,
+        zorder=zorder,
+    )
+
+
 def draw_detector_delta_q_region(
     visual: dict[str, object] | None,
     color: str,
@@ -10985,12 +11318,36 @@ def draw_detector_delta_q_region(
         and boundary_outer.shape == detector_region_shape
     ):
         boundary_mask = expanded_detector_mask(boundary_inner | boundary_outer, boundary_expand_px)
-        draw_detector_mask_layer(
+        draw_detector_boundary_contour(
             boundary_mask,
             color,
             alpha=float(boundary_alpha),
-            zorder=4.0,
+            zorder=4.1,
         )
+
+
+def detector_mask_centerline_from_visual(
+    visual: dict[str, object] | None,
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    if not isinstance(visual, dict):
+        return []
+    mask = np.asarray(visual.get("band_fill_mask"), dtype=bool)
+    shape_mask = np.asarray(globals().get("detector_region_shape_mask", np.ones(mask.shape, dtype=bool)), dtype=bool)
+    if mask.ndim != 2 or shape_mask.shape != mask.shape:
+        return []
+    mask = mask & shape_mask
+    if not np.any(mask):
+        return []
+    rows: list[float] = []
+    cols: list[float] = []
+    for row in np.flatnonzero(np.any(mask, axis=1)):
+        row_cols = np.flatnonzero(mask[int(row), :])
+        if row_cols.size:
+            rows.append(float(row))
+            cols.append(float(np.nanmedian(row_cols.astype(np.float64))))
+    if len(rows) < 2:
+        return []
+    return [(np.asarray(cols, dtype=np.float64), np.asarray(rows, dtype=np.float64))]
 
 
 def visible_polyline_anchor(
@@ -11083,10 +11440,8 @@ def place_low_l_rod_label(
     text: str,
     color: str,
     *,
-    used_positions: list[np.ndarray],
     offset_px: float = 16.0,
-    tangent_shift_px: float = 8.0,
-) -> None:
+) -> np.ndarray | None:
     pts = np.column_stack(
         [np.asarray(x_line, dtype=np.float64), np.asarray(y_line, dtype=np.float64)]
     )
@@ -11096,43 +11451,12 @@ def place_low_l_rod_label(
         qz = np.full(pts.shape[0], np.nan, dtype=np.float64)
     anchor = low_l_rod_anchor(pts[:, 0], pts[:, 1], qz)
     if anchor is None or np.count_nonzero(finite) < 2:
-        return
+        return None
     x_anchor, y_anchor = anchor
-    d2 = np.square(pts[:, 0] - float(x_anchor)) + np.square(pts[:, 1] - float(y_anchor))
-    d2[~finite] = np.inf
-    j = int(np.nanargmin(d2))
-    valid_indices = np.flatnonzero(finite)
-    if valid_indices.size < 2:
-        return
-    local = int(np.argmin(np.abs(valid_indices - j)))
-    j0 = int(valid_indices[max(local - 1, 0)])
-    j1 = int(valid_indices[min(local + 1, valid_indices.size - 1)])
-    tangent = pts[j1] - pts[j0]
-    tangent = tangent / (np.linalg.norm(tangent) + 1.0e-12)
     base_pos = clamp_detector_label_position(
         np.array([float(x_anchor), float(y_anchor) + float(offset_px)], dtype=np.float64)
     )
-    pos = base_pos.copy()
-    for attempt in range(13):
-        if all(np.hypot(*(pos - q)) >= 18.0 for q in used_positions):
-            break
-        direction = -1.0 if attempt % 2 else 1.0
-        distance = float((attempt // 2) + 1) * float(tangent_shift_px)
-        pos = clamp_detector_label_position(base_pos + direction * distance * tangent)
-    used_positions.append(pos.copy())
-    ax.text(
-        pos[0],
-        pos[1],
-        text,
-        color=color,
-        fontsize=7.0,
-        fontweight="semibold",
-        ha="center",
-        va="center",
-        zorder=9.0,
-        clip_on=True,
-        path_effects=[pe.withStroke(linewidth=2.4, foreground="white")],
-    )
+    return base_pos.copy()
 
 
 def place_rod_label(
@@ -11143,21 +11467,19 @@ def place_rod_label(
     color: str,
     *,
     beam_center: tuple[float, float],
-    used_positions: list[np.ndarray],
     offset_px: float = 14.0,
-    tangent_shift_px: float = 8.0,
     flip_normal: bool = False,
-) -> None:
+) -> np.ndarray | None:
     pts = np.column_stack(
         [np.asarray(x_line, dtype=np.float64), np.asarray(y_line, dtype=np.float64)]
     )
     finite = np.isfinite(pts[:, 0]) & np.isfinite(pts[:, 1])
     pts = pts[finite]
     if pts.shape[0] < 2:
-        return
+        return None
     anchor = visible_polyline_anchor(pts[:, 0], pts[:, 1])
     if anchor is None:
-        return
+        return None
     x_anchor, y_anchor = anchor
     d2 = np.square(pts[:, 0] - float(x_anchor)) + np.square(pts[:, 1] - float(y_anchor))
     j = int(np.argmin(d2))
@@ -11177,27 +11499,455 @@ def place_rod_label(
     base_pos = clamp_detector_label_position(
         np.array([float(x_anchor), float(y_anchor)], dtype=np.float64) + float(offset_px) * normal
     )
-    pos = base_pos.copy()
-    for attempt in range(13):
-        if all(np.hypot(*(pos - q)) >= 18.0 for q in used_positions):
-            break
-        direction = -1.0 if attempt % 2 else 1.0
-        distance = float((attempt // 2) + 1) * float(tangent_shift_px)
-        pos = clamp_detector_label_position(base_pos + direction * distance * tangent)
-    used_positions.append(pos.copy())
-    ax.text(
-        pos[0],
-        pos[1],
-        text,
-        color=color,
-        fontsize=7.0,
-        fontweight="semibold",
-        ha="center",
-        va="center",
-        zorder=9.0,
-        clip_on=True,
-        path_effects=[pe.withStroke(linewidth=2.4, foreground="white")],
-    )
+    return base_pos.copy()
+
+
+def show_detector_region_label_position_popup(
+    fig: object,
+    ax: object,
+    label_entries: list[dict[str, object]],
+    *,
+    settings_path: object = None,
+) -> tuple[list[dict[str, object]], bool]:
+    try:
+        import tkinter as tk
+        from tkinter import ttk
+    except Exception as exc:
+        raise RuntimeError(f"Tkinter detector label editor is unavailable: {exc}") from exc
+
+    edited = [dict(entry) for entry in label_entries]
+    original = [dict(entry) for entry in label_entries]
+    drawable_indices = [
+        index for index, entry in enumerate(edited) if detector_label_xy(entry) is not None
+    ]
+    if not drawable_indices:
+        return edited, True
+
+    fig.canvas.draw()
+    display_width, display_height = fig.canvas.get_width_height()
+    image_path = ""
+    root = tk.Tk()
+    root.title("Detector label pixel editor")
+
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            image_path = str(tmp.name)
+        fig.savefig(image_path, dpi=fig.dpi, format="png")
+        photo = tk.PhotoImage(file=image_path)
+        display_width = int(photo.width())
+        display_height = int(photo.height())
+
+        root._ra_sim_detector_label_photo = photo
+        settings_text = "" if settings_path is None else str(settings_path).strip()
+        label_choices = [
+            f"{index}: {str(edited[index].get('text', ''))}" for index in drawable_indices
+        ]
+        state: dict[str, object] = {
+            "active_index": int(drawable_indices[0]),
+            "accepted": True,
+            "syncing_controls": False,
+            "dragging_index": None,
+            "drag_offset_x": 0.0,
+            "drag_offset_y": 0.0,
+        }
+        canvas_items: dict[int, int] = {}
+
+        def data_to_canvas_xy(x_value: object, y_value: object) -> tuple[float, float]:
+            display_x, display_y = ax.transData.transform((float(x_value), float(y_value)))
+            canvas_y = float(display_height) - float(display_y)
+            return float(display_x), float(canvas_y)
+
+        def canvas_xy_to_data(canvas_x: object, canvas_y: object) -> tuple[float, float]:
+            display_x = float(canvas_x)
+            display_y = float(display_height) - float(canvas_y)
+            x_data, y_data = ax.transData.inverted().transform((display_x, display_y))
+            return float(x_data), float(y_data)
+
+        def active_index() -> int:
+            return int(state["active_index"])
+
+        def active_position() -> np.ndarray | None:
+            return detector_label_xy(edited[active_index()])
+
+        def label_font(entry: dict[str, object]) -> tuple[str, int, str]:
+            return ("Arial", max(6, int(round(detector_label_fontsize(entry)))), "bold")
+
+        image_frame = ttk.Frame(root)
+        image_frame.grid(row=0, column=0, sticky="nsew")
+        root.rowconfigure(0, weight=1)
+        root.columnconfigure(0, weight=1)
+        canvas_width = min(display_width, max(720, int(0.90 * root.winfo_screenwidth())))
+        canvas_height = min(display_height, max(520, int(0.78 * root.winfo_screenheight())))
+        canvas = tk.Canvas(
+            image_frame,
+            width=canvas_width,
+            height=canvas_height,
+            bg="black",
+            scrollregion=(0, 0, display_width, display_height),
+            highlightthickness=0,
+        )
+        x_scroll = ttk.Scrollbar(image_frame, orient="horizontal", command=canvas.xview)
+        y_scroll = ttk.Scrollbar(image_frame, orient="vertical", command=canvas.yview)
+        canvas.configure(xscrollcommand=x_scroll.set, yscrollcommand=y_scroll.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        y_scroll.grid(row=0, column=1, sticky="ns")
+        x_scroll.grid(row=1, column=0, sticky="ew")
+        image_frame.rowconfigure(0, weight=1)
+        image_frame.columnconfigure(0, weight=1)
+        canvas.create_image(0, 0, image=photo, anchor="nw")
+
+        selection_item = canvas.create_rectangle(
+            0, 0, 0, 0, outline="cyan", width=2, state="hidden"
+        )
+
+        label_var = tk.StringVar(value=label_choices[0])
+        x_var = tk.StringVar()
+        y_var = tk.StringVar()
+        font_var = tk.StringVar()
+
+        def canvas_event_xy(event) -> tuple[float, float]:
+            return float(canvas.canvasx(event.x)), float(canvas.canvasy(event.y))
+
+        def update_selection_box() -> None:
+            item = canvas_items.get(active_index())
+            if item is None:
+                canvas.itemconfigure(selection_item, state="hidden")
+                return
+            bbox = canvas.bbox(item)
+            if bbox is None:
+                canvas.itemconfigure(selection_item, state="hidden")
+                return
+            canvas.coords(
+                selection_item,
+                float(bbox[0]) - 4.0,
+                float(bbox[1]) - 3.0,
+                float(bbox[2]) + 4.0,
+                float(bbox[3]) + 3.0,
+            )
+            canvas.itemconfigure(selection_item, state="normal")
+            canvas.tag_raise(selection_item)
+
+        def update_canvas_label(index: int) -> None:
+            pos = detector_label_xy(edited[int(index)])
+            item = canvas_items.get(int(index))
+            if pos is None:
+                if item is not None:
+                    canvas.itemconfigure(item, state="hidden")
+                return
+            canvas_x, canvas_y = data_to_canvas_xy(float(pos[0]), float(pos[1]))
+            if item is None:
+                item = canvas.create_text(
+                    canvas_x,
+                    canvas_y,
+                    text=str(edited[int(index)].get("text", "")),
+                    fill="white",
+                    font=label_font(edited[int(index)]),
+                    anchor="center",
+                )
+                canvas_items[int(index)] = item
+                canvas.tag_bind(item, "<Button-1>", lambda event, idx=int(index): start_label_drag(event, idx))
+                canvas.tag_bind(item, "<B1-Motion>", lambda event, idx=int(index): drag_label_motion(event, idx))
+                canvas.tag_bind(item, "<ButtonRelease-1>", lambda event, idx=int(index): finish_label_drag(event, idx))
+            else:
+                canvas.coords(item, canvas_x, canvas_y)
+                canvas.itemconfigure(
+                    item,
+                    state="normal",
+                    text=str(edited[int(index)].get("text", "")),
+                    font=label_font(edited[int(index)]),
+                )
+            canvas.tag_raise(item)
+            if int(index) == active_index():
+                update_selection_box()
+
+        def sync_controls() -> None:
+            index = active_index()
+            pos = detector_label_xy(edited[index])
+            state["syncing_controls"] = True
+            try:
+                label_var.set(f"{index}: {str(edited[index].get('text', ''))}")
+                if pos is not None:
+                    x_var.set(f"{float(pos[0]):.1f}")
+                    y_var.set(f"{float(pos[1]):.1f}")
+                font_var.set(f"{detector_label_fontsize(edited[index]):.1f}")
+            finally:
+                state["syncing_controls"] = False
+
+        def select_label(index: int) -> None:
+            if int(index) not in drawable_indices:
+                return
+            state["active_index"] = int(index)
+            sync_controls()
+            update_selection_box()
+
+        def set_label_position(index: int, *, x_value: object = None, y_value: object = None) -> None:
+            pos = detector_label_xy(edited[int(index)])
+            if pos is None:
+                return
+            x_new = float(pos[0])
+            y_new = float(pos[1])
+            try:
+                if x_value is not None:
+                    x_new = float(x_value)
+                if y_value is not None:
+                    y_new = float(y_value)
+            except Exception:
+                return
+            if not (np.isfinite(x_new) and np.isfinite(y_new)):
+                return
+            clamped = clamp_detector_label_position(np.asarray([x_new, y_new], dtype=np.float64))
+            edited[int(index)]["label_xy"] = clamped.copy()
+            update_canvas_label(int(index))
+            sync_controls()
+
+        def start_label_drag(event, index: int):
+            if int(index) not in drawable_indices:
+                return None
+            select_label(int(index))
+            item = canvas_items.get(int(index))
+            event_x, event_y = canvas_event_xy(event)
+            if item is not None:
+                item_coords = canvas.coords(item)
+                if len(item_coords) >= 2:
+                    state["drag_offset_x"] = float(item_coords[0]) - event_x
+                    state["drag_offset_y"] = float(item_coords[1]) - event_y
+                else:
+                    state["drag_offset_x"] = 0.0
+                    state["drag_offset_y"] = 0.0
+            state["dragging_index"] = int(index)
+            update_selection_box()
+            return "break"
+
+        def drag_label_motion(event, index: int):
+            dragging_index = state.get("dragging_index")
+            if dragging_index is None:
+                return None
+            active_drag_index = int(dragging_index)
+            if int(index) != active_drag_index:
+                return None
+            event_x, event_y = canvas_event_xy(event)
+            target_canvas_x = event_x + float(state.get("drag_offset_x", 0.0))
+            target_canvas_y = event_y + float(state.get("drag_offset_y", 0.0))
+            x_data, y_data = canvas_xy_to_data(target_canvas_x, target_canvas_y)
+            set_label_position(active_drag_index, x_value=x_data, y_value=y_data)
+            return "break"
+
+        def finish_label_drag(event, index: int):
+            if state.get("dragging_index") is not None:
+                drag_label_motion(event, int(index))
+            state["dragging_index"] = None
+            state["drag_offset_x"] = 0.0
+            state["drag_offset_y"] = 0.0
+            update_selection_box()
+            return "break"
+
+        def drag_active_label_motion(event):
+            dragging_index = state.get("dragging_index")
+            if dragging_index is None:
+                return None
+            return drag_label_motion(event, int(dragging_index))
+
+        def finish_active_label_drag(event):
+            dragging_index = state.get("dragging_index")
+            if dragging_index is None:
+                return None
+            return finish_label_drag(event, int(dragging_index))
+
+        def apply_position_fields(_event=None) -> None:
+            if bool(state.get("syncing_controls", False)):
+                return
+            set_label_position(active_index(), x_value=x_var.get(), y_value=y_var.get())
+
+        def apply_font_field(_event=None) -> None:
+            if bool(state.get("syncing_controls", False)):
+                return
+            try:
+                value = float(font_var.get())
+            except Exception:
+                return
+            if not np.isfinite(value):
+                return
+            edited[active_index()]["fontsize"] = float(np.clip(value, 4.0, 32.0))
+            update_canvas_label(active_index())
+            sync_controls()
+
+        def nudge_label(dx: float, dy: float) -> None:
+            pos = active_position()
+            if pos is None:
+                return
+            set_label_position(
+                active_index(),
+                x_value=float(pos[0]) + float(dx),
+                y_value=float(pos[1]) + float(dy),
+            )
+
+        def step_font(delta: float) -> None:
+            edited[active_index()]["fontsize"] = float(
+                np.clip(detector_label_fontsize(edited[active_index()]) + float(delta), 4.0, 32.0)
+            )
+            update_canvas_label(active_index())
+            sync_controls()
+
+        def on_label_selected(_event=None) -> None:
+            choice = str(label_var.get())
+            try:
+                selected = int(choice.split(":", 1)[0].strip())
+            except Exception:
+                return
+            select_label(selected)
+
+        def sync_canvas_labels() -> None:
+            for index in drawable_indices:
+                update_canvas_label(int(index))
+            sync_controls()
+            update_selection_box()
+
+        def import_label_settings() -> None:
+            nonlocal edited
+            if not settings_text:
+                print("detector label editor: no label settings path configured")
+                return
+            try:
+                edited = apply_detector_label_settings(
+                    edited, load_detector_label_settings(settings_text)
+                )
+                sync_canvas_labels()
+                print(f"loaded detector label settings={Path(settings_text).expanduser()}")
+            except Exception as exc:
+                print(f"ignored detector label settings={Path(settings_text).expanduser()}: {exc}")
+
+        def export_label_settings() -> None:
+            if not settings_text:
+                print("detector label editor: no label settings path configured")
+                return
+            try:
+                saved_path = save_detector_label_settings(settings_text, edited)
+                print(f"saved detector label settings={saved_path}")
+            except Exception as exc:
+                print(f"failed detector label settings export={Path(settings_text).expanduser()}: {exc}")
+
+        def accept() -> None:
+            state["accepted"] = True
+            root.quit()
+
+        def cancel() -> None:
+            state["accepted"] = False
+            root.quit()
+
+        controls = ttk.Frame(root, padding=(8, 6))
+        controls.grid(row=1, column=0, sticky="ew")
+        controls.columnconfigure(1, weight=1)
+        ttk.Label(controls, text="Label").grid(row=0, column=0, sticky="w")
+        label_selector = ttk.Combobox(
+            controls, textvariable=label_var, values=label_choices, state="readonly", width=30
+        )
+        label_selector.grid(row=0, column=1, sticky="ew", padx=(4, 8))
+        label_selector.bind("<<ComboboxSelected>>", on_label_selected)
+        ttk.Label(controls, text="X").grid(row=0, column=2, sticky="w")
+        x_entry = ttk.Entry(controls, textvariable=x_var, width=9)
+        x_entry.grid(row=0, column=3, padx=(4, 8))
+        ttk.Label(controls, text="Y").grid(row=0, column=4, sticky="w")
+        y_entry = ttk.Entry(controls, textvariable=y_var, width=9)
+        y_entry.grid(row=0, column=5, padx=(4, 8))
+        ttk.Label(controls, text="Font").grid(row=0, column=6, sticky="w")
+        font_entry = ttk.Entry(controls, textvariable=font_var, width=7)
+        font_entry.grid(row=0, column=7, padx=(4, 8))
+
+        x_entry.bind("<Return>", apply_position_fields)
+        y_entry.bind("<Return>", apply_position_fields)
+        x_entry.bind("<FocusOut>", apply_position_fields)
+        y_entry.bind("<FocusOut>", apply_position_fields)
+        font_entry.bind("<Return>", apply_font_field)
+        font_entry.bind("<FocusOut>", apply_font_field)
+
+        buttons = ttk.Frame(root, padding=(8, 0, 8, 8))
+        buttons.grid(row=2, column=0, sticky="ew")
+        for column in range(12):
+            buttons.columnconfigure(column, weight=1)
+        ttk.Button(buttons, text="X -", command=lambda: nudge_label(-1.0, 0.0)).grid(
+            row=0, column=0, sticky="ew", padx=2
+        )
+        ttk.Button(buttons, text="X +", command=lambda: nudge_label(1.0, 0.0)).grid(
+            row=0, column=1, sticky="ew", padx=2
+        )
+        ttk.Button(buttons, text="Y -", command=lambda: nudge_label(0.0, -1.0)).grid(
+            row=0, column=2, sticky="ew", padx=2
+        )
+        ttk.Button(buttons, text="Y +", command=lambda: nudge_label(0.0, 1.0)).grid(
+            row=0, column=3, sticky="ew", padx=2
+        )
+        ttk.Button(buttons, text="Font -", command=lambda: step_font(-1.0)).grid(
+            row=0, column=4, sticky="ew", padx=2
+        )
+        ttk.Button(buttons, text="Font +", command=lambda: step_font(1.0)).grid(
+            row=0, column=5, sticky="ew", padx=2
+        )
+        ttk.Button(buttons, text="Import", command=import_label_settings).grid(
+            row=0, column=6, sticky="ew", padx=2
+        )
+        ttk.Button(buttons, text="Export", command=export_label_settings).grid(
+            row=0, column=7, sticky="ew", padx=2
+        )
+        ttk.Button(buttons, text="Cancel", command=cancel).grid(
+            row=0, column=10, sticky="ew", padx=2
+        )
+        ttk.Button(buttons, text="Accept", command=accept).grid(
+            row=0, column=11, sticky="ew", padx=2
+        )
+
+        canvas.bind("<B1-Motion>", drag_active_label_motion)
+        canvas.bind("<ButtonRelease-1>", finish_active_label_drag)
+        root.bind("<Left>", lambda event: nudge_label(-1.0, 0.0))
+        root.bind("<Right>", lambda event: nudge_label(1.0, 0.0))
+        root.bind("<Up>", lambda event: nudge_label(0.0, -1.0))
+        root.bind("<Down>", lambda event: nudge_label(0.0, 1.0))
+        root.bind("<Escape>", lambda event: cancel())
+        root.protocol("WM_DELETE_WINDOW", cancel)
+        sync_canvas_labels()
+        root.mainloop()
+    finally:
+        try:
+            root.destroy()
+        except Exception:
+            pass
+        if image_path:
+            try:
+                os.unlink(image_path)
+            except Exception:
+                pass
+
+    if not bool(state["accepted"]):
+        return original, False
+    return edited, True
+
+
+def edit_detector_region_label_positions(
+    fig: object,
+    ax: object,
+    label_entries: list[dict[str, object]],
+    *,
+    mode: object = "auto",
+    settings_path: object = None,
+    backend_name: object = None,
+    env: dict[str, str] | None = None,
+) -> list[dict[str, object]]:
+    entries = [dict(entry) for entry in label_entries]
+    path_text = "" if settings_path is None else str(settings_path).strip()
+    runtime_mode = detector_label_edit_runtime_mode(mode, backend_name=backend_name, env=env)
+    if runtime_mode != "popup":
+        print(f"detector label editor: mode={runtime_mode}")
+        return entries
+    try:
+        edited, accepted = show_detector_region_label_position_popup(
+            fig, ax, entries, settings_path=path_text
+        )
+    except Exception as exc:
+        print(f"skipped detector label editor: {exc}")
+        return entries
+    if not accepted:
+        print("detector label editor: canceled")
+        return entries
+    return edited
 
 
 detector_region_display_width = max(detector_region_xlim[1] - detector_region_xlim[0], 1.0)
@@ -11210,7 +11960,7 @@ fig_height = min(
 )
 fig, ax = plt.subplots(figsize=(JOURNAL_FULL_WIDTH_IN, fig_height), constrained_layout=False)
 fig.subplots_adjust(left=0.075, right=0.995, bottom=0.085, top=0.985)
-detector_region_image = ax.imshow(
+ax.imshow(
     detector_region_bg,
     origin="upper",
     aspect="equal",
@@ -11219,13 +11969,56 @@ detector_region_image = ax.imshow(
     vmax=float(detector_region_vmax),
     rasterized=True,
 )
-detector_region_cbar = fig.colorbar(
-    detector_region_image, ax=ax, fraction=0.026, pad=0.010, shrink=0.84
-)
-detector_region_cbar.set_label("Intensity", fontsize=6.5)
-detector_region_cbar.ax.tick_params(labelsize=5.8, length=2.0, width=0.45)
 
+detector_label_settings_path = _setting_text(
+    "DETECTOR_LABEL_SETTINGS_PATH_OVERRIDE",
+    "RA_SIM_DETECTOR_LABEL_SETTINGS",
+    FIGURE_OUT_DIR / f"{ROD_PROFILE_REGION_STEM}_detector_label_settings.json",
+)
 rod_label_entries: list[dict[str, object]] = []
+detector_label_ids_added: set[str] = set()
+
+
+def append_detector_rod_label_entry(
+    *,
+    m_value: int,
+    branch_suffix: str,
+    x_line: object,
+    y_line: object,
+    qz_line: object | None = None,
+    color: object,
+) -> None:
+    label_id = detector_rod_label_id(m_value, branch_suffix)
+    if label_id in detector_label_ids_added:
+        return
+    x_values = np.asarray(x_line, dtype=np.float64)
+    y_values = np.asarray(y_line, dtype=np.float64)
+    if x_values.shape != y_values.shape:
+        return
+    finite = np.isfinite(x_values) & np.isfinite(y_values)
+    if np.count_nonzero(finite) < 2:
+        return
+    if qz_line is None:
+        qz_values = detector_qz_values_for_polyline(x_values, y_values, qz_map)
+    else:
+        qz_values = np.asarray(qz_line, dtype=np.float64)
+        if qz_values.shape != x_values.shape:
+            qz_values = detector_qz_values_for_polyline(x_values, y_values, qz_map)
+    rod_label_entries.append(
+        {
+            "x_line": x_values,
+            "y_line": y_values,
+            "qz_line": qz_values,
+            "label_id": label_id,
+            "text": detector_rod_label(m_value, branch_suffix),
+            "fontsize": detector_region_label_fontsize,
+            "color": color,
+            "label_mode": "low_l_base",
+        }
+    )
+    detector_label_ids_added.add(label_id)
+
+
 final_detector_rod_trace_payloads_by_key: dict[tuple[str, int], list[dict[str, object]]] = {
     rod_identity_key(rod): projected_qr_detector_trace_payloads(
         rod, config=profile_bg["qr_overlay_config"]
@@ -11251,6 +12044,7 @@ for index, rod in enumerate(rod_entries):
     color = region_colors[index % len(region_colors)]
     m_value = int(rod["m"])
     rod_key = rod_identity_key(rod)
+    detector_overlay_qz_bounds_by_key: dict[tuple[str, int, str], tuple[float, float]] = {}
     for branch_name, phi_min, phi_max in (("-", -90.0, 0.0), ("+", 0.0, 90.0)):
         overlays = [
             item
@@ -11269,6 +12063,9 @@ for index, rod in enumerate(rod_entries):
             if qz_bounds is None:
                 continue
             qz_min, qz_max = qz_bounds
+            detector_overlay_qz_bounds_by_key[
+                (str(rod.get("source", "")), m_value, branch_name)
+            ] = (float(qz_min), float(qz_max))
             visual = gui_qr_cylinder_overlay.build_detector_selected_qr_rod_band_visual_payload(
                 qr_map=qr_map,
                 qz_map=qz_map,
@@ -11283,47 +12080,75 @@ for index, rod in enumerate(rod_entries):
                 shape_mask=detector_region_shape_mask,
             )
             draw_detector_delta_q_region(visual, color)
+            detector_visual_label_lines = detector_mask_centerline_from_visual(visual)
+            for visual_col, visual_row in detector_visual_label_lines:
+                append_detector_rod_label_entry(
+                    m_value=m_value,
+                    branch_suffix=branch_name,
+                    x_line=visual_col,
+                    y_line=visual_row,
+                    qz_line=None,
+                    color=color,
+                )
     rod_payloads = final_detector_rod_trace_payloads_by_key.get(rod_key, [])
     for payload in rod_payloads:
-        projected_col = np.asarray(payload["x_line"], dtype=np.float64)
-        projected_row = np.asarray(payload["y_line"], dtype=np.float64)
-        ax.plot(
-            projected_col,
-            projected_row,
-            color=color,
-            linewidth=detector_region_centerline_lw,
-            alpha=1.0,
-            zorder=5.0,
-        )
         branch_suffix = "+" if int(payload.get("branch_sign", 0)) > 0 else "-"
-        rod_label_entries.append(
-            {
-                "x_line": projected_col,
-                "y_line": projected_row,
-                "qz_line": np.asarray(
-                    payload.get("qz_line", np.full(projected_col.shape, np.nan)), dtype=np.float64
-                ),
-                "text": f"HK={m_value} {branch_suffix}",
-                "color": color,
-                "label_mode": "low_l_base",
-            }
+        raw_projected_col = np.asarray(payload["x_line"], dtype=np.float64)
+        raw_projected_row = np.asarray(payload["y_line"], dtype=np.float64)
+        raw_projected_qz = np.asarray(
+            payload.get("qz_line", np.full(raw_projected_col.shape, np.nan)),
+            dtype=np.float64,
+        )
+        if raw_projected_qz.shape != raw_projected_col.shape:
+            raw_projected_qz = np.full(raw_projected_col.shape, np.nan, dtype=np.float64)
+        trace_qz_bounds = detector_overlay_qz_bounds_by_key.get(
+            (str(rod.get("source", "")), m_value, branch_suffix)
+        )
+        if trace_qz_bounds is None:
+            projected_col = raw_projected_col.copy()
+            projected_row = raw_projected_row.copy()
+        else:
+            projected_col, projected_row = clipped_detector_trace_to_qz_bounds(
+                raw_projected_col,
+                raw_projected_row,
+                raw_projected_qz,
+                trace_qz_bounds,
+            )
+        if np.count_nonzero(np.isfinite(projected_col) & np.isfinite(projected_row)) < 2:
+            continue
+        finite_projected = np.isfinite(projected_col) & np.isfinite(projected_row)
+        projected_qz_line = np.where(finite_projected, raw_projected_qz, np.nan)
+        should_draw_centerline = trace_qz_bounds is not None
+        if should_draw_centerline:
+            ax.plot(
+                projected_col,
+                projected_row,
+                color=color,
+                linewidth=detector_region_centerline_lw,
+                alpha=1.0,
+                zorder=5.0,
+            )
+        append_detector_rod_label_entry(
+            m_value=m_value,
+            branch_suffix=branch_suffix,
+            x_line=projected_col,
+            y_line=projected_row,
+            qz_line=projected_qz_line,
+            color=color,
         )
 
 specular_color = OKABE_ITO["sky"]
-specular_detector_qz_values = (
-    np.asarray(specular_l_marker_table["qz_marker"], dtype=np.float64)
-    if not specular_l_marker_table.empty and "qz_marker" in specular_l_marker_table
-    else np.asarray([], dtype=np.float64)
-)
+specular_detector_qz_values = np.asarray(specular_qz_values, dtype=np.float64)
 specular_detector_qz_values = specular_detector_qz_values[
     np.isfinite(specular_detector_qz_values) & (specular_detector_qz_values > POSITIVE_QZ_MIN)
 ]
+specular_delta_q_visual = None
 if specular_detector_qz_values.size >= 2:
     specular_delta_q_visual = (
         gui_qr_cylinder_overlay.build_detector_selected_qr_rod_band_visual_payload(
-            qr_map=qr_map,
-            qz_map=qz_map,
-            valid_q=valid_q_map,
+            qr_map=specular_detector_qr_map,
+            qz_map=specular_detector_qz_map,
+            valid_q=specular_detector_valid_q,
             qr_center=0.0,
             delta_qr=float(qr_rod_delta_qr),
             qz_min=float(np.nanmin(specular_detector_qz_values)),
@@ -11343,6 +12168,8 @@ if specular_detector_qz_values.size >= 2:
     )
 specular_lines = specular_detector_lines_from_markers(specular_l_marker_table)
 if not specular_lines:
+    specular_lines = detector_mask_centerline_from_visual(specular_delta_q_visual)
+if not specular_lines:
     specular_lines = specular_detector_centerline_fallback()
 for projected_col, projected_row in specular_lines:
     ax.plot(
@@ -11357,8 +12184,14 @@ for projected_col, projected_row in specular_lines:
         {
             "x_line": projected_col,
             "y_line": projected_row,
-            "text": "00L",
+            "label_id": detector_specular_label_id(),
+            "qz_line": detector_qz_values_for_polyline(
+                projected_col, projected_row, specular_detector_qz_map
+            ),
+            "text": detector_specular_label(),
+            "fontsize": detector_region_label_fontsize,
             "color": specular_color,
+            "label_mode": "low_l_base",
             "flip_normal": False,
         }
     )
@@ -11371,65 +12204,95 @@ beam_center = (
     float(getattr(profile_bg["qr_overlay_config"], "center_col", center_col_px)),
     float(getattr(profile_bg["qr_overlay_config"], "center_row", center_row_px)),
 )
-hk0_l3_star_center = hk0_star_marker_center(
-    specular_l_marker_table,
-    projector=lambda theta, phi: detector_xy_from_caked_angles(profile_bg, theta, phi),
-    target_l=3.0,
-)
-hk0_l3_star_path = FIGURE_OUT_DIR / "hk0_l3_star.png"
-if hk0_l3_star_center is None:
-    print("skipped hk0_l3_star.png: drawable HK=0, L=3 marker was unavailable")
+hk0_00l_region_mask = None
+if isinstance(specular_delta_q_visual, dict):
+    candidate_mask = np.asarray(specular_delta_q_visual.get("band_fill_mask"), dtype=bool)
+    if candidate_mask.shape == detector_region_shape:
+        shape_mask = np.asarray(detector_region_shape_mask, dtype=bool)
+        if shape_mask.shape == candidate_mask.shape:
+            candidate_mask = candidate_mask & shape_mask
+        hk0_00l_region_mask = candidate_mask
+hk0_00l_region_path = FIGURE_OUT_DIR / "00L_region.png"
+hk0_00l_region_horizontal_path = FIGURE_OUT_DIR / "00L_region_horizontal.png"
+if hk0_00l_region_mask is None or not np.any(hk0_00l_region_mask):
+    print("skipped 00L_region.png: specular 00L region mask was unavailable")
 else:
-    hk0_l3_star_saved = save_hk0_star_crop(
+    hk0_00l_region_saved = save_hk0_00l_region_crop(
         np.asarray(profile_bg.get("raw_detector_image", profile_bg["detector_image"]), dtype=np.float64),
-        hk0_l3_star_path,
+        hk0_00l_region_path,
+        horizontal_output_path=hk0_00l_region_horizontal_path,
         beam_center=beam_center,
-        peak_center=hk0_l3_star_center,
+        region_mask=hk0_00l_region_mask,
     )
-    if hk0_l3_star_saved is None:
-        print("skipped hk0_l3_star.png: crop bounds were empty or invalid")
+    if hk0_00l_region_saved is None:
+        print("skipped 00L_region.png: crop bounds were empty or invalid")
     else:
-        print(f"saved={hk0_l3_star_saved}")
-used_label_positions: list[np.ndarray] = []
+        for saved_path in hk0_00l_region_saved:
+            if saved_path is not None:
+                print(f"saved={saved_path}")
 for label_entry in rod_label_entries:
     if str(label_entry.get("label_mode", "")) == "low_l_base":
-        place_low_l_rod_label(
+        label_xy = place_low_l_rod_label(
             ax,
             np.asarray(label_entry["x_line"], dtype=np.float64),
             np.asarray(label_entry["y_line"], dtype=np.float64),
             np.asarray(label_entry.get("qz_line", []), dtype=np.float64),
             str(label_entry["text"]),
             str(label_entry["color"]),
-            used_positions=used_label_positions,
         )
     else:
-        place_rod_label(
+        label_xy = place_rod_label(
             ax,
             np.asarray(label_entry["x_line"], dtype=np.float64),
             np.asarray(label_entry["y_line"], dtype=np.float64),
             str(label_entry["text"]),
             str(label_entry["color"]),
             beam_center=beam_center,
-            used_positions=used_label_positions,
             flip_normal=bool(label_entry.get("flip_normal", False)),
         )
+    if label_xy is not None:
+        label_entry["label_xy"] = label_xy.copy()
 
-add_panel_label(ax, "(a)", outside=True, fontsize=9.0)
-ax.set_xlabel("Detector column (pixel)")
-ax.set_ylabel("Detector row (pixel)")
+ax.set_xlabel("Detector x pixel (bottom-left origin)")
+ax.set_ylabel("Detector y pixel (bottom-left origin)")
 finish_axes(ax)
 ax.set_xlim(*detector_region_xlim)
 ax.set_ylim(*detector_region_ylim)
 x_ticks = np.linspace(detector_region_xlim[0], detector_region_xlim[1], 5)
 y_ticks = np.linspace(detector_region_ylim[1], detector_region_ylim[0], 5)
+x_tick_labels, y_tick_labels = detector_bottom_left_axis_tick_labels(
+    x_ticks,
+    y_ticks,
+    xlim=detector_region_xlim,
+    ylim=detector_region_ylim,
+)
 ax.set_xticks(x_ticks)
-ax.set_xticklabels([f"{tick:.0f}" for tick in x_ticks])
+ax.set_xticklabels(x_tick_labels)
 ax.set_yticks(y_ticks)
-ax.set_yticklabels([f"{tick:.0f}" for tick in y_ticks])
+ax.set_yticklabels(y_tick_labels)
+
+rod_label_entries = edit_detector_region_label_positions(
+    fig,
+    ax,
+    rod_label_entries,
+    mode=qr_rod_peak_edit_mode,
+    settings_path=detector_label_settings_path,
+    backend_name=mpl.get_backend(),
+    env=os.environ,
+)
+draw_detector_region_label_artists(ax, rod_label_entries)
 
 detector_region_png, detector_region_pdf = save_manuscript_figure(fig, ROD_PROFILE_REGION_STEM)
 plt.close(fig)
+detector_region_scale_png, detector_region_scale_pdf = save_detector_region_intensity_scale(
+    detector_region_cmap,
+    vmin=float(detector_region_vmin),
+    vmax=float(detector_region_vmax),
+    stem=f"{ROD_PROFILE_REGION_STEM}_intensity_scale",
+)
 print(f"saved={detector_region_png}")
 print(f"saved={detector_region_pdf}")
 print(f"saved={FIGURE_OUT_DIR / f'{ROD_PROFILE_REGION_STEM}.svg'}")
+print(f"saved={detector_region_scale_png}")
+print(f"saved={detector_region_scale_pdf}")
 display(Image(filename=str(detector_region_png)))

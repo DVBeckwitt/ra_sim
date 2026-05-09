@@ -1,5 +1,6 @@
 import ast
 from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import math
@@ -107,6 +108,7 @@ def _script_functions(*names: str) -> dict[str, object]:
         "pd": pd,
         "Path": Path,
         "pickle": pickle,
+        "replace": replace,
         "re": re,
         "plt": plt,
         "LogNorm": LogNorm,
@@ -129,12 +131,12 @@ def _script_functions(*names: str) -> dict[str, object]:
         "ROD_QZ_NONLINEAR_TAIL_POWER_BOUNDS": (0.55, 12.0),
         "ROD_QZ_NONLINEAR_MAX_NFEV": 1200,
         "ROD_QZ_SHARED_LINEAR_BASELINE_ENABLED": True,
-        "QR_ROD_FINAL_FIT_CACHE_SIGNATURE": "joint_qz_labeled_marker_fit_v2",
+        "QR_ROD_FINAL_FIT_CACHE_SIGNATURE": "joint_qz_labeled_marker_fit_specular_theta_i0_l8_v4",
         "PRE_EDITOR_CACHE_SCHEMA": "ra_sim.background_pre_editor_cache.v1",
         "PRE_EDITOR_CACHE_SIGNATURE": "pre_qr_rod_marker_editor_inputs_v1",
         "PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE": "background_peak_fit_results_v1",
         "PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE": "profile_fit_cache_v1",
-        "PRE_EDITOR_QR_ROD_STAGE_SIGNATURE": "qr_rod_pre_marker_profiles_v1",
+        "PRE_EDITOR_QR_ROD_STAGE_SIGNATURE": "qr_rod_pre_marker_profiles_specular_theta_i0_l8_v3",
     }
     exec(compile(module, str(PARALLEL_SCRIPT_PATH), "exec"), namespace)
     return namespace
@@ -214,6 +216,573 @@ def test_background_peak_fits_notebook_uses_rotated_gaussian_peak_fits() -> None
 
     for removed in ("PSEUDO_VOIGT", "_pseudo_voigt", "Fitted pseudo-Voigt"):
         assert removed not in source
+
+
+def test_detector_region_labels_use_m_not_hk_or_material() -> None:
+    namespace = _script_functions(
+        "detector_rod_label",
+        "detector_specular_label",
+    )
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    rod_label = namespace["detector_rod_label"]
+    specular_label = namespace["detector_specular_label"]
+
+    assert rod_label(7, "+") == "m = 7 +"
+    assert rod_label(7, "-") == "m = 7 -"
+    assert specular_label() == "m = 0"
+    assert "detector_rod_material_label(" not in source
+    assert "detector_specular_material_label(" not in source
+
+
+def test_detector_region_delta_q_boundaries_use_dashed_contours() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "detector_region_boundary_linestyle" in source
+    assert "ax.contour(" in source
+    assert "linestyles=detector_region_boundary_linestyle" in source
+    assert "linewidths=detector_region_boundary_lw" in source
+    assert "draw_detector_mask_layer(\n            boundary_mask" not in source
+
+
+def test_detector_region_note_describes_white_m_labels_and_dashed_boundaries() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "dashed boundary strokes" in source
+    assert "solid-white m labels" in source
+    assert "material/source labels" not in source
+    assert "intensity scale is saved as a separate file" in source
+    assert "dashed edge pixels" not in source
+
+
+def test_detector_region_saves_intensity_scale_as_separate_file() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    detector_figure_start = source.index("fig, ax = plt.subplots(figsize=(JOURNAL_FULL_WIDTH_IN, fig_height)")
+    detector_figure_end = source.index(
+        "detector_region_png, detector_region_pdf = save_manuscript_figure",
+        detector_figure_start,
+    )
+    detector_figure_source = source[detector_figure_start:detector_figure_end]
+
+    assert "fig.colorbar(" not in detector_figure_source
+    assert "detector_region_cbar" not in detector_figure_source
+    assert "def save_detector_region_intensity_scale(" in source
+    assert 'stem=f"{ROD_PROFILE_REGION_STEM}_intensity_scale"' in source
+    assert "detector_region_scale_png, detector_region_scale_pdf" in source
+
+
+def test_detector_region_label_initial_placement_uses_default_geometry() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    low_l_source = source[
+        source.index("def place_low_l_rod_label(") : source.index("\ndef place_rod_label(")
+    ]
+    rod_source = source[
+        source.index("def place_rod_label(") : source.index(
+            "\ndef show_detector_region_label_position_popup("
+        )
+    ]
+    detector_figure_start = source.index("rod_label_entries: list[dict[str, object]] = []")
+    editor_call = source.index("edit_detector_region_label_positions(", detector_figure_start)
+    section = source[detector_figure_start:editor_call]
+
+    assert "choose_detector_label_position(" not in low_l_source
+    assert "choose_detector_label_position(" not in rod_source
+    assert "high_intensity_mask" not in low_l_source
+    assert "high_intensity_mask" not in rod_source
+    assert "detector_region_label_high_intensity_mask" not in section
+    assert "used_label_positions" not in section
+    assert "return base_pos.copy()" in low_l_source
+    assert "return base_pos.copy()" in rod_source
+
+
+def test_detector_qz_values_for_polyline_samples_detector_map() -> None:
+    namespace = _script_functions("detector_qz_values_for_polyline")
+    qz_values_for_polyline = namespace["detector_qz_values_for_polyline"]
+
+    qz_map = np.arange(12, dtype=np.float64).reshape(3, 4)
+    sampled = qz_values_for_polyline(
+        np.array([0.2, 2.6, 4.0, np.nan]),
+        np.array([1.2, 0.4, 1.0, 1.0]),
+        qz_map,
+    )
+
+    np.testing.assert_allclose(sampled[:2], np.array([4.0, 3.0]))
+    assert np.isnan(sampled[2])
+    assert np.isnan(sampled[3])
+
+
+def test_detector_qspace_config_with_theta_initial_preserves_other_fields() -> None:
+    namespace = _script_functions("detector_qspace_config_with_theta_initial")
+    with_theta_initial = namespace["detector_qspace_config_with_theta_initial"]
+
+    @dataclass(frozen=True)
+    class DummyQConfig:
+        theta_initial_deg: float
+        distance_cor_to_detector: float
+
+    original = DummyQConfig(theta_initial_deg=6.0, distance_cor_to_detector=0.42)
+    updated = with_theta_initial(original, 18.0)
+
+    assert original.theta_initial_deg == pytest.approx(6.0)
+    assert updated.theta_initial_deg == pytest.approx(18.0)
+    assert updated.distance_cor_to_detector == pytest.approx(original.distance_cor_to_detector)
+
+
+def test_detector_region_specular_label_defaults_to_low_l_geometry() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    detector_figure_source = source[
+        source.index("specular_color = OKABE_ITO") : source.index(
+            "\ndisplay_detector_rotation_fit_debug("
+        )
+    ]
+    specular_label_source = detector_figure_source[
+        detector_figure_source.index('"label_id": detector_specular_label_id()') :
+    ]
+
+    assert '"label_mode": "low_l_base"' in specular_label_source
+    assert '"qz_line": detector_qz_values_for_polyline(' in specular_label_source
+
+
+def test_detector_region_label_editor_runtime_mode_respects_headless() -> None:
+    namespace = _script_functions("qr_rod_peak_edit_runtime_mode", "detector_label_edit_runtime_mode")
+    runtime_mode = namespace["detector_label_edit_runtime_mode"]
+
+    assert runtime_mode("auto", backend_name="agg", env={}) == "skip"
+    assert runtime_mode("auto", backend_name="TkAgg", env={}) == "popup"
+    assert runtime_mode("auto", backend_name="TkAgg", env={"CI": "1"}) == "skip"
+    assert runtime_mode("popup", backend_name="agg", env={"CI": "1"}) == "popup"
+    assert runtime_mode("skip", backend_name="TkAgg", env={}) == "skip"
+
+
+def test_detector_region_label_renderer_uses_white_text_from_label_xy() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    function_source = source[
+        source.index("def draw_detector_region_label_artists(") : source.index(
+            "\ndef detector_label_edit_runtime_mode("
+        )
+    ]
+
+    assert 'entry.get("label_xy"' in function_source
+    assert 'color="white"' in function_source
+    assert 'fontsize=detector_label_fontsize(entry)' in function_source
+    assert 'color=str(entry["color"])' not in function_source
+    assert "path_effects=" not in function_source
+
+
+def test_detector_region_label_settings_round_trip_by_label_id() -> None:
+    namespace = _script_functions(
+        "detector_label_xy",
+        "detector_label_id",
+        "detector_label_fontsize",
+        "detector_label_settings_payload",
+        "apply_detector_label_settings",
+    )
+    settings_payload = namespace["detector_label_settings_payload"]
+    apply_settings = namespace["apply_detector_label_settings"]
+    namespace["detector_region_label_fontsize"] = 11.0
+
+    exported = settings_payload(
+        [
+            {
+                "label_id": "m=7:+",
+                "text": "m = 7 +",
+                "label_xy": np.array([12.0, 34.0]),
+                "fontsize": 14.5,
+            },
+            {
+                "label_id": "m=0",
+                "text": "m = 0",
+                "label_xy": np.array([56.0, 78.0]),
+                "fontsize": 16.0,
+            },
+        ]
+    )
+
+    assert exported["schema"] == "ra_sim.detector_label_settings.v1"
+    assert exported["labels"][0]["label_id"] == "m=7:+"
+    assert exported["labels"][0]["label_xy"] == [12.0, 34.0]
+    assert exported["labels"][0]["fontsize"] == 14.5
+
+    applied = apply_settings(
+        [
+            {"label_id": "m=7:+", "text": "m = 7 +", "label_xy": np.array([0.0, 0.0])},
+            {"label_id": "m=0", "text": "m = 0", "label_xy": np.array([1.0, 1.0])},
+            {"label_id": "m=9:-", "text": "m = 9 -", "label_xy": np.array([2.0, 2.0])},
+        ],
+        exported,
+    )
+
+    np.testing.assert_allclose(applied[0]["label_xy"], np.array([12.0, 34.0]))
+    np.testing.assert_allclose(applied[1]["label_xy"], np.array([56.0, 78.0]))
+    np.testing.assert_allclose(applied[2]["label_xy"], np.array([2.0, 2.0]))
+    assert applied[0]["fontsize"] == 14.5
+    assert applied[1]["fontsize"] == 16.0
+
+
+def test_detector_region_label_editor_uses_tkinter_coordinate_controls() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    function_source = source[
+        source.index("def show_detector_region_label_position_popup(") : source.index(
+            "\ndef edit_detector_region_label_positions("
+        )
+    ]
+
+    for token in (
+        "import tkinter as tk",
+        "from tkinter import ttk",
+        "root = tk.Tk()",
+        "canvas = tk.Canvas(",
+        "canvas.create_image(",
+        "canvas.create_text(",
+        "canvas.tag_bind(",
+        "label_var = tk.StringVar",
+        "x_var = tk.StringVar",
+        "y_var = tk.StringVar",
+        "font_var = tk.StringVar",
+        "ttk.Combobox(",
+        "ttk.Entry(",
+        "ttk.Button(",
+        'text="X -"',
+        'text="X +"',
+        'text="Y -"',
+        'text="Y +"',
+        'text="Import"',
+        'text="Export"',
+        'text="Cancel"',
+        'text="Accept"',
+        "load_detector_label_settings(",
+        "save_detector_label_settings(",
+    ):
+        assert token in function_source
+
+    assert "from matplotlib.widgets" not in function_source
+    assert "TextBox(" not in function_source
+    assert "Button(fig.add_axes" not in function_source
+
+
+def test_detector_region_label_editor_selects_labels_without_matplotlib_events() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    function_source = source[
+        source.index("def show_detector_region_label_position_popup(") : source.index(
+            "\ndef edit_detector_region_label_positions("
+        )
+    ]
+
+    for token in (
+        "def select_label(index: int)",
+        "label_selector.bind(",
+        'canvas.tag_bind(item, "<Button-1>"',
+        "update_canvas_label(",
+        "sync_controls()",
+    ):
+        assert token in function_source
+    assert "mpl_connect(" not in function_source
+    assert "def on_motion(event)" not in function_source
+    assert "def on_release(event)" not in function_source
+    assert "def on_press(event)" not in function_source
+    assert '"dragging": False' not in function_source
+    assert ".get_lines()" not in function_source
+    assert ".images" not in function_source
+
+
+def test_detector_region_label_editor_tunes_pixel_locations_below_image() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    function_source = source[
+        source.index("def show_detector_region_label_position_popup(") : source.index(
+            "\ndef edit_detector_region_label_positions("
+        )
+    ]
+
+    for token in (
+        "def set_label_position(",
+        "def apply_position_fields(",
+        "def nudge_label(",
+        'x_entry.bind("<Return>",',
+        'y_entry.bind("<Return>",',
+        'x_entry.bind("<FocusOut>",',
+        'y_entry.bind("<FocusOut>",',
+        'command=lambda: nudge_label(-1.0, 0.0)',
+        'command=lambda: nudge_label(1.0, 0.0)',
+        'command=lambda: nudge_label(0.0, -1.0)',
+        'command=lambda: nudge_label(0.0, 1.0)',
+        "canvas.coords(",
+        "x_var.set(",
+        "y_var.set(",
+    ):
+        assert token in function_source
+    assert "setup_detector_label_editor_blit(" not in source
+    assert "redraw_detector_label_editor_blit(" not in source
+
+
+def test_detector_region_label_editor_drags_labels_on_tk_canvas() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    function_source = source[
+        source.index("def show_detector_region_label_position_popup(") : source.index(
+            "\ndef edit_detector_region_label_positions("
+        )
+    ]
+
+    for token in (
+        'canvas.tag_bind(item, "<Button-1>"',
+        'canvas.tag_bind(item, "<B1-Motion>"',
+        'canvas.tag_bind(item, "<ButtonRelease-1>"',
+        "def canvas_event_xy(",
+        "canvas.canvasx(event.x)",
+        "canvas.canvasy(event.y)",
+        "def canvas_xy_to_data(",
+        "ax.transData.inverted().transform(",
+        "def start_label_drag(",
+        "def drag_label_motion(",
+        "def finish_label_drag(",
+        "def drag_active_label_motion(",
+        "def finish_active_label_drag(",
+        'canvas.bind("<B1-Motion>", drag_active_label_motion)',
+        'canvas.bind("<ButtonRelease-1>", finish_active_label_drag)',
+        '"dragging_index": None',
+    ):
+        assert token in function_source
+
+
+def test_detector_region_label_editor_renders_static_matplotlib_image_for_tk_canvas() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    function_source = source[
+        source.index("def show_detector_region_label_position_popup(") : source.index(
+            "\ndef edit_detector_region_label_positions("
+        )
+    ]
+
+    for token in (
+        "fig.savefig(",
+        "tempfile.NamedTemporaryFile(",
+        "photo = tk.PhotoImage(",
+        "display_width, display_height = fig.canvas.get_width_height()",
+        "def data_to_canvas_xy(",
+        "canvas_y = float(display_height) - float(display_y)",
+    ):
+        assert token in function_source
+
+
+def test_detector_region_label_editor_wires_before_final_save() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    detector_figure_start = source.index("rod_label_entries: list[dict[str, object]] = []")
+    editor_call = source.index("edit_detector_region_label_positions(", detector_figure_start)
+    save_call = source.index(
+        "detector_region_png, detector_region_pdf = save_manuscript_figure",
+        detector_figure_start,
+    )
+    section = source[detector_figure_start:save_call]
+
+    assert editor_call < save_call
+    assert "draw_detector_region_label_artists(" in section
+    assert 'label_entry["label_xy"]' in section
+    assert "used_label_positions" not in section
+
+
+def test_detector_region_label_editor_does_not_auto_import_settings_before_popup() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    function_source = source[
+        source.index("def edit_detector_region_label_positions(") : source.index(
+            "\ndetector_region_display_width ="
+        )
+    ]
+    before_popup_source = function_source[
+        : function_source.index("show_detector_region_label_position_popup(")
+    ]
+
+    assert "load_detector_label_settings(" not in before_popup_source
+    assert "apply_detector_label_settings(" not in before_popup_source
+    assert "settings_path=path_text" in function_source
+
+
+def test_detector_region_specular_visual_uses_integrated_qz_region() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    qmap_setup_source = source[
+        source.index("profile_detector_q_maps = notebook_detector_qr_qz_maps(") : source.index(
+            "\ndef bilinear_sample_detector_map("
+        )
+    ]
+    specular_profile_source = source[
+        source.index("specular_region_mask = (") : source.index(
+            "for rod in ([] if qr_rod_pre_editor_cache_hit else rod_entries):"
+        )
+    ]
+    nonzero_profile_source = source[
+        source.index("for rod in ([] if qr_rod_pre_editor_cache_hit else rod_entries):") : source.index(
+            "\nif not profile_rows:"
+        )
+    ]
+    detector_figure_source = source[
+        source.index("specular_color = OKABE_ITO") : source.index(
+            "\ndisplay_detector_rotation_fit_debug("
+        )
+    ]
+
+    assert "specular_detector_theta_initial_deg = 3.0 * float(ROD_PROFILE_TILT_DEG)" in source
+    assert "specular_detector_q_config = detector_qspace_config_with_theta_initial(" in qmap_setup_source
+    assert "specular_detector_q_maps = notebook_detector_qr_qz_maps(" in qmap_setup_source
+    assert "config=specular_detector_q_config" in qmap_setup_source
+    assert "specular_detector_region_mask" in specular_profile_source
+    assert "specular_detector_qr_map = np.asarray(specular_detector_q_maps[0]" in specular_profile_source
+    assert "specular_detector_qz_map = np.asarray(specular_detector_q_maps[1]" in specular_profile_source
+    assert "specular_detector_valid_q = np.asarray(specular_detector_q_maps[2]" in specular_profile_source
+    assert "SPECULAR_QR_ROD_L_MAX = 8.0" in source
+    assert "specular_qz_bounds = qz_bounds_for_l_window(" in specular_profile_source
+    assert "l_max=SPECULAR_QR_ROD_L_MAX" in specular_profile_source
+    assert "specular_detector_region_mask = specular_detector_region_mask &" in specular_profile_source
+    assert "profile_from_detector_qr_qz(" in specular_profile_source
+    assert "detector_q_maps=specular_detector_q_maps" in specular_profile_source
+    assert "theta_initial_deg_used_for_q=specular_detector_theta_initial_deg" in specular_profile_source
+    assert "detector_q_maps=profile_detector_q_maps" in nonzero_profile_source
+    assert "profile_from_full_mask(" not in specular_profile_source
+    assert 'branch_label="m = 0"' in specular_profile_source
+    assert "specular_detector_qz_values = np.asarray(specular_qz_values" in detector_figure_source
+    assert "qr_map=specular_detector_qr_map" in detector_figure_source
+    assert "qz_map=specular_detector_qz_map" in detector_figure_source
+    assert "valid_q=specular_detector_valid_q" in detector_figure_source
+    assert "projected_col, projected_row, specular_detector_qz_map" in detector_figure_source
+    assert '"label_id": detector_specular_label_id()' in detector_figure_source
+    assert "theta_i0 = 3*theta_i" in source
+
+
+def test_parallel_script_specular_qz_bounds_for_l_window_limits_to_l8() -> None:
+    namespace = _script_functions("qz_l_linear_coeff_from_marker_rows", "qz_bounds_for_l_window")
+    qz_bounds = namespace["qz_bounds_for_l_window"]
+    marker_table = pd.DataFrame(
+        [
+            {"qz_marker": 1.0, "fit_l": 4.0},
+            {"qz_marker": 2.0, "fit_l": 8.0},
+        ]
+    )
+
+    bounds = qz_bounds(
+        np.linspace(0.25, 4.0, 20),
+        marker_table,
+        l_min=0.0,
+        l_max=8.0,
+        positive_qz_min=0.0,
+    )
+
+    assert bounds == pytest.approx((0.25, 2.0))
+    assert qz_bounds(np.linspace(0.25, 4.0, 20), pd.DataFrame(), l_max=8.0) is None
+
+
+def test_detector_region_centerlines_clip_to_visual_qz_bounds() -> None:
+    namespace = _script_functions("clipped_detector_trace_to_qz_bounds")
+    clip_trace = namespace["clipped_detector_trace_to_qz_bounds"]
+
+    clipped_x, clipped_y = clip_trace(
+        np.array([1.0, 2.0, 3.0, 4.0]),
+        np.array([10.0, 20.0, 30.0, 40.0]),
+        np.array([-0.1, 0.2, 0.7, 1.1]),
+        (0.0, 0.8),
+    )
+
+    assert np.isnan(clipped_x[0])
+    assert np.isnan(clipped_y[3])
+    np.testing.assert_allclose(clipped_x[1:3], np.array([2.0, 3.0]))
+    np.testing.assert_allclose(clipped_y[1:3], np.array([20.0, 30.0]))
+
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    detector_figure_source = source[
+        source.index("rod_label_entries: list[dict[str, object]] = []") : source.index(
+            "specular_color = OKABE_ITO"
+        )
+    ]
+    assert "detector_overlay_qz_bounds_by_key" in detector_figure_source
+    assert "trace_qz_bounds = detector_overlay_qz_bounds_by_key.get(" in detector_figure_source
+    assert "if trace_qz_bounds is None:\n            projected_col = raw_projected_col.copy()" in detector_figure_source
+    assert "label_id = detector_rod_label_id(m_value, branch_suffix)" in detector_figure_source
+    assert "append_detector_rod_label_entry(" in detector_figure_source
+    assert "clipped_detector_trace_to_qz_bounds(" in detector_figure_source
+
+
+def test_detector_region_labels_are_not_dropped_when_branch_overlay_bounds_are_missing() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    detector_figure_source = source[
+        source.index("rod_label_entries: list[dict[str, object]] = []") : source.index(
+            "specular_color = OKABE_ITO"
+        )
+    ]
+
+    assert "if trace_qz_bounds is None:\n            continue" not in detector_figure_source
+    assert "should_draw_centerline = trace_qz_bounds is not None" in detector_figure_source
+    assert 'branch_suffix = "+" if int(payload.get("branch_sign", 0)) > 0 else "-"' in detector_figure_source
+    assert '"text": detector_rod_label(m_value, branch_suffix)' in detector_figure_source
+
+
+def test_detector_region_labels_fallback_to_drawn_band_centerlines() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    detector_figure_source = source[
+        source.index("rod_label_entries: list[dict[str, object]] = []") : source.index(
+            "specular_color = OKABE_ITO"
+        )
+    ]
+
+    assert "detector_label_ids_added: set[str] = set()" in detector_figure_source
+    assert "def append_detector_rod_label_entry(" in detector_figure_source
+    assert "detector_visual_label_lines = detector_mask_centerline_from_visual(visual)" in detector_figure_source
+    assert "for visual_col, visual_row in detector_visual_label_lines:" in detector_figure_source
+    assert "append_detector_rod_label_entry(" in detector_figure_source
+    assert "if label_id in detector_label_ids_added:" in detector_figure_source
+
+
+def test_detector_region_axis_tick_labels_use_bottom_left_origin() -> None:
+    namespace = _script_functions("detector_bottom_left_axis_tick_labels")
+    axis_labels = namespace["detector_bottom_left_axis_tick_labels"]
+
+    x_labels, y_labels = axis_labels(
+        np.array([9.5, 59.5, 109.5]),
+        np.array([20.5, 70.5, 120.5]),
+        xlim=(9.5, 109.5),
+        ylim=(120.5, 20.5),
+    )
+
+    assert x_labels == ["0", "50", "100"]
+    assert y_labels == ["100", "50", "0"]
+
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    detector_region_source = source[
+        source.index("ax.set_xlabel(\"Detector x pixel") : source.index(
+            "\nrod_label_entries = edit_detector_region_label_positions("
+        )
+    ]
+    assert "detector_bottom_left_axis_tick_labels(" in detector_region_source
+    assert 'ax.set_xlabel("Detector x pixel (bottom-left origin)")' in detector_region_source
+    assert 'ax.set_ylabel("Detector y pixel (bottom-left origin)")' in detector_region_source
+
+
+def test_detector_region_specular_label_can_use_visual_mask_centerline() -> None:
+    namespace = _script_functions("detector_mask_centerline_from_visual")
+    namespace["detector_region_shape_mask"] = np.ones((5, 6), dtype=bool)
+    centerline_from_visual = namespace["detector_mask_centerline_from_visual"]
+
+    visual = {"band_fill_mask": np.zeros((5, 6), dtype=bool)}
+    visual["band_fill_mask"][1, 2:5] = True
+    visual["band_fill_mask"][2, 3:5] = True
+    lines = centerline_from_visual(visual)
+
+    assert len(lines) == 1
+    np.testing.assert_allclose(lines[0][0], np.array([3.0, 3.5]))
+    np.testing.assert_allclose(lines[0][1], np.array([1.0, 2.0]))
+
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    detector_figure_source = source[
+        source.index("specular_color = OKABE_ITO") : source.index(
+            "\ndisplay_detector_rotation_fit_debug("
+        )
+    ]
+    assert "detector_mask_centerline_from_visual(specular_delta_q_visual)" in detector_figure_source
+    assert '"label_id": detector_specular_label_id()' in detector_figure_source
+
+
+def test_parallel_script_rod_profile_panel_label_uses_m_without_branch_word() -> None:
+    namespace = _script_functions("rod_profile_panel_label")
+    panel_label = namespace["rod_profile_panel_label"]
+
+    assert panel_label(0, "qz") == "$m = 0$"
+    assert panel_label(7, "+") == "$m = 7\\ +$"
+    assert panel_label(7, "-") == "$m = 7\\ -$"
+    assert "branch" not in panel_label(7, "+").lower()
 
 
 def test_joint_qz_fit_keeps_close_peak_valley_low() -> None:
@@ -527,137 +1096,126 @@ def test_parallel_script_direct_process_reentry_is_before_backend_normalization_
     assert "subprocess.run(" in source
 
 
-def test_parallel_script_hk0_l3_star_crop_bounds_contains_beam_and_peak() -> None:
-    namespace = _script_functions("hk0_star_crop_bounds")
-    crop_bounds = namespace["hk0_star_crop_bounds"]
+def test_parallel_script_00l_region_crop_bounds_spans_mask_top_to_beam_center() -> None:
+    namespace = _script_functions("hk0_00l_region_crop_bounds")
+    crop_bounds = namespace["hk0_00l_region_crop_bounds"]
+    region_mask = np.zeros((200, 300), dtype=bool)
+    region_mask[60:125, 145:156] = True
 
     bounds = crop_bounds(
         (200, 300),
         (150.0, 160.0),
-        (148.0, 60.0),
-        lateral_half_width_px=12,
-        above_peak_padding_px=20,
-        below_beam_padding_px=5,
+        region_mask,
+        lateral_half_width_px=48,
     )
 
     assert bounds is not None
     row_slice, col_slice = bounds
-    assert row_slice.start <= 40
-    assert row_slice.stop >= 166
-    assert col_slice.start <= 136
-    assert col_slice.stop >= 163
+    assert row_slice.start == 60
+    assert row_slice.stop == 161
+    assert col_slice.start == 102
+    assert col_slice.stop == 199
 
 
-def test_parallel_script_hk0_l3_star_crop_bounds_clips_and_rejects_invalid() -> None:
-    namespace = _script_functions("hk0_star_crop_bounds")
-    crop_bounds = namespace["hk0_star_crop_bounds"]
+def test_parallel_script_00l_region_crop_bounds_clips_and_rejects_invalid() -> None:
+    namespace = _script_functions("hk0_00l_region_crop_bounds")
+    crop_bounds = namespace["hk0_00l_region_crop_bounds"]
+    region_mask = np.zeros((80, 70), dtype=bool)
+    region_mask[1:60, 2:8] = True
 
     row_slice, col_slice = crop_bounds(
         (80, 70),
         (4.0, 78.0),
-        (2.0, 1.0),
-        lateral_half_width_px=20,
-        above_peak_padding_px=20,
-        below_beam_padding_px=10,
+        region_mask,
+        lateral_half_width_px=10,
     )
 
-    assert row_slice.start == 0
-    assert row_slice.stop == 80
+    assert row_slice.start == 1
+    assert row_slice.stop == 79
     assert col_slice.start == 0
-    assert col_slice.stop <= 70
-    assert crop_bounds((80, 70), (np.nan, 78.0), (2.0, 1.0)) is None
-    assert crop_bounds((80, 70), (4.0, 78.0), (np.inf, 1.0)) is None
+    assert col_slice.stop == 15
+    assert crop_bounds((80, 70), (np.nan, 78.0), region_mask) is None
+    assert crop_bounds((80, 70), (4.0, 78.0), None) is None
+    assert crop_bounds((80, 70), (4.0, 78.0), np.zeros((79, 70), dtype=bool)) is None
+    assert crop_bounds((80, 70), (4.0, 0.0), region_mask) is None
 
 
-def test_parallel_script_hk0_l3_star_selects_l3_marker_center() -> None:
-    namespace = _script_functions("hk0_star_marker_center")
-    marker_center = namespace["hk0_star_marker_center"]
-    markers = pd.DataFrame(
-        [
-            {
-                "m": 0,
-                "l": 1,
-                "refined_two_theta_deg": 20.0,
-                "refined_phi_deg": 0.0,
-            },
-            {
-                "m": 0,
-                "l": 3,
-                "refined_two_theta_deg": 12.0,
-                "refined_phi_deg": 3.0,
-            },
-            {
-                "m": 1,
-                "l": 3,
-                "refined_two_theta_deg": 99.0,
-                "refined_phi_deg": 9.0,
-            },
-        ]
-    )
-
-    center = marker_center(markers, projector=lambda theta, phi: (theta + 1.0, phi + 2.0))
-
-    assert center == (13.0, 5.0)
-
-
-def test_parallel_script_hk0_l3_star_save_writes_png(tmp_path) -> None:
+def test_parallel_script_00l_region_save_writes_vertical_and_horizontal_png(tmp_path) -> None:
     namespace = _script_functions(
         "detector_display_cmap",
         "detector_intensity_display",
         "detector_log_norm",
-        "hk0_star_crop_bounds",
-        "save_hk0_star_crop",
+        "hk0_00l_region_crop_bounds",
+        "save_hk0_00l_region_crop",
     )
-    save_crop = namespace["save_hk0_star_crop"]
+    save_crop = namespace["save_hk0_00l_region_crop"]
     image = np.arange(10_000, dtype=np.float64).reshape(100, 100)
-    out_path = tmp_path / "hk0_l3_star.png"
+    region_mask = np.zeros(image.shape, dtype=bool)
+    region_mask[28:75, 45:55] = True
+    out_path = tmp_path / "00L_region.png"
+    horizontal_path = tmp_path / "00L_region_horizontal.png"
 
     result = save_crop(
         image,
         out_path,
+        horizontal_output_path=horizontal_path,
         beam_center=(50.0, 82.0),
-        peak_center=(52.0, 28.0),
-        lateral_half_width_px=18,
-        above_peak_padding_px=16,
-        below_beam_padding_px=8,
+        region_mask=region_mask,
+        lateral_half_width_px=9,
     )
 
-    assert result == out_path
+    assert result == (out_path, horizontal_path)
     assert out_path.exists()
+    assert horizontal_path.exists()
     assert out_path.stat().st_size > 0
+    assert horizontal_path.stat().st_size > 0
     rendered = plt.imread(out_path)
+    horizontal = plt.imread(horizontal_path)
     assert rendered.shape[-1] in {3, 4}
+    assert horizontal.shape[-1] in {3, 4}
+    assert horizontal.shape[1] == rendered.shape[0]
     assert not np.allclose(rendered[..., 0], rendered[..., 1])
 
 
-def test_parallel_script_hk0_l3_star_save_uses_detector_log_color() -> None:
+def test_parallel_script_00l_region_save_uses_detector_log_color() -> None:
     if not PARALLEL_SCRIPT_PATH.exists():
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     function_source = source[
-        source.index("def save_hk0_star_crop(") : source.index("\ndef label_from_entry(")
+        source.index("def save_hk0_00l_region_crop(") : source.index("\ndef label_from_entry(")
     ]
 
     assert "detector_display_cmap()" in function_source
     assert "detector_intensity_display(crop)" in function_source
     assert "detector_log_norm([display_crop]" in function_source
+    assert "np.rot90(rgba_crop, k=1)" in function_source
     assert 'cmap="gray"' not in function_source
 
 
-def test_parallel_script_hk0_l3_star_output_is_wired() -> None:
+def test_parallel_script_00l_region_output_is_wired() -> None:
     if not PARALLEL_SCRIPT_PATH.exists():
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
 
     for token in (
-        '"hk0_l3_star.png"',
-        "hk0_star_marker_center(",
-        "save_hk0_star_crop(",
-        "detector_xy_from_caked_angles(profile_bg",
-        "skipped hk0_l3_star.png",
-        "HK=0, L=3",
+        '"00L_region.png"',
+        '"00L_region_horizontal.png"',
+        "hk0_00l_region_mask =",
+        '"band_fill_mask"',
+        "save_hk0_00l_region_crop(",
+        "region_mask=hk0_00l_region_mask",
+        "skipped 00L_region.png",
     ):
         assert token in source
+    export_block = source[
+        source.index("beam_center = (") : source.index("for label_entry in rod_label_entries:")
+    ]
+    assert "hk0_00l_region_endpoint_from_line" not in export_block
+    assert "qz_values_to_l_axis(" not in export_block
+    assert "detector_qz_values_for_polyline(" not in export_block
+    assert "target_l=16.0" not in export_block
+    assert "marker_source=marker_table" not in export_block
+    assert "hk0_l3_star" not in source
 
 
 def test_parallel_script_detector_hk0_region_uses_prominent_specular_style() -> None:
@@ -818,6 +1376,151 @@ def test_parallel_script_final_rod_profile_figure_filters_empty_entries() -> Non
     assert "plot_rod_entries = rod_entries + [specular_rod_entry]" not in source
 
 
+def test_parallel_script_shared_rod_profile_l_axis_limits_span_all_profile_axes() -> None:
+    namespace = _script_functions(
+        "l_reference_rows",
+        "qz_values_to_l_axis",
+        "shared_rod_profile_l_axis_limits",
+    )
+    shared_limits = namespace["shared_rod_profile_l_axis_limits"]
+    marker_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_marker": 1.0, "fit_l": 2.0, "l": 2.0},
+            {"m": 1, "branch": "+", "qz_marker": 2.0, "fit_l": 4.0, "l": 4.0},
+            {"m": 1, "branch": "-", "qz_marker": 1.0, "fit_l": 2.0, "l": 2.0},
+            {"m": 1, "branch": "-", "qz_marker": 2.0, "fit_l": 4.0, "l": 4.0},
+            {"m": 0, "branch": "qz", "qz_marker": 1.0, "fit_l": 3.0, "l": 3.0},
+        ]
+    )
+    namespace["plot_marker_table"] = marker_table
+    profile_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_center": 1.0, "pixel_count": 5},
+            {"m": 1, "branch": "+", "qz_center": 2.5, "pixel_count": 5},
+            {"m": 1, "branch": "-", "qz_center": 3.0, "pixel_count": 0},
+            {"m": 0, "branch": "qz", "qz_center": 1.2, "pixel_count": 0},
+        ]
+    )
+    plot_entries = [{"m": 1}, {"m": 0}]
+    phi_windows = [("-", -90.0, 0.0, "-"), ("+", 0.0, 90.0, "+")]
+
+    np.testing.assert_allclose(
+        shared_limits(
+            profile_table,
+            marker_table,
+            plot_entries,
+            phi_windows,
+            min_l=2.0,
+            fallback_span=1.0,
+        ),
+        (2.0, 6.0),
+    )
+
+
+def test_parallel_script_shared_nonzero_rod_profile_y_axis_limits_ignore_hk0() -> None:
+    namespace = _script_functions(
+        "normalized_data_simulation_payload",
+        "l_reference_rows",
+        "qz_values_to_l_axis",
+        "shared_nonzero_rod_profile_y_axis_limits",
+    )
+    shared_limits = namespace["shared_nonzero_rod_profile_y_axis_limits"]
+    marker_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_marker": 1.0, "fit_l": 2.0, "l": 2.0},
+            {"m": 1, "branch": "+", "qz_marker": 2.0, "fit_l": 4.0, "l": 4.0},
+            {"m": 0, "branch": "qz", "qz_marker": 1.0, "fit_l": 3.0, "l": 3.0},
+        ]
+    )
+    profile_table = pd.DataFrame(
+        [
+            {
+                "m": 1,
+                "branch": "+",
+                "qz_center": 1.5,
+                "pixel_count": 5,
+                "background_density": 4.0,
+                "joint_peak_density": 1.5,
+                "joint_linear_baseline_density": 1.0,
+                "fit_density": 1.5,
+            },
+            {
+                "m": 0,
+                "branch": "qz",
+                "qz_center": 1.5,
+                "pixel_count": 5,
+                "background_density": 1.0e6,
+                "joint_peak_density": 1.0e6,
+                "joint_linear_baseline_density": 0.0,
+                "fit_density": 1.0e6,
+            },
+        ]
+    )
+
+    y_min, y_max = shared_limits(
+        profile_table,
+        marker_table,
+        [{"m": 1}, {"m": 0}],
+        [("-", -90.0, 0.0, "-"), ("+", 0.0, 90.0, "+")],
+        fallback_limits=(-1.0, 1.0),
+    )
+
+    assert y_min < y_max
+    assert -0.2 < y_min < 0.0
+    assert 1.0 < y_max < 1.2
+
+
+def test_parallel_script_shared_nonzero_rod_profile_y_axis_limits_fallback_without_nonzero_data() -> None:
+    namespace = _script_functions(
+        "normalized_data_simulation_payload",
+        "l_reference_rows",
+        "qz_values_to_l_axis",
+        "shared_nonzero_rod_profile_y_axis_limits",
+    )
+    shared_limits = namespace["shared_nonzero_rod_profile_y_axis_limits"]
+    profile_table = pd.DataFrame(
+        [
+            {
+                "m": 0,
+                "branch": "qz",
+                "qz_center": 1.5,
+                "pixel_count": 5,
+                "background_density": 1.0e6,
+                "joint_peak_density": 1.0e6,
+                "joint_linear_baseline_density": 0.0,
+                "fit_density": 1.0e6,
+            },
+        ]
+    )
+
+    assert shared_limits(
+        profile_table,
+        pd.DataFrame(),
+        [{"m": 1}, {"m": 0}],
+        [("-", -90.0, 0.0, "-"), ("+", 0.0, 90.0, "+")],
+        fallback_limits=(-1.0, 1.0),
+    ) == (-1.0, 1.0)
+
+
+def test_parallel_script_final_rod_profile_axes_use_shared_l_limits_except_hk0() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    helper_def = source.index("def shared_rod_profile_l_axis_limits(")
+    nonzero_entries = source.index("nonzero_plot_rod_entries =", helper_def)
+    limits_assign = source.index("rod_profile_l_axis_limits = shared_rod_profile_l_axis_limits(")
+    hk0_limits = source.index("rod_profile_hk0_l_axis_limits = (0.0, SPECULAR_QR_ROD_L_MAX)")
+    figure_loop = source.index("for row, rod in enumerate(plot_rod_entries):", limits_assign)
+
+    assert helper_def < nonzero_entries < limits_assign < hk0_limits < figure_loop
+    assert "int(rod[\"m\"]) != 0" in source[nonzero_entries:limits_assign]
+    assert "nonzero_plot_rod_entries" in source[limits_assign:hk0_limits]
+    assert "ax.set_xlim(*rod_profile_hk0_l_axis_limits)" in source[figure_loop:]
+    assert "rod_profile_nonzero_y_axis_limits = shared_nonzero_rod_profile_y_axis_limits(" in source
+    assert "ax.set_ylim(*rod_profile_nonzero_y_axis_limits)" in source[figure_loop:]
+    assert source.count("ax.set_xlim(*rod_profile_l_axis_limits)") == 1
+    assert "ax.set_xlim(2.0, x_max)" not in source
+
+
 def test_parallel_script_specular_export_markers_follow_edited_qz_positions() -> None:
     namespace = _script_functions("specular_export_marker_table_from_final_markers")
     export_markers = namespace["specular_export_marker_table_from_final_markers"]
@@ -894,8 +1597,10 @@ def test_parallel_script_specular_exports_are_rebuilt_from_final_markers_before_
         rebuild_call,
     )
     marker_csv = source.index("marker_table.to_csv(marker_csv", replace_final_markers)
-    detector_export = source.index("specular_detector_qz_values = (", marker_csv)
-    star_export = source.index("hk0_l3_star_center = hk0_star_marker_center(", detector_export)
+    detector_export = source.index(
+        "specular_detector_qz_values = np.asarray(specular_qz_values", marker_csv
+    )
+    star_export = source.index("hk0_00l_region_mask =", detector_export)
 
     assert final_cache_marker_merge < rebuild_call < replace_final_markers < marker_csv
     assert marker_csv < detector_export < star_export
@@ -976,6 +1681,7 @@ def test_parallel_script_marker_title_changes_cache_key() -> None:
 def test_parallel_script_qr_rod_final_cache_requires_fit_signature() -> None:
     namespace = _script_functions("qr_rod_profile_cache_has_final_fit")
     cache_has_final_fit = namespace["qr_rod_profile_cache_has_final_fit"]
+    final_fit_signature = "joint_qz_labeled_marker_fit_specular_theta_i0_l8_v4"
     payload = {
         "final_rod_profile_table": pd.DataFrame(
             {"qz_center": [1.0, 2.0], "joint_fit_density": [0.1, 0.2]}
@@ -989,15 +1695,15 @@ def test_parallel_script_qr_rod_final_cache_requires_fit_signature() -> None:
 
     assert not cache_has_final_fit(
         payload,
-        {"mode": "last_cached", "fit_signature": "joint_qz_labeled_marker_fit_v2"},
+        {"mode": "last_cached", "fit_signature": final_fit_signature},
     )
     payload["final_peak_edit_cache_key"] = {
         "mode": "last_cached",
-        "fit_signature": "joint_qz_labeled_marker_fit_v2",
+        "fit_signature": final_fit_signature,
     }
     assert cache_has_final_fit(
         payload,
-        {"mode": "last_cached", "fit_signature": "joint_qz_labeled_marker_fit_v2"},
+        {"mode": "last_cached", "fit_signature": final_fit_signature},
     )
 
 
@@ -1154,15 +1860,14 @@ def test_parallel_script_qr_rod_peak_edits_round_trip_json(tmp_path: Path) -> No
     ]
 
 
-def test_parallel_script_marker_title_overrides_final_rod_label() -> None:
+def test_parallel_script_marker_row_title_keeps_peak_editor_labels() -> None:
     namespace = _script_functions(
         "clean_marker_title",
         "marker_row_title",
         "l_tick_label",
         "hk_display_label",
-        "rod_marker_annotation_label",
     )
-    marker_label = namespace["rod_marker_annotation_label"]
+    marker_label = namespace["marker_row_title"]
 
     assert marker_label({"display_l": 2.0}, 1) == "L=2"
     assert marker_label({"display_l": 2.49}, 1) == "L=2"
@@ -1172,40 +1877,87 @@ def test_parallel_script_marker_title_overrides_final_rod_label() -> None:
     assert marker_label({"display_l": 2.0, "marker_title": "  "}, 1) == "L=2"
 
 
-def test_parallel_script_final_rod_labels_point_from_upper_right() -> None:
+def test_parallel_script_final_rod_profiles_do_not_draw_peak_l_labels_or_arrows() -> None:
     if not PARALLEL_SCRIPT_PATH.exists():
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
-    function_source = source[
-        source.index("def annotate_rod_profile_hk_locations(") : source.index(
-            "\ndef qz_to_l_linear_coeff("
+    final_profile_source = source[
+        source.index("rod_profile_l_axis_limits = shared_rod_profile_l_axis_limits(") : source.index(
+            "maybe_suptitle(fig, rf\"{SAMPLE_LABEL}: $Q_r$ rod $L$ profiles\""
         )
     ]
 
-    assert "xytext=(12.0, 12.0 + 5.0 * (marker_index % 3))" in function_source
-    assert 'ha="left"' in function_source
-    assert 'va="bottom"' in function_source
-    assert '"arrowstyle": "->"' in function_source
+    assert "def annotate_rod_profile_hk_locations(" not in source
+    assert "def rod_marker_annotation_label(" not in source
+    assert "annotate_rod_profile_hk_locations(" not in final_profile_source
+    assert "rod_marker_annotation_label(" not in final_profile_source
+    assert '"arrowstyle": "->"' not in final_profile_source
+
+
+def test_parallel_script_rod_profile_panels_use_centered_m_labels() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    final_profile_source = source[
+        source.index("rod_profile_l_axis_limits = shared_rod_profile_l_axis_limits(") : source.index(
+            "maybe_suptitle(fig, rf\"{SAMPLE_LABEL}: $Q_r$ rod $L$ profiles\""
+        )
+    ]
+
+    assert "rod_profile_panel_label(0, \"qz\")" in final_profile_source
+    assert "rod_profile_panel_label(int(rod[\"m\"]), branch_name)" in final_profile_source
+    assert "transform=ax.transAxes" in final_profile_source
+    assert 'ha="center"' in final_profile_source
+    assert 'va="top"' in final_profile_source
+    assert "labelleft=col == 0" in final_profile_source
+    assert "labelbottom=row == last_nonzero_plot_row" in final_profile_source
+    assert "branch_label" not in final_profile_source
+    assert '"- branch"' not in source
+    assert '"+ branch"' not in source
+    assert 'ax.set_title(branch_label if row == 0 else "")' not in final_profile_source
+    assert 'ax.set_title(r"$HK = 0$")' not in final_profile_source
+    assert 'ax.set_ylabel(f"$m = {int(rod[\'m\'])}$")' not in final_profile_source
+    assert 'ax.set_ylabel(f"$HK = {int(rod[\'m\'])}$")' not in final_profile_source
+
+
+def test_parallel_script_nonzero_rod_profile_grid_removes_inner_spacing() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    final_profile_source = source[
+        source.index("rod_profile_l_axis_limits = shared_rod_profile_l_axis_limits(") : source.index(
+            "maybe_suptitle(fig, rf\"{SAMPLE_LABEL}: $Q_r$ rod $L$ profiles\""
+        )
+    ]
+
+    assert "nonzero_profile_grid = profile_grid" in final_profile_source
+    assert ".subgridspec(" in final_profile_source
+    assert "wspace=0.0" in final_profile_source
+    assert "hspace=0.0" in final_profile_source
 
 
 def test_parallel_script_qr_rod_peak_editor_is_wired_before_joint_fit_cache() -> None:
     if not PARALLEL_SCRIPT_PATH.exists():
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
-    marker_table_index = source.index("marker_table = pd.DataFrame(marker_rows)")
+    profile_rows_index = source.index("profile_rows = []")
+    marker_table_index = source.index(
+        "\nmarker_table = pd.DataFrame(marker_rows)",
+        source.index("if not profile_rows:"),
+    )
     specular_call = source.index(
         "specular_l_marker_table = specular_l_marker_rows_for_background",
-        marker_table_index,
+        profile_rows_index,
     )
     specular_merge = source.index(
         "marker_table = marker_table_with_specular_l_markers(",
-        specular_call,
+        marker_table_index,
     )
     editor_call = source.index("edit_qr_rod_peak_markers(", marker_table_index)
     cache_key_call = source.index("qr_rod_peak_edit_cache_key(", marker_table_index)
     final_fit_call = source.index("add_joint_qz_fit_columns(", marker_table_index)
 
-    assert specular_call < specular_merge < editor_call < cache_key_call < final_fit_call
+    assert specular_call < marker_table_index < specular_merge < editor_call < cache_key_call < final_fit_call
     assert "RA_SIM_QR_ROD_PEAK_EDIT_MODE" in source
     assert '"QR_ROD_PEAK_EDIT_MODE_OVERRIDE", "RA_SIM_QR_ROD_PEAK_EDIT_MODE", "popup"' in source
     assert "TextBox(" in source
@@ -1280,25 +2032,62 @@ def test_parallel_script_qr_rod_peak_editor_has_import_export_buttons() -> None:
         assert token in function_source
 
 
-def test_parallel_script_defines_rod_marker_label_before_first_call() -> None:
+def test_parallel_script_qr_rod_peak_editor_shows_hk0_in_log_view() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    function_source = source[
+        source.index("def show_qr_rod_peak_marker_popup(") : source.index(
+            "\ndef edit_qr_rod_peak_markers("
+        )
+    ]
+
+    assert "if required_marker_table is not None:" in function_source
+    assert "edited = marker_table_with_specular_l_markers(edited, required_marker_table)" in function_source
+    assert "original = edited.copy()" in function_source
+    assert "y_plot = positive_log_plot_values(y)" in function_source
+    assert "y_markers_plot = positive_log_plot_values(y_markers)" in function_source
+    assert "apply_positive_log_y_axis(ax, y, y_markers)" in function_source
+    assert 'ax.set_ylabel("Intensity (log)", fontsize=8)' in function_source
+
+
+def test_parallel_script_saved_figures_do_not_include_panel_letters() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    panel_labels_source = source[
+        source.index("def add_panel_labels(") : source.index("\ndef maybe_suptitle(")
+    ]
+    detector_region_source = source[
+        source.index("rod_label_entries = edit_detector_region_label_positions(") : source.index(
+            "\ndetector_region_png, detector_region_pdf = save_manuscript_figure"
+        )
+    ]
+
+    assert "return\n    flat_axes" in panel_labels_source
+    assert 'add_panel_label(ax, "(a)"' not in source
+    assert 'add_panel_label(ax, "(b)"' not in source
+    assert 'add_panel_label(ax, "(c)"' not in source
+    assert "maybe_suptitle(fig," not in detector_region_source
+
+
+def test_parallel_script_has_no_final_rod_marker_label_helper() -> None:
     if not PARALLEL_SCRIPT_PATH.exists():
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
     tree = ast.parse(PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8"), filename=str(PARALLEL_SCRIPT_PATH))
-    definition_line = next(
-        node.lineno
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "rod_marker_annotation_label"
-    )
-    call_lines = [
-        node.lineno
+    names = {
+        node.name
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "rod_marker_annotation_label"
-    ]
+        if isinstance(node, ast.FunctionDef)
+    }
+    call_names = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
 
-    assert call_lines
-    assert definition_line < min(call_lines)
+    assert "rod_marker_annotation_label" not in names
+    assert "rod_marker_annotation_label" not in call_names
 
 
 def test_parallel_background_peak_fits_notebook_uses_process_pool_worker() -> None:
