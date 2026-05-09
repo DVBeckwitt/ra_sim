@@ -7526,7 +7526,7 @@ def _refresh_geometry_manual_pick_session(*, reuse_only: bool = False) -> dict[s
     except Exception:
         return current_session
     if bool(reuse_only) and cache_data.get("cache_ready") is False:
-        detector_picker_ready = bool(
+        detector_picker_ready = (
             cache_data.get("picker_candidates_ready") is True and not uses_caked_space
         )
         if not detector_picker_ready:

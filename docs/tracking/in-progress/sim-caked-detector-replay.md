@@ -5,7 +5,7 @@ Type: bug
 Owner:
 Issue: none
 Priority: p1
-Last updated: 2026-05-08
+Last updated: 2026-05-09
 
 ## Summary
 
@@ -23,6 +23,24 @@ the current projection lookup, and routes detector replay only through:
 Implemented in [manual_geometry.py](../../../ra_sim/gui/manual_geometry.py)
 with focused regression coverage in
 [test_manual_geometry_selection_helpers.py](../../../tests/test_manual_geometry_selection_helpers.py).
+
+2026-05-09 detector picker hard-reject update: detector-mode manual Qr/Qz
+picking now treats caked projection rows as invalid detector candidates before
+reading detector-looking coordinate fields. A caked projection row with
+`sim_refined_detector_display_px` must return no detector picker row and no
+detector grouped candidate. That keeps caked projection provenance from
+blocking the bounded picker-only detector recovery path. The runtime refresh
+path also keeps the picker-ready detector session path concise without changing
+behavior.
+
+Bug/error status: the wrong-frame detector admission path is fixed in focused
+helper/runtime tests and direct probe evidence. Feature status: no new operator
+control, public API, CLI flag, saved-state schema, artifact format, dependency,
+or CI workflow. Migration/deprecation status: no migration required; existing
+saved rows are interpreted at runtime by provenance/frame. Shipping status:
+automated local gates are green; manual detector/caked GUI smoke remains
+pending before closing this active tracker. Rollback is a normal git revert; no
+data cleanup, feature flag, or migration step is required.
 
 2026-05-08 active manual pick session refresh update: detector/caked view
 toggles now refresh the active session from the current view's grouped
@@ -61,8 +79,9 @@ Feature status: no new operator control, public API, CLI flag, saved-state
 schema, artifact format, dependency, or CI workflow. Migration/deprecation
 status: no migration required; old ambiguous rows remain readable and are
 handled conservatively at resolver time. Shipping status: focused automated
-local gates are green; full `python -m ra_sim.dev check` is still blocked by
-pre-existing formatting drift in `ra_sim/gui/_runtime/runtime_session.py`.
+local gates are green; the later 2026-05-09 validation pass records
+`python -m ra_sim.dev check` passing after the runtime-session formatting drift
+was cleaned up.
 Rollback is a normal git revert; no data cleanup, feature flag, or migration
 step is required.
 
@@ -259,6 +278,24 @@ Feature status:
   there.
 
 ## Validation
+
+Latest local validation, 2026-05-09:
+
+- direct probe: a caked projection row with `sim_refined_detector_display_px`
+  returns `None` from `geometry_manual_detector_picker_row(...)` and `{}` from
+  detector grouped-cache conversion.
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_manual_geometry_selection_helpers.py -k "detector_picker_grouped_candidates_does_not_fallback_to_caked_projection_rows or detector_picker_rejects_caked_projection_row_even_with_refined_detector_display or detector_click_retries_picker_only_when_cache_contains_only_caked_grouped_rows" -ra`
+  passed (`3 passed, 565 deselected`).
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_manual_geometry_selection_helpers.py -k "detector_picker or picker_candidates_only or refresh_session_replaces_caked_projection_rows" -ra`
+  passed (`8 passed, 560 deselected`).
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_gui_runtime_import_safe.py -k "reuse_only_refresh or runtime_refresh_detector_session_uses_picker_ready_cache_even_when_refinement_cold" -ra`
+  passed (`2 passed, 417 deselected`).
+- `python -m compileall -q ra_sim/gui tests`, `git diff --check`, and
+  `python -m ra_sim.dev check` passed.
+- Full `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_manual_geometry_selection_helpers.py -x -ra`
+  still stops at the unrelated
+  `test_minus_1_0_10_fit_step_reduces_qr_residual` source assertion after
+  `467 passed`.
 
 Latest local validation, 2026-05-08:
 

@@ -31,7 +31,7 @@ intensity contract, but remains downstream of green mosaic fitting.
 | Deterministic geometry runtime fix pass | bug | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-05-04 | [deterministic-geometry-runtime-fix-pass.md](in-progress/deterministic-geometry-runtime-fix-pass.md) |
 | Qr/Qz shape sensitivity | feature | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-22 | [q-group-shape-sensitivity.md](in-progress/q-group-shape-sensitivity.md) |
 | Q-space viewer fix | bug | - | none | p1 | 2026-04-30 | [q-space-viewer-fix.md](in-progress/q-space-viewer-fix.md) |
-| Sim caked detector replay | bug | - | none | p1 | 2026-05-08 | [sim-caked-detector-replay.md](in-progress/sim-caked-detector-replay.md) |
+| Sim caked detector replay | bug | - | none | p1 | 2026-05-09 | [sim-caked-detector-replay.md](in-progress/sim-caked-detector-replay.md) |
 | Background peak fit detector Qr rod panel | bug/feature | - | none | p1 | 2026-05-05 | [background-peak-fit-detector-qr-rod-panel.md](in-progress/background-peak-fit-detector-qr-rod-panel.md) |
 | Beam center background pick | feature | - | none | p1 | 2026-05-01 | [beam-center-background-pick.md](in-progress/beam-center-background-pick.md) |
 | Background Qr reference picks | feature | - | none | p2 | 2026-04-30 | [background-qr-reference-picks.md](in-progress/background-qr-reference-picks.md) |
@@ -71,11 +71,16 @@ aliases win first, safe current caked display aliases win second, refined-only
 fit/cache fields remain fallback, and background-shaped rows do not become
 simulated visual caked points. The active manual-pick session refresh now also
 lets detector rows replace sticky caked projection rows on detector refresh while
-preserving only visual caked aliases by identity. No migration, deprecation, CI
-workflow, feature flag, or release version change is required. Full
-`ra_sim.dev check` remains blocked by unrelated formatting drift in
-`ra_sim/gui/_runtime/runtime_session.py`; manual detector/caked GUI smoke remains
-pending before closing the tracking item.
+preserving only visual caked aliases by identity. The 2026-05-09 detector-picker
+closure hard-rejects caked projection rows before detector-looking coordinate
+fields are considered, so `sim_refined_detector_display_px` on a caked
+projection row no longer blocks picker-only detector recovery. No migration,
+deprecation, CI workflow, feature flag, or release version change is required.
+Focused detector/runtime tests, compile, diff check, and
+`python -m ra_sim.dev check` pass. Full manual-helper validation still has an
+unrelated `test_minus_1_0_10_fit_step_reduces_qr_residual` source assertion;
+manual detector/caked GUI smoke remains pending before closing the tracking
+item.
 
 Background peak fit detector Qr rod panel status note:
 The ignored parallel diagnostics notebook now treats the detector Qr-rod panel

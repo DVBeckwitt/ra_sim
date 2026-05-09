@@ -5,7 +5,7 @@ Type: bug
 Owner:
 Issue: [#248](https://github.com/DVBeckwitt/ra_sim/issues/248)
 Priority: p1
-Last updated: 2026-05-07
+Last updated: 2026-05-09
 
 This page records the resolved detector/caked manual-picking problem for Qr/Qz
 group selection and HKL selection. It replaces the earlier in-progress
