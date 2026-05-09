@@ -8792,6 +8792,10 @@ def geometry_manual_detector_picker_row(
 
     if not isinstance(entry, Mapping):
         return None
+    if bool(entry.get("_caked_qr_projection_cache")) or (
+        _geometry_manual_entry_display_frame(entry) == "caked"
+    ):
+        return None
     group_key = _geometry_manual_real_q_group_key(entry)
     if group_key is None:
         return None
@@ -9319,18 +9323,6 @@ def geometry_manual_detector_picker_grouped_candidates_from_cache(
         native_background=native_background,
         profile_cache=profile_cache,
     )
-    if not grouped and isinstance(cache_data, Mapping):
-        raw_grouped = cache_data.get("grouped_candidates")
-        if isinstance(raw_grouped, Mapping):
-            grouped = {
-                group_key: [
-                    {**dict(entry), "q_group_key": group_key}
-                    for entry in (entries or ())
-                    if isinstance(entry, Mapping)
-                ]
-                for raw_key, entries in raw_grouped.items()
-                if (group_key := _geometry_manual_real_q_group_key(raw_key)) is not None
-            }
     return grouped
 
 

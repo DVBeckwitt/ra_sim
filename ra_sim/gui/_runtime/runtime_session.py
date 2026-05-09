@@ -7518,10 +7518,21 @@ def _refresh_geometry_manual_pick_session(*, reuse_only: bool = False) -> dict[s
         return current_session
     if not isinstance(cache_data, dict):
         return current_session
-    if bool(reuse_only) and cache_data.get("cache_ready") is False:
+    pick_uses_caked_space_fn = globals().get("_geometry_manual_pick_uses_caked_space")
+    try:
+        uses_caked_space = (
+            bool(pick_uses_caked_space_fn()) if callable(pick_uses_caked_space_fn) else False
+        )
+    except Exception:
         return current_session
+    if bool(reuse_only) and cache_data.get("cache_ready") is False:
+        detector_picker_ready = bool(
+            cache_data.get("picker_candidates_ready") is True and not uses_caked_space
+        )
+        if not detector_picker_ready:
+            return current_session
 
-    if _geometry_manual_pick_uses_caked_space():
+    if uses_caked_space:
         caked_grouped_candidates = cache_data.get("caked_qr_projection_grouped_candidates")
         if not (isinstance(caked_grouped_candidates, Mapping) and bool(caked_grouped_candidates)):
             return current_session
@@ -7542,10 +7553,7 @@ def _refresh_geometry_manual_pick_session(*, reuse_only: bool = False) -> dict[s
         candidate_source_key=_geometry_manual_candidate_source_key,
         profile_cache=simulation_runtime_state.profile_cache,
     )
-    if (
-        _geometry_manual_pick_uses_caked_space()
-        and gui_manual_geometry.geometry_manual_live_caked_trace_enabled()
-    ):
+    if uses_caked_space and gui_manual_geometry.geometry_manual_live_caked_trace_enabled():
         gui_manual_geometry.geometry_manual_trace_live_caked_visual_source_event(
             "pending_visual_map_built",
             manual_geometry_run_id=(
@@ -30972,9 +30980,7 @@ def _geometry_manual_rebuild_source_rows_for_background(
             if disordered_rows:
                 disordered_cache_source = "stored_disordered_phase_hit_tables"
                 live_rows.extend(disordered_rows)
-                cache_metadata["stored_disordered_phase_source_rows"] = int(
-                    len(disordered_rows)
-                )
+                cache_metadata["stored_disordered_phase_source_rows"] = int(len(disordered_rows))
                 cache_metadata["live_rows_cache_source"] = (
                     f"live_preview_cache+{disordered_cache_source}"
                     if live_source_counts
@@ -30983,9 +30989,7 @@ def _geometry_manual_rebuild_source_rows_for_background(
                 if not live_source_counts:
                     cache_metadata["live_rows_signature_match"] = True
                     cache_metadata["live_rows_signature_reason"] = disordered_cache_source
-                cache_metadata["source_counts"] = _geometry_fit_live_row_source_counts(
-                    live_rows
-                )
+                cache_metadata["source_counts"] = _geometry_fit_live_row_source_counts(live_rows)
         if cache_metadata:
             return {
                 "rows": live_rows,

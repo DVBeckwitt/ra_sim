@@ -13628,7 +13628,7 @@ def test_geometry_manual_toggle_selection_at_starts_session() -> None:
         20.0,
         pick_session={},
         current_background_index=0,
-        display_background=np.zeros((8, 8), dtype=float),
+        display_background=np.zeros((32, 32), dtype=float),
         get_cache_data=lambda **_kwargs: {
             "signature": ("cache",),
             "grouped_candidates": {
@@ -14758,6 +14758,79 @@ def test_detector_first_qr_selection_cold_cache_builds_picker_candidates_only() 
     assert cache_calls[1]["picker_candidates_only"] is True
 
 
+def test_detector_click_retries_picker_only_when_cache_contains_only_caked_grouped_rows() -> None:
+    group_key = ("q_group", "primary", 1, 0)
+    detector_entry = _runtime_qr_click_candidate(group_key)
+    cache_calls: list[dict[str, object]] = []
+
+    caked_entry = {
+        "q_group_key": group_key,
+        "_caked_qr_projection_cache": True,
+        "display_frame": "caked_display",
+        "caked_x": 22.0,
+        "caked_y": -25.0,
+        "sim_refined_detector_display_px": (10.0, 20.0),
+    }
+
+    def _get_cache(**kwargs):
+        cache_calls.append(dict(kwargs))
+        if len(cache_calls) == 1:
+            return {
+                "cache_ready": False,
+                "signature": ("caked-only",),
+                "grouped_candidates": {group_key: [dict(caked_entry)]},
+                "cache_metadata": {
+                    "cache_action": "reused",
+                    "reuse_only": True,
+                },
+            }
+        return {
+            "cache_ready": False,
+            "picker_candidates_ready": True,
+            "signature": ("picker-only",),
+            "detector_picker_rows": [dict(detector_entry)],
+            "detector_picker_source_rows": [dict(detector_entry)],
+            "detector_picker_grouped_candidates": {group_key: [dict(detector_entry)]},
+            "cache_metadata": {
+                "cache_action": "rebuilt",
+                "picker_candidates_only": True,
+            },
+        }
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        10.0,
+        20.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((32, 32), dtype=float),
+        get_cache_data=_get_cache,
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
+        set_pick_session_fn=lambda _session: None,
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=lambda _text: None,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is True
+    assert next_session["group_key"] == group_key
+    assert cache_calls[0]["reuse_only"] is True
+    assert cache_calls[1]["reuse_only"] is False
+    assert cache_calls[1]["build_caked_projection_sidecar"] is False
+    assert cache_calls[1]["picker_candidates_only"] is True
+    tagged = next_session["tagged_candidate"]
+    assert tagged["display_frame"] == "detector_display"
+    assert tagged["detector_display_px"] == (10.0, 20.0)
+    assert tagged.get("_caked_qr_projection_cache") is not True
+
+
 def test_runtime_pick_cache_picker_candidates_only_skips_refinement_and_fresh_simulation(
     monkeypatch,
 ) -> None:
@@ -15214,7 +15287,7 @@ def test_geometry_manual_toggle_selection_at_starts_two_branch_session_for_qr_qz
         20.0,
         pick_session={},
         current_background_index=0,
-        display_background=np.zeros((8, 8), dtype=float),
+        display_background=np.zeros((64, 64), dtype=float),
         get_cache_data=lambda **_kwargs: {
             "signature": ("cache",),
             "grouped_candidates": {
@@ -15304,7 +15377,7 @@ def test_geometry_manual_toggle_selection_at_tags_clicked_seed_within_group() ->
         39.5,
         pick_session={},
         current_background_index=0,
-        display_background=np.zeros((8, 8), dtype=float),
+        display_background=np.zeros((64, 64), dtype=float),
         get_cache_data=lambda **_kwargs: {
             "signature": ("cache",),
             "grouped_candidates": {
@@ -15675,7 +15748,7 @@ def test_geometry_manual_toggle_selection_at_keeps_selected_candidate_under_perm
             39.5,
             pick_session={},
             current_background_index=0,
-            display_background=np.zeros((8, 8), dtype=float),
+            display_background=np.zeros((64, 64), dtype=float),
             get_cache_data=lambda **_kwargs: {
                 "signature": ("cache",),
                 "grouped_candidates": {group_key: [dict(entry) for entry in entries]},
@@ -15728,7 +15801,7 @@ def test_geometry_manual_toggle_selection_at_prefers_shared_peak_finder_group_wh
         20.0,
         pick_session={},
         current_background_index=0,
-        display_background=np.zeros((8, 8), dtype=float),
+        display_background=np.zeros((256, 256), dtype=float),
         get_cache_data=lambda **_kwargs: {
             "signature": ("cache",),
             "grouped_candidates": {
@@ -15838,7 +15911,7 @@ def test_geometry_manual_toggle_selection_at_shared_peak_finder_preserves_branch
         0.0,
         pick_session={},
         current_background_index=0,
-        display_background=np.zeros((8, 8), dtype=float),
+        display_background=np.zeros((256, 256), dtype=float),
         get_cache_data=lambda **_kwargs: {
             "signature": ("cache",),
             "grouped_candidates": {group_key: [dict(entry) for entry in mirrored_entries]},
@@ -15964,7 +16037,7 @@ def test_geometry_manual_toggle_selection_at_falls_back_when_shared_peak_has_no_
         20.0,
         pick_session={},
         current_background_index=0,
-        display_background=np.zeros((8, 8), dtype=float),
+        display_background=np.zeros((32, 32), dtype=float),
         get_cache_data=lambda **_kwargs: {
             "signature": ("cache",),
             "grouped_candidates": {
@@ -16784,7 +16857,7 @@ def test_geometry_manual_select_q_group_at_tags_branch_mosaic_top_candidate() ->
         10.0,
         pick_session=None,
         current_background_index=0,
-        display_background=np.zeros((8, 8), dtype=float),
+        display_background=np.zeros((32, 32), dtype=float),
         get_cache_data=lambda **_kwargs: {"grouped_candidates": {key: entries}},
         pairs_for_index=lambda _idx: [],
         set_pairs_for_index_fn=lambda _idx, entries_arg: list(entries_arg or []),
@@ -16852,7 +16925,7 @@ def test_geometry_manual_select_q_group_at_uses_profile_cache_sample_weights() -
         10.0,
         pick_session=None,
         current_background_index=0,
-        display_background=np.zeros((8, 8), dtype=float),
+        display_background=np.zeros((32, 32), dtype=float),
         get_cache_data=lambda **_kwargs: {"grouped_candidates": {key: entries}},
         pairs_for_index=lambda _idx: [],
         set_pairs_for_index_fn=lambda _idx, entries_arg: list(entries_arg or []),
@@ -18087,21 +18160,27 @@ def _toggle_cross_view_selection(
 ):
     set_sessions: list[dict[str, object]] = []
     status_messages: list[str] = []
+
+    def _cache_data(**kwargs):
+        if callable(cache_data):
+            return cache_data(**kwargs)
+        if isinstance(cache_data, dict):
+            return dict(cache_data)
+        return {
+            "signature": ("cross-view", bool(use_caked_space)),
+            "grouped_candidates": grouped,
+            "caked_qr_projection_grouped_candidates": grouped
+            if bool(use_caked_space)
+            else {},
+        }
+
     handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
         float(col),
         float(row),
         pick_session={},
         current_background_index=0,
         display_background=np.zeros((256, 256), dtype=float),
-        get_cache_data=lambda **_kwargs: (
-            dict(cache_data)
-            if isinstance(cache_data, dict)
-            else {
-                "signature": ("cross-view", bool(use_caked_space)),
-                "grouped_candidates": grouped,
-                "caked_qr_projection_grouped_candidates": grouped if bool(use_caked_space) else {},
-            }
-        ),
+        get_cache_data=_cache_data,
         pairs_for_index=lambda _idx: [],
         set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
         set_pick_session_fn=lambda session: set_sessions.append(dict(session)),
@@ -19178,7 +19257,7 @@ def test_manual_qr_caked_toggle_requires_projection_cache_without_grouped_fallba
             204.0,
             pick_session={},
             current_background_index=0,
-            display_background=np.zeros((8, 8), dtype=float),
+            display_background=np.zeros((256, 256), dtype=float),
             get_cache_data=lambda **_kwargs: dict(cache_data),
             pairs_for_index=lambda _idx: [],
             set_pairs_for_index_fn=lambda _idx, entries: list(entries or []),
@@ -20870,12 +20949,35 @@ def test_manual_qr_selection_works_caked_then_detector_with_stale_caked_cache() 
     assert dist < 1.0
 
     use_caked["value"] = False
+    detector_rows = callbacks.simulated_peaks_for_params(prefer_cache=True)
+    detector_grouped = callbacks.pick_candidates(detector_rows)
+    cache_calls: list[dict[str, object]] = []
+
+    def _stale_then_detector_cache(**kwargs):
+        cache_calls.append(dict(kwargs))
+        grouped_candidates = (
+            detector_grouped
+            if bool(kwargs.get("picker_candidates_only"))
+            else stale_grouped
+        )
+        return {
+            "cache_ready": False,
+            "signature": ("cross-view", False),
+            "grouped_candidates": grouped_candidates,
+            "picker_candidates_ready": bool(kwargs.get("picker_candidates_only")),
+            "caked_qr_projection_grouped_candidates": {},
+        }
+
     detector_session = _toggle_cross_view_selection(
         stale_grouped,
         103.0,
         204.0,
         use_caked_space=False,
         group_key=group_key,
+        cache_data=_stale_then_detector_cache,
+    )
+    assert any(
+        bool(call.get("picker_candidates_only")) is True for call in cache_calls
     )
     assert detector_session["target_count"] == 2
     assert len(detector_session["group_entries"]) == 2
@@ -23888,6 +23990,58 @@ def test_detector_mode_qr_picker_falls_through_invalid_source_rows() -> None:
     assert set(grouped) == {group_key}
     assert grouped[group_key][0]["detector_display_px"] == (120.0, 130.0)
     assert trace["reason_candidates_are_empty"] == "valid_detector_rows_available_but_not_selected"
+
+
+def test_detector_picker_grouped_candidates_does_not_fallback_to_caked_projection_rows() -> (
+    None
+):
+    group_key = ("q_group", "primary", 1, 10)
+    cache_data = {
+        "grouped_candidates": {
+            group_key: [
+                {
+                    "q_group_key": group_key,
+                    "_caked_qr_projection_cache": True,
+                    "display_frame": "caked_display",
+                    "caked_x": 22.0,
+                    "caked_y": -25.0,
+                }
+            ]
+        }
+    }
+
+    grouped = mg.geometry_manual_detector_picker_grouped_candidates_from_cache(
+        cache_data,
+        display_background=np.zeros((3000, 3000), dtype=float),
+    )
+
+    assert grouped == {}
+
+
+def test_detector_picker_rejects_caked_projection_row_even_with_refined_detector_display() -> (
+    None
+):
+    group_key = ("q_group", "primary", -1, 0, 10)
+    entry = {
+        "q_group_key": group_key,
+        "_caked_qr_projection_cache": True,
+        "display_frame": "caked_display",
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "source_branch_index": 0,
+        "caked_x": 22.0,
+        "caked_y": -25.0,
+        "sim_refined_detector_display_px": (1000.0, 2000.0),
+    }
+
+    assert mg.geometry_manual_detector_picker_row(entry) is None
+
+    grouped = mg.geometry_manual_detector_picker_grouped_candidates_from_cache(
+        {"grouped_candidates": {group_key: [entry]}},
+        display_background=np.zeros((3000, 3000), dtype=float),
+    )
+
+    assert grouped == {}
 
 
 def test_detector_mode_qr_picker_starts_without_caked_projection_cache() -> None:

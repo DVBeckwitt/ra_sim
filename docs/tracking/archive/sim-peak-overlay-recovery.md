@@ -283,6 +283,47 @@ candidates are preserved, detector/display/caked pixels are finite, Qr/Qz
 groups are clickable at candidate pixels, and HKL nearest-pixel selection
 recovers the candidate.
 
+## Detector Wrong-Frame Cache Leak Closure
+
+Status: fixed on 2026-05-09. Detector-mode manual Qr/Qz picking now fails
+closed on caked projection rows, including rows that carry detector-looking
+fields such as `sim_refined_detector_display_px`. The removed behavior was an
+internal fallback from detector picker grouping to raw `grouped_candidates`;
+there is no public API, saved-state schema, CLI, or config migration.
+
+What changed:
+
+- `geometry_manual_detector_picker_row(...)` rejects caked projection
+  provenance and current caked display frames before resolving detector display
+  points.
+- `geometry_manual_detector_picker_grouped_candidates_from_cache(...)` no
+  longer returns raw grouped rows that did not pass detector picker conversion.
+- Detector clicks that first see only caked grouped rows now treat the detector
+  candidate set as empty, run the existing bounded `picker_candidates_only`
+  recovery, and select from rebuilt detector picker rows.
+- `_refresh_geometry_manual_pick_session(reuse_only=True)` can refresh detector
+  `group_entries` from picker-ready rows when `cache_ready=False` but
+  `picker_candidates_ready=True`, while caked refresh remains conservative.
+
+Bug/error status: the reported `No Qr/Qz set found within a ... px window`
+wrong-frame path is covered by regression tests. The active session should now
+preserve source identity and refresh into the current view instead of staying a
+caked row after a detector toggle.
+
+Validation recorded for this closure:
+
+- direct probe: a caked projection row with `sim_refined_detector_display_px`
+  returns `None` from detector picker row conversion and `{}` from detector
+  grouped cache conversion;
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_manual_geometry_selection_helpers.py -k "detector_picker_grouped_candidates_does_not_fallback_to_caked_projection_rows or detector_picker_rejects_caked_projection_row_even_with_refined_detector_display or detector_click_retries_picker_only_when_cache_contains_only_caked_grouped_rows" -ra`
+  passed with 3 tests;
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_manual_geometry_selection_helpers.py -k "detector_picker or picker_candidates_only or refresh_session_replaces_caked_projection_rows" -ra`
+  passed with 8 tests;
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_gui_runtime_import_safe.py -k "reuse_only_refresh or runtime_refresh_detector_session_uses_picker_ready_cache_even_when_refinement_cold" -ra`
+  passed with 2 tests;
+- `python -m compileall -q ra_sim/gui tests`, `git diff --check`, and
+  `python -m ra_sim.dev check` passed.
+
 ## Main Code Paths
 
 - `ra_sim/gui/geometry_q_group_manager.py`

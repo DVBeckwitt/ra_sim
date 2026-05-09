@@ -21074,6 +21074,116 @@ def test_reuse_only_refresh_miss_preserves_active_pick_session_exactly(monkeypat
     assert cache_calls[-1]["reuse_only"] is True
 
 
+def test_runtime_refresh_detector_session_uses_picker_ready_cache_even_when_refinement_cold(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    group_key = ("q_group", "primary", 1, 0)
+    caked_candidate = {
+        "label": "1,0,0",
+        "hkl": (1, 0, 0),
+        "q_group_key": group_key,
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "source_branch_index": 0,
+        "_caked_qr_projection_cache": True,
+        "display_frame": "caked_display",
+        "caked_x": 22.0,
+        "caked_y": -25.0,
+    }
+    detector_candidate = {
+        "label": "1,0,0",
+        "hkl": (1, 0, 0),
+        "q_group_key": group_key,
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "source_branch_index": 0,
+        "display_col": 10.0,
+        "display_row": 20.0,
+        "sim_col": 10.0,
+        "sim_row": 20.0,
+    }
+    session = {
+        "group_key": group_key,
+        "group_entries": [dict(caked_candidate)],
+        "remaining_candidates": [dict(caked_candidate)],
+        "pending_entries": [],
+        "target_count": 1,
+        "base_entries": [],
+        "q_label": "selected group",
+        "background_index": 0,
+        "tagged_candidate": dict(caked_candidate),
+    }
+    manual_state = SimpleNamespace(pick_session=session)
+    cache_data = {
+        "cache_ready": False,
+        "picker_candidates_ready": True,
+        "signature": ("picker-ready-refinement-cold",),
+        "detector_picker_rows": [dict(detector_candidate)],
+        "detector_picker_source_rows": [dict(detector_candidate)],
+        "detector_picker_grouped_candidates": {group_key: [dict(detector_candidate)]},
+        "cache_metadata": {
+            "cache_action": "reused",
+            "picker_candidates_ready": True,
+            "refinement_lookup_ready": False,
+        },
+    }
+
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_manual_state",
+        manual_state,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(current_background_index=0),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(profile_cache=None),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_manual_pick_background_image",
+        lambda: np.zeros((32, 32), dtype=float),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "_current_geometry_fit_params", lambda: {}, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_geometry_manual_pick_cache",
+        lambda **_kwargs: dict(cache_data),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_pick_uses_caked_space",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_set_geometry_manual_pick_session",
+        lambda value: (
+            setattr(manual_state, "pick_session", dict(value)) or manual_state.pick_session
+        ),
+        raising=False,
+    )
+
+    result = runtime_session._refresh_geometry_manual_pick_session(reuse_only=True)
+
+    row = result["group_entries"][0]
+    assert row.get("_caked_qr_projection_cache") is not True
+    assert row.get("display_frame") == "detector_display"
+    assert row["detector_display_px"] == (10.0, 20.0)
+    assert manual_state.pick_session == result
+
+
 def test_manual_pick_cache_invalidation_schedules_prewarm_when_armed(monkeypatch) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     invalidated: list[str] = []
