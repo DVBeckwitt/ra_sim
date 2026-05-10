@@ -17302,7 +17302,7 @@ def geometry_manual_pairs_fit_space_kind(
     pick_applies_to_background: bool = False,
     auto_caked_detector_origin: bool = False,
 ) -> str:
-    """Classify one manual-pair set as detector-pixel or caked fit-space."""
+    """Classify one manual-pair set as missing, detector-pixel, or caked fit-space."""
 
     pair_kinds = _geometry_manual_pair_fit_space_kinds(
         manual_pairs,
@@ -17314,9 +17314,7 @@ def geometry_manual_pairs_fit_space_kind(
         return "caked"
     if pair_kinds == {"detector"}:
         return "detector"
-    if bool(pick_uses_caked_space) and bool(pick_applies_to_background):
-        return "caked"
-    return "detector"
+    return "missing"
 
 
 def geometry_manual_fit_space_by_background(
@@ -17327,7 +17325,7 @@ def geometry_manual_fit_space_by_background(
     current_background_index: int | None = None,
     active_var_names: Sequence[object] | None = None,
 ) -> dict[int, str]:
-    """Return detector/caked manual fit-space classification per background."""
+    """Return missing/detector/caked manual fit-space classification per background."""
 
     indices = [int(idx) for idx in (background_indices or ())]
     result: dict[int, str] = {}
@@ -17364,6 +17362,16 @@ def manual_geometry_fit_space_preflight_error(
 ) -> str | None:
     """Reject mixed detector/caked manual-pair selections before overrides run."""
 
+    osc_list: list[object] | None = None
+
+    def _background_label(idx: int) -> str:
+        nonlocal osc_list
+        if osc_list is None:
+            osc_list = list(osc_files or ())
+        if 0 <= int(idx) < len(osc_list):
+            return Path(str(osc_list[int(idx)])).name
+        return f"background {int(idx) + 1}"
+
     normalized: dict[int, str] = {}
     for raw_idx, raw_kind in (fit_space_by_background or {}).items():
         try:
@@ -17371,17 +17379,18 @@ def manual_geometry_fit_space_preflight_error(
         except Exception:
             continue
         kind = str(raw_kind or "detector").strip().lower()
-        normalized[idx] = kind if kind in {"caked", "mixed"} else "detector"
+        normalized[idx] = kind if kind in {"caked", "mixed", "missing"} else "detector"
+    missing_indices = [idx for idx, kind in normalized.items() if kind == "missing"]
+    if missing_indices:
+        labels = [_background_label(idx) for idx in sorted(missing_indices)]
+        return (
+            "Geometry fit unavailable: save manual Qr/Qz pairs first for "
+            + ", ".join(labels)
+            + "."
+        )
     mixed_indices = [idx for idx, kind in normalized.items() if kind == "mixed"]
     if mixed_indices:
-        labels: list[str] = []
-        osc_list = list(osc_files or ())
-        for idx in sorted(mixed_indices):
-            if 0 <= int(idx) < len(osc_list):
-                label = Path(str(osc_list[int(idx)])).name
-            else:
-                label = f"background {int(idx) + 1}"
-            labels.append(f"{label}=mixed")
+        labels = [f"{_background_label(idx)}=mixed" for idx in sorted(mixed_indices)]
         return (
             "Geometry fit unavailable: saved manual Qr/Qz pairs mix detector-pixel "
             "and caked fit-space coordinates within the same background. Clear and "
@@ -17392,14 +17401,9 @@ def manual_geometry_fit_space_preflight_error(
     if len(set(normalized.values())) <= 1:
         return None
 
-    labels: list[str] = []
-    osc_list = list(osc_files or ())
-    for idx in sorted(normalized):
-        if 0 <= int(idx) < len(osc_list):
-            label = Path(str(osc_list[int(idx)])).name
-        else:
-            label = f"background {int(idx) + 1}"
-        labels.append(f"{label}={normalized[idx]}")
+    labels = [
+        f"{_background_label(idx)}={normalized[idx]}" for idx in sorted(normalized)
+    ]
     return (
         "Geometry fit unavailable: selected manual Qr/Qz pairs mix detector-pixel "
         "and caked fit-space coordinates. Clear and re-pick the selected groups in "
@@ -17960,15 +17964,16 @@ def apply_manual_caked_point_geometry_fit_runtime_overrides(
     cfg["solver"] = optimizer_cfg
     cfg["projection_view_mode"] = "caked"
     active_names = [str(name) for name in (active_var_names or ())]
+    active_name_set = set(active_names)
     resolved_seed_policy = normalize_geometry_fit_seed_policy(seed_policy)
-    if resolved_seed_policy is None and {"gamma", "Gamma"}.issubset(set(active_names)):
+    if resolved_seed_policy is None and {"gamma", "Gamma"}.issubset(active_name_set):
         row_count = geometry_fit_fixed_manual_caked_qr_row_count(
             current_dataset=current_dataset,
             dataset_infos=dataset_infos,
             manual_pair_rows=manual_pair_rows,
         )
         if row_count > 0:
-            resolved_seed_policy = GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART
+            resolved_seed_policy = GEOMETRY_FIT_SEED_POLICY_DIRECT
     if resolved_seed_policy is not None:
         apply_saved_manual_caked_geometry_fit_budget(
             cfg,

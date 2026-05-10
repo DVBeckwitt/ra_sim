@@ -15023,8 +15023,11 @@ def test_runtime_impl_backfills_detector_origin_two_tilt_pairs_before_fit_space(
     assert "manual_caked_geometry_fit_observed_anchor_preflight_error" in source
 
 
-def test_manual_caked_runtime_override_keeps_dynamic_exact_caked_path() -> None:
+def test_manual_caked_runtime_override_defaults_saved_pairs_to_direct_solve() -> None:
     geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
+
+    def _runtime_cfg() -> dict[str, object]:
+        return {"solver": {"dynamic_point_geometry_fit": False, "max_nfev": 99, "restarts": 4}}
 
     manual_caked_row = {
         "background_two_theta_deg": 10.0,
@@ -15035,7 +15038,7 @@ def test_manual_caked_runtime_override_keeps_dynamic_exact_caked_path() -> None:
         "source_row_index": 24,
     }
     caked_cfg = geometry_fit.apply_manual_caked_point_geometry_fit_runtime_overrides(
-        {"solver": {"dynamic_point_geometry_fit": False, "max_nfev": 99, "restarts": 4}},
+        _runtime_cfg(),
         joint_background_mode=False,
         active_var_names=["gamma", "Gamma"],
         manual_pair_rows=[manual_caked_row],
@@ -15045,16 +15048,33 @@ def test_manual_caked_runtime_override_keeps_dynamic_exact_caked_path() -> None:
     assert caked_solver["manual_point_fit_mode"] is True
     assert caked_solver["dynamic_point_geometry_fit"] is True
     assert caked_cfg["projection_view_mode"] == "caked"
-    assert caked_solver["max_nfev"] == 60
+    assert caked_solver["max_nfev"] == 29
+    assert caked_solver["seed_multistart"] is False
+    assert caked_solver["seed_multistart_enabled"] is False
     assert caked_solver["_qr_fit_point_only_projection"] is True
     assert caked_solver["_headless_accept_caked_angular_metric_without_pixel_threshold"] is True
-    assert caked_cfg["seed_search"]["prescore_top_k"] == 1
-    assert caked_cfg["seed_search"]["n_global"] == 4
+    assert caked_cfg["seed_search"]["enabled"] is False
     assert caked_cfg["bounds"]["gamma"] == [-90.0, 90.0]
     assert caked_cfg["bounds"]["Gamma"] == [-90.0, 90.0]
 
+    ladder_caked_cfg = geometry_fit.apply_manual_caked_point_geometry_fit_runtime_overrides(
+        _runtime_cfg(),
+        joint_background_mode=False,
+        active_var_names=["gamma", "Gamma"],
+        manual_pair_rows=[manual_caked_row],
+        seed_policy=geometry_fit.GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART,
+    )
+    ladder_solver = ladder_caked_cfg["solver"]
+
+    assert ladder_solver["max_nfev"] == 60
+    assert ladder_solver["seed_multistart"] is True
+    assert ladder_solver["seed_multistart_enabled"] is True
+    assert ladder_caked_cfg["seed_search"]["enabled"] is True
+    assert ladder_caked_cfg["seed_search"]["prescore_top_k"] == 1
+    assert ladder_caked_cfg["seed_search"]["n_global"] == 4
+
     direct_caked_cfg = geometry_fit.apply_manual_caked_point_geometry_fit_runtime_overrides(
-        {"solver": {"dynamic_point_geometry_fit": False, "max_nfev": 99, "restarts": 4}},
+        _runtime_cfg(),
         joint_background_mode=False,
     )
     assert direct_caked_cfg["solver"]["max_nfev"] == 30
@@ -15618,6 +15638,129 @@ def test_async_geometry_fit_job_preserves_caked_runtime_fields(monkeypatch, tmp_
         runtime_session._build_geometry_fit_async_job(bindings)
 
     assert ensure_calls == []
+
+
+def test_async_geometry_fit_job_skips_empty_selected_backgrounds_when_current_has_pairs(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    geometry_fit = runtime_session.gui_geometry_fit
+    ensure_calls: list[str] = []
+    detector_pair = {"pair_id": "detector-0", "x": 10.0, "y": 20.0}
+    caked_pair = {
+        "pair_id": "caked-0",
+        "manual_background_input_origin": "caked",
+        "background_two_theta_deg": 10.0,
+        "background_phi_deg": 1.0,
+    }
+    manual_pairs_by_index = {
+        0: [detector_pair],
+        1: [],
+        2: [],
+    }
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=[
+            "Bi2Se3_5m_5d.osc",
+            "Bi2Se3_10d_5m.osc",
+            "Bi2Se3_15d_5m.osc",
+        ],
+        current_background_index=0,
+        image_size=4,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda idx: list(manual_pairs_by_index[int(idx)]),
+        load_background_by_index=lambda _idx: (
+            np.ones((4, 4), dtype=np.float64),
+            np.ones((4, 4), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        geometry_manual_simulated_lookup=lambda _rows: {},
+        geometry_manual_entry_display_coords=lambda _entry: None,
+        unrotate_display_peaks=lambda entries, shape, *, k: list(entries),
+        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
+        select_fit_orientation=lambda *_args, **_kwargs: ({}, {"pairs": 0}),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        orient_image_for_fit=lambda image, **kwargs: image,
+        pick_uses_caked_space=lambda: False,
+    )
+    prepare_bindings = geometry_fit.GeometryFitRuntimePreparationBindings(
+        fit_config={"geometry": {"solver": {}}},
+        theta_initial=5.0,
+        apply_geometry_fit_background_selection=lambda **_kwargs: True,
+        current_geometry_fit_background_indices=lambda **_kwargs: [0, 1, 2],
+        geometry_fit_uses_shared_theta_offset=lambda _indices: True,
+        apply_background_theta_metadata=lambda **_kwargs: True,
+        current_background_theta_values=lambda **_kwargs: [5.0, 6.0, 6.0],
+        current_geometry_theta_offset=lambda **_kwargs: 0.0,
+        ensure_geometry_fit_caked_view=lambda: ensure_calls.append("ensure"),
+        manual_dataset_bindings=manual_dataset_bindings,
+        build_runtime_config=lambda _params: {"solver": {}},
+    )
+    bindings = SimpleNamespace(
+        value_callbacks=geometry_fit.GeometryFitRuntimeValueCallbacks(
+            current_var_names=lambda: ["gamma"],
+            current_params=lambda: {
+                "theta_initial": 5.0,
+                "center": [1.0, 1.0],
+                "corto_detector": 0.5,
+                "lambda": 1.54e-10,
+            },
+            current_ui_params=lambda: {},
+            var_map={},
+            build_mosaic_params=lambda **_kwargs: {},
+        ),
+        prepare_bindings_factory=lambda _var_names: prepare_bindings,
+        execution_bindings=SimpleNamespace(
+            downloads_dir=tmp_path,
+            log_dir=tmp_path,
+            solver_inputs=SimpleNamespace(miller=[], intensities=[], image_size=4),
+        ),
+        solve_fit=lambda *_args, **_kwargs: None,
+        stamp_factory=lambda: "20260510_000000",
+    )
+    runtime_stubs = {
+        "_geometry_source_snapshot_signature_for_background": lambda idx, params: (
+            "sig",
+            int(idx),
+        ),
+        "_live_cache_signature_summary": lambda signature: repr(signature),
+        "_build_live_preview_simulated_peaks_from_cache": lambda: [],
+        "_last_live_preview_cache_metadata": lambda: {},
+        "_live_cache_inventory_snapshot": lambda: {"source_snapshot_count": 0},
+        "_geometry_manual_last_source_snapshot_diagnostics": lambda: {},
+        "_geometry_manual_last_simulation_diagnostics": lambda: {},
+        "get_last_intersection_cache": lambda: [],
+    }
+    for name, replacement in runtime_stubs.items():
+        monkeypatch.setattr(runtime_session, name, replacement, raising=False)
+
+    job = runtime_session._build_geometry_fit_async_job(bindings)
+
+    assert ensure_calls == []
+    assert job["selected_background_indices"] == [0]
+    assert job["required_indices"] == [0]
+    assert job["joint_background_mode"] is False
+    assert job["manual_fit_space_by_background"] == {0: "detector"}
+    assert sorted(job["manual_pairs_by_background"]) == [0]
+    assert job["skipped_manual_pair_backgrounds"] == {
+        1: "Bi2Se3_10d_5m.osc",
+        2: "Bi2Se3_15d_5m.osc",
+    }
+
+    manual_pairs_by_index[0] = [detector_pair, caked_pair]
+    with pytest.raises(RuntimeError, match="within the same background"):
+        runtime_session._build_geometry_fit_async_job(bindings)
+
+    manual_pairs_by_index[0] = []
+    with pytest.raises(RuntimeError) as exc_info:
+        runtime_session._build_geometry_fit_async_job(bindings)
+
+    error = str(exc_info.value)
+    assert "save manual Qr/Qz pairs first" in error
+    assert "Bi2Se3_5m_5d.osc" in error
+    assert "Bi2Se3_10d_5m.osc" in error
+    assert "Bi2Se3_15d_5m.osc" in error
 
 
 def test_geometry_fit_worker_rejects_stored_mixed_manual_fit_space_before_prepare(

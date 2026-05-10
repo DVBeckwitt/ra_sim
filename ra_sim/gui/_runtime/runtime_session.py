@@ -41485,12 +41485,31 @@ def _build_geometry_fit_async_job(
     background_labels: dict[int, str] = {}
     theta_base_by_background: dict[int, float] = {}
     theta_initial_by_background: dict[int, float] = {}
+    skipped_manual_pair_backgrounds: dict[int, str] = {}
 
     def _theta_base_for_index(dataset_index: int) -> float:
         if build_all_selected_backgrounds or joint_background_mode:
             if 0 <= int(dataset_index) < len(background_theta_values):
                 return float(background_theta_values[int(dataset_index)])
         return float(fit_params_snapshot.get("theta_initial", theta_initial_value))
+
+    def _record_background_fit_inputs(idx: int) -> None:
+        theta_base_value = float(_theta_base_for_index(int(idx)))
+        theta_initial_value_i = float(
+            theta_base_value + float(fit_params_snapshot.get("theta_offset", 0.0))
+        )
+        theta_base_by_background[int(idx)] = float(theta_base_value)
+        theta_initial_by_background[int(idx)] = float(theta_initial_value_i)
+        params_i = dict(fit_params_snapshot)
+        params_i["theta_initial"] = float(theta_initial_value_i)
+        requested_signature = _geometry_source_snapshot_signature_for_background(
+            int(idx),
+            params_i,
+        )
+        requested_signatures[int(idx)] = requested_signature
+        requested_signature_summaries[int(idx)] = _live_cache_signature_summary(
+            requested_signature
+        )
 
     for idx in required_indices:
         native_background, display_background = manual_dataset_bindings.load_background_by_index(
@@ -41509,20 +41528,7 @@ def _build_geometry_fit_async_job(
             simulation_runtime_state.source_row_snapshots.get(int(idx)) or {}
         )
         background_labels[int(idx)] = _geometry_fit_background_label(int(idx))
-        theta_base_value = float(_theta_base_for_index(int(idx)))
-        theta_initial_value_i = float(
-            theta_base_value + float(fit_params_snapshot.get("theta_offset", 0.0))
-        )
-        theta_base_by_background[int(idx)] = float(theta_base_value)
-        theta_initial_by_background[int(idx)] = float(theta_initial_value_i)
-        params_i = dict(fit_params_snapshot)
-        params_i["theta_initial"] = float(theta_initial_value_i)
-        requested_signature = _geometry_source_snapshot_signature_for_background(
-            int(idx),
-            params_i,
-        )
-        requested_signatures[int(idx)] = requested_signature
-        requested_signature_summaries[int(idx)] = _live_cache_signature_summary(requested_signature)
+        _record_background_fit_inputs(int(idx))
 
     try:
         manual_match_config = (
@@ -41611,6 +41617,59 @@ def _build_geometry_fit_async_job(
         current_background_index=int(current_background_index),
         active_var_names=var_names,
     )
+    missing_manual_pair_indices = [
+        int(idx)
+        for idx, kind in manual_fit_space_by_background.items()
+        if str(kind).strip().lower() == "missing"
+    ]
+    missing_manual_pair_set = {int(idx) for idx in missing_manual_pair_indices}
+    usable_manual_pair_indices = [
+        int(idx)
+        for idx in required_indices
+        if int(idx) not in missing_manual_pair_set
+    ]
+    if missing_manual_pair_indices and usable_manual_pair_indices:
+        usable_set = {int(idx) for idx in usable_manual_pair_indices}
+        skipped_manual_pair_backgrounds = {
+            int(idx): str(background_labels.get(int(idx), f"background {int(idx) + 1}"))
+            for idx in sorted(missing_manual_pair_indices)
+        }
+        required_indices = [int(idx) for idx in required_indices if int(idx) in usable_set]
+        selected_background_indices = [
+            int(idx) for idx in selected_background_indices if int(idx) in usable_set
+        ]
+        manual_fit_space_by_background = {
+            int(idx): str(manual_fit_space_by_background[int(idx)]) for idx in required_indices
+        }
+        for payload_by_background in (
+            background_images,
+            manual_pairs_by_background,
+            source_snapshots,
+            background_labels,
+        ):
+            for idx in list(payload_by_background):
+                if int(idx) not in usable_set:
+                    del payload_by_background[idx]
+        primary_index = (
+            int(current_background_index)
+            if int(current_background_index) in usable_set
+            else int(required_indices[0])
+        )
+        uses_shared_theta = bool(uses_shared_theta and len(selected_background_indices) > 1)
+        joint_background_mode = bool(uses_shared_theta)
+        build_all_selected_backgrounds = bool(joint_background_mode)
+        if not uses_shared_theta:
+            fit_params_snapshot["theta_offset"] = 0.0
+            if 0 <= int(primary_index) < len(background_theta_values):
+                fit_params_snapshot["theta_initial"] = float(
+                    background_theta_values[int(primary_index)]
+                )
+        theta_base_by_background.clear()
+        theta_initial_by_background.clear()
+        requested_signatures.clear()
+        requested_signature_summaries.clear()
+        for idx in required_indices:
+            _record_background_fit_inputs(int(idx))
     fit_space_error = gui_geometry_fit.manual_geometry_fit_space_preflight_error(
         manual_fit_space_by_background,
         osc_files=list(manual_dataset_bindings.osc_files or ()),
@@ -42183,6 +42242,7 @@ def _build_geometry_fit_async_job(
         "live_rows_handoff_diagnostics": live_rows_handoff_diagnostics,
         "manual_match_config": manual_match_config,
         "manual_fit_space_by_background": dict(manual_fit_space_by_background),
+        "skipped_manual_pair_backgrounds": dict(skipped_manual_pair_backgrounds),
         "pick_uses_caked_space": bool(pick_uses_caked_space),
         "geometry_manual_simulated_lookup": (
             manual_dataset_bindings.geometry_manual_simulated_lookup
@@ -42434,6 +42494,8 @@ def _handle_geometry_fit_worker_event(kind: str, payload: object) -> None:
             _clear_geometry_fit_late_event_tail_state(clear_pending=False)
     if event_kind.startswith("source_cache_") and source_cache_message:
         _geometry_fit_cmd_line(source_cache_message)
+    elif event_kind == "manual_pair_backgrounds_skipped" and message_text:
+        _geometry_fit_cmd_line(message_text)
     if event_kind in {
         "source_cache_build_start",
         "source_cache_bundle_failed",
@@ -42513,6 +42575,27 @@ def _run_async_geometry_fit_worker_job(
             )
         except Exception:
             return
+
+    skipped_manual_pair_backgrounds = {
+        int(idx): str(label)
+        for idx, label in dict(job_data.get("skipped_manual_pair_backgrounds", {}) or {}).items()
+    }
+    if skipped_manual_pair_backgrounds:
+        skipped_labels = ", ".join(
+            str(skipped_manual_pair_backgrounds[idx])
+            for idx in sorted(skipped_manual_pair_backgrounds)
+        )
+        _emit_worker_event(
+            "manual_pair_backgrounds_skipped",
+            {
+                "skipped_manual_pair_backgrounds": dict(skipped_manual_pair_backgrounds),
+                "skipped_background_indices": sorted(skipped_manual_pair_backgrounds),
+                "message": (
+                    "preflight: skipping selected backgrounds without saved manual "
+                    f"Qr/Qz pairs: {skipped_labels}"
+                ),
+            },
+        )
 
     worker_source_row_snapshots = {
         int(idx): copy.deepcopy(snapshot)

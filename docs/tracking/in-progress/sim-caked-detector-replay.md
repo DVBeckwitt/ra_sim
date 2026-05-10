@@ -24,6 +24,48 @@ Implemented in [manual_geometry.py](../../../ra_sim/gui/manual_geometry.py)
 with focused regression coverage in
 [test_manual_geometry_selection_helpers.py](../../../tests/test_manual_geometry_selection_helpers.py).
 
+2026-05-10 GUI fit-space preflight update: selected backgrounds with no
+enabled manual Qr/Qz pairs now classify as `missing` instead of `detector` for
+geometry-fit preflight. This keeps the GUI `All`-background fit path from
+misreporting a state like `caked, empty, empty` as mixed detector/caked
+fit-space. If at least one selected background has valid saved manual pairs,
+the async GUI fit now filters the empty selected backgrounds out of the actual
+fit job and emits a preflight skip message naming them. If every selected
+background is empty, the user-facing failure still says to save manual Qr/Qz
+pairs first. Real mixed detector/caked manual pairs are still rejected,
+including mixed pairs within one background.
+
+Bug/error status: fixed for the misleading GUI dialog shown when included
+backgrounds have zero enabled pairs, and fixed for the blocked `All`-background
+fit where the current background has saved pairs but other selected backgrounds
+are still empty. Feature status: no new control, public API, saved-state
+schema, CLI flag, dependency, or migration. Interface status: the internal
+helper `geometry_manual_pairs_fit_space_kind(...)` has a `missing`
+classification for empty enabled-pair sets, and async geometry-fit jobs include
+additive `skipped_manual_pair_backgrounds` metadata for operator diagnostics.
+Shipping status: focused classification, runtime async-job, and workflow
+missing/mixed tests pass locally. Rollback is a normal git revert.
+
+2026-05-10 GUI saved-manual caked solve update: GUI geometry fits for saved
+manual caked Qr pairs now use the same direct fixed-source default as headless
+saved-manual caked runs. The implicit GUI default no longer switches
+`gamma,Gamma` fits into ladder multistart solely because fixed manual caked rows
+exist; operators can still request `ladder-multistart` explicitly through the
+existing seed-policy path. This keeps the common two-point GUI refine path on
+the bounded direct solve instead of appearing to stall at the normalized-u
+multistart phase.
+
+Bug/error status: fixed for the slow GUI default shown by
+`running normalized-u multistart solve` after a saved-manual caked preflight.
+Feature status: no new GUI control, public API, CLI flag, saved-state schema,
+artifact format, dependency, migration, or version bump. Interface status: the
+existing internal `seed_policy` contract is preserved; only the default when it
+is omitted changes to match headless. Shipping status: the import-safe GUI
+runtime override regression now proves direct default and explicit ladder
+opt-in behavior; full import-safe GUI runtime coverage and geometry-fit workflow
+coverage pass locally, along with compile, Ruff, and diff-hygiene checks.
+Rollback is a normal git revert.
+
 2026-05-10 repo-clean follow-up: runtime geometry-fit overlay invalidation is
 now import-safe when `geometry_fit_history_state` is absent, refined-only
 detector fallback rows report their actual detector source label, and the

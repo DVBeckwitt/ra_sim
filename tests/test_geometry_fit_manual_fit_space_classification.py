@@ -93,6 +93,39 @@ def test_detector_origin_pair_with_backfilled_caked_fields_uses_detector_fit_spa
     )
 
 
+def test_empty_manual_pair_set_is_missing_fit_space() -> None:
+    assert geometry_fit.geometry_manual_pairs_fit_space_kind([]) == "missing"
+
+
+def test_missing_pairs_are_reported_before_mixed_fit_spaces() -> None:
+    fit_spaces = geometry_fit.geometry_manual_fit_space_by_background(
+        [0, 1, 2],
+        {
+            0: [_caked_origin_pair()],
+            1: [],
+            2: [],
+        },
+        pick_uses_caked_space=False,
+        current_background_index=0,
+    )
+
+    error = geometry_fit.manual_geometry_fit_space_preflight_error(
+        fit_spaces,
+        osc_files=[
+            "Bi2Se3_5m_5d.osc",
+            "Bi2Se3_10d_5m.osc",
+            "Bi2Se3_15d_5m.osc",
+        ],
+    )
+
+    assert fit_spaces == {0: "caked", 1: "missing", 2: "missing"}
+    assert error is not None
+    assert "save manual Qr/Qz pairs first" in error
+    assert "Bi2Se3_10d_5m.osc" in error
+    assert "Bi2Se3_15d_5m.osc" in error
+    assert "mix detector-pixel and caked fit-space" not in error
+
+
 def test_detector_origin_pair_with_backfilled_caked_fields_can_auto_cake_for_two_tilts() -> None:
     spaces = geometry_fit.geometry_manual_fit_space_by_background(
         [0],
@@ -118,7 +151,7 @@ def test_detector_origin_pair_does_not_call_ensure_caked_view() -> None:
     assert result.prepared_run.geometry_runtime_cfg.get("projection_view_mode") != "caked"
 
 
-def test_auto_caked_detector_origin_two_tilt_fit_gets_ladder_runtime() -> None:
+def test_auto_caked_detector_origin_two_tilt_fit_defaults_to_direct_runtime() -> None:
     calls: list[str] = []
 
     def _projector(cols, rows, **_kwargs):
@@ -142,7 +175,9 @@ def test_auto_caked_detector_origin_two_tilt_fit_gets_ladder_runtime() -> None:
     assert result.prepared_run is not None
     cfg = result.prepared_run.geometry_runtime_cfg
     assert cfg["projection_view_mode"] == "caked"
-    assert cfg["solver"]["max_nfev"] == 60
+    assert cfg["solver"]["max_nfev"] == 29
+    assert cfg["solver"]["seed_multistart"] is False
+    assert cfg["solver"]["seed_multistart_enabled"] is False
     assert cfg["solver"]["_qr_fit_point_only_projection"] is True
     assert cfg["solver"]["_headless_accept_caked_angular_metric_without_pixel_threshold"] is True
     assert cfg["bounds"]["gamma"] == [-90.0, 90.0]
