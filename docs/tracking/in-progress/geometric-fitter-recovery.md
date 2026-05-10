@@ -93,6 +93,28 @@ pre-existing formatting drift in `ra_sim/gui/_runtime/runtime_session.py`.
 Rollback is a normal git revert; no saved-state cleanup or deprecation
 migration is required.
 
+2026-05-10 repeatable two-rotation baseline gate: the existing
+`scripts/debug/run_geometry_fit_quality_baseline.py` runner now accepts
+`--active-vars` and forwards it to headless `fit-geometry`, so the Bi saved
+states can be validated with
+`--active-vars gamma,Gamma --seed-policy direct` through the same report/gate
+path used by other quality baselines. A real headless run wrote reports under
+`C:\Users\Kenpo\.local\share\ra_sim\fit_quality_baseline\codex_gamma_Gamma_20260510_000000`.
+Bi2Se3 matched 82/82 fixed pairs with zero missing pairs and zero branch
+mismatches, reducing direct RMS from 34.5307 px to 15.701942 px. Bi2Te3
+matched 84/84 fixed pairs with zero missing pairs and zero branch mismatches,
+reducing direct RMS from 36.8629 px to 36.661839 px. Both runs preserved
+exact/point-only caked fit-space provenance and passed the saved-state gate.
+Feature status: complete for the existing debug runner, with default baseline
+behavior unchanged when `--active-vars` is omitted. Bug/error status: fixed for
+the repeatable two-detector-rotation quality gate. CI/automation status:
+existing `python -m ra_sim.dev check` and integration tests remain the merge
+gates; the real Bi material baseline stays an opt-in local validation because
+it depends on user-root saved states and takes a long wall-clock run.
+Deprecation/migration status: no deprecated entrypoint, saved-state schema, or
+artifact schema changes; no migration path is required. Shipping status: ready
+as an additive debug-script option. Rollback is a normal git revert.
+
 Real full headless `fit-geometry` smoke is now run and still failing after a
 clean exact-caked request. The first divergence from passing ladder evidence is
 not routing or pair identity but seed/start state: real headless fit uses the

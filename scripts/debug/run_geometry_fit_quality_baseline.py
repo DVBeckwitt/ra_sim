@@ -2567,6 +2567,7 @@ def _run_fit_geometry(
     state_path: Path,
     run_dir: Path,
     *,
+    active_vars: str | None = None,
     timeout_seconds: float | None = None,
 ) -> RunArtifacts:
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -2581,9 +2582,10 @@ def _run_fit_geometry(
         str(state_path),
         "--seed-policy",
         "direct",
-        "--out-state",
-        str(out_state_path),
     ]
+    if active_vars is not None:
+        cmd.extend(["--active-vars", str(active_vars)])
+    cmd.extend(["--out-state", str(out_state_path)])
     started_at = time.monotonic()
     started_at_wall_time = time.time()
     next_heartbeat_at = started_at + HEARTBEAT_INTERVAL_SECONDS
@@ -2741,6 +2743,7 @@ def run_baseline(
     state_paths: Sequence[Path],
     output_root: Path,
     *,
+    active_vars: str | None = None,
     reuse_existing: bool = False,
     state_timeout_seconds: float | None = None,
 ) -> list[dict[str, object]]:
@@ -2758,6 +2761,7 @@ def run_baseline(
             artifacts = _run_fit_geometry(
                 state_path,
                 run_dir,
+                active_vars=active_vars,
                 timeout_seconds=state_timeout_seconds,
             )
         report = build_quality_report(artifacts)
@@ -2822,6 +2826,14 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Reuse existing per-state CLI stdout/stderr and fitted state artifacts instead of rerunning the fit.",
     )
     parser.add_argument(
+        "--active-vars",
+        default=None,
+        help=(
+            "Optional comma-separated active variable override forwarded to "
+            "`ra_sim.cli fit-geometry`, such as gamma,Gamma."
+        ),
+    )
+    parser.add_argument(
         "--state-timeout-seconds",
         type=float,
         default=None,
@@ -2835,9 +2847,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     state_paths = [Path(path).expanduser() for path in args.states] if args.states else list(DEFAULT_STATE_PATHS)
     output_root = Path(args.output_root).expanduser() if args.output_root else _default_output_root()
     try:
-        reports = run_baseline(
+        run_baseline(
             state_paths,
             output_root,
+            active_vars=args.active_vars,
             reuse_existing=bool(args.reuse_existing),
             state_timeout_seconds=args.state_timeout_seconds,
         )

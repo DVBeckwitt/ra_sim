@@ -254,7 +254,7 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 | Debug and analysis tools | `scripts/debug/plot_mosaic_omega_and_bragg_sphere.py` | `python scripts/debug/plot_mosaic_omega_and_bragg_sphere.py --H <h> --K <k> --L <l>` | Interactive Matplotlib plot. | Visualizes mosaic omega distribution and Bragg sphere geometry. |
 | Validation probes | `scripts/debug/run_diffraction_test.py` | `python scripts/debug/run_diffraction_test.py` | Generated artifact scripts/debug/simulation.npz. | Runs one headless diffraction simulation for downstream inspection. |
 | Geometry landscape and fitting performance | `scripts/debug/run_geometry_fit_parameter_correlation.py` | `python scripts/debug/run_geometry_fit_parameter_correlation.py --state <state.json> --outdir <dir>` | Correlation artifacts in output directory. | Exports geometry-fit parameter correlation maps. |
-| Geometry recovery diagnostics | `scripts/debug/run_geometry_fit_quality_baseline.py` | `python scripts/debug/run_geometry_fit_quality_baseline.py <state.json>` | Baseline report artifacts under output root. | Runs frozen-state geometry-fit quality baselines. |
+| Geometry recovery diagnostics | `scripts/debug/run_geometry_fit_quality_baseline.py` | `python scripts/debug/run_geometry_fit_quality_baseline.py <state.json> [--active-vars gamma,Gamma]` | Baseline report artifacts under output root. | Runs frozen-state geometry-fit quality baselines, including constrained active-variable gates. |
 | Geometry recovery diagnostics | `scripts/debug/run_geometry_fitter_cache_regression_gate.py` | `python scripts/debug/run_geometry_fitter_cache_regression_gate.py --mode local` | Focused compile, pytest, and optional New4 artifacts. | Runs geometry fitter cache regression gates in local or strict mode. |
 | Geometry recovery diagnostics | `scripts/debug/run_new4_caked_point_reprojection_check.py` | `python scripts/debug/run_new4_caked_point_reprojection_check.py --state <state.json>` | rung_03b_caked_point_reprojection.json. | Checks New4 exact-cake point reprojection. |
 | Geometry recovery diagnostics | `scripts/debug/run_new4_geometry_fit_ladder.py` | `python scripts/debug/run_new4_geometry_fit_ladder.py --state <state.json> --output-root <dir>` | Rung JSON reports and ladder summary. | Runs bounded New4 geometry-fit optimizer probes. |
@@ -315,6 +315,41 @@ These modules are not stand-alone test commands, but they are validation-critica
 The `(-1,0,10)` Qr/Qz fitter regression is covered by focused tests in
 `tests/test_manual_geometry_selection_helpers.py` and provider-local resolver
 unit tests in `tests/test_geometry_fitting.py`.
+
+## Focused two-rotation geometry baseline
+
+Use the constrained baseline runner when the Bi2Se3 and Bi2Te3 saved states
+need to prove only detector rotations move fitted points closer together:
+
+```powershell
+python scripts/debug/run_geometry_fit_quality_baseline.py `
+  --active-vars gamma,Gamma `
+  --output-root <output-root> `
+  --state-timeout-seconds 900
+```
+
+The debug-script option is additive. Omitting `--active-vars` keeps the default
+baseline command unchanged, while providing it forwards the comma-separated
+active-variable override to `ra_sim.cli fit-geometry`.
+
+Current status, 2026-05-10: the local Bi2Se3 run matched 82/82 fixed pairs with
+zero missing pairs and zero branch mismatches, reducing direct RMS from
+34.5307 px to 15.701942 px. The local Bi2Te3 run matched 84/84 fixed pairs
+with zero missing pairs and zero branch mismatches, reducing direct RMS from
+36.8629 px to 36.661839 px. Both runs preserved exact/point-only caked
+fit-space provenance and passed the saved-state gate.
+
+Narrow regression gate:
+
+```powershell
+python -m pytest tests/test_geometry_fit_quality_baseline.py tests/test_cli_geometry_fit.py -ra
+```
+
+CI status: the normal GitHub Actions gates remain `python -m ra_sim.dev check`
+and integration tests. The real Bi material baseline is intentionally local
+and opt-in because it depends on user-root saved states and has a long runtime.
+No deprecation, migration, saved-state schema change, artifact schema change,
+or production rollout flag is required; rollback is a normal git revert.
 
 Focused commands:
 

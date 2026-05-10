@@ -1790,6 +1790,95 @@ def test_resolve_artifact_paths_rejects_stale_sidecars_reported_by_fresh_log(
     assert matched_peaks_path is None
 
 
+def test_baseline_parser_accepts_active_vars_override() -> None:
+    module = _load_baseline_module()
+
+    args = module._parse_args(["--active-vars", "gamma,Gamma"])
+
+    assert args.active_vars == "gamma,Gamma"
+
+
+def test_run_fit_geometry_adds_active_vars_only_when_requested(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_baseline_module()
+    state_path = tmp_path / "Bi2Se3.json"
+    run_dir = tmp_path / "run"
+    captured_commands: list[list[str]] = []
+
+    class _FakeProcess:
+        pid = 12345
+        returncode = 0
+
+        def __init__(self, cmd, **_kwargs):
+            captured_commands.append(list(cmd))
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(module.subprocess, "Popen", _FakeProcess)
+    monkeypatch.setattr(
+        module,
+        "_resolve_artifact_paths",
+        lambda **_kwargs: (None, None, None),
+    )
+
+    module._run_fit_geometry(state_path, run_dir / "default")
+    module._run_fit_geometry(state_path, run_dir / "gamma_gamma", active_vars="gamma,Gamma")
+
+    default_cmd, override_cmd = captured_commands
+    assert "--active-vars" not in default_cmd
+    assert override_cmd[override_cmd.index("--active-vars") + 1] == "gamma,Gamma"
+    assert override_cmd.index("--seed-policy") < override_cmd.index("--active-vars")
+    assert override_cmd.index("--active-vars") < override_cmd.index("--out-state")
+
+
+def test_run_baseline_passes_active_vars_to_child_fit(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_baseline_module()
+    state_path = tmp_path / "Bi2Te3.json"
+    output_root = tmp_path / "baseline"
+    captured: dict[str, object] = {}
+
+    def _fake_run_fit_geometry(state_arg, run_dir_arg, **kwargs):
+        captured["state_path"] = state_arg
+        captured["run_dir"] = run_dir_arg
+        captured["kwargs"] = dict(kwargs)
+        return module.RunArtifacts(
+            state_path=state_arg,
+            run_dir=run_dir_arg,
+            out_state_path=run_dir_arg / f"{state_arg.stem}_fit.json",
+            log_path=None,
+            trace_path=None,
+            matched_peaks_path=None,
+            cli_stdout_path=run_dir_arg / "cli_stdout.txt",
+            cli_stderr_path=run_dir_arg / "cli_stderr.txt",
+            cli_returncode=0,
+        )
+
+    monkeypatch.setattr(module, "_run_fit_geometry", _fake_run_fit_geometry)
+    monkeypatch.setattr(
+        module,
+        "build_quality_report",
+        lambda _artifacts: {"state_name": "Bi2Te3", "saved_state_gate": {"ok": True}},
+    )
+    monkeypatch.setattr(module, "_write_report_files", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        module,
+        "_compact_summary_from_report",
+        lambda *_args, **_kwargs: {"state": "Bi2Te3"},
+    )
+
+    module.run_baseline([state_path], output_root, active_vars="gamma,Gamma")
+
+    assert captured["state_path"] == state_path
+    assert captured["run_dir"] == output_root / "Bi2Te3"
+    assert captured["kwargs"]["active_vars"] == "gamma,Gamma"
+
+
 @pytest.mark.skipif(
     os.environ.get("RA_SIM_RUN_SLOW_BASELINE_FITS") != "1",
     reason=(
