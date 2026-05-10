@@ -3556,6 +3556,8 @@ def build_geometry_fit_qr_handoff_audit_rows(
             resolver_entry["provider_selected_source_identity_canonical"] = copy.deepcopy(
                 resolver_identity
             )
+        if source_trace_entry:
+            resolver_entry["provider_local_exact_source_row_proof_available"] = True
         resolver_entry["fit_source_resolution_kind"] = "provider_fixed_source_local"
         resolver_entry["optimizer_request_has_fixed_source"] = True
         resolver_entry["optimizer_request_source"] = "provider_pair"

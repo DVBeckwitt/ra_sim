@@ -1862,9 +1862,7 @@ def test_geometry_manual_candidate_helpers_prefer_caked_coords_in_caked_view() -
     assert abs(dist - caked_near_dist) < 1.0e-9
 
 
-def test_caked_view_visual_distance_uses_current_caked_display_before_stale_fit_cache() -> (
-    None
-):
+def test_caked_view_visual_distance_uses_current_caked_display_before_stale_fit_cache() -> None:
     candidate = {
         "_caked_qr_projection_cache": True,
         "display_frame": "caked_display",
@@ -11328,14 +11326,11 @@ def test_saved_background_origin_prefers_detector_origin_over_caked_frame() -> N
     }
 
     assert mg._geometry_manual_saved_background_detector_origin(entry) is True
-    assert (
-        mg._geometry_manual_saved_background_display_point_for_view(
-            entry,
-            use_caked_display=True,
-            entry_display_coords=lambda _entry: (22.0, -25.0),
-        )
-        == (22.0, -25.0)
-    )
+    assert mg._geometry_manual_saved_background_display_point_for_view(
+        entry,
+        use_caked_display=True,
+        entry_display_coords=lambda _entry: (22.0, -25.0),
+    ) == (22.0, -25.0)
     assert (
         mg._geometry_manual_saved_background_display_point_for_view(
             entry,
@@ -11773,10 +11768,7 @@ def test_saved_background_origin_inference_for_legacy_rows(
     entry,
     expected_detector_origin,
 ) -> None:
-    assert (
-        mg._geometry_manual_saved_background_detector_origin(entry)
-        is expected_detector_origin
-    )
+    assert mg._geometry_manual_saved_background_detector_origin(entry) is expected_detector_origin
 
 
 def test_make_runtime_geometry_manual_cache_callbacks_store_cache_state_and_build_pairs() -> None:
@@ -13974,8 +13966,7 @@ def test_runtime_placement_callback_source_entry_refinement_does_not_call_pick_c
             match_config={}
         ),
         set_pairs_for_index=lambda _idx, entries: (
-            saved_sets.append([dict(entry) for entry in (entries or [])])
-            or list(entries or [])
+            saved_sets.append([dict(entry) for entry in (entries or [])]) or list(entries or [])
         ),
         pairs_for_index=lambda _idx: [],
         set_pick_session=lambda session: pick_session_state.__setitem__("session", dict(session)),
@@ -14102,11 +14093,13 @@ def test_place_then_next_toggle_uses_existing_warm_cache_without_rebuild(
         refresh_pick_session=lambda session, *, reuse_only=False: dict(session),
         status_messages=status_messages,
         refine_saved_pair_entry=(
-            lambda entry, source=None: runtime_session._refine_geometry_manual_pair_entry_from_cache(
-                entry,
-                source_entry=source,
-                reuse_only=True,
-                invalidate_pick_cache=False,
+            lambda entry, source=None: (
+                runtime_session._refine_geometry_manual_pair_entry_from_cache(
+                    entry,
+                    source_entry=source,
+                    reuse_only=True,
+                    invalidate_pick_cache=False,
+                )
             )
         ),
     )
@@ -14427,9 +14420,7 @@ def test_initial_pairs_display_reuse_only_miss_does_not_call_source_rows_or_fres
     assert displayed[0]["sim_display"] == (10.0, 11.0)
 
 
-def test_initial_pairs_display_reuse_only_miss_does_not_rebuild_caked_projection() -> (
-    None
-):
+def test_initial_pairs_display_reuse_only_miss_does_not_rebuild_caked_projection() -> None:
     saved_entry = {
         "label": "1,0,0",
         "hkl": (1, 0, 0),
@@ -18200,9 +18191,7 @@ def _toggle_cross_view_selection(
         return {
             "signature": ("cross-view", bool(use_caked_space)),
             "grouped_candidates": grouped,
-            "caked_qr_projection_grouped_candidates": grouped
-            if bool(use_caked_space)
-            else {},
+            "caked_qr_projection_grouped_candidates": grouped if bool(use_caked_space) else {},
         }
 
     handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
@@ -20279,8 +20268,9 @@ def test_manual_qr_caked_saved_replay_matches_detector_origin_caked_baseline() -
 
     assert saved_pairs[0]["bg_display"] == clicked_caked
     _assert_pair_close(saved_pairs[0]["sim_display"], detector_to_caked["caked_sim_display"])
-    assert tuple(saved_pairs[0].get(field) for field in _CROSS_VIEW_ID_FIELDS) == (
-        detector_to_caked["identity"]
+    assert (
+        tuple(saved_pairs[0].get(field) for field in _CROSS_VIEW_ID_FIELDS)
+        == (detector_to_caked["identity"])
     )
 
 
@@ -20997,9 +20987,10 @@ def test_manual_qr_selection_works_detector_then_caked_after_view_change() -> No
     assert caked_session["tagged_candidate"]["source_ray_id"] == "plus-ray"
 
 
-def test_manual_qr_selection_works_caked_then_detector_with_stale_caked_cache() -> None:
+def test_caked_qr_selection_rearms_detector_click_to_same_visual_identity() -> None:
     use_caked = {"value": True}
     group_key = ("q_group", "primary", 3, 4)
+    original_group = group_key
     raw_rows = [
         {
             "label": "3,0,4",
@@ -21048,6 +21039,12 @@ def test_manual_qr_selection_works_caked_then_detector_with_stale_caked_cache() 
     assert caked_session["tagged_candidate"]["branch_id"] == "-x"
     assert caked_session["tagged_candidate"]["source_reflection_index"] == 17
     assert caked_session["tagged_candidate"]["source_ray_id"] == "minus-ray"
+    original_identity = {
+        "branch_id": caked_session["tagged_candidate"]["branch_id"],
+        "source_branch_index": caked_session["tagged_candidate"]["source_branch_index"],
+        "source_reflection_index": caked_session["tagged_candidate"]["source_reflection_index"],
+        "source_ray_id": caked_session["tagged_candidate"]["source_ray_id"],
+    }
 
     stale_caked_rows = []
     for row in caked_rows:
@@ -21083,9 +21080,7 @@ def test_manual_qr_selection_works_caked_then_detector_with_stale_caked_cache() 
     def _stale_then_detector_cache(**kwargs):
         cache_calls.append(dict(kwargs))
         grouped_candidates = (
-            detector_grouped
-            if bool(kwargs.get("picker_candidates_only"))
-            else stale_grouped
+            detector_grouped if bool(kwargs.get("picker_candidates_only")) else stale_grouped
         )
         return {
             "cache_ready": False,
@@ -21103,21 +21098,22 @@ def test_manual_qr_selection_works_caked_then_detector_with_stale_caked_cache() 
         group_key=group_key,
         cache_data=_stale_then_detector_cache,
     )
-    assert any(
-        bool(call.get("picker_candidates_only")) is True for call in cache_calls
-    )
+    assert any(bool(call.get("picker_candidates_only")) is True for call in cache_calls)
+    selected_row = detector_session["tagged_candidate"]
+    selected_identity = {
+        "branch_id": selected_row["branch_id"],
+        "source_branch_index": selected_row["source_branch_index"],
+        "source_reflection_index": selected_row["source_reflection_index"],
+        "source_ray_id": selected_row["source_ray_id"],
+    }
+    assert detector_session["group_key"] == original_group
+    assert selected_identity == original_identity
     assert detector_session["target_count"] == 2
     assert len(detector_session["group_entries"]) == 2
-    assert detector_session["tagged_candidate"]["branch_id"] == "-x"
-    assert detector_session["tagged_candidate"]["source_reflection_index"] == 17
-    assert detector_session["tagged_candidate"]["source_ray_id"] == "minus-ray"
-    assert detector_session["tagged_candidate"].get("_caked_qr_projection_cache") is not True
-    assert detector_session["tagged_candidate"]["display_frame"] == "detector_display"
-    assert (
-        detector_session["tagged_candidate"]["detector_display_source"]
-        == "sim_visual_detector_display_px"
-    )
-    assert detector_session["tagged_candidate"]["detector_display_px"] == (103.0, 204.0)
+    assert selected_row.get("_caked_qr_projection_cache") is not True
+    assert selected_row["display_frame"] == "detector_display"
+    assert selected_row["detector_display_source"] == "sim_visual_detector_display_px"
+    assert selected_row["detector_display_px"] == (103.0, 204.0)
 
 
 def test_peak_selection_detector_hit_test_prefers_detector_coords_over_stale_caked_display() -> (
@@ -24047,6 +24043,15 @@ def test_detector_picker_uses_visual_detector_display_before_refined_detector_di
     assert row["detector_native_px"] == (120.0, 210.0)
 
 
+def test_visual_detector_helper_labels_refined_only_candidate_as_refined_fallback() -> None:
+    point, source = mg._geometry_manual_candidate_visual_detector_sim_point(
+        {"sim_refined_detector_display_px": (1000.0, 2000.0)}
+    )
+
+    assert point == (1000.0, 2000.0)
+    assert source == "sim_refined_detector_display_px"
+
+
 def test_detector_picker_row_does_not_pair_refined_display_with_nominal_native() -> None:
     entry = {
         "q_group_key": ("q_group", "primary", 1, 10),
@@ -24149,9 +24154,7 @@ def test_detector_mode_qr_picker_falls_through_invalid_source_rows() -> None:
     assert trace["reason_candidates_are_empty"] == "valid_detector_rows_available_but_not_selected"
 
 
-def test_detector_picker_grouped_candidates_does_not_fallback_to_caked_projection_rows() -> (
-    None
-):
+def test_detector_picker_grouped_candidates_does_not_fallback_to_caked_projection_rows() -> None:
     group_key = ("q_group", "primary", 1, 10)
     cache_data = {
         "grouped_candidates": {
@@ -24175,9 +24178,7 @@ def test_detector_picker_grouped_candidates_does_not_fallback_to_caked_projectio
     assert grouped == {}
 
 
-def test_detector_picker_rejects_caked_projection_row_even_with_refined_detector_display() -> (
-    None
-):
+def test_detector_picker_rejects_caked_projection_row_even_with_refined_detector_display() -> None:
     group_key = ("q_group", "primary", -1, 0, 10)
     entry = {
         "q_group_key": group_key,
@@ -24956,10 +24957,12 @@ def test_caked_assignment_distance_uses_visual_sim() -> None:
         display_background=np.zeros((4, 4), dtype=np.float64),
         get_cache_data=lambda **_kwargs: {"cache_ready": True},
         refine_preview_point=lambda _candidate, col, row, **_kwargs: (float(col), float(row)),
-        set_pairs_for_index_fn=lambda _idx, entries: saved_entries.extend(
-            [dict(entry) for entry in (entries or []) if isinstance(entry, Mapping)]
-        )
-        or saved_entries,
+        set_pairs_for_index_fn=lambda _idx, entries: (
+            saved_entries.extend(
+                [dict(entry) for entry in (entries or []) if isinstance(entry, Mapping)]
+            )
+            or saved_entries
+        ),
         set_pick_session_fn=lambda _session: None,
         clear_preview_artists_fn=lambda **_kwargs: None,
         restore_view_fn=lambda **_kwargs: None,
@@ -28529,12 +28532,14 @@ def test_minus_1_0_10_live_cmd_log_validator(tmp_path) -> None:
     assert "No simulated Qr/Qz groups are available" not in full_transcript
     assert "q_group_key=('q_group', 'primary', 1, 10)" in full_transcript
     for branch in (0, 1):
-        assert picker_resolved[branch]["source_table_index"] == detector_targets[branch][
-            "source_table_index"
-        ]
-        assert picker_resolved[branch]["source_row_index"] == detector_targets[branch][
-            "source_row_index"
-        ]
+        assert (
+            picker_resolved[branch]["source_table_index"]
+            == detector_targets[branch]["source_table_index"]
+        )
+        assert (
+            picker_resolved[branch]["source_row_index"]
+            == detector_targets[branch]["source_row_index"]
+        )
         assert picker_resolved[branch]["source_branch_index"] == branch
     assert set(_diag_branch_map(detector_saved)) == {0, 1}
     assert set(_diag_branch_map(caked_saved)) == {0, 1}
@@ -29995,7 +30000,11 @@ def test_minus_1_0_10_fit_step_reduces_qr_residual(tmp_path) -> None:
             rtol=0.0,
         )
 
-    fit_run = _diag_run_controlled_minus_1_0_10_fit(context, dataset)
+    fit_run = _diag_run_controlled_minus_1_0_10_fit(
+        context,
+        dataset,
+        objective_trace_enabled=True,
+    )
     request = fit_run["request"]
     var_names = fit_run["var_names"]
     result = fit_run["result"]

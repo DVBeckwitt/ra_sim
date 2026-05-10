@@ -39,6 +39,7 @@
   - Fixed geometry-fit live-cache preflight so source-matched q-group rows can satisfy generated-disordered manual pairs without falling through to fresh simulation or caked-projector setup, and restored locked/stale QR prediction-branch source switching before `locked_qr_row_unavailable` is returned.
   - Fixed manual Qr/Qz caked replay and fit handoff so detector-origin saved rows redraw through detector projection, visual caked aliases stay separate from fit/cache aliases, required caked projector errors stay precise, and cold detector clicks fail fast instead of rebuilding picker caches on the UI path.
   - Fixed caked-to-detector Qr replay fallback rotation so source-backed caked replay uses `display_rotate_k`, not its inverse, when the bound detector display callback is unavailable.
+  - Fixed import-safe geometry-fit overlay invalidation, detector fallback source labels, and the caked-select -> detector-rearm manual Qr/Qz click workflow so saved visual identity survives view changes without accepting caked projection rows as detector candidates.
   - Fixed saved manual background origin replay so explicit detector-origin rows win over stale caked frame tokens, and new manual placements persist the matching origin/frame contract.
   - Fixed detector-origin manual background redraw in caked view so failed live detector-to-caked projection leaves the marker unresolved instead of falling back to stale saved caked fields.
   - Hardened manual Qr/Qz simulated caked fit/cache resolution so bare `caked_x/y` is used only for explicit simulated caked projection rows, not background/replay-shaped rows.
@@ -78,6 +79,7 @@
   - Fixed diagnostic Qz rod profiles to plot acceptance-normalized intensity density instead of raw integrated sums, removing false high-2θ support ramps.
   - Replaced `all_background_peak_fits.ipynb` pseudo-Voigt peak fits with rotated 2D Gaussian-plus-plane fits, then fit each Qr-rod Qz profile jointly as a simultaneous sum of all projected branch-point Gaussian peaks to avoid overlap overestimation between close peaks.
   - Added parameter-cell state selection and a batch runner for `all_background_peak_fits.ipynb`, with per-GUI-state output directories by default.
+  - Fixed the parallel background Qr-rod final fit to keep supported weak Bi2Se3 low-L specular markers while rejecting unsupported markers and failing closed on inconsistent tail-component aggregation shapes.
   - Added `hk0_l3_star.png` to the parallel background peak-fit diagnostic script as a colored, log-scaled raw detector crop from the beam center through the `HK=0`, `L=3` / `00L` marker.
   - Improved the parallel diagnostic detector selected-region figure so the central `HK=0` / `00L` rod uses high-contrast styling and a more prominent Delta-Qr band.
   - Adjusted the detector selected-region highlight so the central `HK=0` / `00L` rod keeps the same-width centerline while the visible Delta-Qr region becomes easier to inspect.

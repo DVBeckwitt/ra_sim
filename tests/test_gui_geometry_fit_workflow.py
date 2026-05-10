@@ -1111,30 +1111,28 @@ def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindi
     assert "experimental_image_for_fit" not in prepared.current_dataset
     prepared_spec = dict(prepared.dataset_specs[0])
     assert prepared_spec.pop("manual_point_pairs") == prepared.current_dataset["manual_point_pairs"]
+    expected_measured_peak_subset = {
+        "x": 31.0,
+        "y": 41.0,
+        "display_col": 31.0,
+        "display_row": 41.0,
+        "fit_detector_x": 31.0,
+        "fit_detector_y": 41.0,
+        "detector_x": 31.0,
+        "detector_y": 41.0,
+        "detector_input_frame": "fit_detector",
+        "detector_input_frame_reason": "apply_orientation_to_entries",
+        "fit_source_identity_only": True,
+        "overlay_match_index": 0,
+        "pair_id": "bg0:pair0",
+        "q_group_key": ("q", 1),
+        "source_table_index": 1,
+        "source_row_index": 2,
+    }
     expected_spec_subset = {
         "dataset_index": 0,
         "label": "bg0.osc",
         "theta_initial": 9.0,
-        "measured_peaks": [
-            {
-                "x": 31.0,
-                "y": 41.0,
-                "display_col": 31.0,
-                "display_row": 41.0,
-                "fit_detector_x": 31.0,
-                "fit_detector_y": 41.0,
-                "detector_x": 31.0,
-                "detector_y": 41.0,
-                "detector_input_frame": "fit_detector",
-                "detector_input_frame_reason": "apply_orientation_to_entries",
-                "fit_source_identity_only": True,
-                "overlay_match_index": 0,
-                "pair_id": "bg0:pair0",
-                "q_group_key": ("q", 1),
-                "source_table_index": 1,
-                "source_row_index": 2,
-            }
-        ],
         "experimental_image": "fit-image",
         "dynamic_reanchor_callback": None,
         "dynamic_reanchor_enabled": False,
@@ -1144,6 +1142,16 @@ def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindi
     }
     for key, expected in expected_spec_subset.items():
         assert prepared_spec[key] == expected
+    assert len(prepared_spec["measured_peaks"]) == 1
+    measured_peak = prepared_spec["measured_peaks"][0]
+    for key, expected in expected_measured_peak_subset.items():
+        assert measured_peak[key] == expected
+    assert measured_peak["hkl"] == (1, 1, 0)
+    assert measured_peak["normalized_hkl"] == (1, 1, 0)
+    assert "provider_simulated_frame" in measured_peak
+    assert "provider_simulated_point_source" in measured_peak
+    assert "source_coverage_aliases" in measured_peak
+    assert "fit_qr_branch_key" in measured_peak
     assert prepared_spec["sim_caked_image_builder"] is None
     assert prepared_spec["sim_caked_image_builder_kind"] is None
     assert callable(prepared_spec["qr_fit_trial_source_rows_builder"])
@@ -22143,7 +22151,15 @@ def test_build_geometry_manual_fit_dataset_prefers_per_background_projection() -
         },
     ]
 
-    def _project_for_background(background_index, rows):
+    def _project_for_background(
+        background_index,
+        rows,
+        *,
+        mode_override=None,
+        strict_caked_projection=False,
+    ):
+        assert mode_override == "caked"
+        assert strict_caked_projection is True
         projection_calls.append(
             (int(background_index), [str(entry.get("row_id")) for entry in rows or ()])
         )
@@ -22442,9 +22458,7 @@ def test_geometry_fit_put_simulated_point_fields_preserves_visual_caked_aliases(
     assert fallback_row["sim_caked"] == (40.176704, 36.25)
 
 
-def test_build_geometry_manual_fit_dataset_caked_projector_internal_type_error_propagates() -> (
-    None
-):
+def test_build_geometry_manual_fit_dataset_caked_projector_internal_type_error_propagates() -> None:
     def _project_for_background(
         _background_index,
         _rows,
@@ -25449,9 +25463,7 @@ def test_current_hit_table_cache_rejects_stale_signature_before_fresh_simulation
                 "source_signature_match": True,
                 "table_source_kind": "stored_max_positions_local",
                 "table_kind": "hit_tables",
-                "table_base_signature": geometry_fit._geometry_fit_cache_jsonable(
-                    ("sig", "base")
-                ),
+                "table_base_signature": geometry_fit._geometry_fit_cache_jsonable(("sig", "base")),
                 "requested_base_signature": geometry_fit._geometry_fit_cache_jsonable(
                     ("sig", "base")
                 ),
@@ -25530,9 +25542,7 @@ def test_current_hit_table_cache_rejects_forged_intersection_cache_payload() -> 
                 "source_signature_match": True,
                 "table_source_kind": "last_intersection_cache",
                 "table_kind": "intersection_cache",
-                "table_base_signature": geometry_fit._geometry_fit_cache_jsonable(
-                    ("sig", "base")
-                ),
+                "table_base_signature": geometry_fit._geometry_fit_cache_jsonable(("sig", "base")),
                 "requested_base_signature": geometry_fit._geometry_fit_cache_jsonable(
                     ("sig", "base")
                 ),

@@ -24,6 +24,26 @@ Implemented in [manual_geometry.py](../../../ra_sim/gui/manual_geometry.py)
 with focused regression coverage in
 [test_manual_geometry_selection_helpers.py](../../../tests/test_manual_geometry_selection_helpers.py).
 
+2026-05-10 repo-clean follow-up: runtime geometry-fit overlay invalidation is
+now import-safe when `geometry_fit_history_state` is absent, refined-only
+detector fallback rows report their actual detector source label, and the
+caked-select -> detector -> clear/rearm -> detector-click workflow has direct
+coverage for selecting the same source identity without treating caked
+projection rows as detector candidates. The QR handoff audit also records
+provider-local exact-source row proof when the resolver trace contains the
+matching source row, keeping the saved caked `(-1,0,10)` residual path on the
+explicit source row instead of falling back to HKL ambiguity.
+
+Bug/error status: fixed for the import-safe runtime failure, the misleading
+refined-only detector source label, and the detector rearm no-hit path after a
+caked Qr selection. Feature status: no operator control, public API, CLI flag,
+saved-state schema, artifact format, dependency, CI workflow, migration, or
+version bump. Shipping status: `tests/test_gui_runtime_import_safe.py`,
+`tests/test_gui_geometry_fit_workflow.py`, and the focused manual-helper
+rotation/source/rearm/`(-1,0,10)` slice pass locally. Manual detector/caked GUI
+smoke remains the only broader tracker item still pending. Rollback is a normal
+git revert with no data cleanup.
+
 2026-05-10 replay rotation invariant update: caked-to-detector Qr replay now
 uses the same native-detector-to-display rotation as direct detector
 projection when the bound `native_detector_coords_to_detector_display_coords`

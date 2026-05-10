@@ -5476,7 +5476,10 @@ def _copy_geometry_fit_state_value(value):
 def _geometry_fit_last_overlay_state() -> dict[str, object] | None:
     """Return the remembered geometry-fit overlay state."""
 
-    return geometry_fit_history_state.last_overlay_state
+    history_state = globals().get("geometry_fit_history_state")
+    if history_state is None:
+        return None
+    return getattr(history_state, "last_overlay_state", None)
 
 
 def _geometry_fit_dataset_cache_payload() -> dict[str, object] | None:
@@ -5514,8 +5517,11 @@ def _set_geometry_fit_last_overlay_state(
 ) -> dict[str, object] | None:
     """Replace the remembered geometry-fit overlay state."""
 
+    history_state = globals().get("geometry_fit_history_state")
+    if history_state is None:
+        return None
     return gui_controllers.replace_geometry_fit_last_overlay_state(
-        geometry_fit_history_state,
+        history_state,
         overlay_state,
         copy_state_value=_copy_geometry_fit_state_value,
     )

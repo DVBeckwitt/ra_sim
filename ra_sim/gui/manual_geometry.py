@@ -11435,16 +11435,18 @@ def _geometry_manual_candidate_visual_detector_sim_point(
     ):
         return visual_detector, "sim_visual_detector_display_px"
     refined_point = _geometry_manual_tuple_point(candidate, "sim_refined_detector_display_px")
+    refined_source = "sim_refined_detector_display_px"
     if refined_point is None:
         refined_point = _geometry_manual_finite_point(
             candidate,
             (("refined_sim_x", "refined_sim_y"),),
         )
+        refined_source = "refined_sim_x/refined_sim_y"
     if refined_point is not None and not _geometry_manual_detector_point_is_caked(
         candidate,
         refined_point,
     ):
-        return refined_point, "sim_visual_detector_display_px"
+        return refined_point, refined_source
     detector_point = _geometry_manual_entry_detector_display_point(candidate)
     if detector_point is not None:
         return detector_point, "sim_visual_detector_display_px"

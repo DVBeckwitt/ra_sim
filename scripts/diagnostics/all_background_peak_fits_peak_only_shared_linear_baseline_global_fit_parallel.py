@@ -101,7 +101,7 @@ from ra_sim.simulation.exact_cake_portable import (
     raw_phi_to_gui_phi,
 )
 
-DEFAULT_STATE_PATH = Path.home() / ".local" / "share" / "ra_sim" / "Bi2Te3.json"
+DEFAULT_STATE_PATH = Path.home() / ".local" / "share" / "ra_sim" / "Bi2Se3.json"
 
 
 def _setting_text(local_name: str, env_name: str, default: object = "") -> str:
@@ -119,7 +119,7 @@ def _safe_run_name(value: object) -> str:
 
 
 QR_ROD_PROFILE_CACHE_SCHEMA = "ra_sim.qr_rod_profile_cache.v1"
-QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_specular_theta_i0_l8_v4"
+QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_specular_theta_i0_l8_v5"
 PRE_EDITOR_CACHE_SCHEMA = "ra_sim.background_pre_editor_cache.v1"
 PRE_EDITOR_CACHE_SIGNATURE = "pre_qr_rod_marker_editor_inputs_v1"
 PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE = "background_peak_fit_results_v1"
@@ -320,7 +320,7 @@ def qr_rod_pre_editor_stage_is_valid(stage_payload: dict[str, object] | None) ->
 
 
 def pre_editor_fit_job_signature(
-    fit_jobs: list[tuple[int, int, dict[str, object]]]
+    fit_jobs: list[tuple[int, int, dict[str, object]]],
 ) -> list[dict[str, object]]:
     rows = []
     for bg_idx, local_idx, entry in fit_jobs:
@@ -794,9 +794,7 @@ def load_qr_rod_peak_edits(path_value: Path | str) -> pd.DataFrame:
     if "marker_title" in table:
         table["marker_title"] = [clean_marker_title(value) for value in table["marker_title"]]
     table = table[np.isfinite(np.asarray(table["qz_marker"], dtype=np.float64))].copy()
-    return table.sort_values(["m", "branch", "qz_marker"], kind="mergesort").reset_index(
-        drop=True
-    )
+    return table.sort_values(["m", "branch", "qz_marker"], kind="mergesort").reset_index(drop=True)
 
 
 def marker_table_with_specular_l_markers(
@@ -818,9 +816,7 @@ def marker_table_with_specular_l_markers(
     if duplicate_key is not None:
         seen = set()
         if not base.empty:
-            seen.update(
-                tuple(row[col] for col in duplicate_key) for row in base.to_dict("records")
-            )
+            seen.update(tuple(row[col] for col in duplicate_key) for row in base.to_dict("records"))
         keep_rows: list[dict[str, object]] = []
         for row in specular.to_dict("records"):
             key = tuple(row[col] for col in duplicate_key)
@@ -1051,7 +1047,9 @@ def show_qr_rod_peak_marker_popup(
     result = {"accepted": True}
     selected: dict[str, object] = {"group": None, "index": None, "dragging": False}
     title_box_state: dict[str, object] = {"box": None, "syncing": False}
-    edit_file_state: dict[str, object] = {"path": "" if edit_path is None else str(edit_path).strip()}
+    edit_file_state: dict[str, object] = {
+        "path": "" if edit_path is None else str(edit_path).strip()
+    }
 
     def group_marker_rows(m_value: int, branch_value: str) -> pd.DataFrame:
         if edited.empty or not {"m", "branch", "qz_marker"}.issubset(edited):
@@ -1289,7 +1287,9 @@ def show_qr_rod_peak_marker_popup(
         axis = axes_by_group[group]
         x_lo, x_hi = axis.get_xlim()
         tolerance = max(abs(float(x_hi) - float(x_lo)) * 0.025, 1.0e-6)
-        nearest_index = int(np.nanargmin(np.where(finite, np.abs(marker_l - float(x_value)), np.inf)))
+        nearest_index = int(
+            np.nanargmin(np.where(finite, np.abs(marker_l - float(x_value)), np.inf))
+        )
         if abs(float(marker_l[nearest_index]) - float(x_value)) > tolerance:
             return False
         selected["group"] = group
@@ -1406,7 +1406,9 @@ def show_qr_rod_peak_marker_popup(
     def on_motion(event) -> None:
         if not selected.get("dragging") or event.xdata is None:
             return
-        if event.inaxes not in group_by_axes or group_by_axes[event.inaxes] != selected.get("group"):
+        if event.inaxes not in group_by_axes or group_by_axes[event.inaxes] != selected.get(
+            "group"
+        ):
             return
         move_selected(float(event.xdata))
 
@@ -1685,7 +1687,9 @@ if not FIGURE_OUT_DIR.is_absolute():
     FIGURE_OUT_DIR = ROOT / FIGURE_OUT_DIR
 FIGURE_OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-SAMPLE_NAME_OVERRIDE_TEXT = _setting_text("SAMPLE_NAME_OVERRIDE", "RA_SIM_ALL_BACKGROUND_SAMPLE_NAME", "")
+SAMPLE_NAME_OVERRIDE_TEXT = _setting_text(
+    "SAMPLE_NAME_OVERRIDE", "RA_SIM_ALL_BACKGROUND_SAMPLE_NAME", ""
+)
 SAMPLE_NAME = SAMPLE_NAME_OVERRIDE_TEXT or _sample_name_from_path(STATE_PATH) or STATE_RUN_NAME
 SAMPLE_LABEL = _sample_label_from_name(SAMPLE_NAME)
 SAMPLE_STEM = _safe_run_name(SAMPLE_NAME).lower()
@@ -2703,7 +2707,9 @@ backend_rotation_k = int(flags.get("background_backend_rotation_k", 3) or 0)
 backend_flip_x = bool(flags.get("background_backend_flip_x", False))
 backend_flip_y = bool(flags.get("background_backend_flip_y", False))
 primary_cif_path = files.get("primary_cif_path")
-detected_sample_name = SAMPLE_NAME_OVERRIDE_TEXT or _sample_name_from_path(primary_cif_path) or STATE_RUN_NAME
+detected_sample_name = (
+    SAMPLE_NAME_OVERRIDE_TEXT or _sample_name_from_path(primary_cif_path) or STATE_RUN_NAME
+)
 if detected_sample_name:
     SAMPLE_NAME = str(detected_sample_name)
     SAMPLE_LABEL = _sample_label_from_name(SAMPLE_NAME)
@@ -5623,9 +5629,7 @@ else:
         PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE,
         {
             "profile_target_count": int(len(profile_targets)),
-            "profile_fit_records": [
-                profile_fit_cache[id(item)] for _bg, item in profile_targets
-            ],
+            "profile_fit_records": [profile_fit_cache[id(item)] for _bg, item in profile_targets],
         },
     )
     write_pre_editor_cache(PRE_EDITOR_CACHE_PATH, PRE_EDITOR_CACHE_KEY, pre_editor_cache)
@@ -7588,12 +7592,36 @@ def _aggregate_tail_components(
     centers: np.ndarray,
     markers: np.ndarray,
     inverse: np.ndarray,
+    x: np.ndarray,
+    target: np.ndarray,
+    finite: np.ndarray,
+    dx: float,
 ) -> list[dict[str, object]]:
     components = []
     if basis.size == 0 or amplitudes.size == 0:
         return components
     model = basis @ amplitudes
     model_peak = max(float(np.nanmax(model)) if model.size else 0.0, 1.0e-12)
+    x_values = np.asarray(x, dtype=np.float64).reshape(-1)
+    target_values = np.asarray(target, dtype=np.float64).reshape(-1)
+    finite_values = np.asarray(finite, dtype=bool).reshape(-1)
+    if (
+        x_values.shape != target_values.shape
+        or x_values.shape != finite_values.shape
+        or x_values.shape != model.shape
+    ):
+        return components
+    dx_value = max(float(dx), 1.0e-9) if np.isfinite(dx) else 1.0e-9
+    finite_target = np.clip(target_values[finite_values], 0.0, None)
+    target_peak = max(float(np.nanmax(finite_target)) if finite_target.size else 0.0, 1.0e-12)
+    x_span = (
+        max(
+            float(np.nanmax(x_values[finite_values]) - np.nanmin(x_values[finite_values])), dx_value
+        )
+        if np.any(finite_values)
+        else dx_value
+    )
+    spacing = _nearest_marker_spacing(centers, x_span)
     for peak_index, center in enumerate(centers):
         cols = [
             idx
@@ -7603,29 +7631,83 @@ def _aggregate_tail_components(
         if not cols:
             continue
         component = basis[:, cols] @ amplitudes[cols]
-        if float(np.nanmax(component)) < float(ROD_QZ_TAIL_COMPONENT_MIN_RELATIVE) * model_peak:
-            continue
+        component_peak = float(np.nanmax(component)) if component.size else 0.0
         active = [
             basis_metadata[idx] | {"amplitude": float(amplitudes[idx])}
             for idx in cols
             if float(amplitudes[idx]) > 0.0
         ]
+        fallback_hwhm = np.nan
+        fallback_tail_power = np.nan
+        marker_supported = False
+        if component_peak < float(ROD_QZ_TAIL_COMPONENT_MIN_RELATIVE) * model_peak:
+            marker = float(markers[peak_index]) if peak_index < markers.size else float(center)
+            support_center = marker if np.isfinite(marker) else float(center)
+            half_window = max(
+                2.0 * dx_value,
+                min(0.35 * float(spacing[peak_index]), 6.0 * dx_value),
+            )
+            local = (
+                finite_values
+                & np.isfinite(target_values)
+                & (np.abs(x_values - support_center) <= half_window)
+            )
+            if not np.any(local):
+                continue
+            local_indices = np.flatnonzero(local)
+            best = int(local_indices[int(np.nanargmax(target_values[local]))])
+            local_peak = float(target_values[best])
+            local_floor = float(np.nanmedian(target_values[local]))
+            local_prominence = local_peak - local_floor
+            fallback_peak = max(local_peak, local_prominence, 0.0)
+            is_local_maximum = (
+                best != int(local_indices[0])
+                and best != int(local_indices[-1])
+                and best > 0
+                and best < target_values.size - 1
+                and local_peak >= float(target_values[best - 1])
+                and local_peak >= float(target_values[best + 1])
+            )
+            marker_supported = (
+                is_local_maximum
+                and local_prominence > max(1.0e-4 * target_peak, 1.0e-12)
+                and fallback_peak > 0.0
+            )
+            if not marker_supported:
+                continue
+            center = float(x_values[best])
+            fallback_hwhm = _estimate_peak_hwhm(
+                x_values,
+                target_values,
+                center=float(center),
+                spacing=float(spacing[peak_index]),
+                dx=dx_value,
+            )
+            fallback_tail_power = 2.0
+            component = fallback_peak * _pearson_vii_profile(
+                x_values,
+                center=float(center),
+                hwhm=float(fallback_hwhm),
+                tail_power=float(fallback_tail_power),
+            )
+            component_peak = float(np.nanmax(component)) if component.size else 0.0
+        else:
+            marker = float(markers[peak_index]) if peak_index < markers.size else float(center)
         if active:
             best = max(active, key=lambda item: float(item["amplitude"]))
             hwhm = float(best["hwhm"])
             tail_power = float(best["tail_power"])
         else:
-            hwhm = np.nan
-            tail_power = np.nan
+            hwhm = float(fallback_hwhm) if np.isfinite(fallback_hwhm) else np.nan
+            tail_power = float(fallback_tail_power) if np.isfinite(fallback_tail_power) else np.nan
         components.append(
             {
                 "component_id": int(peak_index + 1),
-                "marker": float(markers[peak_index])
-                if peak_index < markers.size
-                else float(center),
+                "marker": marker,
                 "center": float(center),
                 "hwhm": hwhm,
                 "tail_power": tail_power,
+                "marker_supported": marker_supported,
                 "density": np.asarray(component[inverse], dtype=np.float64).tolist(),
             }
         )
@@ -7685,10 +7767,9 @@ def _refine_pearson_vii_components(
     for component in components:
         density_sorted = _component_density_to_sorted(component, order, x.size)
         amp0 = float(np.nanmax(density_sorted)) if density_sorted.size else 0.0
-        min_component_amp = max(
-            1.0e-12, float(ROD_QZ_TAIL_COMPONENT_MIN_RELATIVE) * target_peak
-        )
-        if not np.isfinite(amp0) or amp0 <= min_component_amp:
+        marker_supported = bool(component.get("marker_supported", False))
+        min_component_amp = max(1.0e-12, float(ROD_QZ_TAIL_COMPONENT_MIN_RELATIVE) * target_peak)
+        if not np.isfinite(amp0) or (amp0 <= min_component_amp and not marker_supported):
             continue
         center0 = float(component.get("center", np.nan))
         hwhm0 = float(component.get("hwhm", np.nan))
@@ -7704,6 +7785,7 @@ def _refine_pearson_vii_components(
             {
                 "component_id": int(component.get("component_id", len(initial_components) + 1)),
                 "marker": marker0,
+                "marker_supported": marker_supported,
                 "amp": amp0,
                 "center": center0,
                 "hwhm": hwhm0,
@@ -7844,10 +7926,9 @@ def _refine_pearson_vii_components(
         density_sorted = amp * _pearson_vii_profile(
             x, center=center, hwhm=hwhm, tail_power=tail_power
         )
-        if (
-            float(np.nanmax(density_sorted))
-            < float(ROD_QZ_TAIL_COMPONENT_MIN_RELATIVE) * model_peak
-        ):
+        if float(np.nanmax(density_sorted)) < float(
+            ROD_QZ_TAIL_COMPONENT_MIN_RELATIVE
+        ) * model_peak and not bool(item.get("marker_supported", False)):
             continue
         refined_components.append(
             {
@@ -7963,7 +8044,18 @@ def fit_joint_qz_peak_sum(
         np.isfinite(peak_model_sorted), np.clip(peak_model_sorted, 0.0, None), 0.0
     )
     total_model_sorted = peak_model_sorted + baseline_sorted
-    components = _aggregate_tail_components(basis, amps, basis_metadata, centers, markers, inverse)
+    components = _aggregate_tail_components(
+        basis,
+        amps,
+        basis_metadata,
+        centers,
+        markers,
+        inverse,
+        x,
+        target,
+        finite,
+        dx,
+    )
     dictionary_cost = float(np.nanmean((total_model_sorted[finite] - measured[finite]) ** 2))
     refined = _refine_pearson_vii_components(
         x,
@@ -9372,9 +9464,7 @@ qr_rod_pre_editor_stage = pre_editor_cache_get_stage(
 )
 qr_rod_pre_editor_cache_hit = qr_rod_pre_editor_stage_is_valid(qr_rod_pre_editor_stage)
 if qr_rod_pre_editor_cache_hit:
-    ROD_PROFILE_MAX_TWO_THETA_DEG = float(
-        qr_rod_pre_editor_stage["rod_profile_max_two_theta_deg"]
-    )
+    ROD_PROFILE_MAX_TWO_THETA_DEG = float(qr_rod_pre_editor_stage["rod_profile_max_two_theta_deg"])
     rod_entries = [dict(row) for row in qr_rod_pre_editor_stage["rod_entries"]]
     rod_qspace_calibration = dict(qr_rod_pre_editor_stage["rod_qspace_calibration"])
     ACTIVE_REJECTED_ROD_KEYS = rejected_rod_key_set(
@@ -9818,7 +9908,10 @@ specular_detector_region_mask = (
     & np.isfinite(specular_detector_qr_map)
     & np.isfinite(specular_detector_qz_map)
     & np.isfinite(profile_detector_two_theta_map)
-    & (np.asarray(profile_detector_two_theta_map, dtype=np.float64) <= float(ROD_PROFILE_MAX_TWO_THETA_DEG))
+    & (
+        np.asarray(profile_detector_two_theta_map, dtype=np.float64)
+        <= float(ROD_PROFILE_MAX_TWO_THETA_DEG)
+    )
     & (specular_detector_qz_map > POSITIVE_QZ_MIN)
     & (specular_detector_qr_map >= 0.0)
     & (specular_detector_qr_map <= float(qr_rod_delta_qr))
@@ -9876,9 +9969,7 @@ marker_rows = []
 region_overlays = []
 profile_failures = []
 if qr_rod_pre_editor_cache_hit:
-    rod_profile_table_cached = pd.DataFrame(
-        qr_rod_pre_editor_stage["rod_profile_table"]
-    ).copy()
+    rod_profile_table_cached = pd.DataFrame(qr_rod_pre_editor_stage["rod_profile_table"]).copy()
     marker_table_cached = pd.DataFrame(qr_rod_pre_editor_stage["marker_table"]).copy()
     profile_rows = [rod_profile_table_cached]
     marker_rows = marker_table_cached.to_dict("records")
@@ -9951,7 +10042,7 @@ if not qr_rod_pre_editor_cache_hit:
         )
 
 
-for rod in ([] if qr_rod_pre_editor_cache_hit else rod_entries):
+for rod in [] if qr_rod_pre_editor_cache_hit else rod_entries:
     samples = gui_qr_cylinder_overlay.project_selected_qr_rod_caked_samples(
         selected_entry=rod,
         config=profile_bg["qr_overlay_config"],
@@ -10353,7 +10444,9 @@ def shared_rod_profile_l_axis_limits(
             )
     if not l_values:
         return float(min_l), float(min_l + max(float(fallback_span), 1.0e-6))
-    finite = np.concatenate([np.asarray(values, dtype=np.float64).reshape(-1) for values in l_values])
+    finite = np.concatenate(
+        [np.asarray(values, dtype=np.float64).reshape(-1) for values in l_values]
+    )
     finite = finite[np.isfinite(finite) & (finite > 0.0)]
     if finite.size == 0:
         return float(min_l), float(min_l + max(float(fallback_span), 1.0e-6))
@@ -10935,7 +11028,10 @@ def detector_label_settings_payload(label_entries: list[dict[str, object]]) -> d
 def apply_detector_label_settings(
     label_entries: list[dict[str, object]], payload: object
 ) -> list[dict[str, object]]:
-    if not isinstance(payload, dict) or payload.get("schema") != "ra_sim.detector_label_settings.v1":
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema") != "ra_sim.detector_label_settings.v1"
+    ):
         return [dict(entry) for entry in label_entries]
     lookup: dict[str, dict[str, object]] = {}
     for item in payload.get("labels", []):
@@ -11126,7 +11222,13 @@ def detector_qz_values_for_polyline(
     rows = np.zeros(y.shape, dtype=np.int64)
     cols[finite] = np.rint(x[finite]).astype(np.int64, copy=False)
     rows[finite] = np.rint(y[finite]).astype(np.int64, copy=False)
-    valid = finite & (rows >= 0) & (rows < qz_map_values.shape[0]) & (cols >= 0) & (cols < qz_map_values.shape[1])
+    valid = (
+        finite
+        & (rows >= 0)
+        & (rows < qz_map_values.shape[0])
+        & (cols >= 0)
+        & (cols < qz_map_values.shape[1])
+    )
     if np.any(valid):
         qz[valid] = qz_map_values[rows[valid], cols[valid]]
     return qz
@@ -11283,9 +11385,7 @@ def draw_detector_boundary_contour(
         return
     if not np.any((~boundary) & detector_region_shape_mask):
         return
-    values = np.ma.masked_where(
-        ~detector_region_shape_mask, np.asarray(boundary, dtype=np.float64)
-    )
+    values = np.ma.masked_where(~detector_region_shape_mask, np.asarray(boundary, dtype=np.float64))
     ax.contour(
         values,
         levels=[0.5],
@@ -11332,7 +11432,9 @@ def detector_mask_centerline_from_visual(
     if not isinstance(visual, dict):
         return []
     mask = np.asarray(visual.get("band_fill_mask"), dtype=bool)
-    shape_mask = np.asarray(globals().get("detector_region_shape_mask", np.ones(mask.shape, dtype=bool)), dtype=bool)
+    shape_mask = np.asarray(
+        globals().get("detector_region_shape_mask", np.ones(mask.shape, dtype=bool)), dtype=bool
+    )
     if mask.ndim != 2 or shape_mask.shape != mask.shape:
         return []
     mask = mask & shape_mask
@@ -11645,9 +11747,17 @@ def show_detector_region_label_position_popup(
                     anchor="center",
                 )
                 canvas_items[int(index)] = item
-                canvas.tag_bind(item, "<Button-1>", lambda event, idx=int(index): start_label_drag(event, idx))
-                canvas.tag_bind(item, "<B1-Motion>", lambda event, idx=int(index): drag_label_motion(event, idx))
-                canvas.tag_bind(item, "<ButtonRelease-1>", lambda event, idx=int(index): finish_label_drag(event, idx))
+                canvas.tag_bind(
+                    item, "<Button-1>", lambda event, idx=int(index): start_label_drag(event, idx)
+                )
+                canvas.tag_bind(
+                    item, "<B1-Motion>", lambda event, idx=int(index): drag_label_motion(event, idx)
+                )
+                canvas.tag_bind(
+                    item,
+                    "<ButtonRelease-1>",
+                    lambda event, idx=int(index): finish_label_drag(event, idx),
+                )
             else:
                 canvas.coords(item, canvas_x, canvas_y)
                 canvas.itemconfigure(
@@ -11680,7 +11790,9 @@ def show_detector_region_label_position_popup(
             sync_controls()
             update_selection_box()
 
-        def set_label_position(index: int, *, x_value: object = None, y_value: object = None) -> None:
+        def set_label_position(
+            index: int, *, x_value: object = None, y_value: object = None
+        ) -> None:
             pos = detector_label_xy(edited[int(index)])
             if pos is None:
                 return
@@ -11824,7 +11936,9 @@ def show_detector_region_label_position_popup(
                 saved_path = save_detector_label_settings(settings_text, edited)
                 print(f"saved detector label settings={saved_path}")
             except Exception as exc:
-                print(f"failed detector label settings export={Path(settings_text).expanduser()}: {exc}")
+                print(
+                    f"failed detector label settings export={Path(settings_text).expanduser()}: {exc}"
+                )
 
         def accept() -> None:
             state["accepted"] = True
@@ -12218,7 +12332,9 @@ if hk0_00l_region_mask is None or not np.any(hk0_00l_region_mask):
     print("skipped 00L_region.png: specular 00L region mask was unavailable")
 else:
     hk0_00l_region_saved = save_hk0_00l_region_crop(
-        np.asarray(profile_bg.get("raw_detector_image", profile_bg["detector_image"]), dtype=np.float64),
+        np.asarray(
+            profile_bg.get("raw_detector_image", profile_bg["detector_image"]), dtype=np.float64
+        ),
         hk0_00l_region_path,
         horizontal_output_path=hk0_00l_region_horizontal_path,
         beam_center=beam_center,

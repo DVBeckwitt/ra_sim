@@ -77,10 +77,13 @@ fields are considered, so `sim_refined_detector_display_px` on a caked
 projection row no longer blocks picker-only detector recovery. No migration,
 deprecation, CI workflow, feature flag, or release version change is required.
 Focused detector/runtime tests, compile, diff check, and
-`python -m ra_sim.dev check` pass. Full manual-helper validation still has an
-unrelated `test_minus_1_0_10_fit_step_reduces_qr_residual` source assertion;
-manual detector/caked GUI smoke remains pending before closing the tracking
-item.
+`python -m ra_sim.dev check` pass. The 2026-05-10 repo-clean follow-up also
+guards import-safe overlay invalidation when runtime history state is absent,
+labels refined-only detector fallback rows with the real fallback source, and
+adds a deterministic caked-select -> detector -> clear/rearm -> detector-click
+identity proof. Full runtime import-safe and geometry-fit workflow suites pass
+locally; manual detector/caked GUI smoke remains pending before closing the
+tracking item.
 
 Background peak fit detector Qr rod panel status note:
 The ignored parallel diagnostics notebook now treats the detector Qr-rod panel
@@ -97,7 +100,16 @@ non-specular L axes from `L=2`, and places the Data/Simulation legend in the
 top-right panel. JSON, nbformat, compile, static checks, and the two parallel
 notebook pytest checks pass. Full notebook-section rerun and visual acceptance
 remain pending; full `tests/test_background_peak_fits_notebook.py` is still red
-in unrelated non-parallel notebook expectations.
+in unrelated non-parallel notebook expectations. The 2026-05-10 Bi2Se3 update
+sets the parallel diagnostic default state to Bi2Se3, bumps the final Qz fit
+cache signature to v5, keeps supported weak low-L specular markers through
+nonlinear refinement, rejects unsupported nearby markers, and makes tail
+component aggregation fail closed on shape mismatch. Focused Bi2Se3 marker,
+shape-mismatch, cache-signature, compile, and format checks pass locally. Full
+diagnostics test-file status is still red in unrelated notebook/script
+source-token assertions; `python -m ra_sim.dev check` is blocked by pre-existing
+formatting drift in `ra_sim/fitting/optimization.py`. No CI workflow, public
+API, saved-state schema, or deprecation/migration path changed.
 
 Beam center background pick status note:
 `Pick Beam Center` is implemented in Setup > Beam Controls. The mode uses the
