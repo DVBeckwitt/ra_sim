@@ -10779,6 +10779,57 @@ def build_geometry_manual_fit_dataset(
             return None
         return float(x_value), float(y_value)
 
+    def _entry_frame(entry: Mapping[str, object] | None, key: str) -> str:
+        if not isinstance(entry, Mapping):
+            return ""
+        return str(entry.get(key) or "").strip().lower()
+
+    def _background_detector_pair_for_frame(
+        entry: Mapping[str, object] | None,
+        expected_frame: str,
+    ) -> tuple[float, float] | None:
+        if _entry_frame(entry, "background_detector_input_frame") != expected_frame:
+            return None
+        return _finite_pair(entry, "background_detector_x", "background_detector_y")
+
+    def _native_detector_anchor(
+        entry: Mapping[str, object] | None,
+    ) -> tuple[float, float] | None:
+        anchor = _background_detector_pair_for_frame(entry, "native_detector")
+        if anchor is not None:
+            return anchor
+        for x_key, y_key in (
+            ("detector_native_x", "detector_native_y"),
+            ("native_col", "native_row"),
+        ):
+            anchor = _finite_pair(entry, x_key, y_key)
+            if anchor is not None:
+                return anchor
+        return None
+
+    def _native_detector_anchor_with_provenance(
+        entry: Mapping[str, object] | None,
+    ) -> tuple[tuple[float, float], str] | None:
+        anchor = _background_detector_pair_for_frame(entry, "native_detector")
+        if anchor is not None and isinstance(entry, Mapping):
+            return (
+                anchor,
+                str(
+                    entry.get(
+                        "background_detector_frame_provenance",
+                        "saved_background_detector_native",
+                    )
+                ),
+            )
+        for x_key, y_key, provenance in (
+            ("detector_native_x", "detector_native_y", "saved_detector_native_xy"),
+            ("native_col", "native_row", "saved_native_col_row"),
+        ):
+            anchor = _finite_pair(entry, x_key, y_key)
+            if anchor is not None:
+                return anchor, provenance
+        return None
+
     def _caked_angle_pair(
         entry: Mapping[str, object] | None,
         *,
@@ -10978,17 +11029,9 @@ def build_geometry_manual_fit_dataset(
             )
             if normalized_entry is None:
                 continue
-            background_detector_x = _finite_float(normalized_entry.get("background_detector_x"))
-            background_detector_y = _finite_float(normalized_entry.get("background_detector_y"))
-            background_detector_frame = (
-                str(normalized_entry.get("background_detector_input_frame") or "")
-                .strip()
-                .lower()
-            )
             if (
-                background_detector_x is not None
-                and background_detector_y is not None
-                and background_detector_frame == "native_detector"
+                _background_detector_pair_for_frame(normalized_entry, "native_detector")
+                is not None
             ):
                 normalized_entry.setdefault(
                     "background_detector_frame_provenance",
@@ -15296,35 +15339,9 @@ def build_geometry_manual_fit_dataset(
             continue
         detector_anchor = None
         detector_anchor_provenance = ""
-        background_frame = (
-            str(original_entry.get("background_detector_input_frame") or "")
-            .strip()
-            .lower()
-            if isinstance(original_entry, Mapping)
-            else ""
-        )
-        if background_frame == "native_detector":
-            detector_anchor = _finite_pair(
-                original_entry,
-                "background_detector_x",
-                "background_detector_y",
-            )
-            if detector_anchor is not None:
-                detector_anchor_provenance = str(
-                    original_entry.get(
-                        "background_detector_frame_provenance",
-                        "saved_background_detector_native",
-                    )
-                )
-        if detector_anchor is None:
-            for x_key, y_key, provenance in (
-                ("detector_native_x", "detector_native_y", "saved_detector_native_xy"),
-                ("native_col", "native_row", "saved_native_col_row"),
-            ):
-                detector_anchor = _finite_pair(original_entry, x_key, y_key)
-                if detector_anchor is not None:
-                    detector_anchor_provenance = provenance
-                    break
+        anchor_with_provenance = _native_detector_anchor_with_provenance(original_entry)
+        if anchor_with_provenance is not None:
+            detector_anchor, detector_anchor_provenance = anchor_with_provenance
         if detector_anchor is None:
             detector_anchor = _finite_pair(measured_entry, "x", "y")
             if detector_anchor is not None:
@@ -15496,26 +15513,7 @@ def build_geometry_manual_fit_dataset(
         ):
             if key in initial_entry:
                 measured_entry[key] = initial_entry.get(key)
-        native_detector_anchor = None
-        background_detector_frame = (
-            str(measured_entry.get("background_detector_input_frame") or "")
-            .strip()
-            .lower()
-        )
-        if background_detector_frame == "native_detector":
-            native_detector_anchor = _finite_pair(
-                measured_entry,
-                "background_detector_x",
-                "background_detector_y",
-            )
-        if native_detector_anchor is None:
-            for x_key, y_key in (
-                ("detector_native_x", "detector_native_y"),
-                ("native_col", "native_row"),
-            ):
-                native_detector_anchor = _finite_pair(measured_entry, x_key, y_key)
-                if native_detector_anchor is not None:
-                    break
+        native_detector_anchor = _native_detector_anchor(measured_entry)
         if native_detector_anchor is not None:
             native_detector_x, native_detector_y = native_detector_anchor
             measured_entry["background_detector_x"] = float(native_detector_x)
@@ -16448,36 +16446,28 @@ def build_geometry_manual_fit_dataset(
             require_observed_caked_anchor=False,
         ):
             return None
-        background_detector_frame = (
-            str(entry.get("background_detector_input_frame") or "").strip().lower()
-        )
-        if background_detector_frame == "native_detector":
-            col = _finite_float(entry.get("background_detector_x"))
-            row = _finite_float(entry.get("background_detector_y"))
-            if col is not None and row is not None:
-                return float(col), float(row), "native_detector"
-        for x_key, y_key in (
-            ("detector_native_x", "detector_native_y"),
-            ("native_col", "native_row"),
-        ):
-            col = _finite_float(entry.get(x_key))
-            row = _finite_float(entry.get(y_key))
-            if col is not None and row is not None:
-                return float(col), float(row), "native_detector"
-        if background_detector_frame == "fit_detector":
-            col = _finite_float(entry.get("background_detector_x"))
-            row = _finite_float(entry.get("background_detector_y"))
-            if col is not None and row is not None:
-                return float(col), float(row), "fit_detector"
+        native_anchor = _native_detector_anchor(entry)
+        if native_anchor is not None:
+            return float(native_anchor[0]), float(native_anchor[1]), "native_detector"
+        fit_background_anchor = _background_detector_pair_for_frame(entry, "fit_detector")
+        if fit_background_anchor is not None:
+            return (
+                float(fit_background_anchor[0]),
+                float(fit_background_anchor[1]),
+                "fit_detector",
+            )
         for x_key, y_key in (("fit_detector_x", "fit_detector_y"),):
             col = _finite_float(entry.get(x_key))
             row = _finite_float(entry.get(y_key))
             if col is not None and row is not None:
                 return float(col), float(row), "fit_detector"
-        detector_frame = str(entry.get("detector_input_frame") or "").strip().lower()
         col = _finite_float(entry.get("detector_x"))
         row = _finite_float(entry.get("detector_y"))
-        if col is not None and row is not None and detector_frame == "fit_detector":
+        if (
+            col is not None
+            and row is not None
+            and _entry_frame(entry, "detector_input_frame") == "fit_detector"
+        ):
             return float(col), float(row), "fit_detector"
         return None
 
