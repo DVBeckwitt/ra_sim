@@ -38,6 +38,7 @@
 - **Fitting and optimization**
   - Fixed geometry-fit live-cache preflight so source-matched q-group rows can satisfy generated-disordered manual pairs without falling through to fresh simulation or caked-projector setup, and restored locked/stale QR prediction-branch source switching before `locked_qr_row_unavailable` is returned.
   - Fixed manual Qr/Qz caked replay and fit handoff so detector-origin saved rows redraw through detector projection, visual caked aliases stay separate from fit/cache aliases, required caked projector errors stay precise, and cold detector clicks fail fast instead of rebuilding picker caches on the UI path.
+  - Fixed caked-to-detector Qr replay fallback rotation so source-backed caked replay uses `display_rotate_k`, not its inverse, when the bound detector display callback is unavailable.
   - Fixed saved manual background origin replay so explicit detector-origin rows win over stale caked frame tokens, and new manual placements persist the matching origin/frame contract.
   - Fixed detector-origin manual background redraw in caked view so failed live detector-to-caked projection leaves the marker unresolved instead of falling back to stale saved caked fields.
   - Hardened manual Qr/Qz simulated caked fit/cache resolution so bare `caked_x/y` is used only for explicit simulated caked projection rows, not background/replay-shaped rows.

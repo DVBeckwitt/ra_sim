@@ -16001,11 +16001,7 @@ def make_runtime_geometry_manual_projection_callbacks(
                     and min(detector_display_shape) > 0
                 ):
                     try:
-                        rotate_k = (
-                            -int(display_rotate_k)
-                            if detector_replay_from_caked_projection
-                            else int(display_rotate_k)
-                        )
+                        rotate_k = int(display_rotate_k)
                         projected_native = rotate_point_for_display(
                             float(native_point[0]),
                             float(native_point[1]),

@@ -20809,10 +20809,71 @@ def test_project_peaks_to_current_view_detector_replay_drops_stale_display_cache
     assert projected_entry["sim_detector_anchor_y"] == 4.0
     assert "sim_detector_display_col" not in projected_entry
     assert "sim_detector_display_row" not in projected_entry
-    assert projected_entry["display_col"] == 251.0
-    assert projected_entry["display_row"] == 3.0
-    assert projected_entry["sim_col_raw"] == 251.0
-    assert projected_entry["sim_row_raw"] == 3.0
+    expected_display = mg._default_rotate_point(3.0, 4.0, (256, 256), 1)
+    assert (projected_entry["display_col"], projected_entry["display_row"]) == expected_display
+    assert (projected_entry["sim_col_raw"], projected_entry["sim_row_raw"]) == expected_display
+
+
+def test_caked_to_detector_replay_rotation_uses_display_rotate_k_without_detector_callback() -> (
+    None
+):
+    native = (1080.0, 1900.0)
+    shape = (3000, 3000)
+    background = np.zeros(shape, dtype=np.uint8)
+    display_rotate_k = -1
+
+    callbacks = mg.make_runtime_geometry_manual_projection_callbacks(
+        caked_view_enabled=lambda: False,
+        last_caked_background_image_unscaled=lambda: np.zeros((8, 8), dtype=float),
+        last_caked_radial_values=lambda: np.array([-30.0, -26.0, 0.0, 23.0], dtype=float),
+        last_caked_azimuth_values=lambda: np.array([-30.0, -26.0, 0.0, 23.0], dtype=float),
+        current_background_display=lambda: background,
+        current_background_native=lambda: background,
+        image_size=shape[0],
+        native_sim_to_display_coords=lambda col, row, _shape: (
+            float(col) + 1000.0,
+            float(row) + 1000.0,
+        ),
+        simulation_native_detector_coords_to_caked_display_coords=lambda col, row: (
+            float(col) + 20.0,
+            float(row) - 30.0,
+        ),
+        display_rotate_k=display_rotate_k,
+    )
+
+    projected = callbacks.project_peaks_to_current_view(
+        [
+            {
+                "label": "-3,0,4",
+                "q_group_key": ("q_group", "primary", 3, 4),
+                "branch_id": "-x",
+                "source_table_index": 0,
+                "source_row_index": 1,
+                "source_reflection_index": 17,
+                "source_branch_index": 1,
+                "source_ray_id": "minus-ray",
+                "coordinate_frame": "simulation_native",
+                "refined_sim_native_x": native[0],
+                "refined_sim_native_y": native[1],
+                "sim_detector_anchor_x": native[0],
+                "sim_detector_anchor_y": native[1],
+                "sim_detector_display_col": 903.0,
+                "sim_detector_display_row": 904.0,
+                "sim_detector_frame_provenance": "stale-display-cache",
+            }
+        ]
+    )
+
+    expected = mg._default_rotate_point(native[0], native[1], shape, display_rotate_k)
+    wrong_inverse = mg._default_rotate_point(native[0], native[1], shape, -display_rotate_k)
+
+    assert len(projected) == 1
+    projected_entry = projected[0]
+    assert "sim_detector_display_col" not in projected_entry
+    assert "sim_detector_display_row" not in projected_entry
+    actual_display = (projected_entry["display_col"], projected_entry["display_row"])
+    assert actual_display == expected
+    assert actual_display != wrong_inverse
 
 
 def test_geometry_manual_session_initial_pairs_display_uses_projected_caked_live_row() -> None:

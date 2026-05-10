@@ -24,6 +24,25 @@ Implemented in [manual_geometry.py](../../../ra_sim/gui/manual_geometry.py)
 with focused regression coverage in
 [test_manual_geometry_selection_helpers.py](../../../tests/test_manual_geometry_selection_helpers.py).
 
+2026-05-10 replay rotation invariant update: caked-to-detector Qr replay now
+uses the same native-detector-to-display rotation as direct detector
+projection when the bound `native_detector_coords_to_detector_display_coords`
+callback is unavailable. The fallback in `_project_peaks_to_view(...)` now uses
+`display_rotate_k` directly instead of negating it for caked replay. The
+regression covers native `(1080.0, 1900.0)`, detector shape `(3000, 3000)`, and
+`display_rotate_k=-1`, and proves the replayed detector display point matches
+`rotate_point_for_display(..., display_rotate_k)` while rejecting the old
+inverse-rotation point.
+
+Bug/error status: fixed in the caked replay fallback path. Feature status: no
+new operator control, public API, CLI flag, saved-state schema, artifact
+format, dependency, CI workflow, or release/version bump. Migration/deprecation
+status: no migration required; existing saved rows are replayed through the
+same runtime provenance path with corrected fallback rotation. Shipping status:
+automated focused gates are green; manual detector/caked GUI smoke remains
+pending for the broader tracker. Rollback is a normal git revert; no data
+cleanup, feature flag, or migration step is required.
+
 2026-05-10 detector visual authority update: detector-mode manual Qr/Qz
 picking now resolves detector display points from `sim_visual_detector_display_px`
 before refined/cache detector coordinates, and pairs that visual display point
@@ -305,6 +324,20 @@ Feature status:
   there.
 
 ## Validation
+
+Latest local validation, 2026-05-10:
+
+- pre-fix regression evidence: `test_caked_to_detector_replay_rotation_uses_display_rotate_k_without_detector_callback`
+  failed with the old inverse point `(1900.0, 1919.0)` instead of the expected
+  display-rotation point `(1099.0, 1080.0)`.
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_manual_geometry_selection_helpers.py -k "project_peaks_to_current_view_detector_replay or caked_to_detector_replay_rotation" -ra`
+  passed (`4 passed, 568 deselected`).
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_manual_geometry_selection_helpers.py -k "caked_to_detector_replay_rotation or project_peaks_to_current_view_detector_replay_drops_stale_display_cache_without_detector_display_callback or detector_picker_uses_visual_detector_display_before_refined_detector_display or detector_choose_group_uses_visual_detector_display_point or detector_picker_rejects_caked_projection_row_even_with_refined_detector_display or detector_click_retries_picker_only_when_cache_contains_only_caked_grouped_rows or apply_sim_visual_detector_fields_preserves_fit_caked_fields" -ra`
+  passed (`7 passed, 565 deselected`).
+- `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_gui_runtime_import_safe.py -k "runtime_refresh_detector_session_uses_picker_ready_cache_even_when_refinement_cold" -ra`
+  passed (`1 passed, 418 deselected`).
+- `python -m compileall -q ra_sim/gui tests`, `python -m ruff check ra_sim/gui/manual_geometry.py tests/test_manual_geometry_selection_helpers.py`, and `git diff --check`
+  passed.
 
 Latest local validation, 2026-05-09:
 
