@@ -115,6 +115,35 @@ Deprecation/migration status: no deprecated entrypoint, saved-state schema, or
 artifact schema changes; no migration path is required. Shipping status: ready
 as an additive debug-script option. Rollback is a normal git revert.
 
+2026-05-10 parameter-matrix rerun: the existing headless baseline runner
+compared `gamma`, `Gamma`, `gamma,Gamma`, `gamma,Gamma,corto_detector`,
+`gamma,Gamma,theta_initial`, and `corto_detector,theta_initial` on the user-root
+Bi2Se3 and Bi2Te3 saved states. Multi-variable artifacts are under
+`%USERPROFILE%\.local\share\ra_sim\fit_quality_baseline\param_matrix_20260510_002`.
+Single-variable artifacts use non-colliding follow-up roots because Windows
+case-insensitive paths made `gamma` and `Gamma` unsafe as sibling folder names:
+`param_matrix_20260510_003_case_safe\single_gamma` for `gamma` and
+`param_matrix_20260510_004_upper_gamma\single_upper_Gamma` for `Gamma`. Every
+corrected combination preserved exact/point-only caked fit-space provenance,
+passed the saved-state gate, kept zero missing fixed pairs and zero branch
+mismatches, and reduced direct RMS for both materials.
+
+`gamma,Gamma` remains the smallest two-rotation proof: Bi2Se3 34.5307 ->
+15.701942 px and Bi2Te3 36.8629 -> 36.661839 px. The best tested residual
+tradeoff was `gamma,Gamma,corto_detector`: Bi2Se3 34.5307 -> 10.922948 px and
+Bi2Te3 36.8629 -> 35.581 px. `Gamma` alone helped Bi2Se3 more than `gamma`
+alone but barely moved Bi2Te3; `corto_detector,theta_initial` helped Bi2Te3
+but not Bi2Se3; `gamma,Gamma,theta_initial` regressed relative to
+`gamma,Gamma`. `theta_initial` is normalized to `theta_offset` in reports.
+Feature status: validated through the existing CLI/debug-runner interface only;
+no GUI, saved state, config, or artifact schema change is required. Bug/error
+status: the docs-index inventory guard is fixed by adding missing tracked
+validation entrypoints to `docs/testing-and-validation.md`. CI/automation
+status: targeted geometry/docs tests and `python -m ra_sim.dev check` pass.
+Deprecation/migration status: no deprecated entrypoint, migration, saved-state
+schema, config schema, or artifact schema change. Shipping status: docs-only
+handoff is ready; rollback is a normal git revert.
+
 Real full headless `fit-geometry` smoke is now run and still failing after a
 clean exact-caked request. The first divergence from passing ladder evidence is
 not routing or pair identity but seed/start state: real headless fit uses the

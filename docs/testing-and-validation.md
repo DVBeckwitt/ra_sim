@@ -332,12 +332,22 @@ The debug-script option is additive. Omitting `--active-vars` keeps the default
 baseline command unchanged, while providing it forwards the comma-separated
 active-variable override to `ra_sim.cli fit-geometry`.
 
-Current status, 2026-05-10: the local Bi2Se3 run matched 82/82 fixed pairs with
-zero missing pairs and zero branch mismatches, reducing direct RMS from
-34.5307 px to 15.701942 px. The local Bi2Te3 run matched 84/84 fixed pairs
-with zero missing pairs and zero branch mismatches, reducing direct RMS from
-36.8629 px to 36.661839 px. Both runs preserved exact/point-only caked
-fit-space provenance and passed the saved-state gate.
+Current status, 2026-05-10: `gamma,Gamma` remains the smallest detector-rotation
+baseline that moves both Bi saved states closer together. Both material runs
+preserved exact/point-only caked fit-space provenance, passed the saved-state
+gate, and kept zero missing fixed pairs and zero branch mismatches. Bi2Se3
+matched 82/82 fixed pairs and reduced direct RMS from 34.5307 px to 15.701942
+px; Bi2Te3 matched 84/84 fixed pairs and reduced direct RMS from 36.8629 px to
+36.661839 px.
+
+The broader local matrix showed `gamma,Gamma,corto_detector` as the best tested
+residual tradeoff for both materials, reducing Bi2Se3 to 10.922948 px and
+Bi2Te3 to 35.581 px, but that is a three-variable exploratory candidate rather
+than the focused two-rotation proof. Single-variable `gamma` and `Gamma`,
+`gamma,Gamma,theta_initial`, and `corto_detector,theta_initial` also preserved
+the saved-state gate and reduced direct RMS for both materials, but each was
+weaker on at least one material. `theta_initial` is reported in artifacts as
+canonical `theta_offset`.
 
 Narrow regression gate:
 
@@ -370,6 +380,62 @@ Expected status:
 - Qr-only fit either reduces the target residual norm or reports an exact
   rejected-step reason without treating the rejected state as an accepted fit,
 - full fit reports total, Qr, non-Qr, line, and prior objective blocks.
+
+## Appendix: Additional tracked validation entrypoints
+
+These tracked paths are part of the validation/debug inventory but are not the
+primary command examples above. Bug/error status, 2026-05-10: the docs-index
+guard is fixed by listing these tracked entrypoints. Feature status:
+documentation-only inventory coverage; no runtime behavior, CLI, saved-state,
+config, or artifact schema changed.
+
+| Path | Purpose |
+|---|---|
+| `scripts/debug/visualize_new4_qr_fit_coordinates.py` | Visualizes New4 Qr fit-coordinate diagnostics. |
+| `scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py` | Runs parallel background peak-fit diagnostics with a shared linear baseline. |
+| `scripts/diagnostics/background_peak_fit_worker.py` | Worker helper for background peak-fit diagnostic batches. |
+| `scripts/diagnostics/run_all_background_peak_fits.py` | Launches the background peak-fit diagnostic batch runner. |
+| `tests/test_background_peak_fits_notebook.py` | Checks notebook-oriented background peak-fit workflows. |
+| `tests/test_beam_center_pick_helpers.py` | Checks beam-center pick helper behavior. |
+| `tests/test_disordered_phase_current_refresh.py` | Checks disordered-phase current refresh behavior. |
+| `tests/test_disordered_phase_end_to_end.py` | Checks disordered-phase end-to-end workflow coverage. |
+| `tests/test_disordered_phase_hit_table_scheduling.py` | Checks disordered-phase hit-table scheduling. |
+| `tests/test_disordered_phase_hit_tables.py` | Checks disordered-phase hit-table construction. |
+| `tests/test_disordered_phase_invalidation.py` | Checks disordered-phase cache invalidation. |
+| `tests/test_disordered_phase_inventory.py` | Checks disordered-phase inventory reporting. |
+| `tests/test_disordered_phase_inventory_live_path.py` | Checks live-path disordered-phase inventory reporting. |
+| `tests/test_disordered_phase_live_q_group_refresh.py` | Checks live Q-group refresh behavior. |
+| `tests/test_disordered_phase_live_runtime_regression.py` | Checks live-runtime disordered-phase regressions. |
+| `tests/test_disordered_phase_logging.py` | Checks disordered-phase diagnostic logging. |
+| `tests/test_disordered_phase_picker_to_fitter_end_to_end.py` | Checks picker-to-fitter disordered-phase handoff. |
+| `tests/test_disordered_phase_q_group_cache.py` | Checks disordered-phase Q-group cache behavior. |
+| `tests/test_disordered_phase_real_inventory.py` | Checks real-data disordered-phase inventory handling. |
+| `tests/test_disordered_phase_source_labels.py` | Checks disordered-phase source labels. |
+| `tests/test_disordered_phase_state.py` | Checks disordered-phase state behavior. |
+| `tests/test_disordered_phase_state_io.py` | Checks disordered-phase state serialization. |
+| `tests/test_disordered_phase_ui_enable.py` | Checks disordered-phase UI enablement gates. |
+| `tests/test_disordered_phase_user_report_live_path.py` | Checks live-path user reports for disordered-phase data. |
+| `tests/test_geometry_fit_disordered_phase.py` | Checks geometry fitting with disordered-phase data. |
+| `tests/test_geometry_fit_disordered_preflight.py` | Checks disordered-phase geometry-fit preflight behavior. |
+| `tests/test_geometry_fit_fresh_rebuild_consumer.py` | Checks fresh geometry-fit rebuild consumers. |
+| `tests/test_geometry_fit_job_live_rows_handoff.py` | Checks live-row handoff for geometry-fit jobs. |
+| `tests/test_geometry_fit_live_cache_diagnostics.py` | Checks live-cache geometry-fit diagnostics. |
+| `tests/test_geometry_fit_live_cache_validation_acceptance.py` | Checks live-cache validation acceptance. |
+| `tests/test_geometry_fit_live_rows_signature_handoff.py` | Checks live-row signature handoff. |
+| `tests/test_geometry_fit_manual_fit_space_classification.py` | Checks manual fit-space classification for geometry fitting. |
+| `tests/test_geometry_fit_source_cache_rungs.py` | Checks source-cache rung behavior. |
+| `tests/test_manual_detector_to_caked_refresh.py` | Checks manual detector-to-caked refresh behavior. |
+| `tests/test_manual_geometry_disordered_state_io.py` | Checks manual-geometry disordered-state serialization. |
+| `tests/test_manual_picker_disordered_detector_positions.py` | Checks manual-picker disordered detector positions. |
+| `tests/test_manual_picker_disordered_phase.py` | Checks manual-picker disordered-phase behavior. |
+| `tests/test_manual_picker_source_diagnostics.py` | Checks manual-picker source diagnostics. |
+| `tests/test_manual_placement_disordered_source.py` | Checks manual placement of disordered sources. |
+| `tests/test_new4_rung2_contract.py` | Checks New4 rung 2 contract behavior. |
+| `tests/test_numba_compat.py` | Checks Numba compatibility guards. |
+| `tests/test_pbi2_ht_shift_cif.py` | Checks PbI2 high-temperature shift CIF handling. |
+| `tests/test_q_group_duplicate_source_identity.py` | Checks duplicate source identity handling for Q groups. |
+| `tests/test_q_space_viewer_runtime.py` | Checks Q-space viewer runtime behavior. |
+| `tests/test_rod_profiles.py` | Checks rod-profile helpers. |
 
 ## Appendix: Agent-skill support tools
 
