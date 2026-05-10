@@ -45,6 +45,15 @@ fit-space classification, dynamic reanchor, and optimizer point-only tests pass
 locally. Rollback is a normal git revert; no data cleanup or migration is
 required.
 
+2026-05-10 detector-origin cleanup/review update: the follow-up simplification
+keeps the detector-origin projection sequence behavior-preserving by collecting
+all exact caked anchor projections before mutating measured, initial, and
+display entries. Review status: no avoidable new file or abstraction; no public
+interface, saved-state schema, artifact schema, dependency, CI/CD workflow, or
+deployment process change. Migration/deprecation status: none required. Launch
+status: ship as a normal bug-fix/refactor commit after targeted local gates;
+rollback remains a normal git revert of the cleanup commit.
+
 2026-05-10 GUI fit-space preflight update: selected backgrounds with no
 enabled manual Qr/Qz pairs now classify as `missing` instead of `detector` for
 geometry-fit preflight. This keeps the GUI `All`-background fit path from

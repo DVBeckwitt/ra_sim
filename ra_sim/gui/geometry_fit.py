@@ -16483,11 +16483,10 @@ def build_geometry_manual_fit_dataset(
             float(phi),
         )
 
-    detector_origin_anchor_projections: list[tuple[float, float, dict[str, object]] | None] = []
-    for measured_entry in measured_for_fit:
-        detector_origin_anchor_projections.append(
-            _project_detector_origin_anchor_to_caked(measured_entry)
-        )
+    detector_origin_anchor_projections = [
+        _project_detector_origin_anchor_to_caked(measured_entry)
+        for measured_entry in measured_for_fit
+    ]
     for projection, measured_entry, initial_entry, display_entry in zip(
         detector_origin_anchor_projections,
         measured_for_fit,
