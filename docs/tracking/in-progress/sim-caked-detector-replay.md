@@ -54,6 +54,22 @@ deployment process change. Migration/deprecation status: none required. Launch
 status: ship as a normal bug-fix/refactor commit after targeted local gates;
 rollback remains a normal git revert of the cleanup commit.
 
+2026-05-10 detector-origin display/native frame update: detector-origin manual
+Qr/Qz rows that only carry saved display-space `detector_x/detector_y` aliases
+now derive their native `background_detector_x/background_detector_y` anchor
+from the existing `unrotate_display_peaks(...)` result before exact caked
+projection. Generic `detector_x/detector_y` fields are no longer promoted to
+native detector coordinates. This fixes the remaining handoff path where the
+visual detector-to-caked trace stayed near the clicked background triangle, but
+the fit handoff projected the display alias as a native detector point and sent
+the observed caked target toward the opposite/off-detector azimuth. Interface
+status: no new public API, GUI control, saved-state field, artifact field,
+dependency, migration, deprecation, or version bump; the existing internal
+`background_detector_input_frame="native_detector"` contract is preserved.
+Shipping status: focused detector-origin anchor, exact-projector, fit-space
+classification, Ruff, compile, and diff hygiene checks pass locally. Manual GUI
+smoke remains pending for the broader tracker.
+
 2026-05-10 GUI fit-space preflight update: selected backgrounds with no
 enabled manual Qr/Qz pairs now classify as `missing` instead of `detector` for
 geometry-fit preflight. This keeps the GUI `All`-background fit path from

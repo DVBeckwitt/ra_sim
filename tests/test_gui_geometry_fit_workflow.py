@@ -23371,11 +23371,36 @@ def test_build_geometry_manual_fit_dataset_exact_projector_uses_current_local_pa
     assert result_a["cake_bundle_signature"] != result_b["cake_bundle_signature"]
 
 
+@pytest.mark.parametrize(
+    ("manual_overrides", "unrotated_native", "expected_detector_call"),
+    [
+        (
+            {"detector_x": 3.0, "detector_y": 4.0},
+            (13.0, 24.0),
+            (13.0, 24.0),
+        ),
+        (
+            {
+                "background_detector_x": 3.0,
+                "background_detector_y": 4.0,
+                "background_detector_input_frame": "display_detector",
+                "fit_detector_x": 13.0,
+                "fit_detector_y": 24.0,
+            },
+            (float("nan"), float("nan")),
+            (30.0, 40.0),
+        ),
+    ],
+    ids=["display-detector-alias", "non-native-background-detector-alias"],
+)
 def test_build_geometry_manual_fit_dataset_reprojects_detector_origin_anchor_for_caked_fit(
     monkeypatch,
+    manual_overrides,
+    unrotated_native,
+    expected_detector_call,
 ) -> None:
     bundle = _make_stub_caked_bundle(
-        detector_shape=(8, 8),
+        detector_shape=(64, 64),
         radial_axis=np.linspace(10.0, 17.0, 8),
         azimuth_axis=np.linspace(-4.0, 3.0, 8),
     )
@@ -23393,7 +23418,8 @@ def test_build_geometry_manual_fit_dataset_reprojects_detector_origin_anchor_for
             detector_calls.append((float(col), float(row)))
             or (
                 (22.5, -35.5)
-                if live_bundle is bundle and (float(col), float(row)) == (3.0, 4.0)
+                if live_bundle is bundle
+                and (float(col), float(row)) == tuple(expected_detector_call)
                 else (None, None)
             )
         ),
@@ -23414,7 +23440,7 @@ def test_build_geometry_manual_fit_dataset_reprojects_detector_origin_anchor_for
     manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
         osc_files=["C:/tmp/bg0.osc"],
         current_background_index=0,
-        image_size=8,
+        image_size=64,
         display_rotate_k=0,
         geometry_manual_pairs_for_index=lambda idx: [
             {
@@ -23427,11 +23453,7 @@ def test_build_geometry_manual_fit_dataset_reprojects_detector_origin_anchor_for
                 "manual_background_input_origin": "detector",
                 "x": 30.0,
                 "y": 40.0,
-                "detector_x": 3.0,
-                "detector_y": 4.0,
-                "background_detector_x": 3.0,
-                "background_detector_y": 4.0,
-                "background_detector_input_frame": "native_detector",
+                **dict(manual_overrides),
                 "background_two_theta_deg": 999.0,
                 "background_phi_deg": -999.0,
                 "caked_x": 999.0,
@@ -23439,8 +23461,8 @@ def test_build_geometry_manual_fit_dataset_reprojects_detector_origin_anchor_for
             }
         ],
         load_background_by_index=lambda idx: (
-            np.zeros((8, 8), dtype=np.float64),
-            np.zeros((8, 8), dtype=np.float64),
+            np.zeros((64, 64), dtype=np.float64),
+            np.zeros((64, 64), dtype=np.float64),
         ),
         apply_background_backend_orientation=lambda image: image,
         geometry_manual_source_rows_for_background=(
@@ -23451,7 +23473,10 @@ def test_build_geometry_manual_fit_dataset_reprojects_detector_origin_anchor_for
         ),
         geometry_manual_simulated_lookup=lambda _simulated_peaks: {(1, 2): dict(source_row)},
         geometry_manual_entry_display_coords=lambda entry: (30.0, 40.0),
-        unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
+        unrotate_display_peaks=lambda entries, shape, *, k: [
+            dict(entry, x=float(unrotated_native[0]), y=float(unrotated_native[1]))
+            for entry in entries
+        ],
         display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
         select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
             {
@@ -23497,7 +23522,7 @@ def test_build_geometry_manual_fit_dataset_reprojects_detector_origin_anchor_for
     assert initial["bg_caked_display"] == pytest.approx((22.5, -35.5))
     assert display["background_two_theta_deg"] == pytest.approx(22.5)
     assert display["background_phi_deg"] == pytest.approx(-35.5)
-    assert detector_calls == [(3.0, 4.0)]
+    assert detector_calls == [tuple(expected_detector_call)]
 
 
 def test_copy_geometry_fit_dataset_spec_for_state_strips_fit_space_projector() -> None:
