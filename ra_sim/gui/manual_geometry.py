@@ -4325,23 +4325,7 @@ def _geometry_manual_tuple_point(
 def _geometry_manual_entry_current_view_point(
     entry: Mapping[str, object] | None,
 ) -> tuple[float, float] | None:
-    if _geometry_manual_entry_display_frame(entry) == "detector":
-        detector_point = _geometry_manual_finite_point(
-            entry,
-            (("display_col", "display_row"),),
-        )
-        if detector_point is not None:
-            return detector_point
-
-    refined_point = _geometry_manual_tuple_point(entry, "sim_refined_detector_display_px")
-    if refined_point is None:
-        refined_point = _geometry_manual_finite_point(entry, (("refined_sim_x", "refined_sim_y"),))
-    if refined_point is not None and not _geometry_manual_entry_display_matches_caked_point(
-        entry,
-        refined_point,
-    ):
-        return refined_point
-    return _geometry_manual_entry_detector_display_point(entry)
+    return _geometry_manual_candidate_detector_display_point(entry)[0]
 
 
 def _geometry_manual_entry_active_view_point(
@@ -7557,15 +7541,10 @@ def _geometry_manual_apply_sim_visual_detector_fields(
             float(visual_caked[0]),
             float(visual_caked[1]),
         )
-        entry["sim_refined_caked_deg"] = (
-            float(visual_caked[0]),
-            float(visual_caked[1]),
-        )
         entry["sim_caked"] = (float(visual_caked[0]), float(visual_caked[1]))
         entry["sim_visual_deg"] = (float(visual_caked[0]), float(visual_caked[1]))
         entry["sim_visual_caked_source"] = "sim_visual_detector_native_px"
-        entry["refined_sim_caked_x"] = float(visual_caked[0])
-        entry["refined_sim_caked_y"] = float(visual_caked[1])
+        entry["sim_visual_source"] = "sim_visual_detector_native_px"
 
 
 def _geometry_manual_apply_detector_origin_conversion_ledger(
@@ -8799,7 +8778,7 @@ def geometry_manual_detector_picker_row(
     group_key = _geometry_manual_real_q_group_key(entry)
     if group_key is None:
         return None
-    display_point = _geometry_manual_candidate_detector_sim_point(entry)
+    display_point, display_source = _geometry_manual_candidate_detector_display_point(entry)
     if display_point is None or _geometry_manual_detector_point_is_caked(entry, display_point):
         return None
     if (
@@ -8813,12 +8792,12 @@ def geometry_manual_detector_picker_row(
     ):
         return None
 
-    refined_display_point = _geometry_manual_tuple_point(entry, "sim_refined_detector_display_px")
-    uses_refined_display = _geometry_manual_points_match(display_point, refined_display_point)
-    if uses_refined_display:
-        native_point = _geometry_manual_tuple_point(entry, "sim_refined_detector_native_px")
-    else:
-        native_point = _geometry_manual_entry_native_point(entry)
+    native_point = _geometry_manual_candidate_detector_native_point(
+        entry,
+        display_point=display_point,
+        display_source=display_source,
+    )
+    uses_refined_display = str(display_source) == "sim_refined_detector_display_px"
     if native_point is not None and _geometry_manual_detector_point_is_caked(entry, native_point):
         return None
     if (
@@ -8847,10 +8826,7 @@ def geometry_manual_detector_picker_row(
     row["sim_col_raw"] = float(display_point[0])
     row["sim_row_raw"] = float(display_point[1])
     row["display_frame"] = "detector_display"
-    if uses_refined_display:
-        row["detector_display_source"] = "sim_refined_detector_display_px"
-    else:
-        row.setdefault("detector_display_source", "detector_picker")
+    row["detector_display_source"] = str(display_source)
     if uses_refined_display and native_point is None:
         for stale_native_key in (
             "detector_native_px",
@@ -9128,12 +9104,12 @@ def _geometry_manual_detector_picker_row_diagnostics(
 def _geometry_manual_detector_picker_identity(
     entry: Mapping[str, object],
 ) -> tuple[object, ...]:
-    display_point = _geometry_manual_candidate_detector_sim_point(entry)
-    refined_display_point = _geometry_manual_tuple_point(entry, "sim_refined_detector_display_px")
-    if _geometry_manual_points_match(display_point, refined_display_point):
-        native_point = _geometry_manual_tuple_point(entry, "sim_refined_detector_native_px")
-    else:
-        native_point = _geometry_manual_entry_native_point(entry)
+    display_point, display_source = _geometry_manual_candidate_detector_display_point(entry)
+    native_point = _geometry_manual_candidate_detector_native_point(
+        entry,
+        display_point=display_point,
+        display_source=display_source,
+    )
     return (
         _geometry_manual_real_q_group_key(entry),
         _default_normalize_hkl_key(entry.get("hkl", entry.get("label"))),
@@ -11386,6 +11362,67 @@ def _geometry_manual_candidate_detector_sim_point(
     if _geometry_manual_points_match(detector_point, caked_point):
         return None
     return detector_point
+
+
+def _geometry_manual_candidate_detector_display_point(
+    candidate: Mapping[str, object] | None,
+) -> tuple[tuple[float, float] | None, str]:
+    if not isinstance(candidate, Mapping):
+        return None, "<unavailable>"
+    display_frame = _geometry_manual_entry_display_frame(candidate)
+    if bool(candidate.get("_caked_qr_projection_cache")) or display_frame == "caked":
+        return None, "<wrong-frame>"
+
+    point = _geometry_manual_tuple_point(candidate, "sim_visual_detector_display_px")
+    if point is not None and not _geometry_manual_detector_point_is_caked(candidate, point):
+        return point, "sim_visual_detector_display_px"
+
+    if display_frame == "detector":
+        point = _geometry_manual_finite_point(candidate, (("display_col", "display_row"),))
+        if point is not None and not _geometry_manual_detector_point_is_caked(candidate, point):
+            return point, "detector_display_px"
+
+    point = _geometry_manual_tuple_point(candidate, "geometry_detector_display_px")
+    if point is not None and not _geometry_manual_detector_point_is_caked(candidate, point):
+        return point, "geometry_detector_display_px"
+
+    point = _geometry_manual_tuple_point(candidate, "sim_refined_detector_display_px")
+    if point is not None and not _geometry_manual_detector_point_is_caked(candidate, point):
+        return point, "sim_refined_detector_display_px"
+
+    point = _geometry_manual_finite_point(candidate, (("refined_sim_x", "refined_sim_y"),))
+    if point is not None and not _geometry_manual_detector_point_is_caked(candidate, point):
+        return point, "refined_sim_x/refined_sim_y"
+
+    detector_point = _geometry_manual_entry_detector_display_point(candidate)
+    if detector_point is not None:
+        return detector_point, "detector_picker"
+    return None, "<unavailable>"
+
+
+def _geometry_manual_candidate_detector_native_point(
+    candidate: Mapping[str, object] | None,
+    *,
+    display_point: tuple[float, float] | None,
+    display_source: str,
+) -> tuple[float, float] | None:
+    source_native_keys = {
+        "sim_visual_detector_display_px": "sim_visual_detector_native_px",
+        "geometry_detector_display_px": "geometry_detector_native_px",
+        "sim_refined_detector_display_px": "sim_refined_detector_native_px",
+    }
+    native_key = source_native_keys.get(str(display_source))
+    native_point = _geometry_manual_tuple_point(candidate, native_key) if native_key else None
+    if native_point is not None:
+        return native_point
+
+    refined_display_point = _geometry_manual_tuple_point(
+        candidate,
+        "sim_refined_detector_display_px",
+    )
+    if _geometry_manual_points_match(display_point, refined_display_point):
+        return _geometry_manual_tuple_point(candidate, "sim_refined_detector_native_px")
+    return _geometry_manual_entry_native_point(candidate)
 
 
 def _geometry_manual_candidate_visual_detector_sim_point(
@@ -17433,7 +17470,6 @@ def geometry_manual_toggle_selection_at(
         not grouped_candidates
         and not bool(use_caked_space)
         and not bool(saved_pair_move_only)
-        and not cache_ready
         and not cache_build_disabled
         and not geometry_manual_pick_session_active(
             current_session,

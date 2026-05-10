@@ -5,7 +5,7 @@ Type: bug
 Owner:
 Issue: none
 Priority: p1
-Last updated: 2026-05-09
+Last updated: 2026-05-10
 
 ## Summary
 
@@ -23,6 +23,33 @@ the current projection lookup, and routes detector replay only through:
 Implemented in [manual_geometry.py](../../../ra_sim/gui/manual_geometry.py)
 with focused regression coverage in
 [test_manual_geometry_selection_helpers.py](../../../tests/test_manual_geometry_selection_helpers.py).
+
+2026-05-10 detector visual authority update: detector-mode manual Qr/Qz
+picking now resolves detector display points from `sim_visual_detector_display_px`
+before refined/cache detector coordinates, and pairs that visual display point
+with visual detector native coordinates when present. Wrong-frame rows still
+fail closed: rows marked `_caked_qr_projection_cache` or `display_frame="caked"`
+are not detector picker candidates even if they carry detector-looking fields.
+When the grouped detector candidates contain only those invalid rows, the click
+path treats the group as empty and runs bounded detector-only picker recovery
+with `picker_candidates_only=True`, `reuse_only=False`, and no caked sidecar
+build.
+
+Visual detector-to-caked projection also stays in the visual alias lane:
+`sim_visual_caked_deg`, `sim_visual_deg`, `sim_caked`, and visual source fields
+can update, while fit/cache fields such as `sim_refined_caked_deg`,
+`refined_sim_caked_x/y`, and `simulated_two_theta_deg/phi` remain fit/cache
+authority.
+
+Bug/error status: fixed in focused helper/runtime tests and direct source
+authority assertions. Feature status: no new operator control, public API, CLI
+flag, saved-state schema, artifact format, dependency, or CI workflow.
+Migration/deprecation status: no migration required; stale saved/runtime rows
+are rejected or rebound by provenance and identity at runtime. Shipping status:
+local automated gates cover picker authority, wrong-frame recovery, active
+session refresh, caked/detector round trips, compile, lint, and diff hygiene;
+manual detector/caked GUI smoke remains pending. Rollback is a normal git
+revert; no data cleanup, feature flag, or migration step is required.
 
 2026-05-09 detector picker hard-reject update: detector-mode manual Qr/Qz
 picking now treats caked projection rows as invalid detector candidates before

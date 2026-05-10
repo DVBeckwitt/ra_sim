@@ -1646,6 +1646,37 @@ def test_geometry_manual_choose_group_at_uses_visible_detector_display_over_raw_
     assert entries[0]["source_ray_id"] == "visible-ray"
 
 
+def test_detector_choose_group_uses_visual_detector_display_point() -> None:
+    group_key = ("q_group", "primary", 1, 10)
+    candidate = {
+        "q_group_key": group_key,
+        "sim_refined_detector_display_px": (1000.0, 2000.0),
+        "sim_visual_detector_display_px": (1200.0, 2100.0),
+    }
+
+    chosen_group, _entries, best_dist = mg.geometry_manual_choose_group_at(
+        {group_key: [candidate]},
+        1200.0,
+        2100.0,
+        window_size_px=50.0,
+        use_caked_display=False,
+    )
+
+    wrong_group, wrong_entries, wrong_dist = mg.geometry_manual_choose_group_at(
+        {group_key: [candidate]},
+        1000.0,
+        2000.0,
+        window_size_px=10.0,
+        use_caked_display=False,
+    )
+
+    assert chosen_group == group_key
+    assert best_dist == 0.0
+    assert wrong_group is None
+    assert wrong_entries == []
+    assert np.isnan(wrong_dist)
+
+
 def test_geometry_manual_choose_group_at_honors_detector_display_frame_when_values_match_caked() -> (
     None
 ):
@@ -14776,7 +14807,7 @@ def test_detector_click_retries_picker_only_when_cache_contains_only_caked_group
         cache_calls.append(dict(kwargs))
         if len(cache_calls) == 1:
             return {
-                "cache_ready": False,
+                "cache_ready": True,
                 "signature": ("caked-only",),
                 "grouped_candidates": {group_key: [dict(caked_entry)]},
                 "cache_metadata": {
@@ -19968,6 +19999,34 @@ def test_caked_qr_projection_entry_preserves_existing_visual_caked_point() -> No
     assert entry["sim_visual_source"] == "saved_visual_projection"
 
 
+def test_apply_sim_visual_detector_fields_preserves_fit_caked_fields() -> None:
+    row: dict[str, object] = {
+        "sim_visual_detector_display_px": (1200.0, 2100.0),
+        "sim_refined_caked_deg": (40.0, 35.0),
+        "refined_sim_caked_x": 40.0,
+        "refined_sim_caked_y": 35.0,
+        "simulated_two_theta_deg": 40.0,
+        "simulated_phi_deg": 35.0,
+    }
+
+    mg._geometry_manual_apply_sim_visual_detector_fields(
+        row,
+        detector_display_to_native_coords=lambda col, row: (col / 10.0, row / 10.0),
+        native_detector_coords_to_caked_display_coords=lambda _col, _row: (41.0, 36.0),
+        display_point=(1200.0, 2100.0),
+    )
+
+    assert row["sim_visual_caked_deg"] == (41.0, 36.0)
+    assert row["sim_visual_deg"] == (41.0, 36.0)
+    assert row["sim_caked"] == (41.0, 36.0)
+    assert row["sim_visual_source"] == "sim_visual_detector_native_px"
+    assert row["sim_refined_caked_deg"] == (40.0, 35.0)
+    assert row["refined_sim_caked_x"] == 40.0
+    assert row["refined_sim_caked_y"] == 35.0
+    assert row["simulated_two_theta_deg"] == 40.0
+    assert row["simulated_phi_deg"] == 35.0
+
+
 def test_geometry_manual_pair_entry_from_caked_projection_candidate_preserves_visual_caked_point() -> (
     None
 ):
@@ -20944,12 +21003,19 @@ def test_manual_qr_selection_works_caked_then_detector_with_stale_caked_cache() 
         window_size_px=50.0,
         use_caked_display=False,
     )
-    assert group_key_found == group_key
-    assert len(group_entries) == 2
-    assert dist < 1.0
+    assert group_key_found is None
+    assert group_entries == []
+    assert np.isnan(dist)
 
     use_caked["value"] = False
     detector_rows = callbacks.simulated_peaks_for_params(prefer_cache=True)
+    for detector_row in detector_rows:
+        visual_point = (float(detector_row["display_col"]), float(detector_row["display_row"]))
+        detector_row["sim_visual_detector_display_px"] = visual_point
+        detector_row["sim_refined_detector_display_px"] = (
+            visual_point[0] - 30.0,
+            visual_point[1] - 30.0,
+        )
     detector_grouped = callbacks.pick_candidates(detector_rows)
     cache_calls: list[dict[str, object]] = []
 
@@ -20984,6 +21050,13 @@ def test_manual_qr_selection_works_caked_then_detector_with_stale_caked_cache() 
     assert detector_session["tagged_candidate"]["branch_id"] == "-x"
     assert detector_session["tagged_candidate"]["source_reflection_index"] == 17
     assert detector_session["tagged_candidate"]["source_ray_id"] == "minus-ray"
+    assert detector_session["tagged_candidate"].get("_caked_qr_projection_cache") is not True
+    assert detector_session["tagged_candidate"]["display_frame"] == "detector_display"
+    assert (
+        detector_session["tagged_candidate"]["detector_display_source"]
+        == "sim_visual_detector_display_px"
+    )
+    assert detector_session["tagged_candidate"]["detector_display_px"] == (103.0, 204.0)
 
 
 def test_peak_selection_detector_hit_test_prefers_detector_coords_over_stale_caked_display() -> (
@@ -23888,6 +23961,29 @@ def test_detector_picker_row_uses_refined_sim_detector_px_and_matching_native() 
     assert row["display_col"] == 12.0
     assert row["display_row"] == 23.0
     assert row["detector_display_source"] == "sim_refined_detector_display_px"
+
+
+def test_detector_picker_uses_visual_detector_display_before_refined_detector_display() -> None:
+    group_key = ("q_group", "primary", 1, 10)
+    candidate = {
+        "q_group_key": group_key,
+        "sim_refined_detector_display_px": (1000.0, 2000.0),
+        "sim_visual_detector_display_px": (1200.0, 2100.0),
+        "sim_visual_detector_native_px": (120.0, 210.0),
+        "native_col": 999.0,
+        "native_row": 999.0,
+    }
+
+    row = mg.geometry_manual_detector_picker_row(
+        candidate,
+        display_width=3000,
+        display_height=3000,
+    )
+
+    assert row is not None
+    assert row["detector_display_px"] == (1200.0, 2100.0)
+    assert row["detector_display_source"] == "sim_visual_detector_display_px"
+    assert row["detector_native_px"] == (120.0, 210.0)
 
 
 def test_detector_picker_row_does_not_pair_refined_display_with_nominal_native() -> None:
