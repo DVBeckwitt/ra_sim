@@ -16392,6 +16392,117 @@ def build_geometry_manual_fit_dataset(
         else:
             fit_space_projector_unavailable_reason = "native_detector_shape_unavailable"
 
+    def _detector_origin_anchor_projection_input(
+        entry: Mapping[str, object] | None,
+    ) -> tuple[float, float, str] | None:
+        if not isinstance(entry, Mapping):
+            return None
+        if not geometry_fit_entry_is_auto_caked_detector_manual_qr(
+            entry,
+            require_observed_caked_anchor=False,
+        ):
+            return None
+        for x_key, y_key in (
+            ("background_detector_x", "background_detector_y"),
+            ("detector_native_x", "detector_native_y"),
+            ("native_col", "native_row"),
+        ):
+            col = _finite_float(entry.get(x_key))
+            row = _finite_float(entry.get(y_key))
+            if col is not None and row is not None:
+                return float(col), float(row), "native_detector"
+        for x_key, y_key in (("fit_detector_x", "fit_detector_y"),):
+            col = _finite_float(entry.get(x_key))
+            row = _finite_float(entry.get(y_key))
+            if col is not None and row is not None:
+                return float(col), float(row), "fit_detector"
+        detector_frame = str(entry.get("detector_input_frame") or "").strip().lower()
+        col = _finite_float(entry.get("detector_x"))
+        row = _finite_float(entry.get("detector_y"))
+        if col is not None and row is not None and detector_frame == "fit_detector":
+            return float(col), float(row), "fit_detector"
+        return None
+
+    def _project_detector_origin_anchor_to_caked(
+        entry: Mapping[str, object] | None,
+    ) -> tuple[float, float, dict[str, object]] | None:
+        if str(fit_space_projector_kind or "") != "exact_caked_bundle" or not callable(
+            fit_space_projector
+        ):
+            return None
+        projection_input = _detector_origin_anchor_projection_input(entry)
+        if projection_input is None:
+            return None
+        col, row, input_frame = projection_input
+        try:
+            projected = fit_space_projector(
+                np.asarray([float(col)], dtype=np.float64),
+                np.asarray([float(row)], dtype=np.float64),
+                local_params=dict(params_i),
+                anchor_kind="measured",
+                input_frame=str(input_frame),
+            )
+        except Exception:
+            return None
+        if not isinstance(projected, Mapping) or not bool(projected.get("valid", False)):
+            return None
+        try:
+            two_theta_values = np.asarray(
+                projected.get("two_theta_deg"),
+                dtype=np.float64,
+            ).reshape(-1)
+            phi_values = np.asarray(
+                projected.get("phi_deg"),
+                dtype=np.float64,
+            ).reshape(-1)
+            two_theta = float(two_theta_values[0])
+            phi = float(phi_values[0])
+        except Exception:
+            return None
+        if not (np.isfinite(two_theta) and np.isfinite(phi)):
+            return None
+        return float(two_theta), float(phi), dict(projected)
+
+    def _apply_detector_origin_caked_anchor(
+        entry: dict[str, object],
+        projection: tuple[float, float, dict[str, object]],
+    ) -> None:
+        two_theta, phi, projected = projection
+        entry["background_two_theta_deg"] = float(two_theta)
+        entry["background_phi_deg"] = float(phi)
+        entry["caked_x"] = float(two_theta)
+        entry["caked_y"] = float(phi)
+        entry["bg_caked_display"] = (float(two_theta), float(phi))
+        entry["fit_space_anchor_override"] = True
+        entry["fit_space_anchor_source"] = "detector_origin_exact_caked_projection"
+        entry["fit_space_projector_kind"] = projected.get("fit_space_projector_kind")
+        entry["fit_space_source"] = projected.get("fit_space_source")
+        entry["caked_projection_source"] = projected.get("caked_projection_source")
+        entry["detector_native_reprojection_diagnostic_caked_deg"] = (
+            float(two_theta),
+            float(phi),
+        )
+
+    detector_origin_anchor_projections: list[tuple[float, float, dict[str, object]] | None] = []
+    for measured_entry in measured_for_fit:
+        detector_origin_anchor_projections.append(
+            _project_detector_origin_anchor_to_caked(measured_entry)
+        )
+    for projection, measured_entry, initial_entry, display_entry in zip(
+        detector_origin_anchor_projections,
+        measured_for_fit,
+        initial_pairs_display,
+        measured_display,
+    ):
+        if projection is None:
+            continue
+        if isinstance(measured_entry, dict):
+            _apply_detector_origin_caked_anchor(measured_entry, projection)
+        if isinstance(initial_entry, dict):
+            _apply_detector_origin_caked_anchor(initial_entry, projection)
+        if isinstance(display_entry, dict):
+            _apply_detector_origin_caked_anchor(display_entry, projection)
+
     label = (
         Path(str(manual_dataset_bindings.osc_files[background_idx])).name
         if 0 <= background_idx < len(manual_dataset_bindings.osc_files)

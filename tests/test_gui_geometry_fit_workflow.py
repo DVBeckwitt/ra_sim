@@ -23371,6 +23371,135 @@ def test_build_geometry_manual_fit_dataset_exact_projector_uses_current_local_pa
     assert result_a["cake_bundle_signature"] != result_b["cake_bundle_signature"]
 
 
+def test_build_geometry_manual_fit_dataset_reprojects_detector_origin_anchor_for_caked_fit(
+    monkeypatch,
+) -> None:
+    bundle = _make_stub_caked_bundle(
+        detector_shape=(8, 8),
+        radial_axis=np.linspace(10.0, 17.0, 8),
+        azimuth_axis=np.linspace(-4.0, 3.0, 8),
+    )
+    detector_calls: list[tuple[float, float]] = []
+
+    monkeypatch.setattr(
+        geometry_fit,
+        "_geometry_fit_resolve_dynamic_reanchor_caked_bundle",
+        lambda **_kwargs: bundle,
+    )
+    monkeypatch.setattr(
+        manual_geometry,
+        "_detector_pixel_to_caked_bin",
+        lambda live_bundle, col, row: (
+            detector_calls.append((float(col), float(row)))
+            or (
+                (22.5, -35.5)
+                if live_bundle is bundle and (float(col), float(row)) == (3.0, 4.0)
+                else (None, None)
+            )
+        ),
+    )
+
+    source_row = {
+        "q_group_key": ("q", 1),
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "source_peak_index": 0,
+        "source_branch_index": 0,
+        "hkl": (1, 1, 0),
+        "sim_col": 5.0,
+        "sim_row": 6.0,
+        "sim_col_raw": 5.0,
+        "sim_row_raw": 6.0,
+    }
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=8,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda idx: [
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "source_peak_index": 0,
+                "source_branch_index": 0,
+                "hkl": (1, 1, 0),
+                "manual_background_input_origin": "detector",
+                "x": 30.0,
+                "y": 40.0,
+                "detector_x": 3.0,
+                "detector_y": 4.0,
+                "background_detector_x": 3.0,
+                "background_detector_y": 4.0,
+                "background_detector_input_frame": "native_detector",
+                "background_two_theta_deg": 999.0,
+                "background_phi_deg": -999.0,
+                "caked_x": 999.0,
+                "caked_y": -999.0,
+            }
+        ],
+        load_background_by_index=lambda idx: (
+            np.zeros((8, 8), dtype=np.float64),
+            np.zeros((8, 8), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_source_rows_for_background=(
+            lambda idx, params, *, consumer, required_pairs=None: [dict(source_row)]
+        ),
+        geometry_manual_simulated_peaks_for_params=(
+            lambda params, *, prefer_cache: [dict(source_row)]
+        ),
+        geometry_manual_simulated_lookup=lambda _simulated_peaks: {(1, 2): dict(source_row)},
+        geometry_manual_entry_display_coords=lambda entry: (30.0, 40.0),
+        unrotate_display_peaks=lambda entries, shape, *, k: [dict(entry) for entry in entries],
+        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            {
+                "indexing_mode": "xy",
+                "k": 0,
+                "flip_x": False,
+                "flip_y": False,
+                "flip_order": "yx",
+                "label": "identity",
+            },
+            {"pairs": len(sim_pts)},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        orient_image_for_fit=lambda image, **kwargs: image,
+        geometry_manual_project_peaks_for_background_view=_identity_geometry_project_rows,
+        pick_uses_caked_space=lambda: False,
+        geometry_manual_caked_view_for_index=lambda idx: {
+            "background_image": np.zeros((8, 8), dtype=float),
+            "radial_axis": np.linspace(10.0, 17.0, 8),
+            "azimuth_axis": np.linspace(-4.0, 3.0, 8),
+            "transform_bundle": bundle,
+        },
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=manual_dataset_bindings,
+        orientation_cfg={},
+    )
+
+    measured = dataset["measured_for_fit"][0]
+    initial = dataset["initial_pairs_display"][0]
+    display = dataset["measured_display"][0]
+
+    assert measured["background_two_theta_deg"] == pytest.approx(22.5)
+    assert measured["background_phi_deg"] == pytest.approx(-35.5)
+    assert measured["fit_space_anchor_override"] is True
+    assert measured["fit_space_anchor_source"] == "detector_origin_exact_caked_projection"
+    assert initial["background_two_theta_deg"] == pytest.approx(22.5)
+    assert initial["background_phi_deg"] == pytest.approx(-35.5)
+    assert initial["bg_caked_display"] == pytest.approx((22.5, -35.5))
+    assert display["background_two_theta_deg"] == pytest.approx(22.5)
+    assert display["background_phi_deg"] == pytest.approx(-35.5)
+    assert detector_calls == [(3.0, 4.0)]
+
+
 def test_copy_geometry_fit_dataset_spec_for_state_strips_fit_space_projector() -> None:
     copied = geometry_fit._copy_geometry_fit_dataset_spec_for_state(
         {

@@ -24,6 +24,27 @@ Implemented in [manual_geometry.py](../../../ra_sim/gui/manual_geometry.py)
 with focused regression coverage in
 [test_manual_geometry_selection_helpers.py](../../../tests/test_manual_geometry_selection_helpers.py).
 
+2026-05-10 detector-origin caked fit target update: GUI geometry-fit dataset
+handoff now reprojects detector-origin manual Qr/Qz background anchors from the
+saved native detector point through the exact caked projector before installing
+`fit_space_anchor_override`. The optimizer and fit overlay now receive the same
+fixed caked target that the detector-to-caked projection reports for the saved
+manual background point, instead of trusting stale or backfilled
+`background_two_theta_deg/background_phi_deg` aliases on detector-origin rows.
+Caked-origin rows keep their explicit caked target behavior.
+
+Bug/error status: fixed for the case where amber background triangles and the
+optimizer's observed target moved to stale caked coordinates while the fitted
+source point stayed near the real detector-origin projection. Feature status:
+no new GUI control, public API, CLI flag, saved-state schema, artifact format,
+dependency, CI workflow, migration, deprecation, or version bump. Interface
+status: the existing internal dataset and optimizer interfaces are preserved;
+only the cached fit-space anchor source for detector-origin rows changes to
+`detector_origin_exact_caked_projection`. Shipping status: focused dataset,
+fit-space classification, dynamic reanchor, and optimizer point-only tests pass
+locally. Rollback is a normal git revert; no data cleanup or migration is
+required.
+
 2026-05-10 GUI fit-space preflight update: selected backgrounds with no
 enabled manual Qr/Qz pairs now classify as `missing` instead of `detector` for
 geometry-fit preflight. This keeps the GUI `All`-background fit path from
@@ -389,6 +410,29 @@ Feature status:
 
 Latest local validation, 2026-05-10:
 
+- pre-fix regression evidence:
+  `tests/test_gui_geometry_fit_workflow.py::test_build_geometry_manual_fit_dataset_reprojects_detector_origin_anchor_for_caked_fit`
+  failed because the measured fit target stayed at stale caked aliases
+  `(999.0, -999.0)` instead of the exact detector projection `(22.5, -35.5)`.
+- `python -m pytest tests/test_gui_geometry_fit_workflow.py::test_build_geometry_manual_fit_dataset_reprojects_detector_origin_anchor_for_caked_fit -ra`
+  passed (`1 passed`).
+- `python -m pytest tests/test_geometry_fit_manual_fit_space_classification.py tests/test_gui_geometry_fit_workflow.py -k "auto_caked_detector_origin or detector_origin_anchor or exact_projector or dynamic_reanchor_projects_detector_click or dynamic_reanchor_uses_exact_caked_bundle" -ra`
+  passed (`10 passed, 624 deselected`).
+- `python -m pytest tests/test_geometry_fit_manual_fit_space_classification.py tests/test_gui_geometry_fit_workflow.py::test_stale_caked_fields_do_not_classify_or_override_detector_target tests/test_gui_geometry_fit_workflow.py::test_valid_caked_fields_classify_saved_bi_pair_as_caked_despite_detector_xy tests/test_gui_geometry_fit_workflow.py::test_build_geometry_manual_fit_dataset_refreshes_manual_pairs_from_saved_caked_angles tests/test_gui_geometry_fit_workflow.py::test_build_geometry_manual_fit_dataset_uses_saved_refined_caked_coords_without_live_source -ra`
+  passed (`13 passed`).
+- `python -m pytest tests/test_geometry_fitting.py -k "fit_space_anchor or qr_fit_point_only_projection" -ra`
+  passed (`11 passed, 200 deselected`).
+- `python -m compileall -q ra_sim/gui tests`, `python -m ruff check ra_sim/gui/geometry_fit.py tests/test_gui_geometry_fit_workflow.py`,
+  `python -m ruff format --check tests/test_gui_geometry_fit_workflow.py`,
+  and `git diff --check -- ra_sim/gui/geometry_fit.py tests/test_gui_geometry_fit_workflow.py docs/tracking/in-progress/sim-caked-detector-replay.md`
+  passed.
+- `python -m ruff format --check ra_sim/gui/geometry_fit.py` would reformat
+  existing unrelated lines in that large module, so this slice left the file's
+  surrounding formatting unchanged and used scoped `ruff check` plus
+  `git diff --check`.
+- `python -m ra_sim.dev check` is still blocked by pre-existing formatting
+  drift in `ra_sim/fitting/optimization.py` and
+  `ra_sim/gui/_runtime/runtime_session.py`; those files are outside this slice.
 - pre-fix regression evidence: `test_caked_to_detector_replay_rotation_uses_display_rotate_k_without_detector_callback`
   failed with the old inverse point `(1900.0, 1919.0)` instead of the expected
   display-rotation point `(1099.0, 1080.0)`.
