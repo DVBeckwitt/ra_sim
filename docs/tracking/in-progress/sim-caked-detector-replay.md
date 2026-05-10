@@ -24,6 +24,18 @@ Implemented in [manual_geometry.py](../../../ra_sim/gui/manual_geometry.py)
 with focused regression coverage in
 [test_manual_geometry_selection_helpers.py](../../../tests/test_manual_geometry_selection_helpers.py).
 
+2026-05-10 detector-origin fit handoff launch note: the detector-origin
+manual Qr/Qz fit bug is fixed in the dataset handoff path and covered by
+focused geometry-fit workflow tests. Bug/error status: resolved for stale
+display/native aliases moving observed fit targets off the clicked background
+points; manual GUI smoke remains pending before this tracker should close.
+Feature status: no new feature, GUI control, CLI flag, public API, saved-state
+field, artifact field, dependency, CI workflow, migration, deprecation, or
+version bump. CI/CD status: local targeted tests, Ruff, compile, and diff
+hygiene passed for the changed files; the broad dev check is still blocked by
+unrelated formatter drift outside this bug slice. Shipping status: safe to ship
+as a normal bug-fix stack with rollback by git revert.
+
 2026-05-10 detector-origin caked fit target update: GUI geometry-fit dataset
 handoff now reprojects detector-origin manual Qr/Qz background anchors from the
 saved native detector point through the exact caked projector before installing
