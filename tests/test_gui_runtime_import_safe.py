@@ -18338,6 +18338,280 @@ def test_worker_prebuild_uses_job_local_live_rows_for_noncurrent_background(
     assert "source_cache_targeted_fresh_simulation_start" not in kinds
 
 
+def test_worker_dataset_binding_does_not_use_gui_refresh_callback(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    job = _make_geometry_fit_worker_job(runtime_session)
+    observed_refresh_callbacks: list[object] = []
+
+    job["required_indices"] = []
+    job["geometry_manual_refresh_pair_entry"] = lambda _entry: pytest.fail(
+        "worker dataset build must not call the GUI/Tk refresh callback"
+    )
+
+    def _fake_build_dataset(_background_index, *, manual_dataset_bindings, **_kwargs):
+        refresh_callback = manual_dataset_bindings.geometry_manual_refresh_pair_entry
+        observed_refresh_callbacks.append(refresh_callback)
+        return {}
+
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_manual_fit_dataset",
+        _fake_build_dataset,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "prepare_geometry_fit_run",
+        lambda **kwargs: (
+            kwargs["build_dataset"](
+                0,
+                theta_base=0.0,
+                base_fit_params={"theta_initial": 0.0},
+                orientation_cfg={},
+                stage_callback=kwargs.get("stage_callback"),
+            )
+            or runtime_session.gui_geometry_fit.GeometryFitPreparationResult()
+        ),
+    )
+
+    action_result = runtime_session._run_async_geometry_fit_worker_job(job)
+
+    assert action_result.error_text is None
+    assert observed_refresh_callbacks == [None]
+
+
+def test_worker_dataset_binding_does_not_use_gui_entry_display_callback(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    job = _make_geometry_fit_worker_job(runtime_session)
+    observed_display_points: list[object] = []
+
+    job["required_indices"] = []
+    job["display_rotate_k"] = 0
+    job["geometry_manual_entry_display_coords"] = lambda _entry: pytest.fail(
+        "worker dataset build must not call the GUI/Tk entry-display callback"
+    )
+
+    def _fake_build_dataset(_background_index, *, manual_dataset_bindings, **_kwargs):
+        for entry in (
+            {
+                "background_index": 0,
+                "display_col": 12.5,
+                "display_row": 34.0,
+            },
+            {
+                "background_index": 0,
+                "geometry_detector_native_px": (21.0, 22.0),
+            },
+        ):
+            display_point = manual_dataset_bindings.geometry_manual_entry_display_coords(entry)
+            observed_display_points.append(display_point)
+        return {}
+
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_manual_fit_dataset",
+        _fake_build_dataset,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "prepare_geometry_fit_run",
+        lambda **kwargs: (
+            kwargs["build_dataset"](
+                0,
+                theta_base=0.0,
+                base_fit_params={"theta_initial": 0.0},
+                orientation_cfg={},
+                stage_callback=kwargs.get("stage_callback"),
+            )
+            or runtime_session.gui_geometry_fit.GeometryFitPreparationResult()
+        ),
+    )
+
+    action_result = runtime_session._run_async_geometry_fit_worker_job(job)
+
+    assert action_result.error_text is None
+    assert observed_display_points == [(12.5, 34.0), (21.0, 22.0)]
+
+
+def test_worker_dataset_binding_uses_job_local_caked_entry_display_coords(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    job = _make_geometry_fit_worker_job(runtime_session)
+    observed_display_points: list[object] = []
+
+    job["required_indices"] = []
+    job["pick_uses_caked_space"] = True
+    job["geometry_manual_entry_display_coords"] = lambda _entry: pytest.fail(
+        "worker dataset build must not call the GUI/Tk caked entry-display callback"
+    )
+
+    def _fake_build_dataset(_background_index, *, manual_dataset_bindings, **_kwargs):
+        display_point = manual_dataset_bindings.geometry_manual_entry_display_coords(
+            {
+                "background_index": 0,
+                "caked_x": 7.5,
+                "caked_y": -2.0,
+                "display_col": 12.5,
+                "display_row": 34.0,
+            }
+        )
+        observed_display_points.append(display_point)
+        return {}
+
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_manual_fit_dataset",
+        _fake_build_dataset,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "prepare_geometry_fit_run",
+        lambda **kwargs: (
+            kwargs["build_dataset"](
+                0,
+                theta_base=0.0,
+                base_fit_params={"theta_initial": 0.0},
+                orientation_cfg={},
+                stage_callback=kwargs.get("stage_callback"),
+            )
+            or runtime_session.gui_geometry_fit.GeometryFitPreparationResult()
+        ),
+    )
+
+    action_result = runtime_session._run_async_geometry_fit_worker_job(job)
+
+    assert action_result.error_text is None
+    assert observed_display_points == [(7.5, -2.0)]
+
+
+def test_worker_dataset_cached_projected_rows_skip_second_caked_projection(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    job = _make_geometry_fit_worker_job(runtime_session)
+    observed_projected_rows: list[dict[str, object]] = []
+
+    projected_row = dict(
+        _geometry_fit_worker_live_row(),
+        _geometry_fit_worker_cached_projection=False,
+        _geometry_fit_worker_projection_background_index=99,
+        _geometry_fit_worker_projection_mode="detector",
+        background_index=0,
+        caked_x=12.5,
+        caked_y=-4.0,
+        actual_source="sim_visual_caked_deg",
+        source_kind="sim_visual_caked_deg",
+        projection_frame="caked_display",
+    )
+    job["projection_view_mode"] = "caked"
+    job["projection_payload_by_background"] = {
+        0: _geometry_fit_worker_caked_payload(
+            runtime_session,
+            background_value=0.0,
+            radial_values=[12.0, 13.0],
+            azimuth_values=[-5.0, -4.0],
+        )
+    }
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            geometry_fit_caking_ai_cache={},
+            analysis_preview_bins=(4, 4),
+            ai_cache={},
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_size", 4, raising=False)
+    monkeypatch.setattr(runtime_session, "pixel_size_m", 1.0, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_build_analysis_integrator",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_fit_caked_roi_selection",
+        lambda *_args, **_kwargs: {
+            "enabled": False,
+            "valid": False,
+            "pixel_count": 0,
+            "fraction": 0.0,
+            "half_width_px": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "make_runtime_geometry_manual_projection_callbacks",
+        lambda **_kwargs: pytest.fail("cached projected rows must not be reprojected"),
+    )
+
+    def _fake_rebuild_geometry_fit_source_rows(**kwargs):
+        return runtime_session.gui_geometry_fit.GeometryFitSourceRowRebuildResult(
+            background_index=int(kwargs["background_index"]),
+            requested_signature=kwargs["requested_signature"],
+            requested_signature_summary=kwargs["requested_signature_summary"],
+            projected_rows=[dict(projected_row)],
+            stored_rows=[dict(_geometry_fit_worker_live_row(), background_index=0)],
+            rebuild_source="live_runtime_cache",
+            rebuild_attempts=["live_runtime_cache"],
+            diagnostics={"status": "ready"},
+        )
+
+    def _fake_build_dataset(_background_index, *, manual_dataset_bindings, **_kwargs):
+        rows = manual_dataset_bindings.geometry_manual_source_rows_for_background(
+            0,
+            {"theta_initial": 0.0},
+            consumer="geometry_fit_dataset",
+            required_pairs=[_geometry_fit_worker_required_pair()],
+        )
+        projected = manual_dataset_bindings.geometry_manual_project_peaks_for_background_view(
+            0,
+            rows,
+            mode_override="caked",
+            strict_caked_projection=True,
+        )
+        observed_projected_rows.extend(
+            dict(row) for row in projected or () if isinstance(row, Mapping)
+        )
+        return {}
+
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "rebuild_geometry_fit_source_rows",
+        _fake_rebuild_geometry_fit_source_rows,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_manual_fit_dataset",
+        _fake_build_dataset,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "prepare_geometry_fit_run",
+        lambda **kwargs: (
+            kwargs["build_dataset"](
+                0,
+                theta_base=0.0,
+                base_fit_params={"theta_initial": 0.0},
+                orientation_cfg={},
+                stage_callback=kwargs.get("stage_callback"),
+            )
+            or runtime_session.gui_geometry_fit.GeometryFitPreparationResult()
+        ),
+    )
+
+    action_result = runtime_session._run_async_geometry_fit_worker_job(job)
+
+    assert action_result.error_text is None
+    assert observed_projected_rows
+    assert observed_projected_rows[0]["caked_x"] == 12.5
+    assert observed_projected_rows[0]["_geometry_fit_worker_cached_projection"] is True
+    assert observed_projected_rows[0]["_geometry_fit_worker_projection_mode"] == "caked"
+    assert observed_projected_rows[0]["_geometry_fit_worker_projection_background_index"] == 0
+
+
 def test_job_local_picker_cache_ignores_cached_data_from_other_background(
     monkeypatch,
 ) -> None:

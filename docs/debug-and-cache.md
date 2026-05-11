@@ -442,6 +442,12 @@ current caked projection token matches the cached sidecar token. If a caked
 sidecar is requested and the current token is unavailable, the reuse-only path
 must fail closed. Detector-only reuse does not require a caked token.
 
+Async geometry-fit worker jobs must not call GUI/Tk manual-pair callbacks.
+Worker dataset builds use job-local detector or caked coordinate fallbacks and
+tag caked/q-space projected rows with worker-local cache markers. Those markers
+are refreshed on every worker handoff so stale internal metadata cannot force a
+second caked projection for rows that are already projected in the job payload.
+
 Saved caked redraw must resolve simulated overlay points in this order:
 source-matched projected caked row, source-matched resolved caked row, saved
 simulation-only caked fields, then detector/native fallback only if no caked

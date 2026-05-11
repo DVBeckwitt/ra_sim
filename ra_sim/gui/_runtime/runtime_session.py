@@ -42557,9 +42557,6 @@ def _build_geometry_fit_async_job(
         "geometry_manual_entry_display_coords": (
             manual_dataset_bindings.geometry_manual_entry_display_coords
         ),
-        "geometry_manual_refresh_pair_entry": (
-            manual_dataset_bindings.geometry_manual_refresh_pair_entry
-        ),
         "geometry_manual_project_peaks_to_current_view": (
             manual_dataset_bindings.geometry_manual_project_peaks_to_current_view
         ),
@@ -43560,18 +43557,60 @@ def _run_async_geometry_fit_worker_job(
             cleaned_rows.append(entry)
         return cleaned_rows
 
+    def _mark_worker_cached_projection_rows(
+        rows: list[dict[str, object]],
+        *,
+        background_index: int,
+        mode: str,
+    ) -> list[dict[str, object]]:
+        if mode not in {"caked", "q_space"}:
+            return rows
+        for row in rows:
+            row["_geometry_fit_worker_cached_projection"] = True
+            row["_geometry_fit_worker_projection_mode"] = mode
+            row["_geometry_fit_worker_projection_background_index"] = int(background_index)
+        return rows
+
+    def _worker_cached_projection_rows_match(
+        rows: Sequence[Mapping[str, object]],
+        *,
+        background_index: int,
+        mode: str,
+    ) -> bool:
+        if mode not in {"caked", "q_space"} or not rows:
+            return False
+        expected_background_index = int(background_index)
+        for row in rows:
+            try:
+                row_background_index = int(
+                    row.get("_geometry_fit_worker_projection_background_index")
+                )
+            except Exception:
+                return False
+            if (
+                row.get("_geometry_fit_worker_cached_projection") is not True
+                or row_background_index != expected_background_index
+                or str(row.get("_geometry_fit_worker_projection_mode") or "").lower() != mode
+            ):
+                return False
+        return True
+
     def _bundle_rows(
         bundle: gui_geometry_fit.GeometryFitBackgroundCacheBundle | None,
     ) -> list[dict[str, object]]:
         if not isinstance(bundle, gui_geometry_fit.GeometryFitBackgroundCacheBundle):
             return []
+        normalized_mode = str(job_data.get("projection_view_mode") or "detector").strip().lower()
         rows = _geometry_fit_rows_for_background(
             int(bundle.background_index),
             bundle.projected_rows,
         )
         if rows:
-            return rows
-        normalized_mode = str(job_data.get("projection_view_mode") or "detector").strip().lower()
+            return _mark_worker_cached_projection_rows(
+                rows,
+                background_index=int(bundle.background_index),
+                mode=normalized_mode,
+            )
         if normalized_mode in {"caked", "q_space"}:
             projected_rows = _geometry_fit_rows_for_background(
                 int(bundle.background_index),
@@ -43581,7 +43620,11 @@ def _run_async_geometry_fit_worker_job(
                 ),
             )
             if projected_rows:
-                return projected_rows
+                return _mark_worker_cached_projection_rows(
+                    projected_rows,
+                    background_index=int(bundle.background_index),
+                    mode=normalized_mode,
+                )
             return []
         return _geometry_fit_rows_for_background(int(bundle.background_index), bundle.stored_rows)
 
@@ -45318,6 +45361,120 @@ def _run_async_geometry_fit_worker_job(
         )
         return _to_display
 
+    def _worker_geometry_manual_entry_display_coords(
+        entry: Mapping[str, object] | None,
+    ) -> tuple[float, float] | None:
+        if not isinstance(entry, Mapping):
+            return None
+
+        def _entry_pair(
+            pair_keys: Sequence[tuple[str, str]],
+        ) -> tuple[float, float] | None:
+            for key_x, key_y in pair_keys:
+                try:
+                    col = float(entry.get(key_x, np.nan))
+                    row = float(entry.get(key_y, np.nan))
+                except Exception:
+                    continue
+                if np.isfinite(col) and np.isfinite(row):
+                    return float(col), float(row)
+            return None
+
+        def _tuple_pair(keys: Sequence[str]) -> tuple[float, float] | None:
+            for key in keys:
+                point = _geometry_fit_overlay_state_finite_pair(entry.get(key))
+                if point is not None:
+                    return float(point[0]), float(point[1])
+            return None
+
+        if bool(job_data.get("pick_uses_caked_space", False)):
+            return _entry_pair(
+                (
+                    ("caked_x", "caked_y"),
+                    ("raw_caked_x", "raw_caked_y"),
+                    ("background_two_theta_deg", "background_phi_deg"),
+                    ("two_theta_deg", "phi_deg"),
+                    ("display_col", "display_row"),
+                    ("x", "y"),
+                )
+            )
+
+        display_point = _tuple_pair(("geometry_detector_display_px", "raw_detector_display_px"))
+        if display_point is not None:
+            return display_point
+
+        display_point = _entry_pair(
+            (
+                ("x", "y"),
+                ("display_col", "display_row"),
+                ("detector_display_x", "detector_display_y"),
+            )
+        )
+        if display_point is not None:
+            return display_point
+
+        try:
+            background_index = int(
+                entry.get("background_index", job_data.get("current_background_index", 0))
+            )
+        except Exception:
+            background_index = int(job_data.get("current_background_index", 0))
+        native_to_display = (
+            _worker_native_detector_coords_to_detector_display_coords_for_background(
+                int(background_index)
+            )
+        )
+        if not callable(native_to_display):
+            return None
+        native_point = _tuple_pair(("geometry_detector_native_px", "raw_detector_native_px"))
+        if native_point is None:
+            native_point = _entry_pair(
+                (
+                    ("detector_x", "detector_y"),
+                    ("background_detector_x", "background_detector_y"),
+                    ("detector_native_x", "detector_native_y"),
+                    ("refined_detector_native_col", "refined_detector_native_row"),
+                    ("native_col", "native_row"),
+                    ("refined_sim_native_x", "refined_sim_native_y"),
+                )
+            )
+        if native_point is None:
+            return None
+        display_point = _geometry_fit_overlay_state_finite_pair(
+            native_to_display(float(native_point[0]), float(native_point[1]))
+        )
+        if display_point is None:
+            return None
+        return float(display_point[0]), float(display_point[1])
+
+    def _project_source_rows_for_background_view_worker(
+        background_index: int,
+        rows: Sequence[object] | None,
+        **kwargs: object,
+    ) -> Sequence[object]:
+        normalized_rows = _geometry_fit_rows_for_background(int(background_index), rows)
+        normalized_mode = (
+            str(
+                kwargs.get("mode_override")
+                if kwargs.get("mode_override") is not None
+                else job_data.get("projection_view_mode") or "detector"
+            )
+            .strip()
+            .lower()
+        )
+        if _worker_cached_projection_rows_match(
+            normalized_rows,
+            background_index=int(background_index),
+            mode=normalized_mode,
+        ):
+            return normalized_rows
+        return _project_source_rows_for_background(
+            int(background_index),
+            normalized_rows,
+            mode_override=kwargs.get("mode_override"),
+            strict_caked_projection=bool(kwargs.get("strict_caked_projection", True)),
+        )
+
     worker_manual_dataset_bindings = gui_geometry_fit.GeometryFitRuntimeManualDatasetBindings(
         osc_files=list(job_data.get("osc_files", ()) or ()),
         current_background_index=int(job_data.get("current_background_index", 0)),
@@ -45351,17 +45508,12 @@ def _run_async_geometry_fit_worker_job(
         geometry_manual_match_config=(
             lambda: copy.deepcopy(job_data.get("manual_match_config", {}))
         ),
-        geometry_manual_entry_display_coords=job_data.get("geometry_manual_entry_display_coords"),
-        geometry_manual_refresh_pair_entry=job_data.get("geometry_manual_refresh_pair_entry"),
+        geometry_manual_entry_display_coords=_worker_geometry_manual_entry_display_coords,
+        geometry_manual_refresh_pair_entry=None,
         geometry_manual_caked_view_for_index=_load_caked_view_by_index_snapshot,
         geometry_manual_project_peaks_to_current_view=_project_source_rows_by_row_background,
         geometry_manual_project_peaks_for_background_view=(
-            lambda background_index, rows, **kwargs: _project_source_rows_for_background(
-                int(background_index),
-                rows,
-                mode_override=kwargs.get("mode_override"),
-                strict_caked_projection=bool(kwargs.get("strict_caked_projection", True)),
-            )
+            _project_source_rows_for_background_view_worker
         ),
         geometry_manual_caked_projection_for_index=_load_caked_projection_by_index_snapshot,
         unrotate_display_peaks=job_data.get("unrotate_display_peaks"),

@@ -93,6 +93,7 @@ non-interactive path:
 - Fixed: detector-view selected-Qr rod ROI mode now displays the detector-native Qr/Qz support mask for overlay/drag only, while Qz profiles stay on the caked `2theta/phi` integration path.
 - Added: multiple selected Qr rods plot as vertically stacked Qz profiles, with union masks used only for overlay and drag support.
 - Changed: selected-Qr rod selection uses an extended-selection list, detector-view rod profiles default to raw accumulated intensity, and `Delta Qr width` is stored as full width with legacy half-width migration.
+- Fixed: async geometry-fit workers build manual-pair datasets without GUI/Tk refresh or display callbacks, resolve detector/caked entry display points from job-local data, and reuse already projected caked rows without a second projection pass.
 - Default: Analyze peak fitting locally subtracts a linear 2D background plane unless `Subtract linear background` is unchecked. This does not mutate detector, caked, matching, manual-pick, geometry-fit, or headless inputs.
 
 For deeper physical and implementation detail, use:

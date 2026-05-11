@@ -24,6 +24,20 @@ Implemented in [manual_geometry.py](../../../ra_sim/gui/manual_geometry.py)
 with focused regression coverage in
 [test_manual_geometry_selection_helpers.py](../../../tests/test_manual_geometry_selection_helpers.py).
 
+2026-05-11 async worker dataset update: GUI geometry-fit async worker jobs no
+longer carry GUI/Tk manual refresh or entry-display callbacks into worker-side
+dataset construction. Worker jobs resolve detector and caked display points
+from job-local row data, mark job-local projected caked/q-space rows with
+fresh private cache metadata, and reuse those projected rows without entering a
+second caked projection path. Bug/error status: fixed for worker-side dataset
+builds that could touch live GUI callbacks or reproject already projected
+caked rows after stale worker markers. Feature status: no new operator control,
+public API, CLI flag, saved-state schema, artifact format, dependency, CI
+workflow, migration, deprecation, release version, or feature flag. Shipping
+status: focused worker regressions, compile, diff hygiene, and
+`python -m ra_sim.dev check` pass locally. Rollback is a normal git revert with
+no data cleanup.
+
 2026-05-10 detector-origin fit handoff launch note: the detector-origin
 manual Qr/Qz fit bug is fixed in the dataset handoff path and covered by
 focused geometry-fit workflow tests. Bug/error status: resolved for stale
