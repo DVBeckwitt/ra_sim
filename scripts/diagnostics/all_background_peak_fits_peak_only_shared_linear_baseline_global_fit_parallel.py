@@ -12893,6 +12893,7 @@ def show_detector_region_label_position_popup(
     if not drawable_indices:
         return edited, True
 
+    drawable_index_set = set(drawable_indices)
     settings_text = "" if settings_path is None else str(settings_path).strip()
     selected: dict[str, object] = {
         "index": int(drawable_indices[0]),
@@ -12904,6 +12905,12 @@ def show_detector_region_label_position_popup(
     title_box_state: dict[str, object] = {"box": None, "syncing": False}
     label_artists: list[object] = []
     control_axes: list[object] = []
+    key_nudges = {
+        "left": (-1.0, 0.0),
+        "right": (1.0, 0.0),
+        "up": (0.0, -1.0),
+        "down": (0.0, 1.0),
+    }
 
     def active_index() -> int:
         return int(selected["index"])
@@ -12952,15 +12959,6 @@ def show_detector_region_label_position_popup(
                     pass
         sync_controls()
         fig.canvas.draw_idle()
-
-    def select_label(index: int) -> None:
-        if int(index) not in drawable_indices:
-            return
-        selected["index"] = int(index)
-        selected["dragging"] = False
-        selected["drag_offset_x"] = 0.0
-        selected["drag_offset_y"] = 0.0
-        redraw_labels()
 
     def set_label_position(index: int, x_value: object, y_value: object) -> None:
         try:
@@ -13012,7 +13010,7 @@ def show_detector_region_label_position_popup(
                     index = int(getattr(artist, "_ra_sim_label_entry_index"))
                 except Exception:
                     continue
-                if index in drawable_indices:
+                if index in drawable_index_set:
                     return index
         if event.xdata is None or event.ydata is None:
             return None
@@ -13039,8 +13037,10 @@ def show_detector_region_label_position_popup(
             print("detector label editor: no label settings path configured")
             return
         try:
-            edited = apply_detector_label_settings(edited, load_detector_label_settings(settings_text))
-            if active_index() not in drawable_indices:
+            edited = apply_detector_label_settings(
+                edited, load_detector_label_settings(settings_text)
+            )
+            if active_index() not in drawable_index_set:
                 selected["index"] = int(drawable_indices[0])
             redraw_labels()
             print(f"loaded detector label settings={Path(settings_text).expanduser()}")
@@ -13110,14 +13110,8 @@ def show_detector_region_label_position_popup(
         if box is not None and getattr(event, "inaxes", None) is getattr(box, "ax", None):
             return
         key = str(getattr(event, "key", "")).lower()
-        if key == "left":
-            nudge_label(-1.0, 0.0)
-        elif key == "right":
-            nudge_label(1.0, 0.0)
-        elif key == "up":
-            nudge_label(0.0, -1.0)
-        elif key == "down":
-            nudge_label(0.0, 1.0)
+        if key in key_nudges:
+            nudge_label(*key_nudges[key])
         elif key in {"enter", "return"}:
             finish_editor(True)
         elif key == "escape":
@@ -13130,11 +13124,10 @@ def show_detector_region_label_position_popup(
                 control_ax.remove()
             except Exception:
                 pass
-        if hasattr(fig, "_ra_sim_detector_label_edit_widgets"):
-            try:
-                delattr(fig, "_ra_sim_detector_label_edit_widgets")
-            except Exception:
-                pass
+        try:
+            delattr(fig, "_ra_sim_detector_label_edit_widgets")
+        except Exception:
+            pass
         fig.canvas.draw_idle()
 
     label_box_ax = fig.add_axes([0.08, 0.018, 0.28, 0.045])

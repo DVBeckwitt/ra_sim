@@ -1352,10 +1352,11 @@ def test_detector_region_label_editor_selects_labels_with_matplotlib_events() ->
     ]
 
     for token in (
-        "def select_label(index: int)",
+        "drawable_index_set = set(drawable_indices)",
         "def label_index_from_event(event)",
         "artist.contains(event)",
         "_ra_sim_label_entry_index",
+        'selected["index"] = int(index)',
         'fig.canvas.mpl_connect("button_press_event", on_press)',
         'fig.canvas.mpl_connect("motion_notify_event", on_motion)',
         'fig.canvas.mpl_connect("button_release_event", on_release)',
