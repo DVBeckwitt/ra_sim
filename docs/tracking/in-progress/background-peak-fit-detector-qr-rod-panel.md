@@ -124,6 +124,13 @@ to make the Qr rod detector and integration figures source-consistent:
   the markdown table instead of suppressing m=3 or m=4 overlays.
 - PbI2 Qr-rod profile panels are displayed on log-scaled intensity axes and
   capped at `L=3`, without trimming the exported CSV/profile rows.
+- PbI2 no-background debug mode is available through
+  `RA_SIM_PBI2_DISABLE_BACKGROUND_SUBTRACTION=1`. It forces transverse sideband
+  subtraction off for PbI2 rods, records the mode in cache signatures, and plots
+  raw `background_density` against full `joint_fit_density`.
+- Headless PbI2 debug runs now use the default `auto` Qr-rod marker edit mode,
+  which still opens the popup on interactive Matplotlib backends but skips it
+  when `RA_SIM_HEADLESS` or CI mode is active.
 - PbI2 generated rods remain disabled by default and final profile rows still
   require complete detector support, so the unsupported `m=7` row is skipped.
 
@@ -150,11 +157,10 @@ Bug/error status:
   detector and L3 star images are written.
 - Empty final Qr-rod profile rows are fixed by excluding rod entries whose
   branches have no drawable positive-L profile data.
-- Misleading PbI2 nonzero dashed overlays are fixed by treating Qr sideband
-  correction as the background removal and suppressing model overlays when
-  marker/L mapping or Qz-baseline cancellation diagnostics fail. The regenerated
-  PbI2 figure keeps the `m=1` `Fit` overlays and omits `m=3`/`m=4` overlays with
-  invalid L mapping.
+- Misleading PbI2 nonzero dashed overlays are fixed by plotting raw central rod
+  data, adding the Qr sideband background back to available fits, and recording
+  marker/L mapping or Qz-baseline cancellation as diagnostics instead of
+  suppressing `m=3`/`m=4` overlays.
 - The Qr-rod marker-label helper ordering bug is fixed; profile annotation and
   redraw paths no longer call `rod_marker_annotation_label(...)` before it is
   defined.
@@ -169,9 +175,9 @@ Feature status:
   the central `HK=0` / `00L` rod. This is a display-only change; Qr/Qz maps,
   Delta-Qr values, selected masks, integration, fitting, and cache identities
   are unchanged.
-- Qr-rod peak marker editing is implemented in the diagnostic `.py` and is on
-  by default with `RA_SIM_QR_ROD_PEAK_EDIT_MODE=popup`; `skip` disables it for
-  unattended runs and optional JSON round trip is available through
+- Qr-rod peak marker editing is implemented in the diagnostic `.py` with
+  default `RA_SIM_QR_ROD_PEAK_EDIT_MODE=auto`; `popup` forces the editor, `skip`
+  disables it for unattended runs, and optional JSON round trip is available through
   `RA_SIM_QR_ROD_PEAK_EDITS`.
 - The marker editor has `Import` and `Export` buttons that round-trip the same
   JSON marker table as `RA_SIM_QR_ROD_PEAK_EDITS`, including adjusted
@@ -215,6 +221,10 @@ Feature status:
   `.py`. The generated markdown includes a `Plot model decisions` table with
   the plotted data source, fit source, added-background source, and diagnostic
   flags per branch.
+- PbI2 no-background debug mode is implemented for the diagnostic `.py` through
+  `PBI2_DISABLE_BACKGROUND_SUBTRACTION_OVERRIDE` or
+  `RA_SIM_PBI2_DISABLE_BACKGROUND_SUBTRACTION`. It is diagnostic-only and does
+  not add a GUI control, CLI flag, saved-state field, or package API surface.
 - Tail-component aggregation now fails closed when `x`, target, finite-mask,
   and model shapes are inconsistent instead of partially replacing only one
   mask and risking a mismatched array index.
@@ -307,14 +317,21 @@ Passing checks:
   mappings and Qz-baseline cancellation are retained as diagnostics instead of
   overlay gates; non-PbI2 model selection is unchanged; and unsupported
   detector-incomplete rows such as `m=7` stay hidden.
+- PbI2 no-background debug coverage verifies the environment/local override
+  disables transverse sideband subtraction, changes both pre-editor and final
+  Qr-rod cache signatures, and makes the plot policy compare raw
+  `background_density` to full `joint_fit_density` without data-minus-baseline
+  subtraction.
 - Focused PbI2 acceptance command passed:
-  `python -m pytest tests/test_background_peak_fits_notebook.py -k "qr_sideband or pbi2_plot_policy or final_profile_plot_uses_model_decisions or pbi2_rod_profile_l_axis or pbi2_final_profile or shared_nonzero_rod_profile_y_axis_limits" -ra`
-  with `11 passed`.
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "qr_rod_peak_editor_is_wired_before_joint_fit_cache or qr_rod_peak_edit_runtime_mode_respects_headless or qr_sideband or pbi2_plot_policy or pbi2_debug or background_debug_policy or final_profile_plot_uses_model_decisions or pbi2_rod_profile_l_axis or pbi2_final_profile or shared_nonzero_rod_profile_y_axis_limits" -ra`
+  with `16 passed`, including the no-background debug flag and default-auto
+  headless editor coverage.
 - Headless PbI2 script execution passed with
-  `RA_SIM_QR_ROD_PEAK_EDIT_MODE=skip`; it regenerated the PbI2 Qr-rod profile
-  artifacts, kept `m=1`, `m=3`, and `m=4` `Fit` overlays on the raw-data basis,
-  wrote the plot-decision diagnostics table, capped displayed L at 3, used log
-  axes on all PbI2 panels, and skipped unsupported `m=7` in the final figure.
+  `RA_SIM_HEADLESS=1 RA_SIM_PBI2_DISABLE_BACKGROUND_SUBTRACTION=1`; it skipped
+  marker and detector-label popups through default `auto` mode, regenerated the
+  PbI2 Qr-rod profile artifacts, recorded sideband subtraction disabled, kept
+  `background_density == background_density_raw`, used log axes on all PbI2
+  panels, and skipped unsupported `m=7` in the final figure.
 - Focused command passed:
   `python -m pytest tests/test_background_peak_fits_notebook.py -k "joint_qz_fit or rod_profile_panels_use_centered_m_labels or qr_rod_marker_hash_changes_cache_key or marker_title_changes_cache_key or qr_rod_final_cache_requires_fit_signature or tail_component_aggregation_rejects_shape_mismatch" -ra`
 - Compile check passed for package, tests, and the diagnostic script:

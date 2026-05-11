@@ -84,7 +84,8 @@ Current status as of 2026-05-11:
 - reset control: `RA_SIM_RESET_QR_ROD_PROFILE_CACHE=1`
 - optional imported peak-edit key: `RA_SIM_QR_ROD_PEAK_EDITS`
 - peak-edit mode: `RA_SIM_QR_ROD_PEAK_EDIT_MODE=popup|skip|auto`;
-  default is `popup`
+  default is `auto`, which opens the popup on interactive Matplotlib backends
+  and skips it for CI/headless runs
 - cache-hit guard: final-fit payloads must include
   `final_rod_profile_table`, `final_marker_table`,
   `final_rod_component_table`, `final_peak_edit_cache_key`, and marker columns
@@ -116,6 +117,17 @@ Current status as of 2026-05-11:
 - PbI2 Qr-rod profile plots use logarithmic intensity axes on every panel and
   cap the displayed L range at 3. This is a figure-display policy only; the CSV
   and fitting artifacts retain the full computed profile rows.
+- For PbI2 debugging runs that must show no Qr-rod background subtraction, set
+  `RA_SIM_PBI2_DISABLE_BACKGROUND_SUBTRACTION=1`. This forces PbI2 transverse
+  sideband subtraction off, records the mode in the pre-editor and final-fit
+  cache signatures, and plots raw `background_density` against full
+  `joint_fit_density`.
+
+```powershell
+$env:RA_SIM_HEADLESS = "1"
+$env:RA_SIM_PBI2_DISABLE_BACKGROUND_SUBTRACTION = "1"
+python scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py
+```
 
 The diagnostic separates fitting coordinates from display labels. `fit_l` is
 the fitted marker coordinate used for Qz-to-L mapping and joint profile fits.
@@ -128,9 +140,9 @@ move the fitted marker position. Qr-rod peak marker edits intentionally update
 `qz_marker` and therefore invalidate the final joint-fit cache.
 
 Qr-rod peak marker edits are applied before the final Qr-rod joint-fit cache is
-checked. The marker editor is on by default with `popup`. Use `skip` for
-unattended runs. `auto` opens the editor only on interactive Matplotlib desktop
-backends and skips it for CI/headless backends. The editor can load and save
+checked. The default `auto` mode opens the editor only on interactive
+Matplotlib desktop backends and skips it for CI/headless backends. Use `popup`
+to force the editor and `skip` for unattended runs. The editor can load and save
 JSON marker tables through `RA_SIM_QR_ROD_PEAK_EDITS`; accepted popup edits are
 hashed into the final-fit cache key so stale fitted profiles are not reused.
 No-edit runs also require the current final-fit signature before a cached joint
@@ -195,17 +207,19 @@ Focused validation status:
 
 - `python -m py_compile scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py`
   passes
-- `python -m pytest tests/test_background_peak_fits_notebook.py -k "qr_sideband or pbi2_plot_policy or final_profile_plot_uses_model_decisions or pbi2_rod_profile_l_axis or pbi2_final_profile or shared_nonzero_rod_profile_y_axis_limits" -ra`
-  passes, `11 passed`
+- `python -m pytest tests/test_background_peak_fits_notebook.py -k "qr_rod_peak_editor_is_wired_before_joint_fit_cache or qr_rod_peak_edit_runtime_mode_respects_headless or qr_sideband or pbi2_plot_policy or pbi2_debug or background_debug_policy or final_profile_plot_uses_model_decisions or pbi2_rod_profile_l_axis or pbi2_final_profile or shared_nonzero_rod_profile_y_axis_limits" -ra`
+  passes with `16 passed`, including the PbI2 no-background debug flag and
+  default-auto headless editor coverage
 - `python -m pytest tests/test_background_peak_fits_notebook.py -k "hk0_l3_star or qr_rod_peak or qr_rod_marker or marker_title or sample_name_override or import_export_buttons or labeled_weak_hk0_marker or qr_rod_final_cache_requires_fit_signature or final_rod_labels_point_from_upper_right or qr_rod_editor_qz_l_axis_coefficients or qr_rod_peak_editor_uses_l_axis" -ra`
   passes, `21 passed`
 - `python -m pytest tests/test_background_peak_fits_notebook.py -k "runner or backend or process" -ra`
   passes, `8 passed`
-- `RA_SIM_QR_ROD_PEAK_EDIT_MODE=skip` PbI2 diagnostic script execution
-  completed, regenerated the PbI2 Qr-rod profile artifacts, retained `m=1`,
-  `m=3`, and `m=4` fit overlays on the raw-data basis, added the Qr sideband
-  background back to the dashed fits, used log axes on every PbI2 panel, capped
-  displayed L at 3, and skipped unsupported `m=7` in the final figure
+- `RA_SIM_HEADLESS=1 RA_SIM_PBI2_DISABLE_BACKGROUND_SUBTRACTION=1` PbI2
+  diagnostic script execution completed, skipped the marker and detector-label
+  popups through default `auto` mode, recorded sideband subtraction disabled in
+  generated markdown, kept `background_density == background_density_raw`,
+  used log axes on every PbI2 panel, capped displayed L at 3, and skipped
+  unsupported `m=7` in the final figure
 - full `tests/test_background_peak_fits_notebook.py` was rerun on 2026-05-11
   and remains red only in six unrelated notebook/script source-token checks:
   `118 passed`, `2 skipped`, `6 failed`

@@ -21,6 +21,7 @@ USE_GPU_OVERRIDE = "1"
 QR_ROD_PEAK_EDIT_MODE_OVERRIDE = ""
 DETECTOR_LABEL_SETTINGS_PATH_OVERRIDE = ""
 RESET_PRE_EDITOR_CACHE_OVERRIDE = ""
+PBI2_DISABLE_BACKGROUND_SUBTRACTION_OVERRIDE = ""
 
 # Faster development output. Use 300 / 1 for final vector figures.
 FIGURE_DPI_OVERRIDE = "200"
@@ -579,6 +580,7 @@ def qr_rod_peak_edit_cache_key(
     lattice_signature: object = None,
     q_group_signature: object = None,
     rod_reference_policy: object = None,
+    rod_profile_policy: object = None,
 ) -> dict[str, object]:
     reference_signature = {}
     if lattice_signature is not None:
@@ -589,6 +591,8 @@ def qr_rod_peak_edit_cache_key(
         reference_signature["rod_reference_policy"] = _cache_normalize_value(
             rod_reference_policy
         )
+    if rod_profile_policy is not None:
+        reference_signature["rod_profile_policy"] = _cache_normalize_value(rod_profile_policy)
 
     def with_reference_signature(payload: dict[str, object]) -> dict[str, object]:
         if reference_signature:
@@ -3031,12 +3035,21 @@ qr_rod_delta_qr_source = as_float(
 )
 QR_ROD_DELTA_QR_SCALE = 0.85
 qr_rod_delta_qr = max(1.0e-9, float(qr_rod_delta_qr_source) * float(QR_ROD_DELTA_QR_SCALE))
+IS_PBI2_SAMPLE_STEM = SAMPLE_STEM.startswith("pbi2")
+PBI2_DISABLE_BACKGROUND_SUBTRACTION = IS_PBI2_SAMPLE_STEM and _truthy_setting(
+    "PBI2_DISABLE_BACKGROUND_SUBTRACTION_OVERRIDE",
+    "RA_SIM_PBI2_DISABLE_BACKGROUND_SUBTRACTION",
+    False,
+)
 QR_ROD_TRANSVERSE_BACKGROUND_ENABLED = (
-    SAMPLE_STEM.startswith("pbi2")
-    or _truthy_setting(
-        "QR_ROD_TRANSVERSE_BACKGROUND_OVERRIDE",
-        "RA_SIM_QR_ROD_TRANSVERSE_BACKGROUND",
-        False,
+    not bool(PBI2_DISABLE_BACKGROUND_SUBTRACTION)
+    and (
+        IS_PBI2_SAMPLE_STEM
+        or _truthy_setting(
+            "QR_ROD_TRANSVERSE_BACKGROUND_OVERRIDE",
+            "RA_SIM_QR_ROD_TRANSVERSE_BACKGROUND",
+            False,
+        )
     )
 )
 QR_ROD_BG_SIDE_BAND_INNER_SCALE = 1.30
@@ -3046,6 +3059,14 @@ QR_ROD_BG_PERCENTILE = 50.0
 PBI2_PLOT_PEAK_TO_DATA_CANCEL_RATIO = 4.0
 PBI2_PLOT_BASELINE_TO_PEAK_CANCEL_RATIO = 0.50
 PBI2_ROD_PROFILE_L_AXIS_MAX = 3.0
+ROD_PROFILE_BACKGROUND_POLICY_SIGNATURE = {
+    "pbi2_disable_background_subtraction": bool(PBI2_DISABLE_BACKGROUND_SUBTRACTION),
+    "qr_rod_transverse_background": bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED),
+    "qr_rod_bg_side_band_inner_scale": float(QR_ROD_BG_SIDE_BAND_INNER_SCALE),
+    "qr_rod_bg_side_band_outer_scale": float(QR_ROD_BG_SIDE_BAND_OUTER_SCALE),
+    "qr_rod_bg_min_side_pixels": int(QR_ROD_BG_MIN_SIDE_PIXELS),
+    "qr_rod_bg_percentile": float(QR_ROD_BG_PERCENTILE),
+}
 rod_phi_samples = max(361, int(as_float(variables.get("rod_points_per_gz_var"), 721)))
 psi_deg = as_float(variables.get("psi_var"), 0.0)
 
@@ -3885,6 +3906,7 @@ PRE_EDITOR_CACHE_INPUT_SIGNATURE = {
         "rod_phi_samples": int(rod_phi_samples),
         "rod_qz_shared_linear_baseline": bool(ROD_QZ_SHARED_LINEAR_BASELINE_ENABLED),
         "rod_qz_nonlinear_refinement": bool(ROD_QZ_NONLINEAR_REFINEMENT_ENABLED),
+        "pbi2_disable_background_subtraction": bool(PBI2_DISABLE_BACKGROUND_SUBTRACTION),
         "qr_rod_transverse_background": bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED),
         "qr_rod_bg_side_band_inner_scale": float(QR_ROD_BG_SIDE_BAND_INNER_SCALE),
         "qr_rod_bg_side_band_outer_scale": float(QR_ROD_BG_SIDE_BAND_OUTER_SCALE),
@@ -7922,6 +7944,7 @@ def rod_profile_plot_model_decision(
     marker_source: pd.DataFrame | None,
     *,
     transverse_background_enabled: bool,
+    background_subtraction_disabled: bool = False,
     peak_to_data_cancel_ratio: float = 4.0,
     baseline_to_peak_cancel_ratio: float = 0.50,
 ) -> dict[str, object]:
@@ -7941,6 +7964,27 @@ def rod_profile_plot_model_decision(
         if "joint_linear_baseline_density" in table.columns
         else None
     )
+    if is_pbi2_nonzero and bool(background_subtraction_disabled):
+        model_column = default_density_column
+        for candidate_column in ("joint_fit_density", "fit_density"):
+            if candidate_column in table.columns:
+                model_column = candidate_column
+                break
+        reason = (
+            "pbi2_no_background_subtraction_debug"
+            if model_column
+            else "missing_model_density"
+        )
+        return {
+            "plot_model": bool(model_column),
+            "data_column": "background_density",
+            "density_column": model_column,
+            "baseline_column": None,
+            "subtract_baseline_from_data": False,
+            "label": "Fit" if model_column else None,
+            "reason": reason,
+            "metrics": {"background_subtraction_disabled": True},
+        }
     if not (is_pbi2_nonzero and bool(transverse_background_enabled)):
         return {
             "plot_model": bool(default_density_column),
@@ -11277,7 +11321,7 @@ qr_rod_peak_edits_path = _setting_text(
     "QR_ROD_PEAK_EDITS_PATH_OVERRIDE", "RA_SIM_QR_ROD_PEAK_EDITS", ""
 )
 qr_rod_peak_edit_mode = _setting_text(
-    "QR_ROD_PEAK_EDIT_MODE_OVERRIDE", "RA_SIM_QR_ROD_PEAK_EDIT_MODE", "popup"
+    "QR_ROD_PEAK_EDIT_MODE_OVERRIDE", "RA_SIM_QR_ROD_PEAK_EDIT_MODE", "auto"
 )
 marker_table, qr_rod_peak_edit_source = edit_qr_rod_peak_markers(
     marker_table,
@@ -11295,6 +11339,7 @@ qr_rod_peak_edit_key = qr_rod_peak_edit_cache_key(
     lattice_signature=ACTIVE_LATTICE_CACHE_SIGNATURE,
     q_group_signature=Q_GROUP_ROWS_CACHE_SIGNATURE,
     rod_reference_policy=ROD_REFERENCE_POLICY_SIGNATURE,
+    rod_profile_policy=ROD_PROFILE_BACKGROUND_POLICY_SIGNATURE,
 )
 if qr_rod_profile_cache_has_final_fit(qr_rod_profile_cache or {}, qr_rod_peak_edit_key):
     rod_profile_table = pd.DataFrame(qr_rod_profile_cache["final_rod_profile_table"]).copy()
@@ -11562,6 +11607,9 @@ def shared_nonzero_rod_profile_y_axis_limits(
                 transverse_background_enabled=bool(
                     globals().get("QR_ROD_TRANSVERSE_BACKGROUND_ENABLED", False)
                 ),
+                background_subtraction_disabled=bool(
+                    globals().get("PBI2_DISABLE_BACKGROUND_SUBTRACTION", False)
+                ),
             )
             plot_model, norm_payload = rod_profile_normalized_payload_for_plot_decision(
                 sub, plot_decision
@@ -11648,6 +11696,7 @@ rod_note_lines = [
     "The plotted traces are acceptance-normalized detector-count densities unless BACKGROUND_SOLID_ANGLE_CORRECTION is enabled. Raw summed columns are retained for audit only.",
     f"Solid-angle correction enabled: `{bool(BACKGROUND_SOLID_ANGLE_CORRECTION)}`.",
     f"Qr-sideband transverse background subtraction enabled: `{bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED)}`. When enabled, `background_density_raw` is the central rod-band density, `qr_sideband_background_density` is the same-Qz off-rod estimate, and `background_density` is their difference.",
+    f"PbI2 no-background debug mode: `{bool(PBI2_DISABLE_BACKGROUND_SUBTRACTION)}`. When enabled, PbI2 Qr-rod transverse sideband subtraction is forced off and raw `background_density` is plotted against full `joint_fit_density`.",
     "When caked sum fields are available, density uses sum_signal / sum_normalization. Otherwise it falls back to acceptance weights, then pixel_count.",
     "For nonzero HK rods outside the PbI2 Qr-sideband plot policy, plotted `Data` is `background_density - joint_linear_baseline_density` unless Qr-sideband subtraction is enabled; with sideband subtraction, plotted `Data` is sideband-corrected `background_density`.",
     "For PbI2 nonzero rods with Qr-sideband subtraction, plotted `Data` is raw central `background_density_raw` and the dashed `Fit` is `joint_fit_density + qr_sideband_background_density`. Marker/L mapping and Qz-baseline cancellation checks are reported as diagnostics instead of suppressing available overlays.",
@@ -11793,6 +11842,7 @@ for rod in nonzero_plot_rod_entries:
             sub,
             plot_marker_table,
             transverse_background_enabled=bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED),
+            background_subtraction_disabled=bool(PBI2_DISABLE_BACKGROUND_SUBTRACTION),
             peak_to_data_cancel_ratio=float(PBI2_PLOT_PEAK_TO_DATA_CANCEL_RATIO),
             baseline_to_peak_cancel_ratio=float(PBI2_PLOT_BASELINE_TO_PEAK_CANCEL_RATIO),
         )
@@ -12000,6 +12050,7 @@ for row, rod in enumerate(plot_rod_entries):
                     sub,
                     plot_marker_table,
                     transverse_background_enabled=bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED),
+                    background_subtraction_disabled=bool(PBI2_DISABLE_BACKGROUND_SUBTRACTION),
                     peak_to_data_cancel_ratio=float(PBI2_PLOT_PEAK_TO_DATA_CANCEL_RATIO),
                     baseline_to_peak_cancel_ratio=float(PBI2_PLOT_BASELINE_TO_PEAK_CANCEL_RATIO),
                 ),

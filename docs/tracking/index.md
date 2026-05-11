@@ -134,9 +134,12 @@ same-Qz transverse Qr sideband subtraction to nonzero PbI2 profiles, shows raw
 central rod data while adding the sideband background back to available fit
 overlays, hides unsupported `m=7`, records marker/L mapping and Qz-baseline
 cancellation checks as diagnostics, displays all PbI2 panels on log intensity
-axes, and caps the displayed L range at 3. Focused PbI2 acceptance, compile,
-and headless script execution pass; the regenerated PbI2 figure keeps available
-`Fit` overlays for nonzero rods on the raw-data basis. Full
+axes, caps the displayed L range at 3, and adds
+`RA_SIM_PBI2_DISABLE_BACKGROUND_SUBTRACTION=1` as a diagnostic-only no-sideband
+mode. Focused PbI2 acceptance, compile, and headless script execution pass; the
+headless run now skips marker/label popups through default `auto` edit mode and
+the regenerated PbI2 figure keeps available `Fit` overlays for nonzero rods on
+the raw-data basis. Full
 diagnostics test-file status is `118 passed`, `2 skipped`, `6 failed` in the
 same unrelated source-token checks. No CI workflow, deployment, package API,
 saved-state schema, or deprecation/migration path changed; rollback is to

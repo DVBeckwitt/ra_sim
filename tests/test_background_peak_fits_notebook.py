@@ -731,6 +731,51 @@ def test_parallel_script_qr_sideband_profiles_bypass_fast_accumulators_and_keep_
     assert "detector_qr_band_per_qz_bin_with_qr_sideband_background" in profile_source
 
 
+def test_parallel_script_pbi2_debug_flag_disables_qr_sideband_subtraction() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    settings_source = source[
+        source.index("QR_ROD_TRANSVERSE_BACKGROUND_ENABLED =") : source.index(
+            "\nQR_ROD_BG_SIDE_BAND_INNER_SCALE"
+        )
+    ]
+    signature_source = source[
+        source.index("PRE_EDITOR_CACHE_INPUT_SIGNATURE =") : source.index(
+            "\nPRE_EDITOR_CACHE_KEY ="
+        )
+    ]
+
+    assert 'PBI2_DISABLE_BACKGROUND_SUBTRACTION_OVERRIDE = ""' in source
+    assert "RA_SIM_PBI2_DISABLE_BACKGROUND_SUBTRACTION" in source
+    assert "PBI2_DISABLE_BACKGROUND_SUBTRACTION" in settings_source
+    assert "not bool(PBI2_DISABLE_BACKGROUND_SUBTRACTION)" in settings_source
+    assert '"pbi2_disable_background_subtraction"' in signature_source
+    assert "PbI2 no-background debug mode" in source
+
+
+def test_parallel_script_qr_rod_final_cache_key_changes_with_background_debug_policy() -> None:
+    namespace = _script_functions("_cache_normalize_value", "qr_rod_peak_edit_cache_key")
+    cache_key = namespace["qr_rod_peak_edit_cache_key"]
+
+    enabled_key = cache_key(
+        None,
+        mode="last_cached",
+        rod_profile_policy={"pbi2_disable_background_subtraction": True},
+    )
+    disabled_key = cache_key(
+        None,
+        mode="last_cached",
+        rod_profile_policy={"pbi2_disable_background_subtraction": False},
+    )
+
+    assert enabled_key != disabled_key
+    assert enabled_key["rod_reference_signature"]["rod_profile_policy"] == {
+        "pbi2_disable_background_subtraction": True
+    }
+    assert disabled_key["rod_reference_signature"]["rod_profile_policy"] == {
+        "pbi2_disable_background_subtraction": False
+    }
+
+
 def test_parallel_script_qr_sideband_plot_data_can_use_explicit_data_column() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     helper_source = source[
@@ -902,6 +947,43 @@ def test_parallel_script_pbi2_plot_policy_keeps_invalid_l_mapping_fit_as_diagnos
     assert decision["label"] == "Fit"
     assert decision["reason"] == "pbi2_raw_with_background_fit"
     assert decision["metrics"]["valid_l_mapping"] is False
+
+
+def test_parallel_script_pbi2_debug_plot_policy_uses_raw_data_and_full_fit() -> None:
+    namespace = _script_functions(
+        "_finite_abs_percentile",
+        "rod_profile_marker_l_mapping_is_valid",
+        "rod_profile_plot_model_decision",
+    )
+    plot_decision = namespace["rod_profile_plot_model_decision"]
+    sub = pd.DataFrame(
+        {
+            "background_density": [7.5, 8.0, 7.8],
+            "background_density_raw": [7.5, 8.0, 7.8],
+            "qr_sideband_background_density": [np.nan, np.nan, np.nan],
+            "joint_peak_density": [6.0, 6.5, 6.1],
+            "joint_linear_baseline_density": [0.5, 0.4, 0.5],
+            "joint_fit_density": [6.5, 6.9, 6.6],
+        }
+    )
+
+    decision = plot_decision(
+        "PbI2",
+        3,
+        "-",
+        sub,
+        pd.DataFrame(),
+        transverse_background_enabled=False,
+        background_subtraction_disabled=True,
+    )
+
+    assert decision["plot_model"] is True
+    assert decision["data_column"] == "background_density"
+    assert decision["density_column"] == "joint_fit_density"
+    assert decision["baseline_column"] is None
+    assert decision["subtract_baseline_from_data"] is False
+    assert decision["label"] == "Fit"
+    assert decision["reason"] == "pbi2_no_background_subtraction_debug"
 
 
 def test_parallel_script_pbi2_marker_l_mapping_allows_duplicate_same_l_rows() -> None:
@@ -3465,7 +3547,7 @@ def test_parallel_script_qr_rod_peak_editor_is_wired_before_joint_fit_cache() ->
         < final_fit_call
     )
     assert "RA_SIM_QR_ROD_PEAK_EDIT_MODE" in source
-    assert '"QR_ROD_PEAK_EDIT_MODE_OVERRIDE", "RA_SIM_QR_ROD_PEAK_EDIT_MODE", "popup"' in source
+    assert '"QR_ROD_PEAK_EDIT_MODE_OVERRIDE", "RA_SIM_QR_ROD_PEAK_EDIT_MODE", "auto"' in source
     assert "TextBox(" in source
     assert "marker_title" in source
     assert 'getattr(event, "inaxes", None) is getattr(box, "ax", None)' in source
