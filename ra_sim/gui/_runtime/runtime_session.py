@@ -43319,6 +43319,7 @@ def _run_async_geometry_fit_worker_job(
         *,
         mode_override: str | None = None,
         strict_caked_projection: bool = True,
+        params_override: Mapping[str, object] | None = None,
     ) -> Sequence[object]:
         normalized_rows = _geometry_fit_rows_for_background(background_index, raw_rows)
         if not normalized_rows:
@@ -43362,6 +43363,8 @@ def _run_async_geometry_fit_worker_job(
         except Exception:
             detector_shape = None
         params_local = dict(job_data.get("params", {}) or {})
+        if isinstance(params_override, Mapping):
+            params_local.update(dict(params_override))
         resolved_caked_payload = None
         exact_caked_bundle = None
         if normalized_mode == "caked":
@@ -43465,7 +43468,7 @@ def _run_async_geometry_fit_worker_job(
                 ),
                 current_background_index=lambda: int(background_index),
                 caked_projection_payload=lambda: resolved_caked_payload,
-                current_geometry_fit_params=lambda: dict(job_data.get("params", {}) or {}),
+                current_geometry_fit_params=lambda: dict(params_local),
                 build_live_preview_simulated_peaks_from_cache=lambda: [],
                 ensure_peak_overlay_data=lambda **_kwargs: False,
                 miller=lambda: job_data["solver_inputs"].miller,
@@ -43507,10 +43510,19 @@ def _run_async_geometry_fit_worker_job(
             )
         )
         try:
-            return _geometry_fit_rows_for_background(
+            projected_rows = _geometry_fit_rows_for_background(
                 background_index,
                 projection_callbacks.project_peaks_to_current_view(normalized_rows),
             )
+            if normalized_mode == "caked":
+                projected_rows = (
+                    gui_geometry_fit._apply_geometry_fit_detector_tilt_caked_projection(
+                        projected_rows,
+                        params_local,
+                        pixel_size_m=float(pixel_size_m),
+                    )
+                )
+            return projected_rows
         except Exception:
             if normalized_mode == "q_space":
                 return []
@@ -43597,15 +43609,27 @@ def _run_async_geometry_fit_worker_job(
 
     def _bundle_rows(
         bundle: gui_geometry_fit.GeometryFitBackgroundCacheBundle | None,
+        *,
+        mode_override: str | None = None,
+        params_override: Mapping[str, object] | None = None,
     ) -> list[dict[str, object]]:
         if not isinstance(bundle, gui_geometry_fit.GeometryFitBackgroundCacheBundle):
             return []
-        normalized_mode = str(job_data.get("projection_view_mode") or "detector").strip().lower()
+        base_mode = str(job_data.get("projection_view_mode") or "detector").strip().lower()
+        normalized_mode = str(mode_override or base_mode or "detector").strip().lower()
+        if normalized_mode not in {"detector", "caked", "q_space"}:
+            normalized_mode = "detector"
         rows = _geometry_fit_rows_for_background(
             int(bundle.background_index),
             bundle.projected_rows,
         )
-        if rows:
+        if rows and _worker_cached_projection_rows_match(
+            rows,
+            background_index=int(bundle.background_index),
+            mode=normalized_mode,
+        ):
+            return [dict(entry) for entry in rows if isinstance(entry, Mapping)]
+        if rows and params_override is None and normalized_mode == base_mode:
             return _mark_worker_cached_projection_rows(
                 rows,
                 background_index=int(bundle.background_index),
@@ -43617,6 +43641,8 @@ def _run_async_geometry_fit_worker_job(
                 _project_source_rows_for_background(
                     int(bundle.background_index),
                     bundle.stored_rows,
+                    mode_override=normalized_mode,
+                    params_override=params_override,
                 ),
             )
             if projected_rows:
@@ -44915,17 +44941,88 @@ def _run_async_geometry_fit_worker_job(
         required_pairs: Sequence[Mapping[str, object]] | None = None,
     ) -> list[dict[str, object]]:
         background_idx = int(background_index)
+        lookup_context = str(consumer or "geometry_fit_dataset")
+
+        def _trial_source_row_projection_mode() -> str:
+            base_mode = str(job_data.get("projection_view_mode") or "detector").strip().lower()
+            if base_mode not in {"detector", "caked", "q_space"}:
+                base_mode = "detector"
+            manual_spaces = job_data.get("manual_fit_space_by_background")
+            manual_space = ""
+            if isinstance(manual_spaces, Mapping):
+                manual_space = (
+                    str(
+                        manual_spaces.get(
+                            int(background_idx),
+                            manual_spaces.get(str(int(background_idx)), ""),
+                        )
+                        or ""
+                    )
+                    .strip()
+                    .lower()
+                )
+            if bool(job_data.get("pick_uses_caked_space", False)) or manual_space == "caked":
+                return "caked"
+            return base_mode
+
+        def _trial_source_rows_from_prebuilt_cache() -> list[dict[str, object]]:
+            if lookup_context != "geometry_fit_trial_source_rows":
+                return []
+            cached_bundle = worker_background_cache_by_index.get(int(background_idx))
+            if not isinstance(
+                cached_bundle,
+                gui_geometry_fit.GeometryFitBackgroundCacheBundle,
+            ):
+                return []
+            normalized_mode = _trial_source_row_projection_mode()
+            projected_rows = _geometry_fit_rows_for_background(
+                int(background_idx),
+                _project_source_rows_for_background(
+                    int(background_idx),
+                    cached_bundle.stored_rows,
+                    mode_override=normalized_mode,
+                    strict_caked_projection=False,
+                    params_override=param_set,
+                ),
+            )
+            if projected_rows:
+                return _mark_worker_cached_projection_rows(
+                    projected_rows,
+                    background_index=int(background_idx),
+                    mode=normalized_mode,
+                )
+            return _bundle_rows(
+                cached_bundle,
+                mode_override=normalized_mode,
+                params_override=param_set,
+            )
+
+        cached_trial_rows = _trial_source_rows_from_prebuilt_cache()
+        if cached_trial_rows:
+            return cached_trial_rows
+
         bundle = _prebuild_background_cache_bundle_worker(
             background_idx,
             theta_base=float(_theta_base_for_background_worker(int(background_idx))),
             param_set=param_set,
-            consumer=str(consumer or "geometry_fit_dataset"),
+            consumer=lookup_context,
             prior_diagnostics=prior_diagnostics,
             required_pairs=required_pairs,
         )
         if not isinstance(bundle, gui_geometry_fit.GeometryFitBackgroundCacheBundle):
-            return []
-        return _bundle_rows(bundle)
+            return _trial_source_rows_from_prebuilt_cache()
+        rows = _bundle_rows(
+            bundle,
+            mode_override=(
+                _trial_source_row_projection_mode()
+                if lookup_context == "geometry_fit_trial_source_rows"
+                else None
+            ),
+            params_override=param_set,
+        )
+        if rows:
+            return rows
+        return _trial_source_rows_from_prebuilt_cache()
 
     def _source_rows_for_background_worker(
         background_index: int,

@@ -15021,11 +15021,21 @@ def test_runtime_impl_backfills_detector_origin_two_tilt_pairs_before_fit_space(
     assert "manual_caked_geometry_fit_observed_anchor_preflight_error" in source
 
 
-def test_manual_caked_runtime_override_defaults_saved_pairs_to_direct_solve() -> None:
+def test_manual_caked_runtime_override_defaults_two_tilt_saved_pairs_to_ladder_solve() -> None:
     geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
 
     def _runtime_cfg() -> dict[str, object]:
-        return {"solver": {"dynamic_point_geometry_fit": False, "max_nfev": 99, "restarts": 4}}
+        return {
+            "candidate_param_names": [
+                "zb",
+                "zs",
+                "theta_offset",
+                "gamma",
+                "Gamma",
+                "center_x",
+            ],
+            "solver": {"dynamic_point_geometry_fit": False, "max_nfev": 99, "restarts": 4},
+        }
 
     manual_caked_row = {
         "background_two_theta_deg": 10.0,
@@ -15046,12 +15056,15 @@ def test_manual_caked_runtime_override_defaults_saved_pairs_to_direct_solve() ->
     assert caked_solver["manual_point_fit_mode"] is True
     assert caked_solver["dynamic_point_geometry_fit"] is True
     assert caked_cfg["projection_view_mode"] == "caked"
-    assert caked_solver["max_nfev"] == 29
-    assert caked_solver["seed_multistart"] is False
-    assert caked_solver["seed_multistart_enabled"] is False
+    assert caked_solver["max_nfev"] == 60
+    assert caked_solver["seed_multistart"] is True
+    assert caked_solver["seed_multistart_enabled"] is True
     assert caked_solver["_qr_fit_point_only_projection"] is True
     assert caked_solver["_headless_accept_caked_angular_metric_without_pixel_threshold"] is True
-    assert caked_cfg["seed_search"]["enabled"] is False
+    assert caked_cfg["seed_search"]["enabled"] is True
+    assert caked_cfg["seed_search"]["prescore_top_k"] == 1
+    assert caked_cfg["seed_search"]["n_global"] == 4
+    assert caked_cfg["candidate_param_names"] == ["gamma", "Gamma"]
     assert caked_cfg["bounds"]["gamma"] == [-90.0, 90.0]
     assert caked_cfg["bounds"]["Gamma"] == [-90.0, 90.0]
 
@@ -15070,6 +15083,7 @@ def test_manual_caked_runtime_override_defaults_saved_pairs_to_direct_solve() ->
     assert ladder_caked_cfg["seed_search"]["enabled"] is True
     assert ladder_caked_cfg["seed_search"]["prescore_top_k"] == 1
     assert ladder_caked_cfg["seed_search"]["n_global"] == 4
+    assert ladder_caked_cfg["candidate_param_names"] == ["gamma", "Gamma"]
 
     direct_caked_cfg = geometry_fit.apply_manual_caked_point_geometry_fit_runtime_overrides(
         _runtime_cfg(),
@@ -18610,6 +18624,303 @@ def test_worker_dataset_cached_projected_rows_skip_second_caked_projection(
     assert observed_projected_rows[0]["_geometry_fit_worker_cached_projection"] is True
     assert observed_projected_rows[0]["_geometry_fit_worker_projection_mode"] == "caked"
     assert observed_projected_rows[0]["_geometry_fit_worker_projection_background_index"] == 0
+
+
+def test_geometry_fit_detector_tilt_caked_projection_updates_trial_angles() -> None:
+    geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
+    params = {
+        "center": [1.0, 1.0],
+        "corto_detector": 0.5,
+        "pixel_size_m": 1.0e-4,
+        "gamma": 2.0,
+        "Gamma": -3.0,
+    }
+    rows = [
+        {
+            "sim_col": 10.0,
+            "sim_row": 20.0,
+            "caked_x": 99.0,
+            "caked_y": -99.0,
+            "dynamic_baseline_anchor_caked_deg": [99.0, -99.0],
+        }
+    ]
+
+    expected = geometry_fit._geometry_fit_detector_tilt_caked_angles(
+        10.0,
+        20.0,
+        params,
+        pixel_size_m=1.0e-4,
+    )
+    updated = geometry_fit._apply_geometry_fit_detector_tilt_caked_projection(
+        rows,
+        params,
+        pixel_size_m=1.0e-4,
+    )
+
+    assert expected is not None
+    assert updated[0]["detector_tilt_caked_projection_applied"] is True
+    assert updated[0]["caked_x"] == pytest.approx(expected[0])
+    assert updated[0]["caked_y"] == pytest.approx(expected[1])
+    assert updated[0]["simulated_two_theta_deg"] == pytest.approx(expected[0])
+    assert updated[0]["simulated_phi_deg"] == pytest.approx(expected[1])
+    assert updated[0]["dynamic_baseline_anchor_caked_deg"] == [
+        pytest.approx(expected[0]),
+        pytest.approx(expected[1]),
+    ]
+    assert rows[0]["caked_x"] == 99.0
+
+
+def test_geometry_fit_detector_tilt_caked_projection_leaves_zero_tilt_rows_unchanged() -> None:
+    geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
+    params = {
+        "center": [1.0, 1.0],
+        "corto_detector": 0.5,
+        "pixel_size_m": 1.0e-4,
+        "gamma": 0.0,
+        "Gamma": 0.0,
+    }
+    row = {"sim_col": 10.0, "sim_row": 20.0, "caked_x": 12.0, "caked_y": -4.0}
+
+    updated = geometry_fit._apply_geometry_fit_detector_tilt_caked_projection(
+        [row],
+        params,
+        pixel_size_m=1.0e-4,
+    )
+
+    assert updated == [row]
+    assert "detector_tilt_caked_projection_applied" not in updated[0]
+    assert updated[0] is not row
+
+
+def test_geometry_fit_progress_text_reports_dynamic_fit_rms_separately() -> None:
+    geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
+
+    text = geometry_fit.build_geometry_fit_progress_text(
+        current_dataset={
+            "pair_count": 25,
+            "group_count": 14,
+            "orientation_choice": {"label": "identity"},
+        },
+        dataset_count=3,
+        joint_background_mode=True,
+        var_names=["gamma", "Gamma"],
+        values=[2.1506, 88.5766],
+        rms=1239.1529,
+        pixel_offsets=[],
+        export_record_count=82,
+        save_path="matched.npy",
+        log_path="fit.log",
+        frame_warning=None,
+        result=SimpleNamespace(
+            weighted_residual_rms_px=51.6901,
+            final_metric_name="dynamic_angular_point_match",
+        ),
+    )
+
+    assert "Dynamic fit RMS = 51.69 px" in text
+    assert "Full-beam overlay RMS = 1239.15 px" in text
+    assert "RMS residual = 1239.15 px" not in text
+
+
+def test_worker_trial_source_rows_reuse_prebuilt_cache_with_trial_params(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    job = _make_geometry_fit_worker_job(runtime_session)
+    live_row = dict(_geometry_fit_worker_live_row(), background_index=0)
+    required_pair = dict(_geometry_fit_worker_required_pair(), background_index=0)
+    observed_trial_rows: list[dict[str, object]] = []
+    rebuild_consumers: list[str] = []
+
+    job["required_indices"] = [0]
+    job["selected_background_indices"] = [0]
+    job["requested_signatures"] = {0: ("sig", 0)}
+    job["requested_signature_summaries"] = {0: "sig-summary"}
+    job["manual_pairs_by_background"] = {0: [required_pair]}
+    job["live_rows_by_background"] = {0: [live_row]}
+    job["live_rows_signature_by_background"] = {0: ("sig", 0)}
+    job["background_images"] = {
+        0: {
+            "native": np.ones((4, 4), dtype=np.float64),
+            "display": np.ones((4, 4), dtype=np.float64),
+        }
+    }
+    monkeypatch.setattr(runtime_session, "pixel_size_m", 1.0, raising=False)
+    monkeypatch.setattr(runtime_session, "image_size", 4, raising=False)
+
+    def _fake_rebuild_geometry_fit_source_rows(**kwargs):
+        consumer = str(kwargs.get("consumer") or "")
+        rebuild_consumers.append(consumer)
+        return runtime_session.gui_geometry_fit.GeometryFitSourceRowRebuildResult(
+            background_index=int(kwargs["background_index"]),
+            requested_signature=kwargs["requested_signature"],
+            requested_signature_summary=kwargs["requested_signature_summary"],
+            projected_rows=[dict(live_row)],
+            stored_rows=[dict(live_row)],
+            rebuild_source="live_runtime_cache",
+            rebuild_attempts=["live_runtime_cache"],
+            diagnostics={"status": "ready"},
+        )
+
+    def _fake_build_dataset(_background_index, *, manual_dataset_bindings, **_kwargs):
+        rows = manual_dataset_bindings.geometry_manual_rebuild_source_rows_for_background(
+            0,
+            {"theta_initial": 0.0, "gamma": 1.25},
+            consumer="geometry_fit_trial_source_rows",
+            required_pairs=[required_pair],
+        )
+        observed_trial_rows.extend(dict(row) for row in rows or () if isinstance(row, Mapping))
+        return {}
+
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "rebuild_geometry_fit_source_rows",
+        _fake_rebuild_geometry_fit_source_rows,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_manual_fit_dataset",
+        _fake_build_dataset,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "prepare_geometry_fit_run",
+        lambda **kwargs: (
+            kwargs["build_dataset"](
+                0,
+                theta_base=0.0,
+                base_fit_params={"theta_initial": 0.0},
+                orientation_cfg={},
+                stage_callback=kwargs.get("stage_callback"),
+            )
+            or runtime_session.gui_geometry_fit.GeometryFitPreparationResult()
+        ),
+    )
+
+    action_result = runtime_session._run_async_geometry_fit_worker_job(job)
+
+    assert action_result.error_text is None
+    assert "geometry_fit_trial_source_rows" not in rebuild_consumers
+    assert observed_trial_rows == [live_row]
+
+
+def test_worker_trial_source_rows_reproject_prebuilt_cache_in_caked_fit_space(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    job = _make_geometry_fit_worker_job(runtime_session)
+    live_row = dict(_geometry_fit_worker_live_row(), background_index=0)
+    required_pair = dict(_geometry_fit_worker_required_pair(), background_index=0)
+    observed_trial_rows: list[dict[str, object]] = []
+    projection_modes: list[bool] = []
+
+    job["var_names"] = ["gamma", "Gamma"]
+    job["pick_uses_caked_space"] = True
+    job["manual_fit_space_by_background"] = {0: "caked"}
+    job["required_indices"] = [0]
+    job["selected_background_indices"] = [0]
+    job["requested_signatures"] = {0: ("sig", 0)}
+    job["requested_signature_summaries"] = {0: "sig-summary"}
+    job["manual_pairs_by_background"] = {0: [required_pair]}
+    job["live_rows_by_background"] = {0: [live_row]}
+    job["live_rows_signature_by_background"] = {0: ("sig", 0)}
+    job["projection_payload_by_background"] = {
+        0: _geometry_fit_worker_caked_payload(
+            runtime_session,
+            background_value=0.0,
+            radial_values=[0.0, 2.0],
+            azimuth_values=[-2.0, 2.0],
+        )
+    }
+
+    monkeypatch.setattr(runtime_session, "pixel_size_m", 1.0, raising=False)
+    monkeypatch.setattr(runtime_session, "image_size", 4, raising=False)
+
+    class _ProjectionCallbacks:
+        def __init__(self, **kwargs):
+            self._kwargs = kwargs
+
+        def project_peaks_to_current_view(self, rows):
+            caked_mode = bool(self._kwargs["caked_view_enabled"]())
+            params = dict(self._kwargs["current_geometry_fit_params"]())
+            projection_modes.append(caked_mode)
+            out = []
+            for row in rows or ():
+                if not isinstance(row, Mapping):
+                    continue
+                projected = dict(row)
+                projected["caked_x"] = float(params.get("gamma", 0.0)) if caked_mode else 0.0
+                projected["caked_y"] = float(params.get("Gamma", 0.0)) if caked_mode else 0.0
+                projected["simulated_two_theta_deg"] = projected["caked_x"]
+                projected["simulated_phi_deg"] = projected["caked_y"]
+                out.append(projected)
+            return out
+
+    def _fake_rebuild_geometry_fit_source_rows(**kwargs):
+        return runtime_session.gui_geometry_fit.GeometryFitSourceRowRebuildResult(
+            background_index=int(kwargs["background_index"]),
+            requested_signature=kwargs["requested_signature"],
+            requested_signature_summary=kwargs["requested_signature_summary"],
+            projected_rows=[dict(live_row)],
+            stored_rows=[dict(live_row)],
+            rebuild_source="live_runtime_cache",
+            rebuild_attempts=["live_runtime_cache"],
+            diagnostics={"status": "ready"},
+        )
+
+    def _fake_build_dataset(_background_index, *, manual_dataset_bindings, **_kwargs):
+        rows = manual_dataset_bindings.geometry_manual_rebuild_source_rows_for_background(
+            0,
+            {"theta_initial": 0.0, "gamma": 1.25, "Gamma": -0.75},
+            consumer="geometry_fit_trial_source_rows",
+            required_pairs=[required_pair],
+        )
+        observed_trial_rows.extend(dict(row) for row in rows or () if isinstance(row, Mapping))
+        return {}
+
+    monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "make_runtime_geometry_manual_projection_callbacks",
+        lambda **kwargs: _ProjectionCallbacks(**kwargs),
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "_apply_geometry_fit_detector_tilt_caked_projection",
+        lambda rows, _params, **_kwargs: [dict(row) for row in rows or ()],
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "rebuild_geometry_fit_source_rows",
+        _fake_rebuild_geometry_fit_source_rows,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_manual_fit_dataset",
+        _fake_build_dataset,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "prepare_geometry_fit_run",
+        lambda **kwargs: (
+            kwargs["build_dataset"](
+                0,
+                theta_base=0.0,
+                base_fit_params={"theta_initial": 0.0},
+                orientation_cfg={},
+                stage_callback=kwargs.get("stage_callback"),
+            )
+            or runtime_session.gui_geometry_fit.GeometryFitPreparationResult()
+        ),
+    )
+
+    action_result = runtime_session._run_async_geometry_fit_worker_job(job)
+
+    assert action_result.error_text is None
+    assert projection_modes == [True]
+    assert observed_trial_rows
+    assert observed_trial_rows[0]["caked_x"] == 1.25
+    assert observed_trial_rows[0]["caked_y"] == -0.75
+    assert observed_trial_rows[0]["_geometry_fit_worker_projection_mode"] == "caked"
 
 
 def test_job_local_picker_cache_ignores_cached_data_from_other_background(

@@ -782,6 +782,234 @@ def _geometry_fit_transform_driven_param_payload(
     }
 
 
+def _geometry_fit_detector_tilt_caked_angles(
+    detector_col: object,
+    detector_row: object,
+    params: Mapping[str, object] | None,
+    *,
+    pixel_size_m: object | None = None,
+) -> tuple[float, float] | None:
+    """Project one detector point to caked angles using gamma/Gamma detector tilt."""
+
+    if not isinstance(params, Mapping):
+        return None
+    try:
+        col = float(detector_col)
+        row = float(detector_row)
+        gamma_deg = float(params.get("gamma", 0.0))
+        Gamma_deg = float(params.get("Gamma", 0.0))
+    except Exception:
+        return None
+    if not (
+        np.isfinite(col) and np.isfinite(row) and np.isfinite(gamma_deg) and np.isfinite(Gamma_deg)
+    ):
+        return None
+    if abs(gamma_deg) <= 1.0e-12 and abs(Gamma_deg) <= 1.0e-12:
+        return None
+    center = _geometry_fit_center_from_params(params)
+    if center is None:
+        return None
+    try:
+        detector_distance = float(params.get("corto_detector", np.nan))
+    except Exception:
+        return None
+    if pixel_size_m is None:
+        pixel_size_value = _fit_space_pixel_size_provenance(params).get("value", np.nan)
+    else:
+        pixel_size_value = pixel_size_m
+    try:
+        pixel_size = float(pixel_size_value)
+    except Exception:
+        return None
+    if (
+        not np.isfinite(detector_distance)
+        or detector_distance <= 0.0
+        or not np.isfinite(pixel_size)
+        or pixel_size <= 0.0
+    ):
+        return None
+
+    center_row, center_col = center
+    x_det = (float(col) - float(center_col)) * float(pixel_size)
+    y_det = (float(row) - float(center_row)) * float(pixel_size)
+    gamma_rad = math.radians(float(gamma_deg))
+    Gamma_rad = math.radians(float(Gamma_deg))
+    cg = math.cos(gamma_rad)
+    sg = math.sin(gamma_rad)
+    cG = math.cos(Gamma_rad)
+    sG = math.sin(Gamma_rad)
+    r_x_det = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, cg, sg],
+            [0.0, -sg, cg],
+        ],
+        dtype=np.float64,
+    )
+    r_z_det = np.array(
+        [
+            [cG, sG, 0.0],
+            [-sG, cG, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    n_detector = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+    n_det_rot = r_z_det @ (r_x_det @ n_detector)
+    norm = float(np.linalg.norm(n_det_rot))
+    if norm <= 0.0 or not np.isfinite(norm):
+        return None
+    n_det_rot = n_det_rot / norm
+    unit_x = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+    e1_det = unit_x - float(np.dot(unit_x, n_det_rot)) * n_det_rot
+    e1_norm = float(np.linalg.norm(e1_det))
+    if e1_norm <= 1.0e-14 or not np.isfinite(e1_norm):
+        e1_det = unit_x
+    else:
+        e1_det = e1_det / e1_norm
+    e2_det = -np.cross(n_det_rot, e1_det)
+    e2_norm = float(np.linalg.norm(e2_det))
+    if e2_norm <= 1.0e-14 or not np.isfinite(e2_norm):
+        e2_det = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    else:
+        e2_det = e2_det / e2_norm
+
+    detector_point = (
+        np.array([0.0, float(detector_distance), 0.0], dtype=np.float64)
+        + float(x_det) * e1_det
+        + float(y_det) * e2_det
+    )
+    ray_norm = float(np.linalg.norm(detector_point))
+    if ray_norm <= 0.0 or not np.isfinite(ray_norm):
+        return None
+    u_f = detector_point / ray_norm
+    u_i = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+    cos_two_theta = float(np.clip(np.dot(u_f, u_i), -1.0, 1.0))
+    two_theta = math.degrees(math.acos(cos_two_theta))
+    transverse = u_f - cos_two_theta * u_i
+    transverse_norm = float(np.linalg.norm(transverse))
+    if transverse_norm <= 1.0e-14 or not np.isfinite(transverse_norm):
+        raw_phi = 135.0
+    else:
+        raw_phi = math.degrees(math.atan2(float(transverse[2]), float(transverse[0])))
+    phi = float(raw_phi_to_gui_phi(raw_phi))
+    if not (np.isfinite(two_theta) and np.isfinite(phi)):
+        return None
+    return float(two_theta), float(phi)
+
+
+def _apply_geometry_fit_detector_tilt_caked_projection(
+    rows: Sequence[Mapping[str, object]] | None,
+    params: Mapping[str, object] | None,
+    *,
+    pixel_size_m: object | None = None,
+) -> list[dict[str, object]]:
+    """Update caked row coordinates with detector-tilt-aware angular projection."""
+
+    projected_rows = [dict(row) for row in rows or () if isinstance(row, Mapping)]
+    if not projected_rows:
+        return []
+
+    def _finite_pair(
+        row: Mapping[str, object], x_key: str, y_key: str
+    ) -> tuple[float, float] | None:
+        try:
+            point = (float(row.get(x_key, np.nan)), float(row.get(y_key, np.nan)))
+        except Exception:
+            return None
+        if np.isfinite(point[0]) and np.isfinite(point[1]):
+            return float(point[0]), float(point[1])
+        return None
+
+    def _tuple_pair(row: Mapping[str, object], key: str) -> tuple[float, float] | None:
+        value = row.get(key)
+        if not isinstance(value, (list, tuple, np.ndarray)) or len(value) < 2:
+            return None
+        try:
+            point = (float(value[0]), float(value[1]))
+        except Exception:
+            return None
+        if np.isfinite(point[0]) and np.isfinite(point[1]):
+            return float(point[0]), float(point[1])
+        return None
+
+    updated: list[dict[str, object]] = []
+    for row in projected_rows:
+        detector_point = None
+        for tuple_key in (
+            "sim_refined_detector_native_px",
+            "geometry_detector_native_px",
+            "raw_detector_native_px",
+        ):
+            detector_point = _tuple_pair(row, tuple_key)
+            if detector_point is not None:
+                break
+        if detector_point is None:
+            for x_key, y_key in (
+                ("refined_sim_native_x", "refined_sim_native_y"),
+                ("native_col", "native_row"),
+                ("sim_native_x", "sim_native_y"),
+                ("detector_native_col", "detector_native_row"),
+                ("sim_detector_anchor_x", "sim_detector_anchor_y"),
+            ):
+                detector_point = _finite_pair(row, x_key, y_key)
+                if detector_point is not None:
+                    break
+        if detector_point is None:
+            for tuple_key in (
+                "sim_refined_detector_display_px",
+                "fit_prediction_detector_display_px",
+            ):
+                detector_point = _tuple_pair(row, tuple_key)
+                if detector_point is not None:
+                    break
+        if detector_point is None:
+            for x_key, y_key in (
+                ("refined_sim_x", "refined_sim_y"),
+                ("sim_col", "sim_row"),
+                ("display_col", "display_row"),
+                ("sim_col_raw", "sim_row_raw"),
+                ("simulated_detector_x", "simulated_detector_y"),
+            ):
+                detector_point = _finite_pair(row, x_key, y_key)
+                if detector_point is not None:
+                    break
+        if detector_point is None:
+            updated.append(row)
+            continue
+        caked_point = _geometry_fit_detector_tilt_caked_angles(
+            detector_point[0],
+            detector_point[1],
+            params,
+            pixel_size_m=pixel_size_m,
+        )
+        if caked_point is None:
+            updated.append(row)
+            continue
+        two_theta, phi = caked_point
+        for x_key, y_key in (
+            ("caked_x", "caked_y"),
+            ("raw_caked_x", "raw_caked_y"),
+            ("two_theta_deg", "phi_deg"),
+            ("simulated_two_theta_deg", "simulated_phi_deg"),
+            ("refined_sim_caked_x", "refined_sim_caked_y"),
+            ("sim_refined_caked_x", "sim_refined_caked_y"),
+        ):
+            row[x_key] = float(two_theta)
+            row[y_key] = float(phi)
+        for tuple_key in (
+            "dynamic_baseline_anchor_caked_deg",
+            "sim_nominal_caked_deg_from_source_row_diagnostic",
+            "sim_visual_caked_deg",
+            "sim_caked_display",
+            "saved_refined_sim_caked_anchor_deg",
+        ):
+            row[tuple_key] = [float(two_theta), float(phi)]
+        row["detector_tilt_caked_projection_applied"] = True
+        updated.append(row)
+    return updated
+
+
 def _geometry_fit_exact_caked_bundle_param_payload(
     params: Mapping[str, object] | None,
 ) -> dict[str, object]:
@@ -6548,11 +6776,15 @@ def rebuild_geometry_fit_source_rows(
         if normalized_projection_view_mode != "caked":
             return bool(
                 normalized_projection_view_mode != "q_space"
-                or _geometry_fit_projection_signature_available(normalized_projection_view_signature)
+                or _geometry_fit_projection_signature_available(
+                    normalized_projection_view_signature
+                )
             )
         return bool(
             isinstance(normalized_projection_payload, Mapping)
-            and isinstance(normalized_projection_payload.get("transform_bundle"), CakeTransformBundle)
+            and isinstance(
+                normalized_projection_payload.get("transform_bundle"), CakeTransformBundle
+            )
             and _geometry_fit_projection_signature_available(normalized_projection_view_signature)
         )
 
@@ -6582,12 +6814,21 @@ def rebuild_geometry_fit_source_rows(
                     return "background_mismatch"
             except Exception:
                 return "background_mismatch"
-        if normalized_projection_view_mode == "caked" and not _projection_payload_ready_for_rebuild():
+        if (
+            normalized_projection_view_mode == "caked"
+            and not _projection_payload_ready_for_rebuild()
+        ):
             return "missing_exact_caked_projection_payload"
         if normalized_projection_view_mode == "caked":
-            metadata_fit_space = str(
-                metadata_dict.get("fit_space") or metadata_dict.get("projection_view_mode") or "caked"
-            ).strip().lower()
+            metadata_fit_space = (
+                str(
+                    metadata_dict.get("fit_space")
+                    or metadata_dict.get("projection_view_mode")
+                    or "caked"
+                )
+                .strip()
+                .lower()
+            )
             if metadata_fit_space and metadata_fit_space not in {"caked", "exact_caked_bundle"}:
                 return "fit_space_mismatch"
         return None
@@ -6599,9 +6840,9 @@ def rebuild_geometry_fit_source_rows(
         if not metadata_dict:
             return {"matches": False, "reason": "missing_metadata"}
         metadata_table_kind = str(metadata_dict.get("table_kind") or "").strip().lower()
-        metadata_table_source_kind = str(
-            metadata_dict.get("table_source_kind") or ""
-        ).strip().lower()
+        metadata_table_source_kind = (
+            str(metadata_dict.get("table_source_kind") or "").strip().lower()
+        )
         if metadata_table_kind == "intersection_cache":
             return {"matches": False, "reason": "forbidden_intersection_cache"}
         if metadata_table_source_kind == "last_intersection_cache":
@@ -6614,9 +6855,10 @@ def rebuild_geometry_fit_source_rows(
                 "reason": "unsupported_table_source_kind",
                 "table_source_kind": metadata_table_source_kind,
             }
-        if "table_base_signature" not in metadata_dict or metadata_dict.get(
-            "table_base_signature"
-        ) is None:
+        if (
+            "table_base_signature" not in metadata_dict
+            or metadata_dict.get("table_base_signature") is None
+        ):
             return {"matches": False, "reason": "missing_table_base_signature"}
         if metadata_dict.get("source_signature_match") is not True:
             return {
@@ -6624,9 +6866,7 @@ def rebuild_geometry_fit_source_rows(
                 "reason": "source_signature_mismatch",
                 "actual_signature_digest": metadata_dict.get("table_base_signature_digest")
                 or metadata_dict.get("current_base_signature_digest"),
-                "expected_signature_digest": metadata_dict.get(
-                    "requested_base_signature_digest"
-                ),
+                "expected_signature_digest": metadata_dict.get("requested_base_signature_digest"),
             }
         try:
             metadata_background_index = int(metadata_dict.get("background_index"))
@@ -6660,9 +6900,7 @@ def rebuild_geometry_fit_source_rows(
             and len(normalized_requested_signature) >= 2
         ):
             expected_base_signature = tuple(normalized_requested_signature[:-2])
-        normalized_expected_base_signature = _geometry_fit_cache_jsonable(
-            expected_base_signature
-        )
+        normalized_expected_base_signature = _geometry_fit_cache_jsonable(expected_base_signature)
         metadata_table_base_signature = _geometry_fit_cache_jsonable(
             metadata_dict.get("table_base_signature")
         )
@@ -6684,7 +6922,9 @@ def rebuild_geometry_fit_source_rows(
                 "actual_signature_digest": metadata_dict.get("current_base_signature_digest"),
                 "expected_signature_digest": metadata_dict.get("requested_base_signature_digest"),
             }
-        metadata_projection_mode = str(metadata_dict.get("projection_view_mode") or "").strip().lower()
+        metadata_projection_mode = (
+            str(metadata_dict.get("projection_view_mode") or "").strip().lower()
+        )
         if metadata_projection_mode and metadata_projection_mode != str(
             normalized_projection_view_mode or ""
         ):
@@ -6694,9 +6934,9 @@ def rebuild_geometry_fit_source_rows(
                 "actual_projection_view_mode": metadata_projection_mode,
                 "expected_projection_view_mode": normalized_projection_view_mode,
             }
-        metadata_fit_space = str(
-            metadata_dict.get("fit_space") or metadata_projection_mode or ""
-        ).strip().lower()
+        metadata_fit_space = (
+            str(metadata_dict.get("fit_space") or metadata_projection_mode or "").strip().lower()
+        )
         expected_fit_space = str(normalized_projection_view_mode or "").strip().lower()
         allowed_fit_spaces = {expected_fit_space}
         if expected_fit_space == "caked":
@@ -6722,7 +6962,10 @@ def rebuild_geometry_fit_source_rows(
                     normalized_projection_view_signature
                 ),
             }
-        if normalized_projection_view_mode == "caked" and not _projection_payload_ready_for_rebuild():
+        if (
+            normalized_projection_view_mode == "caked"
+            and not _projection_payload_ready_for_rebuild()
+        ):
             return {"matches": False, "reason": "missing_exact_caked_projection_payload"}
         return {"matches": True, "reason": "matched"}
 
@@ -7472,9 +7715,7 @@ def rebuild_geometry_fit_source_rows(
             live_validation_event_payload = {
                 **live_runtime_cache_diag,
                 "reason": str(live_cache_validation.get("reason") or "missing_canonical_candidate"),
-                "live_cache_reject_reason": live_cache_validation.get(
-                    "validator_failure_reason"
-                ),
+                "live_cache_reject_reason": live_cache_validation.get("validator_failure_reason"),
                 "validator_failure_reason": live_cache_validation.get("validator_failure_reason"),
                 "validator_rows_nonempty": bool(
                     live_cache_validation.get("validator_rows_nonempty", False)
@@ -8051,12 +8292,8 @@ def rebuild_geometry_fit_source_rows(
                 missing_required_pair_count=int(
                     current_validation.get("missing_required_pair_count", 0) or 0
                 ),
-                branch_mismatch_count=int(
-                    current_validation.get("branch_mismatch_count", 0) or 0
-                ),
-                current_hit_table_reject_reason=current_validation.get(
-                    "validator_failure_reason"
-                ),
+                branch_mismatch_count=int(current_validation.get("branch_mismatch_count", 0) or 0),
+                current_hit_table_reject_reason=current_validation.get("validator_failure_reason"),
             )
             if bool(current_validation.get("valid", False)) and current_rows:
                 if targeted_preflight_enabled:
@@ -8102,9 +8339,7 @@ def rebuild_geometry_fit_source_rows(
                 missing_required_pair_count=int(
                     current_validation.get("missing_required_pair_count", 0) or 0
                 ),
-                branch_mismatch_count=int(
-                    current_validation.get("branch_mismatch_count", 0) or 0
-                ),
+                branch_mismatch_count=int(current_validation.get("branch_mismatch_count", 0) or 0),
                 reason=str(current_validation.get("reason") or "validation_failed"),
                 current_hit_table_reject_reason=str(
                     current_validation.get("validator_failure_reason") or "validation_failed"
@@ -8179,6 +8414,7 @@ def rebuild_geometry_fit_source_rows(
         if isinstance(exception, Exception):
             raise exception
         return list(result_box.get("value") or ())
+
     if callable(simulate_hit_tables):
         try:
             if targeted_preflight_enabled and collected_required_branch_group_keys:
@@ -11029,10 +11265,7 @@ def build_geometry_manual_fit_dataset(
             )
             if normalized_entry is None:
                 continue
-            if (
-                _background_detector_pair_for_frame(normalized_entry, "native_detector")
-                is not None
-            ):
+            if _background_detector_pair_for_frame(normalized_entry, "native_detector") is not None:
                 normalized_entry.setdefault(
                     "background_detector_frame_provenance",
                     "geometry_manual_refresh_pair_entry",
@@ -11613,13 +11846,11 @@ def build_geometry_manual_fit_dataset(
         ) -> bool:
             if not (
                 bool(row.get("provider_backed_live_source_row", False))
-                or str(row.get("row_origin", "") or "")
-                == "manual_picker_saved_source_coverage"
+                or str(row.get("row_origin", "") or "") == "manual_picker_saved_source_coverage"
             ):
                 return False
             if not (
-                use_caked_display
-                or geometry_manual_pairs_use_caked_fit_space(selected_entries)
+                use_caked_display or geometry_manual_pairs_use_caked_fit_space(selected_entries)
             ):
                 return True
             if str(row.get("row_origin", "") or "") == "manual_picker_saved_source_coverage":
@@ -15316,9 +15547,7 @@ def build_geometry_manual_fit_dataset(
                     float(saved_caked_simulated_point[0]),
                     float(saved_caked_simulated_point[1]),
                 )
-                initial_entry["simulated_two_theta_deg"] = float(
-                    saved_caked_simulated_point[0]
-                )
+                initial_entry["simulated_two_theta_deg"] = float(saved_caked_simulated_point[0])
                 initial_entry["simulated_phi_deg"] = float(saved_caked_simulated_point[1])
                 initial_entry["provider_simulated_frame"] = "caked_2theta_phi"
                 initial_entry["provider_simulated_point_source"] = "manual_picker_saved"
@@ -17487,9 +17716,7 @@ def geometry_manual_fit_space_by_background(
 
     indices = [int(idx) for idx in (background_indices or ())]
     result: dict[int, str] = {}
-    auto_caked_detector_origin = geometry_fit_active_vars_include_detector_tilts(
-        active_var_names
-    )
+    auto_caked_detector_origin = geometry_fit_active_vars_include_detector_tilts(active_var_names)
     for idx in indices:
         if callable(pairs_for_index):
             pairs = pairs_for_index(int(idx))
@@ -17542,9 +17769,7 @@ def manual_geometry_fit_space_preflight_error(
     if missing_indices:
         labels = [_background_label(idx) for idx in sorted(missing_indices)]
         return (
-            "Geometry fit unavailable: save manual Qr/Qz pairs first for "
-            + ", ".join(labels)
-            + "."
+            "Geometry fit unavailable: save manual Qr/Qz pairs first for " + ", ".join(labels) + "."
         )
     mixed_indices = [idx for idx, kind in normalized.items() if kind == "mixed"]
     if mixed_indices:
@@ -17559,9 +17784,7 @@ def manual_geometry_fit_space_preflight_error(
     if len(set(normalized.values())) <= 1:
         return None
 
-    labels = [
-        f"{_background_label(idx)}={normalized[idx]}" for idx in sorted(normalized)
-    ]
+    labels = [f"{_background_label(idx)}={normalized[idx]}" for idx in sorted(normalized)]
     return (
         "Geometry fit unavailable: selected manual Qr/Qz pairs mix detector-pixel "
         "and caked fit-space coordinates. Clear and re-pick the selected groups in "
@@ -17576,9 +17799,7 @@ def geometry_fit_datasets_use_caked_fit_space(
 ) -> bool:
     """Classify prepared manual datasets before applying runtime overrides."""
 
-    auto_caked_detector_origin = geometry_fit_active_vars_include_detector_tilts(
-        active_var_names
-    )
+    auto_caked_detector_origin = geometry_fit_active_vars_include_detector_tilts(active_var_names)
     for info in dataset_infos or ():
         if not isinstance(info, Mapping):
             continue
@@ -17711,18 +17932,26 @@ def geometry_fit_entry_has_fixed_manual_caked_qr(entry: Mapping[str, object]) ->
     has_observed_caked_anchor = geometry_fit_entry_has_observed_caked_anchor(entry)
     source = str(entry.get("fit_source_resolution_kind", "") or "").strip().lower()
     row_origin = str(entry.get("row_origin", "") or "").strip().lower()
-    target_source = str(
-        entry.get("target_anchor_source")
-        or entry.get("manual_target_anchor_source")
-        or entry.get("fit_target_anchor_source")
-        or ""
-    ).strip().lower()
-    sim_source = str(
-        entry.get("simulated_source")
-        or entry.get("sim_source")
-        or entry.get("source_coordinate_source")
-        or ""
-    ).strip().lower()
+    target_source = (
+        str(
+            entry.get("target_anchor_source")
+            or entry.get("manual_target_anchor_source")
+            or entry.get("fit_target_anchor_source")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
+    sim_source = (
+        str(
+            entry.get("simulated_source")
+            or entry.get("sim_source")
+            or entry.get("source_coordinate_source")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
     fixed_source = bool(
         entry.get("optimizer_request_has_fixed_source", False)
         or entry.get("fixed_source_resolved", False)
@@ -17921,6 +18150,9 @@ def apply_saved_manual_caked_geometry_fit_budget(
         if not _geometry_fit_runtime_is_saved_manual_caked_candidate(runtime_cfg):
             return False, int(row_count)
         return False, int(row_count)
+    active_names = [str(name) for name in active_var_names if str(name)]
+    if active_names:
+        runtime_cfg["candidate_param_names"] = list(dict.fromkeys(active_names))
     _apply_saved_manual_caked_geometry_fit_lean_runtime(
         runtime_cfg,
         max_nfev=(
@@ -17928,9 +18160,7 @@ def apply_saved_manual_caked_geometry_fit_budget(
             if normalized_seed_policy == GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART
             else GEOMETRY_FIT_SAVED_MANUAL_CAKED_DIRECT_MAX_NFEV
         ),
-        seed_multistart=(
-            normalized_seed_policy == GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART
-        ),
+        seed_multistart=(normalized_seed_policy == GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART),
     )
     if normalized_seed_policy == GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART:
         seed_search_cfg = runtime_cfg.get("seed_search")
@@ -18131,7 +18361,7 @@ def apply_manual_caked_point_geometry_fit_runtime_overrides(
             manual_pair_rows=manual_pair_rows,
         )
         if row_count > 0:
-            resolved_seed_policy = GEOMETRY_FIT_SEED_POLICY_DIRECT
+            resolved_seed_policy = GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART
     if resolved_seed_policy is not None:
         apply_saved_manual_caked_geometry_fit_budget(
             cfg,
@@ -21379,21 +21609,13 @@ def _aggregate_geometry_fit_optimizer_request_summaries(
         "missing_fixed_source_count",
     )
     aggregate: dict[str, object] = {
-        key: int(
-            sum(
-                int(summary.get(key, 0) or 0)
-                for summary in valid
-            )
-        )
-        for key in total_keys
+        key: int(sum(int(summary.get(key, 0) or 0) for summary in valid)) for key in total_keys
     }
     aggregate["provider_to_optimizer_identity_match"] = all(
-        bool(summary.get("provider_to_optimizer_identity_match", False))
-        for summary in valid
+        bool(summary.get("provider_to_optimizer_identity_match", False)) for summary in valid
     )
     aggregate["provider_to_optimizer_point_match"] = all(
-        bool(summary.get("provider_to_optimizer_point_match", False))
-        for summary in valid
+        bool(summary.get("provider_to_optimizer_point_match", False)) for summary in valid
     )
     handoff_rows: list[dict[str, object]] = []
     for dataset_ordinal, summary in enumerate(valid):
@@ -21439,9 +21661,7 @@ def build_geometry_fit_solver_request(
     for spec in dataset_specs:
         dataset_index = _geometry_fit_dataset_index(spec)
         source_dataset = (
-            dataset_by_index.get(int(dataset_index))
-            if dataset_index is not None
-            else None
+            dataset_by_index.get(int(dataset_index)) if dataset_index is not None else None
         )
         if not isinstance(source_dataset, Mapping):
             continue
@@ -23336,7 +23556,14 @@ def build_geometry_fit_progress_text(
         except Exception:
             continue
         base_summary_lines.append(f"{name} = {value:.4f}")
-    base_summary_lines.append(f"RMS residual = {float(rms):.2f} px")
+    weighted_rms = _geometry_fit_metric_float(getattr(result, "weighted_residual_rms_px", np.nan))
+    metric_name = str(getattr(result, "final_metric_name", "") or "").strip()
+    if metric_name == "dynamic_angular_point_match" and np.isfinite(weighted_rms):
+        base_summary_lines.append(f"Dynamic fit RMS = {float(weighted_rms):.2f} px")
+        if np.isfinite(float(rms)) and abs(float(rms) - float(weighted_rms)) > 1.0e-6:
+            base_summary_lines.append(f"Full-beam overlay RMS = {float(rms):.2f} px")
+    else:
+        base_summary_lines.append(f"RMS residual = {float(rms):.2f} px")
     base_summary_lines.append(
         "Orientation = {orientation}".format(
             orientation=str(

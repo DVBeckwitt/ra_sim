@@ -1,4 +1,5 @@
 import tkinter as tk
+from types import SimpleNamespace
 
 import pytest
 
@@ -1505,6 +1506,29 @@ def test_console_status_label_compacts_text_and_logs_once(monkeypatch) -> None:
 
     label.config(text="This is a fairly long status line")
     assert len(printed) == 1
+
+
+def test_console_status_label_escapes_unprintable_console_text(monkeypatch) -> None:
+    _FakeLabel.created = []
+    printed = []
+    monkeypatch.setattr(views.ttk, "Label", _FakeLabel)
+    monkeypatch.setattr(views.sys, "stdout", SimpleNamespace(encoding="cp1252"))
+    monkeypatch.setattr(
+        "builtins.print",
+        lambda *args, **kwargs: printed.append((args, kwargs)),
+    )
+
+    label = views.ConsoleStatusLabel(
+        object(),
+        name="geometry",
+        max_gui_chars=80,
+    )
+    label.config(text="Fit complete: gamma 0.0 \u2192 0.1")
+
+    assert printed == [
+        (("[geometry] Fit complete: gamma 0.0 \\u2192 0.1",), {"flush": True}),
+    ]
+    assert label.cget("text") == "Fit complete: gamma 0.0 \u2192 0.1"
 
 
 def test_create_status_panel_stores_console_labels_and_progressbar(monkeypatch) -> None:

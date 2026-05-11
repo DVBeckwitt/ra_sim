@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import sys
 import tomllib
 import webbrowser
 from importlib.metadata import PackageNotFoundError, version as get_package_version
@@ -2195,6 +2196,15 @@ def _compact_status_text(text: object, *, max_chars: int = 120) -> str:
     return summary
 
 
+def _console_printable_text(text: object) -> str:
+    summary = str(text)
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        return summary.encode(encoding).decode(encoding)
+    except UnicodeEncodeError:
+        return summary.encode(encoding, errors="backslashreplace").decode(encoding)
+
+
 class ConsoleStatusLabel:
     """Mirror verbose GUI status messages to the terminal and keep GUI text compact."""
 
@@ -2226,7 +2236,7 @@ class ConsoleStatusLabel:
             raw_text = "" if options["text"] is None else str(options["text"])
             if raw_text != self._last_full_text:
                 if raw_text.strip():
-                    print(f"[{self._name}] {raw_text}", flush=True)
+                    print(_console_printable_text(f"[{self._name}] {raw_text}"), flush=True)
                 self._last_full_text = raw_text
             options["text"] = _compact_status_text(
                 raw_text,
