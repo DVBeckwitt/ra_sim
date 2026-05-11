@@ -4,8 +4,8 @@ Type: bug/feature
 Owner: -
 Issue: none
 Priority: p1
-Last updated: 2026-05-10
-Status: implemented locally, focused validation passing
+Last updated: 2026-05-11
+Status: implemented locally, PbI2 figure regenerated, focused validation passing
 
 ## Problem
 
@@ -21,6 +21,13 @@ missing from the active `.py` workflow, so marker edits could not be made before
 the final joint Qz fit. Direct Windows runs also left global peak fitting on the
 slow thread backend, so the CPU-heavy stage used one process instead of all
 available worker processes.
+
+The PbI2 case also exposed a material-specific plotting failure. PbI2 rods use
+different lattice constants than the Bi2Se3/Bi2Te3 states, and the weak
+nonzero PbI2 rod profiles were showing peak-only Qz fit components as
+`Simulation` even when the fit relied on a large negative Qz-linear nuisance
+baseline. That made `m=3` and `m=4` overlays look physically wrong while the
+sideband-corrected data still carried the rod-centered diffuse signal.
 
 ## Change
 
@@ -48,9 +55,10 @@ to make the Qr rod detector and integration figures source-consistent:
   stronger band fill, and expanded Delta-Qr boundary so the actual selected
   region remains visible over high-intensity detector pixels without making the
   centerline dominate the region.
-- Integrated Qr rod figure centers `HK=0`, labels its x-axis as `L`, uses
-  `Intensity (a.u.)` only on the HK=0 row, aligns non-specular x ranges from
-  `L=2`, and places the Data/Simulation legend in the top-right panel.
+- Integrated Qr rod figure centers `HK=0`, labels its x-axis as `L`, labels the
+  HK=0 row and left nonzero subplot axes with `Intensity (a.u.)`, aligns
+  non-specular x ranges from `L=2`, and places the Data/Simulation legend in
+  the top-right panel.
 - Earlier per-tilt background-vs-fit plots now label peaks directly with compact
   `(HK,L)` text instead of numbered labels with a side key and branch suffix.
 - The script now writes `hk0_l3_star.png`, a raw detector-intensity crop from
@@ -79,8 +87,8 @@ to make the Qr rod detector and integration figures source-consistent:
   of dropping them at the old 1% initial-amplitude gate, so labeled HK=0 peaks
   such as `006` remain included in the final fit.
 - Final Qr-rod fit cache keys now include
-  `fit_signature=joint_qz_labeled_marker_fit_v2`; old cached fits without that
-  signature are recomputed.
+  `fit_signature=joint_qz_labeled_marker_fit_specular_theta_i0_l8_v8`; old
+  cached fits without that signature are recomputed.
 - The guarded runner now accepts the generated `.py` diagnostic through the
   existing `--notebook` flag and sets the internal process guard needed for
   Windows process-pool fitting.
@@ -105,6 +113,16 @@ to make the Qr rod detector and integration figures source-consistent:
   drawable profile data and marker-derived positive-L mapping before allocating
   subplot rows. Empty rods, such as the observed Bi2Te3 `HK=7` row, are skipped
   instead of producing blank figure rows.
+- PbI2 nonzero Qr-rod extraction uses same-Qz transverse Qr sideband
+  subtraction. The central raw density remains in `background_density_raw`, the
+  sideband estimate is written as `qr_sideband_background_density`, and plotted
+  data uses sideband-corrected `background_density`.
+- PbI2 nonzero profile plots now use a plot-model decision helper. Branches
+  with invalid marker/L mapping or strong peak/baseline cancellation omit the
+  dashed overlay; accepted PbI2 branches plot total `joint_fit_density` as
+  `Fit` instead of peak-only `Simulation`.
+- PbI2 generated rods remain disabled by default and final profile rows still
+  require complete detector support, so the unsupported `m=7` row is skipped.
 
 ## Status
 
@@ -129,6 +147,11 @@ Bug/error status:
   detector and L3 star images are written.
 - Empty final Qr-rod profile rows are fixed by excluding rod entries whose
   branches have no drawable positive-L profile data.
+- Misleading PbI2 nonzero dashed overlays are fixed by treating Qr sideband
+  correction as the background removal and suppressing model overlays when
+  marker/L mapping or Qz-baseline cancellation diagnostics fail. The regenerated
+  PbI2 figure keeps the `m=1` `Fit` overlays and omits `m=3`/`m=4` overlays with
+  invalid L mapping.
 - The Qr-rod marker-label helper ordering bug is fixed; profile annotation and
   redraw paths no longer call `rod_marker_annotation_label(...)` before it is
   defined.
@@ -169,24 +192,38 @@ Feature status:
   cache signature prevents reuse of stale final fits from the older component
   gate.
 - Bi2Se3 is now the default local state for the parallel diagnostic script.
-  The final Qz fit cache signature is `joint_qz_labeled_marker_fit_specular_theta_i0_l8_v5`
-  so cached fits from the older marker gate are recomputed.
+  The final Qz fit cache signature is `joint_qz_labeled_marker_fit_specular_theta_i0_l8_v8`
+  so cached fits from the older marker gate, baseline-sensitive weak-marker
+  gate, pre-log-residual full-profile objective, and pre-PbI2 sideband plot
+  policy are recomputed.
 - Supported weak Bi2Se3 low-L specular markers are preserved through
   aggregation and nonlinear refinement even when their initial component
-  amplitude is below the relative model threshold. Unsupported projected
-  markers in the same local profile window remain excluded.
+  amplitude is below the relative model threshold. The current bug fix also
+  seeds a labeled weak component from raw-profile local prominence when the
+  preliminary shared baseline is too high at the shoulder. Unsupported
+  projected markers in the same local profile window remain excluded, and the
+  Bi2Te3 weak marker at the same nominal location remains fitted.
+- Final nonlinear Pearson-VII Qz refinement now appends a bounded log-intensity
+  residual to the existing intensity-weighted residual. This improves the
+  full-profile fit seen on the log-scaled Qr integration plot while preserving
+  the existing `fit_joint_qz_peak_sum(qz_center, background_density, qz_markers)`
+  helper interface.
+- PbI2 sideband-corrected plot policy is implemented for the diagnostic `.py`.
+  The generated markdown includes a `Plot model decisions` table with the
+  plotted/omitted model source and reason per branch.
 - Tail-component aggregation now fails closed when `x`, target, finite-mask,
   and model shapes are inconsistent instead of partially replacing only one
   mask and risking a mismatched array index.
 - CI/deployment automation was not changed for this slice. The applicable gate
-  remains the local diagnostics pytest/compile/format-check path before a
-  manuscript run or PR.
+  remains the local diagnostics pytest/compile path before a manuscript run or
+  PR; no workflow files, deployment jobs, secrets, or branch protections were
+  changed.
 - No deprecation path or user migration is required. The only compatibility
-  action is the final-fit cache signature bump, which forces stale cached
+  action is the final-fit cache signature bump to v8, which forces stale cached
   Qr-rod final fits to be recomputed.
 - Shipping status is local-only. The rollback path is to revert the diagnostic
-  script/test/doc commit and allow older cache signatures to be regenerated by
-  the previous fit logic.
+  script/test/doc commit, delete regenerated local artifacts if needed, and
+  allow older cache signatures to be regenerated by the previous fit logic.
 - Windows CPU parallelization is implemented through the guarded runner path.
   A Bi2Se3 run on 2026-05-07 reported `backend=process_pool`, `pids=28`, and
   `global peak fitting elapsed=22.83s`, versus the direct-thread report of
@@ -233,7 +270,7 @@ Passing checks:
   component list.
 - Targeted snap coverage verifies that all markers in a selected profile panel
   move to nearby local maxima.
-- Fast project check tier:
+- Earlier fast project check tier:
   `python -m ra_sim.dev check` passed with `280 passed`.
 - Parallel-notebook pytest checks:
   `tests/test_background_peak_fits_notebook.py::test_parallel_background_peak_fits_notebook_uses_process_pool_worker`
@@ -248,32 +285,52 @@ Passing checks:
   detector theta/phi used by downstream exported images.
 - Final Qr-rod profile row regression coverage verifies empty rods such as the
   observed Bi2Te3 `HK=7` case are excluded before subplot rows are allocated.
-- Bi2Se3 low-L specular marker regression coverage verifies the weak marker is
-  included, the unsupported nearby marker is excluded, and the final component
-  count stays fixed.
+- Bi2Se3/Bi2Te3 low-L specular marker regression coverage uses embedded
+  artifact-shaped m=0 profiles. It verifies the Bi2Se3 weak marker is included
+  despite the over-high preliminary shared baseline, the unsupported nearby
+  Bi2Se3 marker is excluded, Bi2Te3 still keeps the matching weak marker, the
+  final component counts stay fixed, and the Bi2Se3 m=0 full-profile log RMS
+  stays below the regression threshold.
+- Measured embedded-profile status after the log-residual slice: Bi2Se3 m=0
+  full-profile log RMS is `0.0473` and low-L tail-window log RMS is `0.0613`;
+  Bi2Te3 m=0 full-profile log RMS is `0.0591`.
 - Tail-component shape-mismatch coverage verifies the helper returns no
   components instead of raising or synthesizing unsupported data.
+- PbI2 sideband and plot-policy coverage verifies same-Qz Qr sideband
+  subtraction keeps raw, sideband, and corrected densities available; invalid
+  marker/L mappings suppress nonzero model overlays; accepted PbI2 branches use
+  total `joint_fit_density`; non-PbI2 model selection is unchanged; and
+  unsupported detector-incomplete rows such as `m=7` stay hidden.
+- Focused PbI2 acceptance command passed:
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "qr_sideband or pbi2_plot_policy or marker_l_mapping_allows_duplicate or plot_policy_keeps_non_pbi2 or final_profile_plot_uses_model_decisions or shared_nonzero_rod_profile_y_axis_limits or final_rod_plot_filters_incomplete_detector_branch_support" -ra`
+  with `12 passed`.
+- Headless PbI2 script execution passed with
+  `RA_SIM_HEADLESS=1` and `RA_SIM_QR_ROD_PEAK_EDIT_MODE=skip`; it regenerated
+  the PbI2 Qr-rod profile artifacts, kept `m=1` `Fit` overlays, omitted the
+  misleading `m=3`/`m=4` nonzero overlays, and skipped unsupported `m=7`.
 - Focused command passed:
-  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_background_peak_fits_notebook.py -k "joint_qz_fit or qr_rod_marker_hash_changes_cache_key or marker_title_changes_cache_key or qr_rod_final_cache_requires_fit_signature or tail_component_aggregation_rejects_shape_mismatch" -ra`
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "joint_qz_fit or rod_profile_panels_use_centered_m_labels or qr_rod_marker_hash_changes_cache_key or marker_title_changes_cache_key or qr_rod_final_cache_requires_fit_signature or tail_component_aggregation_rejects_shape_mismatch" -ra`
 - Compile check passed for package, tests, and the diagnostic script:
   `python -m compileall -q ra_sim tests scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py`
 - Focused format check passed:
-  `python -m ruff format --check scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py tests/test_background_peak_fits_notebook.py tests/test_gui_geometry_fit_workflow.py tests/test_manual_geometry_selection_helpers.py`
+  `python -m ruff format --check scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py tests/test_background_peak_fits_notebook.py`
 
 Known validation limits:
 
-- Full `tests/test_background_peak_fits_notebook.py` was rerun on 2026-05-10.
+- Full `tests/test_background_peak_fits_notebook.py` was rerun on 2026-05-11.
   It still has six unrelated notebook/script source-token expectation
-  failures, including the older missing `ROD_PROFILE_MAX_TWO_THETA_DEG = 60.0`
-  and `"fit_model": "rotated_gaussian_plane"` notebook tokens plus detector
+  failures, with `116 passed`, `2 skipped`, and `6 failed`. The failures are
+  the older missing `ROD_PROFILE_MAX_TWO_THETA_DEG = 60.0` and
+  `"fit_model": "rotated_gaussian_plane"` notebook tokens plus detector
   label-editor, specular-region, and sample-name override script-token
   expectations.
-- `python -m ra_sim.dev check` is currently blocked by pre-existing formatting
+- Current `python -m ra_sim.dev check` is blocked by pre-existing formatting
   drift in `ra_sim/fitting/optimization.py`.
-- The 2026-05-10 Bi2Se3 weak-marker fix was validated with focused tests, not
-  a full real-sample script run.
-- The L3 star crop, empty-row suppression, cache reuse, and interactive Qr-rod
-  marker editor still need a real Bi2Se3/Bi2Te3 script run after this slice.
+- The 2026-05-10 Bi2Se3 weak-marker fix was validated with focused tests using
+  embedded real-profile values, not a full real-sample script run.
+- The PbI2 headless diagnostic path has been rerun. The L3 star crop,
+  cache reuse, and interactive Qr-rod marker editor still need a real
+  Bi2Se3/Bi2Te3 script run after this slice.
 - Visual acceptance still needs manual script-output review: colored detector
   background, HK labels near low-L rod bases, emphasized central `HK=0`
   Delta-Qr band, the `hk0_l3_star.png` crop fully containing the L=3

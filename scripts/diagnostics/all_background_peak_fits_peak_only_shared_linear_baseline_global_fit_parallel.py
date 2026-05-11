@@ -101,7 +101,7 @@ from ra_sim.simulation.exact_cake_portable import (
     raw_phi_to_gui_phi,
 )
 
-DEFAULT_STATE_PATH = Path.home() / ".local" / "share" / "ra_sim" / "Bi2Se3.json"
+DEFAULT_STATE_PATH = Path.home() / ".local" / "share" / "ra_sim" / "PbI2.json"
 
 
 def _setting_text(local_name: str, env_name: str, default: object = "") -> str:
@@ -119,12 +119,12 @@ def _safe_run_name(value: object) -> str:
 
 
 QR_ROD_PROFILE_CACHE_SCHEMA = "ra_sim.qr_rod_profile_cache.v1"
-QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_specular_theta_i0_l8_v5"
+QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_specular_theta_i0_l8_v8"
 PRE_EDITOR_CACHE_SCHEMA = "ra_sim.background_pre_editor_cache.v1"
 PRE_EDITOR_CACHE_SIGNATURE = "pre_qr_rod_marker_editor_inputs_v1"
 PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE = "background_peak_fit_results_v1"
 PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE = "profile_fit_cache_v1"
-PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_specular_theta_i0_l8_v3"
+PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_specular_theta_i0_l8_v4"
 
 
 def _cache_normalize_value(value: object) -> object:
@@ -576,7 +576,26 @@ def qr_rod_peak_edit_cache_key(
     *,
     marker_table: pd.DataFrame | None = None,
     mode: object = None,
+    lattice_signature: object = None,
+    q_group_signature: object = None,
+    rod_reference_policy: object = None,
 ) -> dict[str, object]:
+    reference_signature = {}
+    if lattice_signature is not None:
+        reference_signature["active_lattice"] = _cache_normalize_value(lattice_signature)
+    if q_group_signature is not None:
+        reference_signature["q_group_rows"] = _cache_normalize_value(q_group_signature)
+    if rod_reference_policy is not None:
+        reference_signature["rod_reference_policy"] = _cache_normalize_value(
+            rod_reference_policy
+        )
+
+    def with_reference_signature(payload: dict[str, object]) -> dict[str, object]:
+        if reference_signature:
+            payload = dict(payload)
+            payload["rod_reference_signature"] = reference_signature
+        return payload
+
     if marker_table is not None:
         table = pd.DataFrame(marker_table).copy()
         columns = [
@@ -609,34 +628,42 @@ def qr_rod_peak_edit_cache_key(
         else:
             records = []
         data = json.dumps(records, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        return {
-            "mode": str(mode or "marker_table"),
-            "sha256": hashlib.sha256(data).hexdigest(),
-            "rows": int(len(table)),
-            "fit_signature": QR_ROD_FINAL_FIT_CACHE_SIGNATURE,
-        }
+        return with_reference_signature(
+            {
+                "mode": str(mode or "marker_table"),
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "rows": int(len(table)),
+                "fit_signature": QR_ROD_FINAL_FIT_CACHE_SIGNATURE,
+            }
+        )
     text = "" if path_value is None else str(path_value).strip()
     if not text:
-        return {"mode": "last_cached", "fit_signature": QR_ROD_FINAL_FIT_CACHE_SIGNATURE}
+        return with_reference_signature(
+            {"mode": "last_cached", "fit_signature": QR_ROD_FINAL_FIT_CACHE_SIGNATURE}
+        )
     path = Path(text).expanduser()
     if not path.exists():
-        return {
+        return with_reference_signature(
+            {
+                "mode": "imported_edits",
+                "exists": False,
+                "path_name": path.name,
+                "sha256": None,
+                "size": None,
+                "fit_signature": QR_ROD_FINAL_FIT_CACHE_SIGNATURE,
+            }
+        )
+    data = path.read_bytes()
+    return with_reference_signature(
+        {
             "mode": "imported_edits",
-            "exists": False,
+            "exists": True,
             "path_name": path.name,
-            "sha256": None,
-            "size": None,
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "size": len(data),
             "fit_signature": QR_ROD_FINAL_FIT_CACHE_SIGNATURE,
         }
-    data = path.read_bytes()
-    return {
-        "mode": "imported_edits",
-        "exists": True,
-        "path_name": path.name,
-        "sha256": hashlib.sha256(data).hexdigest(),
-        "size": len(data),
-        "fit_signature": QR_ROD_FINAL_FIT_CACHE_SIGNATURE,
-    }
+    )
 
 
 def qr_rod_profile_cache_has_final_fit(
@@ -1745,6 +1772,11 @@ PEAK_FIT_MULTISTART_WIDTH_FACTORS = (1.0, 1.8, 2.8)
 PEAK_FIT_MAX_NFEV = 1400
 ROD_PROFILE_QZ_BINS = 96
 SPECULAR_QR_ROD_L_MAX = 8.0
+ALLOW_GENERATED_ROD_REFERENCES = _truthy_setting(
+    "ALLOW_GENERATED_ROD_REFERENCES_OVERRIDE", "RA_SIM_ALLOW_GENERATED_ROD_REFERENCES", False
+)
+DETECTOR_ROTATION_MIN_ANCHORS = 4
+DETECTOR_ROTATION_MIN_M_GROUPS = 2
 refresh_figure_stems()
 ROD_PROFILE_MAX_TWO_THETA_DEG = 70.3
 ROD_QZ_FORWARD_FIT_CENTER_THETA_BOUND_DEG = 0.45
@@ -1764,6 +1796,8 @@ ROD_QZ_NONLINEAR_MAX_COMPONENTS = 14
 ROD_QZ_NONLINEAR_CENTER_BOUND_BINS = 4.0
 ROD_QZ_NONLINEAR_TAIL_POWER_BOUNDS = (0.55, 12.0)
 ROD_QZ_NONLINEAR_MAX_NFEV = 1200
+ROD_QZ_NONLINEAR_LOG_RESIDUAL_WEIGHT = 1.0
+ROD_QZ_NONLINEAR_LOG_FLOOR_FRACTION = 0.05
 CAKED_FIGURE_INTENSITY_MODE = "density"
 # Keep background fitting in detector-count density units. Solid-angle correction
 # converts to intensity per steradian and amplifies flat detector offsets as sec(2theta)^3.
@@ -2031,6 +2065,112 @@ def as_float(value: object, fallback: float = float("nan")) -> float:
     except Exception:
         return float(fallback)
     return out if np.isfinite(out) else float(fallback)
+
+
+def positive_float_or_nan(value: object) -> float:
+    out = as_float(value)
+    return out if np.isfinite(out) and out > 0.0 else float("nan")
+
+
+def active_lattice_constants_from_cif_path(cif_path: object) -> dict[str, object]:
+    text = str(cif_path or "").strip()
+    if not text:
+        raise ValueError("primary CIF path is empty")
+    path = Path(text).expanduser()
+    if not path.exists():
+        raise ValueError(f"primary CIF path does not exist: {path}")
+    from ra_sim.cli import _parse_cif_cell_a_c
+
+    a_value, c_value = _parse_cif_cell_a_c(str(path))
+    a_value = positive_float_or_nan(a_value)
+    c_value = positive_float_or_nan(c_value)
+    if not (np.isfinite(a_value) and np.isfinite(c_value)):
+        raise ValueError(f"primary CIF has invalid lattice constants: {path}")
+    return {
+        "a": float(a_value),
+        "c": float(c_value),
+        "source": "primary_cif_path",
+        "primary_cif_path": str(path),
+    }
+
+
+def active_lattice_constants_from_state(state_payload: dict[str, object]) -> dict[str, object]:
+    variables = state_payload.get("variables", {})
+    variables = variables if isinstance(variables, dict) else {}
+    files_payload = state_payload.get("files", {})
+    files_payload = files_payload if isinstance(files_payload, dict) else {}
+    primary_cif = str(files_payload.get("primary_cif_path", "") or "").strip()
+
+    a_value = positive_float_or_nan(variables.get("a_var"))
+    c_value = positive_float_or_nan(variables.get("c_var"))
+    if np.isfinite(a_value) and np.isfinite(c_value):
+        return {
+            "a": float(a_value),
+            "c": float(c_value),
+            "source": "state.variables",
+            "primary_cif_path": primary_cif,
+        }
+
+    if primary_cif:
+        try:
+            return active_lattice_constants_from_cif_path(primary_cif)
+        except Exception as exc:
+            raise ValueError(
+                "active lattice constants unavailable: expected positive state variables "
+                "a_var/c_var or CIF _cell_length_a/_cell_length_c"
+            ) from exc
+
+    raise ValueError(
+        "active lattice constants unavailable: expected positive state variables "
+        "a_var/c_var or CIF _cell_length_a/_cell_length_c"
+    )
+
+
+def file_cache_signature(path_value: object) -> dict[str, object]:
+    text = str(path_value or "").strip()
+    if not text:
+        return {"path_name": "", "exists": False, "sha256": None, "size": None}
+    path = Path(text).expanduser()
+    if not path.exists():
+        return {"path_name": path.name, "exists": False, "sha256": None, "size": None}
+    data = path.read_bytes()
+    return {
+        "path_name": path.name,
+        "exists": True,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "size": len(data),
+    }
+
+
+def active_lattice_cache_signature(state_payload: dict[str, object]) -> dict[str, object]:
+    lattice = active_lattice_constants_from_state(state_payload)
+    return {
+        "a": _cache_normalize_value(lattice.get("a")),
+        "c": _cache_normalize_value(lattice.get("c")),
+        "source": str(lattice.get("source", "")),
+        "primary_cif": file_cache_signature(lattice.get("primary_cif_path")),
+    }
+
+
+def q_group_rows_cache_signature(state_payload: dict[str, object]) -> list[dict[str, object]]:
+    geometry = state_payload.get("geometry", {})
+    geometry = geometry if isinstance(geometry, dict) else {}
+    rows: list[dict[str, object]] = []
+    for row in geometry.get("q_group_rows", []) or []:
+        if not isinstance(row, dict):
+            continue
+        rows.append(
+            {
+                "key": _cache_normalize_value(row.get("key", row.get("q_group_key"))),
+                "source_label": str(row.get("source_label", "")),
+                "structure_role": str(row.get("structure_role", "")),
+                "included": bool(row.get("included", True)),
+                "gz_index": _cache_normalize_value(row.get("gz_index")),
+                "qr": _cache_normalize_value(row.get("qr")),
+                "qz": _cache_normalize_value(row.get("qz")),
+            }
+        )
+    return sorted(rows, key=lambda item: json.dumps(item, sort_keys=True, default=str))
 
 
 def angle_sort_value(value: object) -> float:
@@ -2687,6 +2827,160 @@ def branch_sort_key(label: str) -> tuple[int, int, int, str]:
     return 999, 999, 999, label
 
 
+def background_peak_entries_from_manual_pairs(
+    state_payload: dict[str, object],
+    *,
+    background_files: list[str],
+    background_tilt_deg: dict[int, float],
+    sample_name: str,
+    excluded_peaks_by_tilt_normalized: set[tuple[object, str]],
+) -> dict[int, list[dict[str, object]]]:
+    entries_by_bg: dict[int, list[dict[str, object]]] = {
+        idx: [] for idx in range(len(background_files))
+    }
+    geometry = state_payload.get("geometry", {})
+    geometry = geometry if isinstance(geometry, dict) else {}
+    for group in geometry.get("manual_pairs", []) or []:
+        if not isinstance(group, dict):
+            continue
+        bg_idx = int(group.get("background_index", -1))
+        if bg_idx not in entries_by_bg:
+            continue
+        for entry in group.get("entries", []) or []:
+            if not isinstance(entry, dict):
+                continue
+            theta = as_float(entry.get("background_two_theta_deg"))
+            phi = as_float(entry.get("background_phi_deg"))
+            has_caked_seed = np.isfinite(theta) and np.isfinite(phi)
+            has_detector_seed = detector_xy_from_entry(entry) is not None
+            if not (has_caked_seed or has_detector_seed):
+                continue
+            e = dict(entry)
+            e["_background_index"] = bg_idx
+            e["_background_name"] = Path(background_files[bg_idx]).name
+            e["_sample_name"] = sample_name
+            e["_tilt_deg"] = float(background_tilt_deg[bg_idx])
+            e["_display_label"] = (
+                f"{sample_name} {format_angle_value(background_tilt_deg[bg_idx])} deg"
+            )
+            e["_label"] = label_from_entry(e)
+            e["_branch"] = branch_from_phi(phi) if np.isfinite(phi) else None
+            if (angle_key(e["_tilt_deg"]), e["_label"]) in excluded_peaks_by_tilt_normalized:
+                continue
+            entries_by_bg[bg_idx].append(e)
+    return entries_by_bg
+
+
+def background_peak_entries_from_peak_records(
+    state_payload: dict[str, object],
+    *,
+    background_files: list[str],
+    background_tilt_deg: dict[int, float],
+    sample_name: str,
+    excluded_peaks_by_tilt_normalized: set[tuple[object, str]],
+) -> dict[int, list[dict[str, object]]]:
+    entries_by_bg: dict[int, list[dict[str, object]]] = {
+        idx: [] for idx in range(len(background_files))
+    }
+    geometry = state_payload.get("geometry", {})
+    geometry = geometry if isinstance(geometry, dict) else {}
+    caked_seed_keys = (
+        ("background_two_theta_deg", "background_phi_deg"),
+        ("two_theta_deg", "phi_deg"),
+        ("caked_x", "caked_y"),
+    )
+    for record in geometry.get("peak_records", []) or []:
+        if not isinstance(record, dict):
+            continue
+        raw_bg_idx = record.get("background_index")
+        has_background_index = raw_bg_idx is not None and str(raw_bg_idx).strip() != ""
+        bg_idx = None
+        if has_background_index:
+            try:
+                bg_idx = int(raw_bg_idx)
+            except Exception:
+                continue
+            if bg_idx not in entries_by_bg:
+                continue
+
+        caked_seed: tuple[float, float] | None = None
+        for theta_key, phi_key in caked_seed_keys:
+            theta = as_float(record.get(theta_key))
+            phi = as_float(record.get(phi_key))
+            if np.isfinite(theta) and np.isfinite(phi):
+                caked_seed = (float(theta), float(phi))
+                break
+
+        base = dict(record)
+        if caked_seed is not None:
+            theta, phi = caked_seed
+            base["background_two_theta_deg"] = float(theta)
+            base["background_phi_deg"] = float(phi)
+            base.setdefault("caked_x", float(theta))
+            base.setdefault("caked_y", float(phi))
+            target_backgrounds = [int(bg_idx)] if bg_idx is not None else list(entries_by_bg)
+        else:
+            xy = detector_xy_from_entry(base)
+            if xy is None:
+                col = as_float(record.get("native_col"))
+                row = as_float(record.get("native_row"))
+                if np.isfinite(col) and np.isfinite(row):
+                    xy = (float(col), float(row))
+            if xy is None or bg_idx is None:
+                continue
+            col, row = xy
+            base.setdefault("detector_col", float(col))
+            base.setdefault("detector_row", float(row))
+            target_backgrounds = [int(bg_idx)]
+
+        base.setdefault("selection_reason", "peak_records_fallback")
+        for target_bg_idx in target_backgrounds:
+            e = dict(base)
+            e["_background_index"] = int(target_bg_idx)
+            e["_background_name"] = Path(background_files[int(target_bg_idx)]).name
+            e["_sample_name"] = sample_name
+            e["_tilt_deg"] = float(background_tilt_deg[int(target_bg_idx)])
+            e["_display_label"] = (
+                f"{sample_name} {format_angle_value(background_tilt_deg[int(target_bg_idx)])} deg"
+            )
+            e["_label"] = label_from_entry(e)
+            phi = as_float(e.get("background_phi_deg"))
+            e["_branch"] = branch_from_phi(phi) if np.isfinite(phi) else None
+            if (angle_key(e["_tilt_deg"]), e["_label"]) in excluded_peaks_by_tilt_normalized:
+                continue
+            entries_by_bg[int(target_bg_idx)].append(e)
+    return entries_by_bg
+
+
+def background_peak_entries_from_state(
+    state_payload: dict[str, object],
+    *,
+    background_files: list[str],
+    background_tilt_deg: dict[int, float],
+    sample_name: str,
+    excluded_peaks_by_tilt_normalized: set[tuple[object, str]],
+) -> tuple[dict[int, list[dict[str, object]]], str]:
+    manual_entries = background_peak_entries_from_manual_pairs(
+        state_payload,
+        background_files=background_files,
+        background_tilt_deg=background_tilt_deg,
+        sample_name=sample_name,
+        excluded_peaks_by_tilt_normalized=excluded_peaks_by_tilt_normalized,
+    )
+    if sum(len(entries) for entries in manual_entries.values()) > 0:
+        return manual_entries, "manual_pairs"
+    peak_record_entries = background_peak_entries_from_peak_records(
+        state_payload,
+        background_files=background_files,
+        background_tilt_deg=background_tilt_deg,
+        sample_name=sample_name,
+        excluded_peaks_by_tilt_normalized=excluded_peaks_by_tilt_normalized,
+    )
+    if sum(len(entries) for entries in peak_record_entries.values()) > 0:
+        return peak_record_entries, "peak_records_fallback"
+    return peak_record_entries, "none"
+
+
 state_doc = json.loads(STATE_PATH.read_text(encoding="utf-8"))
 state = state_doc.get("state", state_doc)
 files = state.get("files", {})
@@ -2714,6 +3008,16 @@ if detected_sample_name:
     SAMPLE_NAME = str(detected_sample_name)
     SAMPLE_LABEL = _sample_label_from_name(SAMPLE_NAME)
 refresh_figure_stems()
+ACTIVE_LATTICE = active_lattice_constants_from_state(state)
+ACTIVE_LATTICE_A = float(ACTIVE_LATTICE["a"])
+ACTIVE_LATTICE_C = float(ACTIVE_LATTICE["c"])
+ACTIVE_LATTICE_CACHE_SIGNATURE = active_lattice_cache_signature(state)
+Q_GROUP_ROWS_CACHE_SIGNATURE = q_group_rows_cache_signature(state)
+ROD_REFERENCE_POLICY_SIGNATURE = {
+    "allow_generated": bool(ALLOW_GENERATED_ROD_REFERENCES),
+    "detector_rotation_min_anchors": int(DETECTOR_ROTATION_MIN_ANCHORS),
+    "detector_rotation_min_m_groups": int(DETECTOR_ROTATION_MIN_M_GROUPS),
+}
 try:
     n2_value = IndexofRefraction(WAVELENGTH_M)
 except Exception:
@@ -2727,43 +3031,45 @@ qr_rod_delta_qr_source = as_float(
 )
 QR_ROD_DELTA_QR_SCALE = 0.85
 qr_rod_delta_qr = max(1.0e-9, float(qr_rod_delta_qr_source) * float(QR_ROD_DELTA_QR_SCALE))
+QR_ROD_TRANSVERSE_BACKGROUND_ENABLED = (
+    SAMPLE_STEM.startswith("pbi2")
+    or _truthy_setting(
+        "QR_ROD_TRANSVERSE_BACKGROUND_OVERRIDE",
+        "RA_SIM_QR_ROD_TRANSVERSE_BACKGROUND",
+        False,
+    )
+)
+QR_ROD_BG_SIDE_BAND_INNER_SCALE = 1.30
+QR_ROD_BG_SIDE_BAND_OUTER_SCALE = 2.80
+QR_ROD_BG_MIN_SIDE_PIXELS = 8
+QR_ROD_BG_PERCENTILE = 50.0
+PBI2_PLOT_PEAK_TO_DATA_CANCEL_RATIO = 4.0
+PBI2_PLOT_BASELINE_TO_PEAK_CANCEL_RATIO = 0.50
 rod_phi_samples = max(361, int(as_float(variables.get("rod_points_per_gz_var"), 721)))
 psi_deg = as_float(variables.get("psi_var"), 0.0)
 
 
-entries_by_bg: dict[int, list[dict[str, object]]] = {
-    idx: [] for idx in range(len(background_files))
-}
-for group in state.get("geometry", {}).get("manual_pairs", []) or []:
-    if not isinstance(group, dict):
-        continue
-    bg_idx = int(group.get("background_index", -1))
-    if bg_idx not in entries_by_bg:
-        continue
-    for entry in group.get("entries", []) or []:
-        if not isinstance(entry, dict):
-            continue
-        theta = as_float(entry.get("background_two_theta_deg"))
-        phi = as_float(entry.get("background_phi_deg"))
-        has_caked_seed = np.isfinite(theta) and np.isfinite(phi)
-        has_detector_seed = detector_xy_from_entry(entry) is not None
-        if not (has_caked_seed or has_detector_seed):
-            continue
-        e = dict(entry)
-        e["_background_index"] = bg_idx
-        e["_background_name"] = Path(background_files[bg_idx]).name
-        e["_sample_name"] = SAMPLE_NAME
-        e["_tilt_deg"] = float(BACKGROUND_TILT_DEG[bg_idx])
-        e["_display_label"] = f"{SAMPLE_NAME} {format_angle_value(BACKGROUND_TILT_DEG[bg_idx])} deg"
-        e["_label"] = label_from_entry(e)
-        e["_branch"] = branch_from_phi(phi) if np.isfinite(phi) else None
-        if (angle_key(e["_tilt_deg"]), e["_label"]) in EXCLUDED_PEAKS_BY_TILT_NORMALIZED:
-            continue
-        entries_by_bg[bg_idx].append(e)
+entries_by_bg, background_peak_entry_source = background_peak_entries_from_state(
+    state,
+    background_files=background_files,
+    background_tilt_deg=BACKGROUND_TILT_DEG,
+    sample_name=SAMPLE_NAME,
+    excluded_peaks_by_tilt_normalized=EXCLUDED_PEAKS_BY_TILT_NORMALIZED,
+)
 
-NO_BACKGROUND_PEAK_ENTRIES_MESSAGE = "fit validation failed: no background peak entries found in geometry.manual_pairs; save background peak matches before running this notebook"
+NO_BACKGROUND_PEAK_ENTRIES_MESSAGE = (
+    "fit validation failed: no background peak entries found in geometry.manual_pairs or usable "
+    "geometry.peak_records; save background peak matches or peak records before running this notebook"
+)
 expected_fit_count = sum(len(v) for v in entries_by_bg.values())
-print(f"backgrounds={len(background_files)} points={expected_fit_count}")
+print(
+    f"backgrounds={len(background_files)} points={expected_fit_count} "
+    f"entry_source={background_peak_entry_source}"
+)
+print(
+    f"active lattice: a={ACTIVE_LATTICE_A:.6g} A c={ACTIVE_LATTICE_C:.6g} A "
+    f"source={ACTIVE_LATTICE.get('source', '')}"
+)
 print(
     "excluded peaks:",
     ", ".join(
@@ -3558,6 +3864,9 @@ PRE_EDITOR_CACHE_INPUT_SIGNATURE = {
         "pixel_size_m": float(PIXEL_SIZE_M),
         "wavelength_m": float(WAVELENGTH_M),
     },
+    "active_lattice": ACTIVE_LATTICE_CACHE_SIGNATURE,
+    "q_group_rows": Q_GROUP_ROWS_CACHE_SIGNATURE,
+    "rod_reference_policy": ROD_REFERENCE_POLICY_SIGNATURE,
     "fit_settings": {
         "fit_model": FIT_MODEL_NAME,
         "theta_half_window_deg": float(THETA_HALF_WINDOW_DEG),
@@ -3575,6 +3884,11 @@ PRE_EDITOR_CACHE_INPUT_SIGNATURE = {
         "rod_phi_samples": int(rod_phi_samples),
         "rod_qz_shared_linear_baseline": bool(ROD_QZ_SHARED_LINEAR_BASELINE_ENABLED),
         "rod_qz_nonlinear_refinement": bool(ROD_QZ_NONLINEAR_REFINEMENT_ENABLED),
+        "qr_rod_transverse_background": bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED),
+        "qr_rod_bg_side_band_inner_scale": float(QR_ROD_BG_SIDE_BAND_INNER_SCALE),
+        "qr_rod_bg_side_band_outer_scale": float(QR_ROD_BG_SIDE_BAND_OUTER_SCALE),
+        "qr_rod_bg_min_side_pixels": int(QR_ROD_BG_MIN_SIDE_PIXELS),
+        "qr_rod_bg_percentile": float(QR_ROD_BG_PERCENTILE),
     },
     "fit_jobs": pre_editor_fit_job_signature(fit_jobs),
 }
@@ -4635,6 +4949,7 @@ fig, axes = plt.subplots(
     sharey=True,
     constrained_layout=True,
 )
+axes = np.asarray(axes, dtype=object).reshape(len(ordered_backgrounds), 2)
 for row, bg in enumerate(ordered_backgrounds):
     detector_image = bg["detector_image"]
     detector_model = positive_l_detector_peak_model_for_display(
@@ -5703,6 +6018,7 @@ fig, axes = plt.subplots(
     figsize=(JOURNAL_ATLAS_WIDTH_IN, max(profile_row_height * len(ordered_backgrounds), 9.2)),
     constrained_layout=True,
 )
+axes = np.asarray(axes, dtype=object).reshape(len(ordered_backgrounds), len(columns))
 for row, bg in enumerate(ordered_backgrounds):
     for col, (branch, axis, title) in enumerate(columns):
         ax = axes[row, col]
@@ -5943,25 +6259,76 @@ def rod_m_from_hk(h: int, k: int) -> int:
     return int(h * h + h * k + k * k)
 
 
-def build_profile_rod_entries(tilt_deg: float) -> list[dict[str, object]]:
-    del tilt_deg
+def active_lattice_qr_value_for_m(m_idx: object, lattice_a: object) -> float:
+    m_value = as_float(m_idx)
+    a_value = as_float(lattice_a)
+    if not (np.isfinite(m_value) and np.isfinite(a_value)) or m_value < 0.0 or a_value <= 0.0:
+        return float("nan")
+    return float((2.0 * np.pi / a_value) * np.sqrt((4.0 / 3.0) * m_value))
+
+
+def active_lattice_qz_value_for_l(l_idx: object, lattice_c: object) -> float:
+    l_value = as_float(l_idx)
+    c_value = as_float(lattice_c)
+    if not (np.isfinite(l_value) and np.isfinite(c_value)) or c_value <= 0.0:
+        return float("nan")
+    return float((2.0 * np.pi / c_value) * l_value)
+
+
+def derived_primary_rod_entry_for_m(m_value: object, lattice_a: object) -> dict[str, object] | None:
+    try:
+        m_int = int(m_value)
+    except Exception:
+        return None
+    if m_int <= 0:
+        return None
+    qr_value = active_lattice_qr_value_for_m(m_int, lattice_a)
+    if not np.isfinite(qr_value):
+        return None
+    return {
+        "key": ("generated_qr", "primary", int(m_int), "active_lattice"),
+        "source": "primary",
+        "source_label": "primary",
+        "m": int(m_int),
+        "qr": float(qr_value),
+        "qr_source": "active_lattice",
+        "generated": True,
+    }
+
+
+def profile_rod_entries_from_q_group_rows(
+    q_group_rows: object,
+    *,
+    candidate_m_values: object = None,
+    lattice_a: object = None,
+    allow_generated: bool = False,
+) -> list[dict[str, object]]:
     q_group_by_m = {}
-    for row in state.get("geometry", {}).get("q_group_rows", []) or []:
+    for row in q_group_rows or []:
         if not isinstance(row, dict) or row.get("included", True) is False:
             continue
         key = row.get("key")
         try:
             m_value = int(key[2]) if isinstance(key, (list, tuple)) and len(key) >= 3 else None
             qr_value = float(row["qr"])
+            qz_value = float(row.get("qz", np.nan))
         except Exception:
             continue
         if m_value is not None and int(m_value) > 0 and m_value not in q_group_by_m:
+            q_group_key = tuple(key) if isinstance(key, (list, tuple)) else key
             source = (
                 str(key[1])
                 if isinstance(key, (list, tuple)) and len(key) >= 2
                 else str(row.get("source", "primary"))
             )
-            q_group_by_m[m_value] = {"qr": qr_value, "source": source}
+            source_label = str(row.get("source_label", source))
+            q_group_by_m[m_value] = {
+                "key": q_group_key,
+                "qr": qr_value,
+                "qz": qz_value,
+                "source": source,
+                "source_label": source_label,
+            }
 
     rods = {}
     for m_value, q_group in q_group_by_m.items():
@@ -5969,12 +6336,152 @@ def build_profile_rod_entries(tilt_deg: float) -> list[dict[str, object]]:
             int(m_value),
             {
                 "key": ("q_group", q_group["source"], int(m_value), "rod"),
+                "q_group_key": q_group["key"],
                 "source": q_group["source"],
+                "source_label": q_group["source_label"],
                 "m": int(m_value),
                 "qr": float(q_group["qr"]),
+                "qz": float(q_group["qz"]),
+                "qr_source": "saved_q_group_rows",
+                "generated": False,
             },
         )
+
+    if bool(allow_generated):
+        for raw_m in candidate_m_values or []:
+            try:
+                m_value = int(raw_m)
+            except Exception:
+                continue
+            if m_value in rods:
+                continue
+            derived = derived_primary_rod_entry_for_m(m_value, lattice_a)
+            if derived is not None:
+                rods[m_value] = derived
     return [rods[m] for m in sorted(rods)]
+
+
+def detector_complete_branch_rod_entries(
+    rod_entries: object,
+    region_overlays: object,
+    *,
+    required_branches: tuple[str, ...] = ("-", "+"),
+) -> list[dict[str, object]]:
+    rods = [dict(row) for row in rod_entries or [] if isinstance(row, dict)]
+    overlay_branches: dict[tuple[str, int], set[str]] = {}
+    for item in region_overlays or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            m_value = int(item["m"])
+            qz_min = float(item.get("qz_min", np.nan))
+            qz_max = float(item.get("qz_max", np.nan))
+        except Exception:
+            continue
+        if not (np.isfinite(qz_min) and np.isfinite(qz_max) and qz_max > qz_min):
+            continue
+        source = str(item.get("source", ""))
+        branch = str(item.get("branch", ""))
+        overlay_branches.setdefault((source, m_value), set()).add(branch)
+
+    required = {str(branch) for branch in required_branches}
+    complete: list[dict[str, object]] = []
+    for rod in rods:
+        try:
+            m_value = int(rod["m"])
+        except Exception:
+            continue
+        source = str(rod.get("source", ""))
+        if required.issubset(overlay_branches.get((source, m_value), set())):
+            complete.append(rod)
+    return complete
+
+
+def detector_overlay_rod_entries(
+    rod_entries: object,
+    *,
+    allow_generated: bool = False,
+    region_overlays: object = None,
+) -> list[dict[str, object]]:
+    rods = [dict(row) for row in rod_entries or [] if isinstance(row, dict)]
+    if bool(allow_generated):
+        source_filtered = rods
+    else:
+        source_filtered = [row for row in rods if not bool(row.get("generated", False))]
+    if region_overlays is None:
+        return source_filtered
+    return detector_complete_branch_rod_entries(source_filtered, region_overlays)
+
+
+def rod_reference_source_summary(
+    rod_entries: object,
+    *,
+    candidate_m_values: object = None,
+    allow_generated: bool = False,
+) -> dict[str, object]:
+    rods = [dict(row) for row in rod_entries or [] if isinstance(row, dict)]
+    available_m: set[int] = set()
+    saved = 0
+    generated = 0
+    for row in rods:
+        if bool(row.get("generated", False)):
+            generated += 1
+        else:
+            saved += 1
+        try:
+            available_m.add(int(row["m"]))
+        except Exception:
+            continue
+    candidate_m: set[int] = set()
+    for raw_m in candidate_m_values or []:
+        try:
+            m_value = int(raw_m)
+        except Exception:
+            continue
+        if m_value > 0:
+            candidate_m.add(m_value)
+    skipped_generated = len(candidate_m - available_m)
+    return {
+        "saved": int(saved),
+        "generated": int(generated),
+        "skipped_generated": int(skipped_generated),
+        "allow_generated": bool(allow_generated),
+    }
+
+
+def fit_result_m_values_for_rod_entries(backgrounds: object, *, tilt_deg: object) -> list[int]:
+    tilt_value = as_float(tilt_deg)
+    values: set[int] = set()
+    for bg in backgrounds or []:
+        if not isinstance(bg, dict):
+            continue
+        bg_tilt = as_float(bg.get("tilt_deg"))
+        if np.isfinite(tilt_value) and np.isfinite(bg_tilt) and abs(bg_tilt - tilt_value) > 1.0e-6:
+            continue
+        for item in bg.get("fit_results", []) or []:
+            if not isinstance(item, dict):
+                continue
+            try:
+                h, k, _l_value = parse_hkl_label(str(item["label"]))
+            except Exception:
+                continue
+            m_value = rod_m_from_hk(h, k)
+            if int(m_value) > 0:
+                values.add(int(m_value))
+    return sorted(values)
+
+
+def build_profile_rod_entries(tilt_deg: float) -> list[dict[str, object]]:
+    candidate_m_values = fit_result_m_values_for_rod_entries(
+        globals().get("ordered_backgrounds", []), tilt_deg=tilt_deg
+    )
+    geometry = state.get("geometry", {}) if isinstance(state.get("geometry"), dict) else {}
+    return profile_rod_entries_from_q_group_rows(
+        geometry.get("q_group_rows", []),
+        candidate_m_values=candidate_m_values,
+        lattice_a=ACTIVE_LATTICE_A,
+        allow_generated=ALLOW_GENERATED_ROD_REFERENCES,
+    )
 
 
 def projected_qz_at_phi_endpoint(samples: dict[str, object], target_phi: float) -> float | None:
@@ -6605,6 +7112,8 @@ def _detector_profile_dataframe_from_arrays(
     fit_mean = np.full(counts.shape, np.nan, dtype=np.float64)
     background_mean[nonempty] = background_sums[nonempty] / counts[nonempty].astype(np.float64)
     fit_mean[nonempty] = fit_sums[nonempty] / counts[nonempty].astype(np.float64)
+    sideband_density = np.full(counts.shape, np.nan, dtype=np.float64)
+    sideband_counts = np.zeros(counts.shape, dtype=np.int64)
     return pd.DataFrame(
         {
             "sample_name": [SAMPLE_NAME] * int(counts.size),
@@ -6629,12 +7138,22 @@ def _detector_profile_dataframe_from_arrays(
             "pixel_count": counts,
             "acceptance_sum": counts.astype(np.float64),
             "acceptance_source": ["pixel_count"] * int(counts.size),
+            "background_sum_raw": np.where(nonempty, background_sums, np.nan),
             "background_sum": np.where(nonempty, background_sums, np.nan),
             "fit_sum": np.where(nonempty, fit_sums, np.nan),
+            "background_mean_raw": background_mean,
             "background_mean": background_mean,
             "fit_mean": fit_mean,
+            "background_weighted_sum_raw": np.where(nonempty, background_sums, np.nan),
             "background_weighted_sum": np.where(nonempty, background_sums, np.nan),
             "fit_weighted_sum": np.where(nonempty, fit_sums, np.nan),
+            "background_density_raw": background_mean,
+            "qr_sideband_background_density": sideband_density,
+            "qr_sideband_pixel_count": sideband_counts,
+            "qr_sideband_inner_delta_qr": [float("nan")] * int(counts.size),
+            "qr_sideband_outer_delta_qr": [float("nan")] * int(counts.size),
+            "qr_sideband_percentile": [float("nan")] * int(counts.size),
+            "qr_transverse_background_subtracted": [False] * int(counts.size),
             "background_density": background_mean,
             "fit_density": fit_mean,
             "two_theta_min": np.asarray(two_theta_min, dtype=np.float64),
@@ -6890,6 +7409,71 @@ def detector_qspace_config_with_theta_initial(config: object, theta_initial_deg:
     return replace(config, theta_initial_deg=float(theta_initial_deg))
 
 
+def _binned_nanpercentile(
+    qz_values: object,
+    density_values: object,
+    edges: object,
+    *,
+    percentile: float,
+    min_count: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    qz = np.asarray(qz_values, dtype=np.float64).reshape(-1)
+    values = np.asarray(density_values, dtype=np.float64).reshape(-1)
+    edges_arr = np.asarray(edges, dtype=np.float64).reshape(-1)
+    n_bins = max(int(edges_arr.size) - 1, 0)
+    out = np.full(n_bins, np.nan, dtype=np.float64)
+    counts = np.zeros(n_bins, dtype=np.int64)
+    if n_bins <= 0 or qz.size != values.size:
+        return out, counts
+    finite = np.isfinite(qz) & np.isfinite(values)
+    if not np.any(finite):
+        return out, counts
+    qz_f = qz[finite]
+    values_f = values[finite]
+    bin_index = np.searchsorted(edges_arr, qz_f, side="right") - 1
+    if edges_arr.size:
+        last_edge = np.isclose(qz_f, edges_arr[-1], rtol=1.0e-12, atol=1.0e-12)
+        bin_index[last_edge] = n_bins - 1
+    valid = (bin_index >= 0) & (bin_index < n_bins)
+    bin_index = bin_index[valid]
+    values_f = values_f[valid]
+    if bin_index.size == 0:
+        return out, counts
+    order = np.argsort(bin_index, kind="mergesort")
+    bin_index = bin_index[order]
+    values_f = values_f[order]
+    starts = np.r_[0, np.flatnonzero(np.diff(bin_index)) + 1]
+    stops = np.r_[starts[1:], bin_index.size]
+    for start, stop in zip(starts, stops):
+        idx = int(bin_index[start])
+        group = values_f[start:stop]
+        counts[idx] = int(group.size)
+        if group.size >= int(min_count):
+            out[idx] = float(np.nanpercentile(group, float(percentile)))
+    return out, counts
+
+
+def _sideband_qr_mask(
+    qr_map: np.ndarray,
+    *,
+    qr0: float,
+    delta_qr: float,
+    inner_scale: float = QR_ROD_BG_SIDE_BAND_INNER_SCALE,
+    outer_scale: float = QR_ROD_BG_SIDE_BAND_OUTER_SCALE,
+) -> tuple[np.ndarray, float, float]:
+    inner = max(float(delta_qr) * float(inner_scale), float(delta_qr) + 1.0e-12)
+    outer = max(float(delta_qr) * float(outer_scale), inner + max(float(delta_qr), 1.0e-12))
+    left_lo = max(0.0, float(qr0) - outer)
+    left_hi = max(0.0, float(qr0) - inner)
+    right_lo = float(qr0) + inner
+    right_hi = float(qr0) + outer
+    mask = np.zeros(qr_map.shape, dtype=bool)
+    if left_hi > left_lo:
+        mask |= (qr_map >= left_lo) & (qr_map <= left_hi)
+    mask |= (qr_map >= right_lo) & (qr_map <= right_hi)
+    return mask, inner, outer
+
+
 def profile_from_detector_qr_qz(
     bg: dict[str, object],
     rod: dict[str, object],
@@ -6969,7 +7553,11 @@ def profile_from_detector_qr_qz(
         qz_hi_fast = float(edges[-1])
         n_bins_fast = int(edges.size - 1)
         phi_wrap = bool(float(phi_min) > float(phi_max))
-        if bool(GPU_ACCELERATION_ENABLED) and detector_solid_angle is None:
+        if (
+            not bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED)
+            and bool(GPU_ACCELERATION_ENABLED)
+            and detector_solid_angle is None
+        ):
             fast_payload = _detector_qr_qz_profile_accumulate_uniform_cupy(
                 image,
                 model,
@@ -6988,7 +7576,11 @@ def profile_from_detector_qr_qz(
                 phi_wrap=phi_wrap,
                 theta_limit=float(ROD_PROFILE_MAX_TWO_THETA_DEG),
             )
-        if fast_payload is None and bool(NUMBA_AVAILABLE):
+        if (
+            fast_payload is None
+            and not bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED)
+            and bool(NUMBA_AVAILABLE)
+        ):
             solid_angle_array = (
                 np.zeros(image.shape, dtype=np.float64)
                 if detector_solid_angle is None
@@ -7060,7 +7652,7 @@ def profile_from_detector_qr_qz(
         phi_selected = (phi_map >= float(phi_min)) & (phi_map <= float(phi_max))
     else:
         phi_selected = (phi_map >= float(phi_min)) | (phi_map <= float(phi_max))
-    base = (
+    base_common = (
         valid_q
         & finite_solid
         & below_theta_limit
@@ -7068,9 +7660,8 @@ def profile_from_detector_qr_qz(
         & np.isfinite(qr_map)
         & np.isfinite(qz_map)
         & (qz_map > POSITIVE_QZ_MIN)
-        & (qr_map >= qr_lo)
-        & (qr_map <= qr_hi)
     )
+    base = base_common & (qr_map >= qr_lo) & (qr_map <= qr_hi)
     selected_qz = qz_map[base]
     if selected_qz.size == 0:
         return pd.DataFrame()
@@ -7082,11 +7673,38 @@ def profile_from_detector_qr_qz(
     counts = np.asarray(counts, dtype=np.int64)
     background_sums = np.asarray(background_sums, dtype=np.float64)
     fit_sums = np.asarray(fit_sums, dtype=np.float64)
-    background_mean = np.full(counts.shape, np.nan, dtype=np.float64)
+    background_mean_raw = np.full(counts.shape, np.nan, dtype=np.float64)
     fit_mean = np.full(counts.shape, np.nan, dtype=np.float64)
     nonempty = counts > 0
-    background_mean[nonempty] = background_sums[nonempty] / counts[nonempty].astype(np.float64)
+    background_mean_raw[nonempty] = background_sums[nonempty] / counts[nonempty].astype(np.float64)
     fit_mean[nonempty] = fit_sums[nonempty] / counts[nonempty].astype(np.float64)
+    background_mean = background_mean_raw.copy()
+
+    sideband_density = np.full(counts.shape, np.nan, dtype=np.float64)
+    sideband_counts = np.zeros(counts.shape, dtype=np.int64)
+    sideband_inner = float("nan")
+    sideband_outer = float("nan")
+    transverse_bg_used = False
+    if bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED):
+        side_qr_mask, sideband_inner, sideband_outer = _sideband_qr_mask(
+            qr_map, qr0=qr0, delta_qr=delta_qr
+        )
+        sideband_mask = base_common & side_qr_mask
+        side_qz = qz_map[sideband_mask]
+        side_values = np.where(np.isfinite(signal[sideband_mask]), signal[sideband_mask], np.nan)
+        sideband_density, sideband_counts = _binned_nanpercentile(
+            side_qz,
+            side_values,
+            edges,
+            percentile=float(QR_ROD_BG_PERCENTILE),
+            min_count=int(QR_ROD_BG_MIN_SIDE_PIXELS),
+        )
+        subtract = nonempty & (sideband_counts >= int(QR_ROD_BG_MIN_SIDE_PIXELS)) & np.isfinite(
+            sideband_density
+        )
+        if np.any(subtract):
+            background_mean[subtract] = background_mean_raw[subtract] - sideband_density[subtract]
+            transverse_bg_used = True
 
     two_theta_min = np.full(counts.shape, np.nan, dtype=np.float64)
     two_theta_max = np.full(counts.shape, np.nan, dtype=np.float64)
@@ -7110,7 +7728,12 @@ def profile_from_detector_qr_qz(
             "tilt_deg": [float(bg["tilt_deg"])] * int(counts.size),
             "theta_initial_deg_used_for_q": [theta_initial_for_q] * int(counts.size),
             "qz_map_source": ["detector_qspace_per_pixel"] * int(counts.size),
-            "qr_integration_source": ["detector_qr_band_per_qz_bin"] * int(counts.size),
+            "qr_integration_source": [
+                "detector_qr_band_per_qz_bin_with_qr_sideband_background"
+                if transverse_bg_used
+                else "detector_qr_band_per_qz_bin"
+            ]
+            * int(counts.size),
             "solid_angle_corrected": [solid_angle_corrected] * int(counts.size),
             "m": [int(rod["m"])] * int(counts.size),
             "qr": [qr0] * int(counts.size),
@@ -7128,12 +7751,22 @@ def profile_from_detector_qr_qz(
             "pixel_count": counts,
             "acceptance_sum": counts.astype(np.float64),
             "acceptance_source": ["pixel_count"] * int(counts.size),
+            "background_sum_raw": np.where(nonempty, background_sums, np.nan),
             "background_sum": np.where(nonempty, background_sums, np.nan),
             "fit_sum": np.where(nonempty, fit_sums, np.nan),
+            "background_mean_raw": background_mean_raw,
             "background_mean": background_mean,
             "fit_mean": fit_mean,
+            "background_weighted_sum_raw": np.where(nonempty, background_sums, np.nan),
             "background_weighted_sum": np.where(nonempty, background_sums, np.nan),
             "fit_weighted_sum": np.where(nonempty, fit_sums, np.nan),
+            "background_density_raw": background_mean_raw,
+            "qr_sideband_background_density": sideband_density,
+            "qr_sideband_pixel_count": sideband_counts,
+            "qr_sideband_inner_delta_qr": [sideband_inner] * int(counts.size),
+            "qr_sideband_outer_delta_qr": [sideband_outer] * int(counts.size),
+            "qr_sideband_percentile": [float(QR_ROD_BG_PERCENTILE)] * int(counts.size),
+            "qr_transverse_background_subtracted": [bool(transverse_bg_used)] * int(counts.size),
             "background_density": background_mean,
             "fit_density": fit_mean,
             "two_theta_min": two_theta_min,
@@ -7218,6 +7851,177 @@ def normalized_data_simulation_payload(
     if not np.isfinite(scale) or scale <= 0.0:
         scale = 1.0
     return {"data": data / scale, "simulation": simulation / scale, "scale": float(scale)}
+
+
+def _finite_abs_percentile(values: object, percentile: float = 90.0) -> float:
+    arr = np.asarray(values, dtype=np.float64)
+    finite = np.abs(arr[np.isfinite(arr)])
+    if finite.size == 0:
+        return 0.0
+    value = float(np.nanpercentile(finite, float(percentile)))
+    return value if np.isfinite(value) else 0.0
+
+
+def rod_profile_marker_l_mapping_is_valid(
+    marker_source: pd.DataFrame | None,
+    *,
+    m_value: int,
+    branch_value: str,
+    min_points: int = 2,
+) -> bool:
+    markers = pd.DataFrame() if marker_source is None else pd.DataFrame(marker_source).copy()
+    if markers.empty or not {"m", "branch", "qz_marker"}.issubset(markers.columns):
+        return False
+    l_column = "fit_l" if "fit_l" in markers else "l" if "l" in markers else "display_l"
+    if l_column not in markers:
+        return False
+    marker_m = pd.to_numeric(markers["m"], errors="coerce").to_numpy(dtype=np.float64)
+    marker_branch = markers["branch"].astype(str).to_numpy(dtype=object)
+    sub = markers[(marker_m == float(int(m_value))) & (marker_branch == str(branch_value))].copy()
+    if sub.empty:
+        return False
+    qz = pd.to_numeric(sub["qz_marker"], errors="coerce").to_numpy(dtype=np.float64)
+    l_values = pd.to_numeric(sub[l_column], errors="coerce").to_numpy(dtype=np.float64)
+    finite = np.isfinite(qz) & np.isfinite(l_values)
+    qz = qz[finite]
+    l_values = l_values[finite]
+    if qz.size < 1:
+        return False
+    order = np.argsort(qz)
+    qz = qz[order]
+    l_values = l_values[order]
+    qz_unique = []
+    l_unique = []
+    for qz_value in np.unique(qz):
+        same_qz = np.isclose(qz, float(qz_value), rtol=1.0e-9, atol=1.0e-9)
+        same_l = l_values[same_qz]
+        if same_l.size == 0:
+            continue
+        if float(np.nanmax(same_l) - np.nanmin(same_l)) > 1.0e-6:
+            return False
+        qz_unique.append(float(qz_value))
+        l_unique.append(float(np.nanmedian(same_l)))
+    qz = np.asarray(qz_unique, dtype=np.float64)
+    l_values = np.asarray(l_unique, dtype=np.float64)
+    if qz.size == 1:
+        return bool(qz[0] > 0.0 and l_values[0] > 0.0)
+    if qz.size < int(min_points) or np.nanmax(qz) <= np.nanmin(qz):
+        return False
+    if np.any(np.diff(l_values) < -1.0e-6) or np.nanmax(l_values) <= np.nanmin(l_values):
+        return False
+    slope, _intercept = np.polyfit(qz, l_values, 1)
+    return bool(np.isfinite(slope) and float(slope) > 0.0)
+
+
+def rod_profile_plot_model_decision(
+    sample_stem: str,
+    m_value: int,
+    branch_value: str,
+    profile_rows: pd.DataFrame,
+    marker_source: pd.DataFrame | None,
+    *,
+    transverse_background_enabled: bool,
+    peak_to_data_cancel_ratio: float = 4.0,
+    baseline_to_peak_cancel_ratio: float = 0.50,
+) -> dict[str, object]:
+    table = pd.DataFrame(profile_rows).copy()
+    is_pbi2_nonzero = str(sample_stem).lower().startswith("pbi2") and int(m_value) != 0
+    default_density_column = (
+        "joint_peak_density"
+        if "joint_peak_density" in table.columns
+        else "fit_density"
+        if "fit_density" in table.columns
+        else None
+    )
+    default_baseline_column = (
+        None
+        if bool(transverse_background_enabled)
+        else "joint_linear_baseline_density"
+        if "joint_linear_baseline_density" in table.columns
+        else None
+    )
+    if not (is_pbi2_nonzero and bool(transverse_background_enabled)):
+        return {
+            "plot_model": bool(default_density_column),
+            "density_column": default_density_column,
+            "baseline_column": default_baseline_column,
+            "subtract_baseline_from_data": True,
+            "label": "Simulation" if default_density_column else None,
+            "reason": "default_peak_model" if default_density_column else "missing_model_density",
+            "metrics": {},
+        }
+
+    l_mapping_valid = rod_profile_marker_l_mapping_is_valid(
+        marker_source, m_value=int(m_value), branch_value=str(branch_value)
+    )
+    if not l_mapping_valid:
+        return {
+            "plot_model": False,
+            "density_column": None,
+            "baseline_column": None,
+            "subtract_baseline_from_data": False,
+            "label": None,
+            "reason": "pbi2_invalid_l_mapping",
+            "metrics": {"valid_l_mapping": False},
+        }
+
+    model_column = (
+        "joint_fit_density"
+        if "joint_fit_density" in table.columns
+        else "fit_density"
+        if "fit_density" in table.columns
+        else None
+    )
+    if model_column is None:
+        return {
+            "plot_model": False,
+            "density_column": None,
+            "baseline_column": None,
+            "subtract_baseline_from_data": False,
+            "label": None,
+            "reason": "missing_model_density",
+            "metrics": {"valid_l_mapping": True},
+        }
+
+    data_scale = _finite_abs_percentile(table.get("background_density", []), 90.0)
+    peak_scale = _finite_abs_percentile(table.get("joint_peak_density", []), 90.0)
+    baseline_scale = _finite_abs_percentile(
+        table.get("joint_linear_baseline_density", []), 90.0
+    )
+    denominator = max(data_scale, 1.0e-12)
+    peak_to_data = peak_scale / denominator
+    baseline_to_peak = baseline_scale / max(peak_scale, 1.0e-12)
+    metrics = {
+        "valid_l_mapping": True,
+        "data_abs_p90": float(data_scale),
+        "peak_abs_p90": float(peak_scale),
+        "baseline_abs_p90": float(baseline_scale),
+        "peak_to_data_ratio": float(peak_to_data),
+        "baseline_to_peak_ratio": float(baseline_to_peak),
+    }
+    if (
+        peak_to_data >= float(peak_to_data_cancel_ratio)
+        and baseline_to_peak >= float(baseline_to_peak_cancel_ratio)
+    ):
+        return {
+            "plot_model": False,
+            "density_column": None,
+            "baseline_column": None,
+            "subtract_baseline_from_data": False,
+            "label": None,
+            "reason": "pbi2_baseline_cancellation",
+            "metrics": metrics,
+        }
+
+    return {
+        "plot_model": True,
+        "density_column": model_column,
+        "baseline_column": None,
+        "subtract_baseline_from_data": False,
+        "label": "Fit",
+        "reason": "pbi2_total_fit",
+        "metrics": metrics,
+    }
 
 
 def positive_log_plot_values(values: object):
@@ -7596,6 +8400,7 @@ def _aggregate_tail_components(
     target: np.ndarray,
     finite: np.ndarray,
     dx: float,
+    measured: np.ndarray | None = None,
 ) -> list[dict[str, object]]:
     components = []
     if basis.size == 0 or amplitudes.size == 0:
@@ -7605,10 +8410,14 @@ def _aggregate_tail_components(
     x_values = np.asarray(x, dtype=np.float64).reshape(-1)
     target_values = np.asarray(target, dtype=np.float64).reshape(-1)
     finite_values = np.asarray(finite, dtype=bool).reshape(-1)
+    measured_values = (
+        target_values if measured is None else np.asarray(measured, dtype=np.float64).reshape(-1)
+    )
     if (
         x_values.shape != target_values.shape
         or x_values.shape != finite_values.shape
         or x_values.shape != model.shape
+        or x_values.shape != measured_values.shape
     ):
         return components
     dx_value = max(float(dx), 1.0e-9) if np.isfinite(dx) else 1.0e-9
@@ -7660,6 +8469,7 @@ def _aggregate_tail_components(
             local_floor = float(np.nanmedian(target_values[local]))
             local_prominence = local_peak - local_floor
             fallback_peak = max(local_peak, local_prominence, 0.0)
+            fallback_shape = target_values
             is_local_maximum = (
                 best != int(local_indices[0])
                 and best != int(local_indices[-1])
@@ -7673,12 +8483,41 @@ def _aggregate_tail_components(
                 and local_prominence > max(1.0e-4 * target_peak, 1.0e-12)
                 and fallback_peak > 0.0
             )
+            if not marker_supported and measured is not None:
+                measured_local = (
+                    finite_values
+                    & np.isfinite(measured_values)
+                    & (np.abs(x_values - support_center) <= half_window)
+                )
+                if np.any(measured_local):
+                    measured_indices = np.flatnonzero(measured_local)
+                    measured_best = int(
+                        measured_indices[int(np.nanargmax(measured_values[measured_local]))]
+                    )
+                    measured_peak = float(measured_values[measured_best])
+                    measured_floor = float(np.nanmedian(measured_values[measured_local]))
+                    measured_prominence = measured_peak - measured_floor
+                    measured_is_local_maximum = (
+                        measured_best != int(measured_indices[0])
+                        and measured_best != int(measured_indices[-1])
+                        and measured_best > 0
+                        and measured_best < measured_values.size - 1
+                        and measured_peak >= float(measured_values[measured_best - 1])
+                        and measured_peak >= float(measured_values[measured_best + 1])
+                    )
+                    marker_supported = measured_is_local_maximum and measured_prominence > max(
+                        1.0e-4 * target_peak, 1.0e-12
+                    )
+                    if marker_supported:
+                        best = measured_best
+                        fallback_peak = max(measured_prominence, 0.0)
+                        fallback_shape = measured_values - measured_floor
             if not marker_supported:
                 continue
             center = float(x_values[best])
             fallback_hwhm = _estimate_peak_hwhm(
                 x_values,
-                target_values,
+                fallback_shape,
                 center=float(center),
                 spacing=float(spacing[peak_index]),
                 dx=dx_value,
@@ -7886,12 +8725,29 @@ def _refine_pearson_vii_components(
         return peak_model, baseline_model, total_model
 
     response = fit_observed if include_baseline else np.clip(target, 0.0, None)
+    log_mask = finite & np.isfinite(response) & (response > 0.0)
+    log_response_positive = response[log_mask]
+    log_floor = (
+        max(
+            float(np.nanpercentile(log_response_positive, 5.0))
+            * float(ROD_QZ_NONLINEAR_LOG_FLOOR_FRACTION),
+            1.0e-12,
+        )
+        if log_response_positive.size
+        else 1.0e-12
+    )
+    log_response = np.log10(np.clip(log_response_positive, 0.0, None) + log_floor)
+    log_residual_weight = max(float(ROD_QZ_NONLINEAR_LOG_RESIDUAL_WEIGHT), 0.0)
 
     def residual(params: np.ndarray) -> np.ndarray:
         _peak_model, _baseline_model, total_model = _split_model(
             np.asarray(params, dtype=np.float64)
         )
-        return weight[finite] * (total_model[finite] - response[finite]) / scale
+        linear_residual = weight[finite] * (total_model[finite] - response[finite]) / scale
+        if log_residual_weight <= 0.0 or log_response.size == 0:
+            return linear_residual
+        log_model = np.log10(np.clip(total_model[log_mask], 0.0, None) + log_floor)
+        return np.concatenate([linear_residual, log_residual_weight * (log_model - log_response)])
 
     initial_peak_model, initial_baseline_model, initial_total_model = _split_model(p0)
     initial_cost = float(np.nanmean((initial_total_model[finite] - response[finite]) ** 2))
@@ -8055,6 +8911,7 @@ def fit_joint_qz_peak_sum(
         target,
         finite,
         dx,
+        measured=measured,
     )
     dictionary_cost = float(np.nanmean((total_model_sorted[finite] - measured[finite]) ** 2))
     refined = _refine_pearson_vii_components(
@@ -9028,6 +9885,41 @@ def collect_detector_rotation_fit_points(
     return points, skipped
 
 
+def detector_rotation_anchor_summary(
+    fit_points: object, active_mask: object | None = None
+) -> dict[str, int]:
+    points = [dict(point) for point in fit_points or [] if isinstance(point, dict)]
+    if active_mask is None:
+        selected = points
+    else:
+        mask = np.asarray(active_mask, dtype=bool).reshape(-1)
+        selected = [point for idx, point in enumerate(points) if idx < mask.size and bool(mask[idx])]
+    m_groups: set[tuple[str, int]] = set()
+    for point in selected:
+        try:
+            m_groups.add((str(point.get("target_source_label", "")), int(point["m"])))
+        except Exception:
+            continue
+    return {
+        "anchor_count": int(len(selected)),
+        "anchor_m_group_count": int(len(m_groups)),
+    }
+
+
+def detector_rotation_fit_has_anchor_coverage(
+    fit_points: object,
+    active_mask: object | None = None,
+    *,
+    min_anchors: int = 4,
+    min_m_groups: int = 2,
+) -> bool:
+    summary = detector_rotation_anchor_summary(fit_points, active_mask)
+    return bool(
+        int(summary["anchor_count"]) >= int(min_anchors)
+        and int(summary["anchor_m_group_count"]) >= int(min_m_groups)
+    )
+
+
 def annotate_rods_with_detector_rotation_fit(
     rods: list[dict[str, object]],
     fit_points: list[dict[str, object]],
@@ -9136,9 +10028,11 @@ def fit_rod_qspace_calibration(
     original_gamma = float(getattr(original_config, "gamma_deg", 0.0))
     original_Gamma = float(getattr(original_config, "Gamma_deg", 0.0))
     original_qr_by_m = {int(rod["m"]): float(rod["qr"]) for rod in rods}
+    anchor_summary = detector_rotation_anchor_summary(fit_points)
 
     base_payload = {
         "anchor_count": int(len(fit_points)),
+        "anchor_m_group_count": int(anchor_summary["anchor_m_group_count"]),
         "skipped_anchor_count": int(len(skipped_points)),
         "distance_original_m": original_distance,
         "distance_fitted_m": original_distance,
@@ -9180,6 +10074,32 @@ def fit_rod_qspace_calibration(
             }
         )
         return annotate_rods_with_detector_rotation_fit(rods, fit_points, None), payload
+    if not detector_rotation_fit_has_anchor_coverage(
+        fit_points,
+        min_anchors=DETECTOR_ROTATION_MIN_ANCHORS,
+        min_m_groups=DETECTOR_ROTATION_MIN_M_GROUPS,
+    ):
+        payload = dict(base_payload)
+        payload.update(
+            {
+                "success": False,
+                "message": "insufficient detector-rotation anchor coverage",
+                "active_anchor_count": int(anchor_summary["anchor_count"]),
+                "active_anchor_m_group_count": int(anchor_summary["anchor_m_group_count"]),
+                "fit_points": [dict(point) for point in fit_points],
+                "skipped_fit_points": [dict(point) for point in skipped_points],
+            }
+        )
+        fitted_rods = annotate_rods_with_detector_rotation_fit(rods, fit_points, None)
+        for rod in fitted_rods:
+            if int(rod.get("qr_fit_sample_count", 0)) > 0:
+                rod["qr_fit_method"] = "saved_q_group_rows_insufficient_detector_rotation_anchors"
+        print(
+            "skipped detector-rotation Qr overlay fit: insufficient detector-rotation anchor coverage "
+            f"points={int(anchor_summary['anchor_count'])} "
+            f"m_groups={int(anchor_summary['anchor_m_group_count'])}"
+        )
+        return fitted_rods, payload
 
     rod_counts = Counter(point_identity_key(point) for point in fit_points)
     for point in fit_points:
@@ -9353,6 +10273,39 @@ def fit_rod_qspace_calibration(
     before_count = int(before["active_count"])
     after_count = int(after["active_count"])
     after_good = np.asarray(after["good"], dtype=bool)
+    active_anchor_summary = detector_rotation_anchor_summary(fit_points, after_good)
+    if not detector_rotation_fit_has_anchor_coverage(
+        fit_points,
+        after_good,
+        min_anchors=DETECTOR_ROTATION_MIN_ANCHORS,
+        min_m_groups=DETECTOR_ROTATION_MIN_M_GROUPS,
+    ):
+        payload = dict(base_payload)
+        payload.update(
+            {
+                "success": False,
+                "message": "insufficient detector-rotation active anchor coverage",
+                "active_anchor_count": int(active_anchor_summary["anchor_count"]),
+                "active_anchor_m_group_count": int(active_anchor_summary["anchor_m_group_count"]),
+                "active_anchor_count_before": int(before_count),
+                "fit_points": [dict(point) for point in fit_points],
+                "skipped_fit_points": [dict(point) for point in skipped_points],
+                "rms_before_qr": float(before["rms_qr"]),
+                "rms_after_qr": float(after["rms_qr"]),
+                "rms_before_qz": float(before["rms_qz"]),
+                "rms_after_qz": float(after["rms_qz"]),
+            }
+        )
+        fitted_rods = annotate_rods_with_detector_rotation_fit(rods, fit_points, after_good)
+        for rod in fitted_rods:
+            if int(rod.get("qr_fit_sample_count", 0)) > 0:
+                rod["qr_fit_method"] = "saved_q_group_rows_insufficient_detector_rotation_anchors"
+        print(
+            "skipped detector-rotation Qr overlay fit: insufficient detector-rotation active anchor coverage "
+            f"points={int(active_anchor_summary['anchor_count'])} "
+            f"m_groups={int(active_anchor_summary['anchor_m_group_count'])}"
+        )
+        return fitted_rods, payload
     theta_fit, distance_fit, gamma_fit, Gamma_fit = map(float, final_params)
     rotation_bound_hit = bool(
         abs(gamma_fit - float(lower[2])) < 1.0e-6
@@ -9370,6 +10323,7 @@ def fit_rod_qspace_calibration(
             "success": bool(result.success),
             "message": result_message,
             "active_anchor_count": int(after_count),
+            "active_anchor_m_group_count": int(active_anchor_summary["anchor_m_group_count"]),
             "active_anchor_count_before": int(before_count),
             "distance_fitted_m": distance_fit,
             "theta_fitted_deg": theta_fit,
@@ -9463,6 +10417,9 @@ qr_rod_pre_editor_stage = pre_editor_cache_get_stage(
     pre_editor_cache, "qr_rod_pre_editor", PRE_EDITOR_QR_ROD_STAGE_SIGNATURE
 )
 qr_rod_pre_editor_cache_hit = qr_rod_pre_editor_stage_is_valid(qr_rod_pre_editor_stage)
+rod_candidate_m_values = fit_result_m_values_for_rod_entries(
+    ordered_backgrounds, tilt_deg=ROD_PROFILE_TILT_DEG
+)
 if qr_rod_pre_editor_cache_hit:
     ROD_PROFILE_MAX_TWO_THETA_DEG = float(qr_rod_pre_editor_stage["rod_profile_max_two_theta_deg"])
     rod_entries = [dict(row) for row in qr_rod_pre_editor_stage["rod_entries"]]
@@ -9506,6 +10463,18 @@ else:
         if not rod_entries:
             raise RuntimeError("all non-specular Qr rods rejected by mixed target Qr spread")
     apply_rod_qspace_calibration([profile_bg], rod_qspace_calibration)
+
+rod_reference_summary = rod_reference_source_summary(
+    rod_entries,
+    candidate_m_values=rod_candidate_m_values,
+    allow_generated=ALLOW_GENERATED_ROD_REFERENCES,
+)
+print(
+    f"rod references: saved={int(rod_reference_summary['saved'])} "
+    f"generated={int(rod_reference_summary['generated'])} "
+    f"skipped_generated={int(rod_reference_summary['skipped_generated'])} "
+    f"allow_generated={bool(rod_reference_summary['allow_generated'])}"
+)
 
 
 def display_detector_rotation_fit_debug(
@@ -9809,13 +10778,27 @@ def fit_qr_centers_for_rod_entries(
 
 
 if not qr_rod_pre_editor_cache_hit:
-    rod_entries = fit_qr_centers_for_rod_entries(
-        profile_bg,
-        rod_entries,
-        detector_q_maps=profile_detector_q_maps,
-        detector_phi_map=profile_detector_phi_map,
-        detector_two_theta_map=profile_detector_two_theta_map,
-    )
+    if bool(rod_qspace_calibration.get("success", False)):
+        rod_entries = fit_qr_centers_for_rod_entries(
+            profile_bg,
+            rod_entries,
+            detector_q_maps=profile_detector_q_maps,
+            detector_phi_map=profile_detector_phi_map,
+            detector_two_theta_map=profile_detector_two_theta_map,
+        )
+        print(
+            "Qr rod center adjustment before integration: "
+            + ", ".join(
+                f"HK={int(rod['m'])}: {float(rod.get('qr_original', rod['qr'])):.5g}->{float(rod['qr']):.5g} "
+                f"({int(rod.get('qr_fit_count', 0))}/{int(rod.get('qr_fit_sample_count', 0))})"
+                for rod in rod_entries
+            )
+        )
+    else:
+        print(
+            "Qr rod center adjustment before integration: skipped; using saved Qr centers "
+            f"because {rod_qspace_calibration.get('message', 'detector-rotation fit was not accepted')}"
+        )
     rod_qspace_calibration["qr_fitted_by_m"] = {
         int(rod["m"]): float(rod["qr"]) for rod in rod_entries
     }
@@ -9825,14 +10808,6 @@ if not qr_rod_pre_editor_cache_hit:
     rod_qspace_calibration["qr_fit_method_by_m"] = {
         int(rod["m"]): str(rod.get("qr_fit_method", "original")) for rod in rod_entries
     }
-    print(
-        "Qr rod center adjustment before integration: "
-        + ", ".join(
-            f"HK={int(rod['m'])}: {float(rod.get('qr_original', rod['qr'])):.5g}->{float(rod['qr']):.5g} "
-            f"({int(rod.get('qr_fit_count', 0))}/{int(rod.get('qr_fit_sample_count', 0))})"
-            for rod in rod_entries
-        )
-    )
 
 
 def specular_window_for_background(bg: dict[str, object]) -> tuple[float, float, float, float]:
@@ -9918,6 +10893,50 @@ specular_detector_region_mask = (
 )
 
 
+def specular_l_marker_rows_with_lattice_fallback(
+    marker_rows: object, *, lattice_c: object, l_max: object
+) -> pd.DataFrame:
+    table = pd.DataFrame(marker_rows).copy()
+    records = table.to_dict("records") if not table.empty else []
+    existing_l: set[int] = set()
+    for row in records:
+        l_value = as_float(row.get("fit_l", row.get("l", row.get("display_l"))))
+        if np.isfinite(l_value) and int(round(l_value)) > 0:
+            existing_l.add(int(round(l_value)))
+    max_l = int(np.floor(as_float(l_max, 0.0)))
+    for l_value in range(1, max_l + 1):
+        if l_value in existing_l:
+            continue
+        qz_value = active_lattice_qz_value_for_l(l_value, lattice_c)
+        if not np.isfinite(qz_value) or qz_value <= POSITIVE_QZ_MIN:
+            continue
+        records.append(
+            {
+                "m": 0,
+                "hk": 0,
+                "branch": "qz",
+                "hkl": f"0,0,{int(l_value)}",
+                "l": int(l_value),
+                "fit_l": int(l_value),
+                "display_l": float(l_value),
+                "qz_marker": float(qz_value),
+                "projected_qz_marker": float(qz_value),
+                "marker_source": "active_lattice",
+            }
+        )
+    out = pd.DataFrame(records)
+    if out.empty:
+        return out
+    sort_l = pd.to_numeric(
+        out["fit_l"] if "fit_l" in out else out.get("l", pd.Series(np.nan, index=out.index)),
+        errors="coerce",
+    )
+    out = out.assign(_sort_l=sort_l)
+    return out.sort_values(["_sort_l", "qz_marker"], kind="mergesort").drop(
+        columns=["_sort_l"]
+    ).reset_index(drop=True)
+
+
 def specular_l_marker_rows_for_background(
     bg: dict[str, object], qz_map: np.ndarray
 ) -> pd.DataFrame:
@@ -9957,7 +10976,9 @@ def specular_l_marker_rows_for_background(
                 "refined_phi_deg": phi0,
             }
         )
-    return pd.DataFrame(rows)
+    return specular_l_marker_rows_with_lattice_fallback(
+        rows, lattice_c=ACTIVE_LATTICE_C, l_max=SPECULAR_QR_ROD_L_MAX
+    )
 
 
 phi_windows = [
@@ -10233,6 +11254,9 @@ qr_rod_peak_edit_key = qr_rod_peak_edit_cache_key(
     None if qr_rod_peak_edit_source == "last_cached" else qr_rod_peak_edits_path or None,
     marker_table=marker_table if qr_rod_peak_edit_source != "last_cached" else None,
     mode=qr_rod_peak_edit_source,
+    lattice_signature=ACTIVE_LATTICE_CACHE_SIGNATURE,
+    q_group_signature=Q_GROUP_ROWS_CACHE_SIGNATURE,
+    rod_reference_policy=ROD_REFERENCE_POLICY_SIGNATURE,
 )
 if qr_rod_profile_cache_has_final_fit(qr_rod_profile_cache or {}, qr_rod_peak_edit_key):
     rod_profile_table = pd.DataFrame(qr_rod_profile_cache["final_rod_profile_table"]).copy()
@@ -10491,19 +11515,35 @@ def shared_nonzero_rod_profile_y_axis_limits(
                 sub = sub[np.asarray(l_values, dtype=np.float64) > 0.0].copy()
             if sub.empty or "background_density" not in sub:
                 continue
-            if "joint_peak_density" in sub:
-                peak_density = sub["joint_peak_density"]
-            elif "fit_density" in sub:
-                peak_density = sub["fit_density"]
+            plot_decision = rod_profile_plot_model_decision(
+                str(globals().get("SAMPLE_STEM", "")),
+                m_value,
+                branch_value,
+                sub,
+                markers,
+                transverse_background_enabled=bool(
+                    globals().get("QR_ROD_TRANSVERSE_BACKGROUND_ENABLED", False)
+                ),
+            )
+            model_column = str(plot_decision.get("density_column") or "")
+            if bool(plot_decision.get("plot_model")) and model_column in sub:
+                model_density = sub[model_column]
+                baseline_column = str(plot_decision.get("baseline_column") or "")
+                baseline_density = sub[baseline_column] if baseline_column in sub else None
             else:
-                continue
+                model_density = np.zeros(sub.shape[0], dtype=np.float64)
+                baseline_density = None
             norm_payload = normalized_data_simulation_payload(
                 sub["background_density"],
-                peak_density,
-                sub.get("joint_linear_baseline_density", None),
+                model_density,
+                baseline_density,
+                subtract_baseline_from_data=bool(
+                    plot_decision.get("subtract_baseline_from_data", True)
+                ),
             )
             y_values.append(np.asarray(norm_payload["data"], dtype=np.float64))
-            y_values.append(np.asarray(norm_payload["simulation"], dtype=np.float64))
+            if bool(plot_decision.get("plot_model")):
+                y_values.append(np.asarray(norm_payload["simulation"], dtype=np.float64))
     if not y_values:
         return tuple(float(value) for value in fallback_limits)
     finite = np.concatenate([np.asarray([0.0], dtype=np.float64), *y_values])
@@ -10555,6 +11595,17 @@ rod_note_lines = [
     f"# {SAMPLE_NAME} {ROD_PROFILE_TILT_LABEL}° HK-rod L profiles",
     "",
     f"Source state: `{STATE_PATH}`",
+    (
+        f"Active lattice: `a={ACTIVE_LATTICE_A:.6g} A`, `c={ACTIVE_LATTICE_C:.6g} A`, "
+        f"source=`{ACTIVE_LATTICE.get('source', '')}`."
+    ),
+    (
+        "Rod reference policy: "
+        f"`allow_generated={bool(rod_reference_summary['allow_generated'])}`, "
+        f"saved=`{int(rod_reference_summary['saved'])}`, "
+        f"generated=`{int(rod_reference_summary['generated'])}`, "
+        f"skipped_generated=`{int(rod_reference_summary['skipped_generated'])}`."
+    ),
     f"Tilt used for Q conversion: `{ROD_PROFILE_TILT_LABEL}°`",
     f"Source Delta $Q_r$: `{qr_rod_delta_qr_source:.4g}` Å^-1",
     f"Active Delta $Q_r$: `{qr_rod_delta_qr:.4g}` Å^-1 (`{QR_ROD_DELTA_QR_SCALE:.2f}` x source)",
@@ -10571,25 +11622,28 @@ rod_note_lines = [
     "The detector-region figure is a detector-space Qr overlay diagnostic: the background is linear detector intensity with robust percentile clipping, translucent ribbons show the active Delta Qr support with dashed boundary strokes, solid curves are projected fitted-geometry rod centerlines, and solid-white m labels start from the default geometry before manual adjustment; the intensity scale is saved as a separate file.",
     "The plotted traces are acceptance-normalized detector-count densities unless BACKGROUND_SOLID_ANGLE_CORRECTION is enabled. Raw summed columns are retained for audit only.",
     f"Solid-angle correction enabled: `{bool(BACKGROUND_SOLID_ANGLE_CORRECTION)}`.",
+    f"Qr-sideband transverse background subtraction enabled: `{bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED)}`. When enabled, `background_density_raw` is the central rod-band density, `qr_sideband_background_density` is the same-Qz off-rod estimate, and `background_density` is their difference.",
     "When caked sum fields are available, density uses sum_signal / sum_normalization. Otherwise it falls back to acceptance weights, then pixel_count.",
-    "For nonzero HK rods, plotted `Data` is `background_density - joint_linear_baseline_density` and plotted `Simulation` is peak-only `joint_peak_density`.",
+    "For nonzero HK rods, plotted `Data` is `background_density - joint_linear_baseline_density` unless Qr-sideband subtraction is enabled; with sideband subtraction, plotted `Data` is sideband-corrected `background_density`.",
+    "For PbI2 nonzero rods with Qr-sideband subtraction, the dashed overlay is labeled `Fit` and uses total `joint_fit_density` only when marker/L mapping and baseline-cancellation diagnostics pass; otherwise the model overlay is omitted for that branch.",
+    "For non-PbI2 nonzero rods, the plotted dashed `Simulation` remains peak-only `joint_peak_density`.",
     "For m=0 only, plotted `Data` is raw `background_density` and plotted `Simulation` is `joint_peak_density + joint_linear_baseline_density`.",
     "The CSV includes `joint_peak_density`, `joint_linear_baseline_density`, and `joint_fit_density = joint_peak_density + joint_linear_baseline_density`.",
     "The CSV includes `peak_subtracted_density = background_density - joint_peak_density`; this fitted-peak removal is the only subtraction product. `fit_residual_density = background_density - joint_fit_density` is reported only as a fit diagnostic.",
-    "The detector-space fit model remains in the CSV as `fit_density`; the plotted line uses peak-only `joint_peak_density`. Individual component distributions are saved to the component CSV but not drawn.",
+    "The detector-space fit model remains in the CSV as `fit_density`. Individual component distributions are saved to the component CSV but not drawn.",
     "Subplot labels show `m = H^2 + H*K + K^2`; marker tick labels show compressed (HK,L) values for the fitted points.",
     "Nonzero-m masks still use detector-space Qr/Qz internally and extend to the projected sign endpoint.",
     "The detector-region figure labels the specular rod as `m = 0`; the displayed support is the same detector Qr/Qz region used for profile extraction.",
     "",
     "## Rods",
     "",
-    "| HK | saved Qr | active fit peaks | fit samples | method | marker count |",
-    "|---:|---:|---:|---:|:---|---:|",
+    "| HK | source | generated | saved Qr | active fit peaks | fit samples | method | marker count |",
+    "|---:|:---|:---:|---:|---:|---:|:---|---:|",
 ]
 for rod in rod_entries:
     marker_count = int((marker_table["m"] == int(rod["m"])).sum()) if not marker_table.empty else 0
     rod_note_lines.append(
-        f"| {int(rod['m'])} | {float(rod['qr']):.5g} | "
+        f"| {int(rod['m'])} | {rod.get('qr_source', 'saved_q_group_rows')} | {bool(rod.get('generated', False))} | {float(rod['qr']):.5g} | "
         f"{int(rod.get('qr_fit_count', 0))} | {int(rod.get('qr_fit_sample_count', 0))} | {rod.get('qr_fit_method', 'saved_q_group_rows')} | {marker_count} |"
     )
 rod_note_lines.extend(
@@ -10618,8 +11672,6 @@ rod_note_lines.append(
 rod_note_lines.append(
     f"| rotation_bound_hit | {bool(rod_qspace_calibration.get('rotation_bound_hit', False))} | {bool(rod_qspace_calibration.get('rotation_bound_hit', False))} |"
 )
-rod_profile_note.write_text("\n".join(rod_note_lines) + "\n", encoding="utf-8")
-print(f"saved={rod_profile_note}")
 if profile_failures:
     print("profile notes:")
     for item in profile_failures:
@@ -10662,20 +11714,30 @@ def plot_tail_component_distributions(
 
 
 drawable_profile_keys = drawable_rod_profile_keys(rod_profile_table, plot_marker_table)
+detector_plot_rod_entries = detector_complete_branch_rod_entries(rod_entries, region_overlays)
 plot_rod_entries = [
     rod
-    for rod in rod_entries
+    for rod in detector_plot_rod_entries
     if any((int(rod["m"]), branch_name) in drawable_profile_keys for branch_name, *_ in phi_windows)
+]
+detector_plot_rod_keys = {rod_identity_key(rod) for rod in detector_plot_rod_entries}
+skipped_incomplete_detector_hk = [
+    int(rod["m"]) for rod in rod_entries if rod_identity_key(rod) not in detector_plot_rod_keys
 ]
 skipped_empty_plot_hk = [
     int(rod["m"])
-    for rod in rod_entries
+    for rod in detector_plot_rod_entries
     if not any(
         (int(rod["m"]), branch_name) in drawable_profile_keys for branch_name, *_ in phi_windows
     )
 ]
 if (0, "qz") in drawable_profile_keys:
     plot_rod_entries.append(specular_rod_entry)
+if skipped_incomplete_detector_hk:
+    print(
+        "skipped incomplete detector-support Qr-rod final figure rows: "
+        + ", ".join(f"HK={value}" for value in skipped_incomplete_detector_hk)
+    )
 if skipped_empty_plot_hk:
     print(
         "skipped empty Qr-rod final figure rows: "
@@ -10684,6 +11746,64 @@ if skipped_empty_plot_hk:
 if not plot_rod_entries:
     raise RuntimeError("no drawable Qr-rod profile rows are available for the final figure")
 nonzero_plot_rod_entries = [rod for rod in plot_rod_entries if int(rod["m"]) != 0]
+plot_model_decision_by_key: dict[tuple[int, str], dict[str, object]] = {}
+plot_model_decision_rows: list[dict[str, object]] = []
+for rod in nonzero_plot_rod_entries:
+    m_value = int(rod["m"])
+    for branch_name, *_ in phi_windows:
+        branch_value = str(branch_name)
+        sub = rod_profile_table[
+            (rod_profile_table["m"] == m_value)
+            & (rod_profile_table["branch"] == branch_value)
+            & (rod_profile_table["pixel_count"] > 0)
+        ].copy()
+        sub = positive_l_rows(sub, m_value=m_value, branch_value=branch_value)
+        if sub.empty:
+            continue
+        plot_decision = rod_profile_plot_model_decision(
+            SAMPLE_STEM,
+            m_value,
+            branch_value,
+            sub,
+            plot_marker_table,
+            transverse_background_enabled=bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED),
+            peak_to_data_cancel_ratio=float(PBI2_PLOT_PEAK_TO_DATA_CANCEL_RATIO),
+            baseline_to_peak_cancel_ratio=float(PBI2_PLOT_BASELINE_TO_PEAK_CANCEL_RATIO),
+        )
+        plot_model_decision_by_key[(m_value, branch_value)] = plot_decision
+        metrics = dict(plot_decision.get("metrics", {}))
+        plot_model_decision_rows.append(
+            {
+                "m": m_value,
+                "branch": branch_value,
+                "plot_model": bool(plot_decision.get("plot_model", False)),
+                "label": str(plot_decision.get("label") or ""),
+                "density_column": str(plot_decision.get("density_column") or ""),
+                "reason": str(plot_decision.get("reason", "")),
+                "peak_to_data_ratio": float(metrics.get("peak_to_data_ratio", np.nan)),
+                "baseline_to_peak_ratio": float(metrics.get("baseline_to_peak_ratio", np.nan)),
+            }
+        )
+if plot_model_decision_rows:
+    rod_note_lines.extend(
+        [
+            "",
+            "## Plot model decisions",
+            "",
+            "| HK | branch | plotted model | density source | reason | peak/data p90 | baseline/peak p90 |",
+            "|---:|:---:|:---:|:---|:---|---:|---:|",
+        ]
+    )
+    for row in plot_model_decision_rows:
+        peak_to_data = float(row["peak_to_data_ratio"])
+        baseline_to_peak = float(row["baseline_to_peak_ratio"])
+        rod_note_lines.append(
+            f"| {int(row['m'])} | {row['branch']} | {row['label'] if row['plot_model'] else 'omitted'} | "
+            f"{row['density_column'] or '-'} | {row['reason']} | "
+            f"{peak_to_data:.4g} | {baseline_to_peak:.4g} |"
+        )
+rod_profile_note.write_text("\n".join(rod_note_lines) + "\n", encoding="utf-8")
+print(f"saved={rod_profile_note}")
 rod_profile_l_axis_limits = shared_rod_profile_l_axis_limits(
     rod_profile_table,
     plot_marker_table,
@@ -10814,10 +11934,33 @@ for row, rod in enumerate(plot_rod_entries):
         ].copy()
         sub = positive_l_rows(sub, m_value=int(rod["m"]), branch_value=branch_name)
         if not sub.empty:
+            plot_decision = plot_model_decision_by_key.get(
+                (int(rod["m"]), str(branch_name)),
+                rod_profile_plot_model_decision(
+                    SAMPLE_STEM,
+                    int(rod["m"]),
+                    str(branch_name),
+                    sub,
+                    plot_marker_table,
+                    transverse_background_enabled=bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED),
+                    peak_to_data_cancel_ratio=float(PBI2_PLOT_PEAK_TO_DATA_CANCEL_RATIO),
+                    baseline_to_peak_cancel_ratio=float(PBI2_PLOT_BASELINE_TO_PEAK_CANCEL_RATIO),
+                ),
+            )
+            model_column = str(plot_decision.get("density_column") or "")
+            baseline_column = str(plot_decision.get("baseline_column") or "")
+            plot_model = bool(plot_decision.get("plot_model")) and model_column in sub
+            model_density = (
+                sub[model_column] if plot_model else np.zeros(sub.shape[0], dtype=np.float64)
+            )
+            plot_baseline_density = sub[baseline_column] if baseline_column in sub else None
             norm_payload = normalized_data_simulation_payload(
                 sub["background_density"],
-                sub.get("joint_peak_density", sub["fit_density"]),
-                sub.get("joint_linear_baseline_density", None),
+                model_density,
+                plot_baseline_density,
+                subtract_baseline_from_data=bool(
+                    plot_decision.get("subtract_baseline_from_data", True)
+                ),
             )
             data_norm = np.asarray(norm_payload["data"], dtype=np.float64)
             simulation_norm = np.asarray(norm_payload["simulation"], dtype=np.float64)
@@ -10837,16 +11980,17 @@ for row, rod in enumerate(plot_rod_entries):
                 label="Data",
                 zorder=4,
             )
-            ax.plot(
-                x,
-                simulation_norm,
-                color=JOURNAL_FIT_COLOR,
-                linewidth=1.0,
-                alpha=0.96,
-                linestyle="--",
-                label="Simulation",
-                zorder=5,
-            )
+            if plot_model:
+                ax.plot(
+                    x,
+                    simulation_norm,
+                    color=JOURNAL_FIT_COLOR,
+                    linewidth=1.0,
+                    alpha=0.96,
+                    linestyle="--",
+                    label=str(plot_decision.get("label", "Fit")),
+                    zorder=5,
+                )
         ax.axhline(0.0, color="0.80", linewidth=0.45)
         ax.grid(True, color=JOURNAL_GRID_COLOR, linewidth=0.45)
         ax.text(
@@ -10871,15 +12015,29 @@ for row, rod in enumerate(plot_rod_entries):
             labelleft=col == 0,
             labelbottom=row == last_nonzero_plot_row,
         )
+        if col == 0:
+            ax.set_ylabel("Intensity (a.u.)")
         for spine in ax.spines.values():
             spine.set_linewidth(0.55)
     nonzero_profile_row += 1
 
+plot_model_labels = sorted(
+    {
+        str(decision.get("label"))
+        for decision in plot_model_decision_by_key.values()
+        if bool(decision.get("plot_model")) and str(decision.get("label") or "")
+    }
+)
+if not plot_model_labels and has_hk0_profile_row:
+    plot_model_labels = ["Simulation"]
 legend_handles = [
     mpl.lines.Line2D([], [], color=JOURNAL_DATA_COLOR, linewidth=1.0, label="Data"),
-    mpl.lines.Line2D(
-        [], [], color=JOURNAL_FIT_COLOR, linewidth=1.0, linestyle="--", label="Simulation"
-    ),
+    *[
+        mpl.lines.Line2D(
+            [], [], color=JOURNAL_FIT_COLOR, linewidth=1.0, linestyle="--", label=label
+        )
+        for label in plot_model_labels
+    ],
 ]
 legend_ax = axes[0, -1]
 legend_ax.legend(
@@ -12133,11 +13291,16 @@ def append_detector_rod_label_entry(
     detector_label_ids_added.add(label_id)
 
 
+detector_overlay_rods = detector_overlay_rod_entries(
+    rod_entries,
+    allow_generated=ALLOW_GENERATED_ROD_REFERENCES,
+    region_overlays=region_overlays,
+)
 final_detector_rod_trace_payloads_by_key: dict[tuple[str, int], list[dict[str, object]]] = {
     rod_identity_key(rod): projected_qr_detector_trace_payloads(
         rod, config=profile_bg["qr_overlay_config"]
     )
-    for rod in rod_entries
+    for rod in detector_overlay_rods
     if not rod_rejected_for_plot(rod, ACTIVE_REJECTED_ROD_KEYS)
 }
 final_detector_rod_lines_by_key: dict[tuple[str, int], list[tuple[np.ndarray, np.ndarray]]] = {
@@ -12152,9 +13315,9 @@ final_detector_rod_lines_by_key: dict[tuple[str, int], list[tuple[np.ndarray, np
 }
 rod_color_by_key = {
     rod_identity_key(rod): region_colors[index % len(region_colors)]
-    for index, rod in enumerate(rod_entries)
+    for index, rod in enumerate(detector_overlay_rods)
 }
-for index, rod in enumerate(rod_entries):
+for index, rod in enumerate(detector_overlay_rods):
     color = region_colors[index % len(region_colors)]
     m_value = int(rod["m"])
     rod_key = rod_identity_key(rod)

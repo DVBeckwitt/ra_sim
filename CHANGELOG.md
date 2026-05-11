@@ -78,10 +78,12 @@
   - Finalized the saved-manual-caked Qr headless fit contract: manual caked Qr targets stay fixed in cached `2θ/φ`, simulated sources use dynamic `sim_visual_caked_deg`, saved-manual-caked Qr fits use the bounded point-only solve policy, and default headless now infers the validated saved-manual-caked policy without enabling `c`.
   - Added `--active-vars` forwarding to the geometry-fit quality baseline runner so the Bi2Se3/Bi2Te3 headless `gamma,Gamma` direct-fit residual-improvement gate is repeatable from the existing debug script.
   - Limited `all_background_peak_fits.ipynb` Qr-rod Qz profiles and caked overlays to caked support at or below `60°` 2theta.
+  - Changed PbI2 Qr-rod profile plotting to keep sideband-corrected data as the plotted signal and suppress nonzero-rod model overlays when marker/L mapping or Qz-baseline cancellation diagnostics make the fitted curve misleading.
   - Fixed diagnostic Qz rod profiles to plot acceptance-normalized intensity density instead of raw integrated sums, removing false high-2θ support ramps.
   - Replaced `all_background_peak_fits.ipynb` pseudo-Voigt peak fits with rotated 2D Gaussian-plus-plane fits, then fit each Qr-rod Qz profile jointly as a simultaneous sum of all projected branch-point Gaussian peaks to avoid overlap overestimation between close peaks.
   - Added parameter-cell state selection and a batch runner for `all_background_peak_fits.ipynb`, with per-GUI-state output directories by default.
-  - Fixed the parallel background Qr-rod final fit to keep supported weak Bi2Se3 low-L specular markers while rejecting unsupported markers and failing closed on inconsistent tail-component aggregation shapes.
+  - Fixed the parallel background Qr-rod final fit to keep supported weak Bi2Se3 low-L specular markers even when the preliminary shared baseline runs above the shoulder, while preserving the matching Bi2Te3 weak marker, rejecting unsupported nearby markers, and failing closed on inconsistent tail-component aggregation shapes.
+  - Improved the parallel background Qr-rod final joint Qz fit by adding a log-scale residual term to the nonlinear Pearson-VII refinement, reducing the Bi2Se3 m=0 full-profile mismatch while preserving the Bi2Te3 weak specular peak and invalidating older final-fit caches.
   - Added `hk0_l3_star.png` to the parallel background peak-fit diagnostic script as a colored, log-scaled raw detector crop from the beam center through the `HK=0`, `L=3` / `00L` marker.
   - Improved the parallel diagnostic detector selected-region figure so the central `HK=0` / `00L` rod uses high-contrast styling and a more prominent Delta-Qr band.
   - Adjusted the detector selected-region highlight so the central `HK=0` / `00L` rod keeps the same-width centerline while the visible Delta-Qr region becomes easier to inspect.
@@ -99,6 +101,7 @@
   - Fixed Qr-rod marker export propagation so manually added duplicate-HKL marker rows are preserved and edited `HK=0` marker Qz positions update the marker CSV, detector selected-region figure, and `hk0_l3_star.png`.
   - Changed direct Windows execution of the parallel `.py` diagnostic to relaunch through the existing guarded runner for the default process backend, so global peak fitting uses the process pool unless `BACKGROUND_FIT_BACKEND=thread` or `serial` is explicitly requested.
   - Fixed the final Qr-rod profile figure so rods with no drawable branch data, such as the empty Bi2Te3 `HK=7` row, are skipped instead of reserving blank figure rows.
+  - Added `Intensity (a.u.)` y-axis labels to the left nonzero Qr-rod integration subplot axes, matching the existing HK=0 row label.
   - Fixed the parallel background peak-fit diagnostic script so Qr-rod marker labels are defined before profile annotation/redraw code can call them.
   - Fixed the parallel background peak-fit diagnostic runner so the generated `.py` diagnostic can run through the guarded Windows process backend, restoring process-pool CPU use while keeping direct top-level `.py` execution on the safe thread fallback.
   - Fixed manual Q-set simulated peak refinement propagation so refined detector/caked Qr rows rebuild lookup maps before redraw and fit handoff, and Q-set objective rows stay on the dynamic resolver instead of falling back to nominal direct projections.

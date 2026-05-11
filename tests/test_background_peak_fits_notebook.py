@@ -77,6 +77,8 @@ def _notebook_functions(*names: str) -> dict[str, object]:
         "ROD_QZ_NONLINEAR_CENTER_BOUND_BINS": 4.0,
         "ROD_QZ_NONLINEAR_TAIL_POWER_BOUNDS": (0.55, 12.0),
         "ROD_QZ_NONLINEAR_MAX_NFEV": 1200,
+        "ROD_QZ_NONLINEAR_LOG_RESIDUAL_WEIGHT": 1.0,
+        "ROD_QZ_NONLINEAR_LOG_FLOOR_FRACTION": 0.05,
         "ROD_QZ_SHARED_LINEAR_BASELINE_ENABLED": True,
     }
     exec(compile(module, str(NOTEBOOK_PATH), "exec"), namespace)
@@ -138,13 +140,19 @@ def _script_functions(*names: str) -> dict[str, object]:
         "ROD_QZ_NONLINEAR_CENTER_BOUND_BINS": 4.0,
         "ROD_QZ_NONLINEAR_TAIL_POWER_BOUNDS": (0.55, 12.0),
         "ROD_QZ_NONLINEAR_MAX_NFEV": 1200,
+        "ROD_QZ_NONLINEAR_LOG_RESIDUAL_WEIGHT": 1.0,
+        "ROD_QZ_NONLINEAR_LOG_FLOOR_FRACTION": 0.05,
         "ROD_QZ_SHARED_LINEAR_BASELINE_ENABLED": True,
-        "QR_ROD_FINAL_FIT_CACHE_SIGNATURE": "joint_qz_labeled_marker_fit_specular_theta_i0_l8_v5",
+        "QR_ROD_FINAL_FIT_CACHE_SIGNATURE": "joint_qz_labeled_marker_fit_specular_theta_i0_l8_v8",
         "PRE_EDITOR_CACHE_SCHEMA": "ra_sim.background_pre_editor_cache.v1",
         "PRE_EDITOR_CACHE_SIGNATURE": "pre_qr_rod_marker_editor_inputs_v1",
         "PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE": "background_peak_fit_results_v1",
         "PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE": "profile_fit_cache_v1",
-        "PRE_EDITOR_QR_ROD_STAGE_SIGNATURE": "qr_rod_pre_marker_profiles_specular_theta_i0_l8_v3",
+        "PRE_EDITOR_QR_ROD_STAGE_SIGNATURE": "qr_rod_pre_marker_profiles_specular_theta_i0_l8_v4",
+        "QR_ROD_BG_SIDE_BAND_INNER_SCALE": 1.30,
+        "QR_ROD_BG_SIDE_BAND_OUTER_SCALE": 2.80,
+        "QR_ROD_BG_MIN_SIDE_PIXELS": 8,
+        "QR_ROD_BG_PERCENTILE": 50.0,
     }
     exec(compile(module, str(PARALLEL_SCRIPT_PATH), "exec"), namespace)
     return namespace
@@ -279,6 +287,700 @@ def test_detector_region_saves_intensity_scale_as_separate_file() -> None:
     assert "def save_detector_region_intensity_scale(" in source
     assert 'stem=f"{ROD_PROFILE_REGION_STEM}_intensity_scale"' in source
     assert "detector_region_scale_png, detector_region_scale_pdf" in source
+
+
+def test_parallel_script_single_background_figures_keep_row_column_axes() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    detector_start = source.index(
+        "fig, axes = plt.subplots(\n"
+        "    len(ordered_backgrounds),\n"
+        "    2,"
+    )
+    detector_setup = source[
+        detector_start : source.index("for row, bg in enumerate(ordered_backgrounds):", detector_start)
+    ]
+    assert "axes = np.asarray(axes, dtype=object).reshape(len(ordered_backgrounds), 2)" in detector_setup
+
+    profile_start = source.index(
+        "fig, axes = plt.subplots(\n"
+        "    len(ordered_backgrounds),\n"
+        "    len(columns),"
+    )
+    profile_setup = source[
+        profile_start : source.index("for row, bg in enumerate(ordered_backgrounds):", profile_start)
+    ]
+    assert (
+        "axes = np.asarray(axes, dtype=object).reshape(len(ordered_backgrounds), len(columns))"
+        in profile_setup
+    )
+
+
+def test_parallel_script_active_lattice_prefers_saved_state_variables() -> None:
+    namespace = _script_functions(
+        "as_float",
+        "positive_float_or_nan",
+        "active_lattice_constants_from_state",
+    )
+    active_lattice = namespace["active_lattice_constants_from_state"]
+
+    lattice = active_lattice(
+        {
+            "variables": {
+                "a_var": "4.59",
+                "c_var": 6.78,
+            },
+            "files": {"primary_cif_path": "ignored.cif"},
+        }
+    )
+
+    assert lattice == {
+        "a": pytest.approx(4.59),
+        "c": pytest.approx(6.78),
+        "source": "state.variables",
+        "primary_cif_path": "ignored.cif",
+    }
+
+
+def test_parallel_script_active_lattice_falls_back_to_primary_cif(tmp_path: Path) -> None:
+    namespace = _script_functions(
+        "as_float",
+        "positive_float_or_nan",
+        "active_lattice_constants_from_cif_path",
+        "active_lattice_constants_from_state",
+    )
+    active_lattice = namespace["active_lattice_constants_from_state"]
+    cif_path = tmp_path / "PbI2.cif"
+    cif_path.write_text(
+        "\n".join(
+            [
+                "data_pbi2",
+                "_cell_length_a    '4.590(2)'",
+                '_cell_length_c    "6.780(3)"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    lattice = active_lattice(
+        {
+            "variables": {"a_var": "", "c_var": ""},
+            "files": {"primary_cif_path": str(cif_path)},
+        }
+    )
+
+    assert lattice["a"] == pytest.approx(4.59)
+    assert lattice["c"] == pytest.approx(6.78)
+    assert lattice["source"] == "primary_cif_path"
+    assert lattice["primary_cif_path"] == str(cif_path)
+
+
+def test_parallel_script_active_lattice_rejects_missing_values() -> None:
+    namespace = _script_functions(
+        "as_float",
+        "positive_float_or_nan",
+        "active_lattice_constants_from_cif_path",
+        "active_lattice_constants_from_state",
+    )
+    active_lattice = namespace["active_lattice_constants_from_state"]
+
+    with pytest.raises(ValueError, match="active lattice constants unavailable"):
+        active_lattice({"variables": {"a_var": "0", "c_var": "nan"}, "files": {}})
+
+
+def test_parallel_script_active_lattice_cache_signature_changes_with_lattice_values() -> None:
+    namespace = _script_functions(
+        "_cache_normalize_value",
+        "as_float",
+        "positive_float_or_nan",
+        "active_lattice_constants_from_state",
+        "file_cache_signature",
+        "active_lattice_cache_signature",
+    )
+    signature = namespace["active_lattice_cache_signature"]
+
+    base = {
+        "variables": {"a_var": "4.59", "c_var": "6.78", "unrelated": "before"},
+        "files": {"primary_cif_path": "PbI2.cif"},
+    }
+    same_lattice = {
+        "variables": {"a_var": "4.59", "c_var": "6.78", "unrelated": "after"},
+        "files": {"primary_cif_path": "PbI2.cif"},
+    }
+    changed_a = {
+        "variables": {"a_var": "5.0", "c_var": "6.78", "unrelated": "before"},
+        "files": {"primary_cif_path": "PbI2.cif"},
+    }
+    changed_c = {
+        "variables": {"a_var": "4.59", "c_var": "7.0", "unrelated": "before"},
+        "files": {"primary_cif_path": "PbI2.cif"},
+    }
+
+    assert signature(base) == signature(same_lattice)
+    assert signature(base) != signature(changed_a)
+    assert signature(base) != signature(changed_c)
+
+
+def test_parallel_script_q_group_rows_cache_signature_changes_with_q_values() -> None:
+    namespace = _script_functions("_cache_normalize_value", "q_group_rows_cache_signature")
+    signature = namespace["q_group_rows_cache_signature"]
+    base = {
+        "geometry": {
+            "q_group_rows": [
+                {
+                    "key": ["q_group", "primary", 1, 0],
+                    "source_label": "primary",
+                    "included": True,
+                    "qr": 1.58,
+                    "qz": 0.0,
+                }
+            ]
+        }
+    }
+    changed_qr = {
+        "geometry": {
+            "q_group_rows": [
+                {
+                    "key": ["q_group", "primary", 1, 0],
+                    "source_label": "primary",
+                    "included": True,
+                    "qr": 1.7,
+                    "qz": 0.0,
+                }
+            ],
+            "unrelated": "ignored",
+        }
+    }
+
+    assert signature(base) != signature(changed_qr)
+
+
+def test_parallel_script_qr_rod_final_cache_key_accepts_reference_signature() -> None:
+    namespace = _script_functions(
+        "_cache_normalize_value",
+        "clean_marker_title",
+        "qr_rod_peak_edit_cache_key",
+    )
+    cache_key = namespace["qr_rod_peak_edit_cache_key"]
+
+    first = cache_key(
+        None,
+        lattice_signature={"a": 4.59, "c": 6.78},
+        q_group_signature=[{"key": ["q_group", "primary", 1, 0], "qr": 1.58}],
+    )
+    second = cache_key(
+        None,
+        lattice_signature={"a": 5.0, "c": 6.78},
+        q_group_signature=[{"key": ["q_group", "primary", 1, 0], "qr": 1.58}],
+    )
+    third = cache_key(
+        None,
+        lattice_signature={"a": 4.59, "c": 6.78},
+        q_group_signature=[{"key": ["q_group", "primary", 1, 0], "qr": 1.7}],
+    )
+
+    assert first != second
+    assert first != third
+    assert first != cache_key(
+        None,
+        lattice_signature={"a": 4.59, "c": 6.78},
+        q_group_signature=[{"key": ["q_group", "primary", 1, 0], "qr": 1.58}],
+        rod_reference_policy={"allow_generated": True},
+    )
+
+
+def test_parallel_script_wires_lattice_and_q_groups_into_cache_keys() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "ACTIVE_LATTICE = active_lattice_constants_from_state(state)" in source
+    assert '"active_lattice": ACTIVE_LATTICE_CACHE_SIGNATURE' in source
+    assert '"q_group_rows": Q_GROUP_ROWS_CACHE_SIGNATURE' in source
+    assert '"rod_reference_policy": ROD_REFERENCE_POLICY_SIGNATURE' in source
+    assert "lattice_signature=ACTIVE_LATTICE_CACHE_SIGNATURE" in source
+    assert "q_group_signature=Q_GROUP_ROWS_CACHE_SIGNATURE" in source
+    assert "rod_reference_policy=ROD_REFERENCE_POLICY_SIGNATURE" in source
+
+
+def test_parallel_script_primary_rod_entries_use_saved_q_groups_by_default() -> None:
+    namespace = _script_functions(
+        "as_float",
+        "active_lattice_qr_value_for_m",
+        "derived_primary_rod_entry_for_m",
+        "profile_rod_entries_from_q_group_rows",
+    )
+    build_entries = namespace["profile_rod_entries_from_q_group_rows"]
+
+    rods = build_entries(
+        [
+            {
+                "key": ["q_group", "primary", 1, 0],
+                "source_label": "primary",
+                "included": True,
+                "qr": 9.0,
+                "qz": 0.0,
+            }
+        ],
+        candidate_m_values=[1, 3],
+        lattice_a=4.59,
+    )
+
+    by_m = {int(row["m"]): row for row in rods}
+    assert sorted(by_m) == [1]
+    assert by_m[1]["qr"] == 9.0
+    assert by_m[1]["qr_source"] == "saved_q_group_rows"
+    assert by_m[1]["generated"] is False
+    assert by_m[1]["source_label"] == "primary"
+    assert by_m[1]["q_group_key"] == ("q_group", "primary", 1, 0)
+
+
+def test_parallel_script_generated_primary_rod_entries_require_explicit_gate() -> None:
+    namespace = _script_functions(
+        "as_float",
+        "active_lattice_qr_value_for_m",
+        "derived_primary_rod_entry_for_m",
+        "profile_rod_entries_from_q_group_rows",
+    )
+    build_entries = namespace["profile_rod_entries_from_q_group_rows"]
+
+    rods = build_entries(
+        [
+            {
+                "key": ["q_group", "primary", 1, 0],
+                "source_label": "primary",
+                "included": True,
+                "qr": 9.0,
+                "qz": 0.0,
+            }
+        ],
+        candidate_m_values=[1, 3],
+        lattice_a=4.59,
+        allow_generated=True,
+    )
+
+    by_m = {int(row["m"]): row for row in rods}
+    assert sorted(by_m) == [1, 3]
+    assert by_m[3]["qr"] == pytest.approx((2.0 * np.pi / 4.59) * np.sqrt(4.0))
+    assert by_m[3]["qr_source"] == "active_lattice"
+    assert by_m[3]["generated"] is True
+    assert "q_group_key" not in by_m[3]
+
+
+def test_parallel_script_build_profile_rods_disables_generated_fallback_by_default() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "ALLOW_GENERATED_ROD_REFERENCES = _truthy_setting" in source
+    assert "allow_generated=ALLOW_GENERATED_ROD_REFERENCES" in source
+
+
+def test_parallel_script_detector_overlay_filters_generated_rods_by_default() -> None:
+    namespace = _script_functions(
+        "detector_complete_branch_rod_entries",
+        "detector_overlay_rod_entries",
+    )
+    overlay_rods = namespace["detector_overlay_rod_entries"]
+    rods = [
+        {"m": 1, "qr": 1.0, "generated": False},
+        {"m": 3, "qr": 2.0, "generated": True},
+        {"m": 4, "qr": 3.0},
+        {"m": 7, "qr": 4.0},
+    ]
+    region_overlays = [
+        {"m": 1, "source": "", "branch": "-", "qz_min": 0.2, "qz_max": 1.2},
+        {"m": 1, "source": "", "branch": "+", "qz_min": 0.2, "qz_max": 1.2},
+        {"m": 4, "source": "", "branch": "-", "qz_min": 0.2, "qz_max": 1.2},
+        {"m": 4, "source": "", "branch": "+", "qz_min": 0.2, "qz_max": 1.2},
+        {"m": 7, "source": "", "branch": "-", "qz_min": 0.2, "qz_max": 1.2},
+    ]
+
+    saved_only = overlay_rods(rods, region_overlays=region_overlays)
+    assert [int(row["m"]) for row in saved_only] == [1, 4]
+    assert [
+        int(row["m"])
+        for row in overlay_rods(rods, region_overlays=region_overlays, allow_generated=True)
+    ] == [1, 4]
+
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    detector_figure_source = source[
+        source.index("rod_label_entries: list[dict[str, object]] = []") : source.index(
+            "specular_color = OKABE_ITO"
+        )
+    ]
+    assert "detector_overlay_rods = detector_overlay_rod_entries(" in detector_figure_source
+    assert "region_overlays=region_overlays" in detector_figure_source
+
+
+def test_parallel_script_final_rod_plot_filters_incomplete_detector_branch_support() -> None:
+    namespace = _script_functions("detector_complete_branch_rod_entries")
+    complete_rods = namespace["detector_complete_branch_rod_entries"]
+    rods = [
+        {"m": 1, "source": "primary"},
+        {"m": 7, "source": "primary"},
+    ]
+    region_overlays = [
+        {"m": 1, "source": "primary", "branch": "-", "qz_min": 0.2, "qz_max": 1.2},
+        {"m": 1, "source": "primary", "branch": "+", "qz_min": 0.2, "qz_max": 1.2},
+        {"m": 7, "source": "primary", "branch": "-", "qz_min": 0.2, "qz_max": 1.2},
+    ]
+
+    assert [int(row["m"]) for row in complete_rods(rods, region_overlays)] == [1]
+
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    final_profile_source = source[
+        source.index("drawable_profile_keys = drawable_rod_profile_keys(") : source.index(
+            "\nif not plot_rod_entries:"
+        )
+    ]
+    assert "detector_plot_rod_entries = detector_complete_branch_rod_entries(" in final_profile_source
+    assert "skipped_incomplete_detector_hk" in final_profile_source
+
+
+def test_parallel_script_reports_rod_reference_sources_and_skipped_generated_rods() -> None:
+    namespace = _script_functions("rod_reference_source_summary")
+    summarize = namespace["rod_reference_source_summary"]
+
+    summary = summarize(
+        [
+            {"m": 1, "generated": False},
+            {"m": 3, "generated": True},
+        ],
+        candidate_m_values=[1, 3, 4],
+        allow_generated=False,
+    )
+
+    assert summary == {
+        "saved": 1,
+        "generated": 1,
+        "skipped_generated": 1,
+        "allow_generated": False,
+    }
+
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    assert "rod references: saved=" in source
+    assert "Rod reference policy:" in source
+    assert "| HK | source | generated | saved Qr |" in source
+
+
+def test_parallel_script_requires_broad_anchor_coverage_before_detector_qr_refit() -> None:
+    namespace = _script_functions(
+        "detector_rotation_anchor_summary",
+        "detector_rotation_fit_has_anchor_coverage",
+    )
+    summarize = namespace["detector_rotation_anchor_summary"]
+    has_coverage = namespace["detector_rotation_fit_has_anchor_coverage"]
+    pbi2_like_points = [
+        {"target_source_label": "primary", "m": 1},
+        {"target_source_label": "primary", "m": 1},
+    ]
+    broad_points = [
+        {"target_source_label": "primary", "m": 1},
+        {"target_source_label": "primary", "m": 1},
+        {"target_source_label": "primary", "m": 3},
+        {"target_source_label": "primary", "m": 3},
+    ]
+
+    assert summarize(pbi2_like_points) == {"anchor_count": 2, "anchor_m_group_count": 1}
+    assert has_coverage(pbi2_like_points) is False
+    assert has_coverage(broad_points) is True
+    assert has_coverage(broad_points, active_mask=[True, True, False, False]) is False
+
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    assert "insufficient detector-rotation anchor coverage" in source
+    assert "if bool(rod_qspace_calibration.get(\"success\", False)):" in source
+
+
+def test_parallel_script_qr_sideband_helpers_bin_same_qz_background() -> None:
+    namespace = _script_functions("_binned_nanpercentile", "_sideband_qr_mask")
+    binned_nanpercentile = namespace["_binned_nanpercentile"]
+    sideband_qr_mask = namespace["_sideband_qr_mask"]
+
+    qz = np.asarray([0.2, 0.3, 1.2, 1.3, 1.4], dtype=np.float64)
+    values = np.asarray([10.0, 12.0, 20.0, 22.0, 24.0], dtype=np.float64)
+    background, counts = binned_nanpercentile(
+        qz,
+        values,
+        np.asarray([0.0, 1.0, 2.0], dtype=np.float64),
+        percentile=50.0,
+        min_count=2,
+    )
+
+    np.testing.assert_allclose(background, np.asarray([11.0, 22.0], dtype=np.float64))
+    np.testing.assert_array_equal(counts, np.asarray([2, 3], dtype=np.int64))
+
+    qr_map = np.asarray([[0.0, 0.7, 0.8, 1.0, 1.13, 1.2, 1.3, 1.6]], dtype=np.float64)
+    mask, inner, outer = sideband_qr_mask(qr_map, qr0=1.0, delta_qr=0.1)
+
+    assert inner == pytest.approx(0.13)
+    assert outer == pytest.approx(0.28)
+    assert mask.tolist() == [[False, False, True, False, True, True, False, False]]
+
+
+def test_parallel_script_qr_sideband_profiles_bypass_fast_accumulators_and_keep_raw_columns() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    profile_source = source[
+        source.index("def profile_from_detector_qr_qz(") : source.index(
+            "\n# Rod-profile baselines are added"
+        )
+    ]
+
+    assert "QR_ROD_TRANSVERSE_BACKGROUND_ENABLED" in source
+    assert "not bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED)" in profile_source
+    assert "background_density_raw" in profile_source
+    assert "qr_sideband_background_density" in profile_source
+    assert "qr_sideband_pixel_count" in profile_source
+    assert "detector_qr_band_per_qz_bin_with_qr_sideband_background" in profile_source
+
+
+def test_parallel_script_qr_sideband_plot_data_does_not_subtract_qz_baseline() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    y_limit_source = source[
+        source.index("def shared_nonzero_rod_profile_y_axis_limits(") : source.index(
+            "\nsupport_diagnostic_stem"
+        )
+    ]
+    final_profile_source = source[
+        source.index("for row, rod in enumerate(plot_rod_entries):") : source.index(
+            "\nrod_profile_png"
+        )
+    ]
+
+    assert "transverse_background_enabled=bool(" in y_limit_source
+    assert "transverse_background_enabled=bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED)" in final_profile_source
+    assert "plot_baseline_density = sub[baseline_column] if baseline_column in sub else None" in final_profile_source
+    assert "Qr-sideband transverse background subtraction enabled" in source
+
+
+def test_parallel_script_pbi2_plot_policy_suppresses_baseline_cancelled_fit() -> None:
+    namespace = _script_functions(
+        "_finite_abs_percentile",
+        "rod_profile_marker_l_mapping_is_valid",
+        "rod_profile_plot_model_decision",
+    )
+    plot_decision = namespace["rod_profile_plot_model_decision"]
+    sub = pd.DataFrame(
+        {
+            "background_density": [3.5, 4.0, 3.8, 4.2],
+            "joint_peak_density": [42.0, 45.0, 46.0, 43.0],
+            "joint_linear_baseline_density": [-39.0, -41.5, -42.0, -40.0],
+            "joint_fit_density": [3.0, 3.5, 4.0, 3.0],
+            "fit_density": [3.0, 3.5, 4.0, 3.0],
+        }
+    )
+    markers = pd.DataFrame(
+        [
+            {"m": 4, "branch": "-", "qz_marker": 1.0, "fit_l": 2.0},
+            {"m": 4, "branch": "-", "qz_marker": 2.0, "fit_l": 3.0},
+        ]
+    )
+
+    decision = plot_decision(
+        "pbi2",
+        4,
+        "-",
+        sub,
+        markers,
+        transverse_background_enabled=True,
+    )
+
+    assert decision["plot_model"] is False
+    assert decision["density_column"] is None
+    assert decision["label"] is None
+    assert decision["reason"] == "pbi2_baseline_cancellation"
+
+
+def test_parallel_script_pbi2_plot_policy_uses_total_fit_when_safe() -> None:
+    namespace = _script_functions(
+        "_finite_abs_percentile",
+        "rod_profile_marker_l_mapping_is_valid",
+        "rod_profile_plot_model_decision",
+    )
+    plot_decision = namespace["rod_profile_plot_model_decision"]
+    sub = pd.DataFrame(
+        {
+            "background_density": [8.0, 9.5, 8.8, 9.0],
+            "joint_peak_density": [6.0, 6.5, 6.1, 6.3],
+            "joint_linear_baseline_density": [0.5, 0.4, 0.5, 0.4],
+            "joint_fit_density": [6.5, 6.9, 6.6, 6.7],
+            "fit_density": [6.5, 6.9, 6.6, 6.7],
+        }
+    )
+    markers = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_marker": 1.0, "fit_l": 2.0},
+            {"m": 1, "branch": "+", "qz_marker": 2.0, "fit_l": 3.0},
+        ]
+    )
+
+    decision = plot_decision(
+        "PbI2",
+        1,
+        "+",
+        sub,
+        markers,
+        transverse_background_enabled=True,
+    )
+
+    assert decision["plot_model"] is True
+    assert decision["density_column"] == "joint_fit_density"
+    assert decision["baseline_column"] is None
+    assert decision["subtract_baseline_from_data"] is False
+    assert decision["label"] == "Fit"
+    assert decision["reason"] == "pbi2_total_fit"
+
+
+def test_parallel_script_pbi2_plot_policy_suppresses_invalid_l_mapping() -> None:
+    namespace = _script_functions(
+        "_finite_abs_percentile",
+        "rod_profile_marker_l_mapping_is_valid",
+        "rod_profile_plot_model_decision",
+    )
+    plot_decision = namespace["rod_profile_plot_model_decision"]
+    sub = pd.DataFrame(
+        {
+            "background_density": [8.0, 9.5, 8.8],
+            "joint_peak_density": [6.0, 6.5, 6.1],
+            "joint_linear_baseline_density": [0.5, 0.4, 0.5],
+            "joint_fit_density": [6.5, 6.9, 6.6],
+        }
+    )
+    markers = pd.DataFrame(
+        [
+            {"m": 3, "branch": "+", "qz_marker": 1.0, "fit_l": np.nan},
+            {"m": 3, "branch": "+", "qz_marker": 2.0, "fit_l": np.nan},
+        ]
+    )
+
+    decision = plot_decision(
+        "PbI2",
+        3,
+        "+",
+        sub,
+        markers,
+        transverse_background_enabled=True,
+    )
+
+    assert decision["plot_model"] is False
+    assert decision["reason"] == "pbi2_invalid_l_mapping"
+
+
+def test_parallel_script_pbi2_marker_l_mapping_allows_duplicate_same_l_rows() -> None:
+    namespace = _script_functions("rod_profile_marker_l_mapping_is_valid")
+    mapping_is_valid = namespace["rod_profile_marker_l_mapping_is_valid"]
+    markers = pd.DataFrame(
+        [
+            {"m": 1, "branch": "-", "qz_marker": 0.9, "fit_l": 1.0},
+            {"m": 1, "branch": "-", "qz_marker": 1.7, "fit_l": 1.0},
+            {"m": 1, "branch": "-", "qz_marker": 1.7, "fit_l": 1.0},
+            {"m": 1, "branch": "-", "qz_marker": 1.95, "fit_l": 2.0},
+            {"m": 1, "branch": "-", "qz_marker": 2.7, "fit_l": 3.0},
+        ]
+    )
+    conflicting = pd.concat(
+        [
+            markers,
+            pd.DataFrame([{"m": 1, "branch": "-", "qz_marker": 1.95, "fit_l": 4.0}]),
+        ],
+        ignore_index=True,
+    )
+
+    assert mapping_is_valid(markers, m_value=1, branch_value="-") is True
+    assert mapping_is_valid(conflicting, m_value=1, branch_value="-") is False
+
+
+def test_parallel_script_plot_policy_keeps_non_pbi2_existing_model_selection() -> None:
+    namespace = _script_functions(
+        "_finite_abs_percentile",
+        "rod_profile_marker_l_mapping_is_valid",
+        "rod_profile_plot_model_decision",
+    )
+    plot_decision = namespace["rod_profile_plot_model_decision"]
+    sub = pd.DataFrame(
+        {
+            "background_density": [4.0, 4.5],
+            "joint_peak_density": [1.0, 1.1],
+            "joint_linear_baseline_density": [0.2, 0.2],
+            "joint_fit_density": [1.2, 1.3],
+            "fit_density": [1.2, 1.3],
+        }
+    )
+
+    decision = plot_decision(
+        "Bi2Se3",
+        4,
+        "-",
+        sub,
+        pd.DataFrame(),
+        transverse_background_enabled=False,
+    )
+
+    assert decision["plot_model"] is True
+    assert decision["density_column"] == "joint_peak_density"
+    assert decision["baseline_column"] == "joint_linear_baseline_density"
+    assert decision["subtract_baseline_from_data"] is True
+    assert decision["label"] == "Simulation"
+    assert decision["reason"] == "default_peak_model"
+
+
+def test_parallel_script_final_profile_plot_uses_model_decisions() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    final_profile_source = source[
+        source.index("for row, rod in enumerate(plot_rod_entries):") : source.index(
+            "\nrod_profile_png"
+        )
+    ]
+    nonzero_profile_source = final_profile_source[final_profile_source.index("for col,") :]
+
+    assert "plot_model_decision_by_key" in final_profile_source
+    assert "rod_profile_plot_model_decision(" in source
+    assert "sub.get(\"joint_peak_density\", sub[\"fit_density\"])" not in nonzero_profile_source
+    assert "label=str(plot_decision.get(\"label\", \"Fit\"))" in nonzero_profile_source
+
+
+def test_parallel_script_dynamic_specular_markers_use_active_lattice_c() -> None:
+    namespace = _script_functions(
+        "as_float",
+        "active_lattice_qz_value_for_l",
+        "specular_l_marker_rows_with_lattice_fallback",
+    )
+    namespace["POSITIVE_QZ_MIN"] = 1.0e-9
+    marker_rows = namespace["specular_l_marker_rows_with_lattice_fallback"]
+
+    markers = marker_rows([], lattice_c=6.78, l_max=3.0)
+
+    assert list(markers["l"]) == [1, 2, 3]
+    assert float(markers.loc[0, "qz_marker"]) == pytest.approx(2.0 * np.pi / 6.78)
+    assert set(markers["marker_source"]) == {"active_lattice"}
+
+
+def test_parallel_script_dynamic_specular_markers_keep_existing_fitted_rows() -> None:
+    namespace = _script_functions(
+        "as_float",
+        "active_lattice_qz_value_for_l",
+        "specular_l_marker_rows_with_lattice_fallback",
+    )
+    namespace["POSITIVE_QZ_MIN"] = 1.0e-9
+    marker_rows = namespace["specular_l_marker_rows_with_lattice_fallback"]
+
+    markers = marker_rows(
+        [{"m": 0, "branch": "qz", "l": 2, "fit_l": 2, "display_l": 2.0, "qz_marker": 99.0}],
+        lattice_c=6.78,
+        l_max=3.0,
+    )
+
+    by_l = {int(row["l"]): row for row in markers.to_dict("records")}
+    assert by_l[2]["qz_marker"] == 99.0
+    assert by_l[2].get("marker_source", "") != "active_lattice"
+    assert by_l[1]["qz_marker"] == pytest.approx(2.0 * np.pi / 6.78)
+    assert by_l[3]["qz_marker"] == pytest.approx(3.0 * 2.0 * np.pi / 6.78)
+
+
+def test_parallel_script_logs_active_lattice_and_records_it_in_notes() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "active lattice:" in source
+    assert "ACTIVE_LATTICE_A" in source
+    assert "ACTIVE_LATTICE_C" in source
+    assert "Active lattice:" in source
 
 
 def test_detector_region_label_initial_placement_uses_default_geometry() -> None:
@@ -922,14 +1624,109 @@ def test_parallel_script_joint_qz_fit_keeps_bi2se3_low_l_specular_marker() -> No
         "fit_joint_qz_peak_sum",
     )
     fit_joint_qz_peak_sum = namespace["fit_joint_qz_peak_sum"]
-    x = 0.026846845392760447 + 0.0180138161284057 * np.arange(96, dtype=np.float64)
-    baseline = 51.226078615200066 - 3.107609114813512 * (x - 0.8825031114920311)
-    y = baseline.copy()
-    y += 14000.0 * np.exp(-0.5 * ((x - 0.06287447764957185) / 0.013) ** 2)
-    y += 24.0 * np.exp(-0.5 * ((x - 0.3871231679608744) / 0.035) ** 2)
-    y += 8500.0 * np.exp(-0.5 * ((x - 0.6393165937585541) / 0.018) ** 2)
-    y += 210.0 * np.exp(-0.5 * ((x - 1.305827790509565) / 0.018) ** 2)
-    markers = np.array(
+    bi2se3_x = 0.0268468453927604 + 0.018013816128405698 * np.arange(96, dtype=np.float64)
+    bi2se3_y = np.array(
+        [
+            1443.4,
+            2499.57142857143,
+            14085.3333333333,
+            6859.64285714286,
+            2383.6,
+            728.1,
+            258.357142857143,
+            107.708333333333,
+            78.1481481481482,
+            70.15,
+            68.1212121212121,
+            63.4791666666667,
+            60.8205128205128,
+            61.9285714285714,
+            59.2222222222222,
+            59.3333333333333,
+            58.0588235294118,
+            59.0,
+            59.6842105263158,
+            69.551724137931,
+            76.472972972973,
+            71.5866666666667,
+            73.3823529411765,
+            71.1684210526316,
+            71.4931506849315,
+            72.75,
+            72.4050632911392,
+            73.8988764044944,
+            76.9444444444444,
+            82.6704545454545,
+            93.0650406504065,
+            125.440860215054,
+            194.625954198473,
+            683.878787878788,
+            8644.70161290323,
+            6778.25833333333,
+            782.1875,
+            224.77397260274,
+            112.201754385965,
+            83.0063291139241,
+            68.875,
+            62.0180722891566,
+            59.0714285714286,
+            56.6900584795322,
+            54.955223880597,
+            53.2080924855491,
+            54.0958904109589,
+            53.9828571428571,
+            52.3417721518987,
+            54.0842696629214,
+            51.6745562130178,
+            51.5028248587571,
+            52.8858695652174,
+            51.7668711656442,
+            50.2857142857143,
+            49.0920245398773,
+            48.8636363636364,
+            50.1179577464789,
+            49.3070175438597,
+            50.1929824561403,
+            49.2022471910112,
+            49.3412322274881,
+            50.0974358974359,
+            50.3039647577093,
+            51.121359223301,
+            52.6206896551724,
+            52.246511627907,
+            53.1402714932127,
+            58.0207468879668,
+            71.0575221238938,
+            140.547008547009,
+            261.040650406504,
+            136.445833333333,
+            61.4526748971193,
+            53.4365079365079,
+            50.3968871595331,
+            49.7176470588235,
+            48.3667953667954,
+            47.2659176029963,
+            47.5666666666667,
+            47.6557971014493,
+            46.054347826087,
+            46.1474820143885,
+            46.2473498233216,
+            45.1003460207612,
+            45.7898305084746,
+            44.2263513513514,
+            44.1196013289037,
+            42.4901960784314,
+            42.974025974026,
+            42.4935897435898,
+            41.7476340694006,
+            41.5423197492163,
+            40.5401234567901,
+            40.226586102719,
+            40.540059347181,
+        ],
+        dtype=np.float64,
+    )
+    bi2se3_markers = np.array(
         [
             0.06287447764957185,
             0.3871231679608744,
@@ -939,16 +1736,186 @@ def test_parallel_script_joint_qz_fit_keeps_bi2se3_low_l_specular_marker() -> No
         ],
         dtype=np.float64,
     )
+    bi2te3_x = 0.0263476507894132 + 0.0169190889522689 * np.arange(96, dtype=np.float64)
+    bi2te3_y = np.array(
+        [
+            302.833333333333,
+            1198.0,
+            11320.0,
+            8735.25,
+            2900.55,
+            974.0,
+            359.714285714286,
+            155.0,
+            87.2903225806452,
+            72.5757575757576,
+            69.2424242424242,
+            65.5454545454545,
+            63.7631578947368,
+            63.8653846153846,
+            63.1818181818182,
+            59.7555555555556,
+            58.7916666666667,
+            58.8235294117647,
+            58.112676056338,
+            60.0526315789474,
+            70.3333333333333,
+            75.4590163934426,
+            68.9384615384615,
+            65.7078651685393,
+            66.0138888888889,
+            67.5694444444444,
+            65.2894736842105,
+            65.8846153846154,
+            67.1559633027523,
+            69.5833333333333,
+            72.6279069767442,
+            81.7777777777778,
+            99.6893203883495,
+            381.739130434783,
+            3156.94897959184,
+            2294.55,
+            300.730769230769,
+            128.585714285714,
+            95.8545454545455,
+            92.1801801801802,
+            87.4521739130435,
+            84.1369863013699,
+            71.8692307692308,
+            67.2032520325203,
+            64.8548387096774,
+            61.5660377358491,
+            59.2638888888889,
+            57.8208955223881,
+            56.6544117647059,
+            58.0,
+            57.4575163398693,
+            55.0763888888889,
+            54.1987179487179,
+            54.4301075268817,
+            53.2981366459627,
+            54.1602564102564,
+            52.6772151898734,
+            52.122905027933,
+            52.98125,
+            53.1298701298701,
+            52.9108910891089,
+            50.6627118644068,
+            51.2416666666667,
+            51.8222222222222,
+            51.3888888888889,
+            51.9562841530055,
+            51.2068965517241,
+            51.1511111111111,
+            51.5492227979275,
+            54.3744292237443,
+            69.9118942731278,
+            76.4146341463415,
+            62.0165975103734,
+            51.6975609756098,
+            50.9752066115703,
+            49.8709677419355,
+            49.3252032520325,
+            50.1294642857143,
+            49.4186991869919,
+            49.2987012987013,
+            49.1254901960784,
+            49.5234042553192,
+            48.8129770992366,
+            49.4177215189873,
+            48.58984375,
+            48.3372093023256,
+            48.1372549019608,
+            47.9054545454546,
+            46.57421875,
+            46.8438661710037,
+            46.4822695035461,
+            45.4172932330827,
+            45.7921146953405,
+            45.28125,
+            43.8239436619718,
+            44.3111888111888,
+        ],
+        dtype=np.float64,
+    )
+    bi2te3_markers = np.array(
+        [
+            0.06699728923054353,
+            0.3778623082216827,
+            0.615943649473,
+            0.7053808103730614,
+            1.231121522995,
+        ],
+        dtype=np.float64,
+    )
 
-    payload = fit_joint_qz_peak_sum(x, y, markers)
+    bi2se3_payload = fit_joint_qz_peak_sum(bi2se3_x, bi2se3_y, bi2se3_markers)
+    bi2te3_payload = fit_joint_qz_peak_sum(bi2te3_x, bi2te3_y, bi2te3_markers)
 
-    assert payload["success"] is True
-    component_markers = sorted(float(component["marker"]) for component in payload["components"])
-    assert len(component_markers) == 4
-    assert any(abs(marker - 0.3871231679608744) <= 0.03 for marker in component_markers)
-    assert not any(abs(marker - 0.5132198808597143) <= 0.03 for marker in component_markers)
+    def _log_profile_rms(
+        x_values: np.ndarray,
+        observed: np.ndarray,
+        model: np.ndarray,
+        *,
+        qz_min: float | None = None,
+        qz_max: float | None = None,
+    ) -> float:
+        positive_observed = observed[np.isfinite(observed) & (observed > 0.0)]
+        floor = (
+            max(float(np.nanpercentile(positive_observed, 5.0)) * 0.05, 1.0e-9)
+            if positive_observed.size
+            else 1.0e-9
+        )
+        mask = (
+            np.isfinite(x_values)
+            & np.isfinite(observed)
+            & np.isfinite(model)
+            & (observed > 0.0)
+            & (model > 0.0)
+        )
+        if qz_min is not None:
+            mask &= x_values >= float(qz_min)
+        if qz_max is not None:
+            mask &= x_values <= float(qz_max)
+        assert np.count_nonzero(mask) >= 3
+        log_delta = np.log10(model[mask] + floor) - np.log10(observed[mask] + floor)
+        return float(np.sqrt(np.nanmean(log_delta**2)))
+
+    assert bi2se3_payload["success"] is True
+    bi2se3_components = bi2se3_payload["components"]
+    bi2se3_component_markers = sorted(float(component["marker"]) for component in bi2se3_components)
+    assert len(bi2se3_component_markers) == 4
+    assert any(abs(marker - 0.3871231679608744) <= 0.03 for marker in bi2se3_component_markers)
+    assert not any(abs(marker - 0.5132198808597143) <= 0.03 for marker in bi2se3_component_markers)
+    weak_bi2se3 = min(
+        bi2se3_components,
+        key=lambda component: abs(float(component["marker"]) - 0.3871231679608744),
+    )
+    assert abs(float(weak_bi2se3["marker"]) - 0.3871231679608744) <= 0.03
+    assert np.nanmax(np.asarray(weak_bi2se3["density"], dtype=np.float64)) > 1.0
+    bi2se3_model = np.asarray(bi2se3_payload["model_density"], dtype=np.float64)
+    assert _log_profile_rms(bi2se3_x, bi2se3_y, bi2se3_model) < 0.075
+    assert (
+        _log_profile_rms(
+            bi2se3_x,
+            bi2se3_y,
+            bi2se3_model,
+            qz_min=0.12,
+            qz_max=0.36,
+        )
+        < 0.16
+    )
     for strong_marker in (0.06287447764957185, 0.6393165937585541, 1.305827790509565):
-        assert any(abs(marker - strong_marker) <= 0.03 for marker in component_markers)
+        assert any(abs(marker - strong_marker) <= 0.03 for marker in bi2se3_component_markers)
+
+    assert bi2te3_payload["success"] is True
+    bi2te3_component_markers = sorted(
+        float(component["marker"]) for component in bi2te3_payload["components"]
+    )
+    assert len(bi2te3_component_markers) == 5
+    assert any(abs(marker - 0.3778623082216827) <= 0.03 for marker in bi2te3_component_markers)
+    bi2te3_model = np.asarray(bi2te3_payload["model_density"], dtype=np.float64)
+    assert _log_profile_rms(bi2te3_x, bi2te3_y, bi2te3_model) < 0.08
 
 
 def test_parallel_script_tail_component_aggregation_rejects_shape_mismatch() -> None:
@@ -1588,6 +2555,9 @@ def test_parallel_script_shared_rod_profile_l_axis_limits_span_all_profile_axes(
 
 def test_parallel_script_shared_nonzero_rod_profile_y_axis_limits_ignore_hk0() -> None:
     namespace = _script_functions(
+        "_finite_abs_percentile",
+        "rod_profile_marker_l_mapping_is_valid",
+        "rod_profile_plot_model_decision",
         "normalized_data_simulation_payload",
         "l_reference_rows",
         "qz_values_to_l_axis",
@@ -1643,6 +2613,9 @@ def test_parallel_script_shared_nonzero_rod_profile_y_axis_limits_fallback_witho
     None
 ):
     namespace = _script_functions(
+        "_finite_abs_percentile",
+        "rod_profile_marker_l_mapping_is_valid",
+        "rod_profile_plot_model_decision",
         "normalized_data_simulation_payload",
         "l_reference_rows",
         "qz_values_to_l_axis",
@@ -1815,7 +2788,7 @@ def test_parallel_script_qr_rod_marker_hash_changes_cache_key() -> None:
 
     assert cache_key(None) == {
         "mode": "last_cached",
-        "fit_signature": "joint_qz_labeled_marker_fit_specular_theta_i0_l8_v5",
+        "fit_signature": "joint_qz_labeled_marker_fit_specular_theta_i0_l8_v8",
     }
     assert cache_key(None, marker_table=markers, mode="popup") != cache_key(
         None, marker_table=shifted, mode="popup"
@@ -1849,7 +2822,7 @@ def test_parallel_script_marker_title_changes_cache_key() -> None:
 def test_parallel_script_qr_rod_final_cache_requires_fit_signature() -> None:
     namespace = _script_functions("qr_rod_profile_cache_has_final_fit")
     cache_has_final_fit = namespace["qr_rod_profile_cache_has_final_fit"]
-    final_fit_signature = "joint_qz_labeled_marker_fit_specular_theta_i0_l8_v5"
+    final_fit_signature = "joint_qz_labeled_marker_fit_specular_theta_i0_l8_v8"
     payload = {
         "final_rod_profile_table": pd.DataFrame(
             {"qz_center": [1.0, 2.0], "joint_fit_density": [0.1, 0.2]}
@@ -1992,6 +2965,265 @@ def test_parallel_script_qr_rod_peak_edit_runtime_mode_respects_headless() -> No
     assert runtime_mode("skip", backend_name="TkAgg", env={}) == "skip"
 
 
+def test_parallel_script_collects_manual_background_peak_entries() -> None:
+    namespace = _script_functions(
+        "as_float",
+        "angle_key",
+        "detector_xy_from_entry",
+        "format_angle_value",
+        "label_from_entry",
+        "branch_from_phi",
+        "background_peak_entries_from_manual_pairs",
+    )
+    collect_entries = namespace["background_peak_entries_from_manual_pairs"]
+    state = {
+        "geometry": {
+            "manual_pairs": [
+                {
+                    "background_index": 0,
+                    "entries": [
+                        {
+                            "hkl": [1, 0, 2],
+                            "background_two_theta_deg": 17.5,
+                            "background_phi_deg": -32.0,
+                            "q_group_key": ["q_group", "primary", 1, 2],
+                        },
+                        {"hkl": [2, 0, 3]},
+                    ],
+                },
+                {
+                    "background_index": 9,
+                    "entries": [
+                        {
+                            "hkl": [3, 0, 4],
+                            "background_two_theta_deg": 21.0,
+                            "background_phi_deg": 12.0,
+                        }
+                    ],
+                },
+            ]
+        }
+    }
+
+    entries = collect_entries(
+        state,
+        background_files=["bg0.osc"],
+        background_tilt_deg={0: -5.0},
+        sample_name="Bi2Se3",
+        excluded_peaks_by_tilt_normalized=set(),
+    )
+
+    assert list(entries) == [0]
+    assert len(entries[0]) == 1
+    entry = entries[0][0]
+    assert entry["_background_index"] == 0
+    assert entry["_background_name"] == "bg0.osc"
+    assert entry["_display_label"] == "Bi2Se3 -5 deg"
+    assert entry["_label"] == "1,0,2"
+    assert entry["_branch"] == "-"
+    assert entry["q_group_key"] == ["q_group", "primary", 1, 2]
+
+
+def test_parallel_script_collects_caked_peak_record_entries_for_all_backgrounds() -> None:
+    namespace = _script_functions(
+        "as_float",
+        "angle_key",
+        "detector_xy_from_entry",
+        "format_angle_value",
+        "label_from_entry",
+        "branch_from_phi",
+        "background_peak_entries_from_peak_records",
+    )
+    collect_entries = namespace["background_peak_entries_from_peak_records"]
+    state = {
+        "geometry": {
+            "peak_records": [
+                {
+                    "hkl": [1, 0, 2],
+                    "two_theta_deg": 17.5,
+                    "phi_deg": 32.0,
+                    "q_group_key": ["q_group", "primary", 1, 2],
+                    "source_table_index": 4,
+                },
+                {"hkl": [2, 0, 3], "two_theta_deg": float("nan"), "phi_deg": 12.0},
+            ]
+        }
+    }
+
+    entries = collect_entries(
+        state,
+        background_files=["bg0.osc", "bg1.osc"],
+        background_tilt_deg={0: -5.0, 1: 0.0},
+        sample_name="Bi2Se3",
+        excluded_peaks_by_tilt_normalized=set(),
+    )
+
+    assert [len(entries[idx]) for idx in (0, 1)] == [1, 1]
+    for bg_idx in (0, 1):
+        entry = entries[bg_idx][0]
+        assert entry["_background_index"] == bg_idx
+        assert entry["_label"] == "1,0,2"
+        assert entry["_branch"] == "+"
+        assert entry["background_two_theta_deg"] == 17.5
+        assert entry["background_phi_deg"] == 32.0
+        assert entry["selection_reason"] == "peak_records_fallback"
+        assert entry["q_group_key"] == ["q_group", "primary", 1, 2]
+        assert entry["source_table_index"] == 4
+
+
+def test_parallel_script_peak_record_detector_seed_requires_background_index() -> None:
+    namespace = _script_functions(
+        "as_float",
+        "angle_key",
+        "detector_xy_from_entry",
+        "format_angle_value",
+        "label_from_entry",
+        "branch_from_phi",
+        "background_peak_entries_from_peak_records",
+    )
+    collect_entries = namespace["background_peak_entries_from_peak_records"]
+    state = {
+        "geometry": {
+            "peak_records": [
+                {
+                    "label": "2,0,3",
+                    "background_index": 1,
+                    "native_col": 42.0,
+                    "native_row": 84.0,
+                },
+                {
+                    "label": "3,0,4",
+                    "native_col": 50.0,
+                    "native_row": 90.0,
+                },
+            ]
+        }
+    }
+
+    entries = collect_entries(
+        state,
+        background_files=["bg0.osc", "bg1.osc"],
+        background_tilt_deg={0: -5.0, 1: 0.0},
+        sample_name="Bi2Se3",
+        excluded_peaks_by_tilt_normalized=set(),
+    )
+
+    assert entries[0] == []
+    assert len(entries[1]) == 1
+    entry = entries[1][0]
+    assert entry["_label"] == "2,0,3"
+    assert entry["detector_col"] == 42.0
+    assert entry["detector_row"] == 84.0
+    assert entry["_branch"] is None
+
+
+def test_parallel_script_background_entries_prefer_manual_pairs_over_peak_records() -> None:
+    namespace = _script_functions(
+        "as_float",
+        "angle_key",
+        "detector_xy_from_entry",
+        "format_angle_value",
+        "label_from_entry",
+        "branch_from_phi",
+        "background_peak_entries_from_manual_pairs",
+        "background_peak_entries_from_peak_records",
+        "background_peak_entries_from_state",
+    )
+    collect_entries = namespace["background_peak_entries_from_state"]
+    state = {
+        "geometry": {
+            "manual_pairs": [
+                {
+                    "background_index": 0,
+                    "entries": [
+                        {
+                            "hkl": [1, 0, 2],
+                            "background_two_theta_deg": 17.5,
+                            "background_phi_deg": -32.0,
+                        }
+                    ],
+                }
+            ],
+            "peak_records": [
+                {
+                    "hkl": [2, 0, 3],
+                    "two_theta_deg": 22.0,
+                    "phi_deg": 14.0,
+                }
+            ],
+        }
+    }
+
+    entries, source = collect_entries(
+        state,
+        background_files=["bg0.osc"],
+        background_tilt_deg={0: -5.0},
+        sample_name="Bi2Se3",
+        excluded_peaks_by_tilt_normalized=set(),
+    )
+
+    assert source == "manual_pairs"
+    assert [entry["_label"] for entry in entries[0]] == ["1,0,2"]
+
+
+def test_parallel_script_background_entries_fallback_filters_excluded_records() -> None:
+    namespace = _script_functions(
+        "as_float",
+        "angle_key",
+        "detector_xy_from_entry",
+        "format_angle_value",
+        "label_from_entry",
+        "branch_from_phi",
+        "background_peak_entries_from_manual_pairs",
+        "background_peak_entries_from_peak_records",
+        "background_peak_entries_from_state",
+    )
+    collect_entries = namespace["background_peak_entries_from_state"]
+    angle_key = namespace["angle_key"]
+    state = {
+        "geometry": {
+            "manual_pairs": [],
+            "peak_records": [
+                {
+                    "hkl": [1, 0, 2],
+                    "two_theta_deg": 17.5,
+                    "phi_deg": 32.0,
+                }
+            ],
+        }
+    }
+
+    entries, source = collect_entries(
+        state,
+        background_files=["bg0.osc", "bg1.osc"],
+        background_tilt_deg={0: -5.0, 1: 0.0},
+        sample_name="Bi2Se3",
+        excluded_peaks_by_tilt_normalized={(angle_key(-5.0), "1,0,2")},
+    )
+
+    assert source == "peak_records_fallback"
+    assert entries[0] == []
+    assert [entry["_label"] for entry in entries[1]] == ["1,0,2"]
+
+
+def test_parallel_script_empty_entry_message_mentions_peak_record_fallback() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(PARALLEL_SCRIPT_PATH))
+    message = None
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if any(
+            isinstance(target, ast.Name) and target.id == "NO_BACKGROUND_PEAK_ENTRIES_MESSAGE"
+            for target in node.targets
+        ):
+            message = ast.literal_eval(node.value)
+            break
+
+    assert "geometry.manual_pairs or usable geometry.peak_records" in message
+    assert "entry_source={background_peak_entry_source}" in source
+
+
 def test_parallel_script_qr_rod_peak_edits_round_trip_json(tmp_path: Path) -> None:
     namespace = _script_functions(
         "clean_marker_title",
@@ -2082,6 +3314,7 @@ def test_parallel_script_rod_profile_panels_use_centered_m_labels() -> None:
     assert 'va="top"' in final_profile_source
     assert "labelleft=col == 0" in final_profile_source
     assert "labelbottom=row == last_nonzero_plot_row" in final_profile_source
+    assert 'if col == 0:\n            ax.set_ylabel("Intensity (a.u.)")' in final_profile_source
     assert "branch_label" not in final_profile_source
     assert '"- branch"' not in source
     assert '"+ branch"' not in source

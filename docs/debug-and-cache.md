@@ -61,7 +61,7 @@ report `backend=process_pool` with multiple PIDs. Use
 `BACKGROUND_FIT_BACKEND=thread` or `BACKGROUND_FIT_BACKEND=serial` to opt out
 of that relaunch for debugging.
 
-Current status as of 2026-05-07:
+Current status as of 2026-05-11:
 
 - pre-editor cache filename:
   `<state-stem>_pre_qr_rod_marker_editor_cache.pkl`
@@ -94,9 +94,23 @@ Current status as of 2026-05-07:
   marker table from the post-editor marker rows so manually moved specular
   markers drive the marker CSV, detector selected-region figure, and
   `hk0_l3_star.png`
-- final-fit cache keys include `fit_signature=joint_qz_labeled_marker_fit_v2`
-  so older cached joint fits that could drop weak labeled markers, such as
-  `00L`/`006`, are recomputed
+- final-fit cache keys include
+  `fit_signature=joint_qz_labeled_marker_fit_specular_theta_i0_l8_v8` so older
+  cached joint fits that could drop weak labeled markers, overfill the m=0
+  low-L full profile, or predate the PbI2 sideband plot policy are recomputed
+- final nonlinear Pearson-VII Qz refinement minimizes the existing
+  intensity-weighted residual plus a bounded log-intensity residual, matching
+  the log-scaled Qr-rod plot without changing marker-table, CSV, CLI, or
+  saved-state interfaces
+- PbI2 nonzero Qr-rod profiles use same-Qz transverse Qr sideband subtraction
+  when enabled: `background_density_raw` keeps the central uncorrected profile,
+  `qr_sideband_background_density` stores the local off-rod estimate, and
+  `background_density` is the sideband-corrected profile used for plotting
+- PbI2 nonzero profile plots suppress dashed model overlays when marker/L
+  mapping is invalid or when the fitted peak component is mostly canceled by a
+  Qz-linear nuisance baseline. Accepted branches plot `joint_fit_density` as
+  `Fit`; omitted branches are recorded in the generated markdown `Plot model
+  decisions` table.
 
 The diagnostic separates fitting coordinates from display labels. `fit_l` is
 the fitted marker coordinate used for Qz-to-L mapping and joint profile fits.
@@ -176,13 +190,21 @@ Focused validation status:
 
 - `python -m py_compile scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py`
   passes
+- `python -m pytest tests/test_background_peak_fits_notebook.py -k "qr_sideband or pbi2_plot_policy or marker_l_mapping_allows_duplicate or plot_policy_keeps_non_pbi2 or final_profile_plot_uses_model_decisions or shared_nonzero_rod_profile_y_axis_limits or final_rod_plot_filters_incomplete_detector_branch_support" -ra`
+  passes, `12 passed`
 - `python -m pytest tests/test_background_peak_fits_notebook.py -k "hk0_l3_star or qr_rod_peak or qr_rod_marker or marker_title or sample_name_override or import_export_buttons or labeled_weak_hk0_marker or qr_rod_final_cache_requires_fit_signature or final_rod_labels_point_from_upper_right or qr_rod_editor_qz_l_axis_coefficients or qr_rod_peak_editor_uses_l_axis" -ra`
   passes, `21 passed`
 - `python -m pytest tests/test_background_peak_fits_notebook.py -k "runner or backend or process" -ra`
   passes, `8 passed`
-- `python -m ra_sim.dev check` passes, `280 passed`
-- full `tests/test_background_peak_fits_notebook.py` still has unrelated
-  non-parallel notebook expectation/helper failures in this checkout
+- `RA_SIM_HEADLESS=1` and `RA_SIM_QR_ROD_PEAK_EDIT_MODE=skip` PbI2 diagnostic
+  script execution completed, regenerated the PbI2 Qr-rod profile artifacts,
+  retained the `m=1` fit overlays, omitted misleading `m=3`/`m=4` overlays,
+  and skipped unsupported `m=7`
+- full `tests/test_background_peak_fits_notebook.py` was rerun on 2026-05-11
+  and remains red only in six unrelated notebook/script source-token checks:
+  `116 passed`, `2 skipped`, `6 failed`
+- current `python -m ra_sim.dev check` is still blocked by pre-existing
+  formatting drift in `ra_sim/fitting/optimization.py`
 - Bi2Se3 guarded-process diagnostic validation completed with `fit_backend=process`,
   `backend=process_pool`, `pids=28`, `79/79` successful background peak fits,
   final Qr-rod cache write, marker CSV columns `fit_l`/`display_l`, and

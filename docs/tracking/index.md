@@ -32,7 +32,7 @@ intensity contract, but remains downstream of green mosaic fitting.
 | Qr/Qz shape sensitivity | feature | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-22 | [q-group-shape-sensitivity.md](in-progress/q-group-shape-sensitivity.md) |
 | Q-space viewer fix | bug | - | none | p1 | 2026-04-30 | [q-space-viewer-fix.md](in-progress/q-space-viewer-fix.md) |
 | Sim caked detector replay | bug | - | none | p1 | 2026-05-09 | [sim-caked-detector-replay.md](in-progress/sim-caked-detector-replay.md) |
-| Background peak fit detector Qr rod panel | bug/feature | - | none | p1 | 2026-05-05 | [background-peak-fit-detector-qr-rod-panel.md](in-progress/background-peak-fit-detector-qr-rod-panel.md) |
+| Background peak fit detector Qr rod panel | bug/feature | - | none | p1 | 2026-05-11 | [background-peak-fit-detector-qr-rod-panel.md](in-progress/background-peak-fit-detector-qr-rod-panel.md) |
 | Beam center background pick | feature | - | none | p1 | 2026-05-01 | [beam-center-background-pick.md](in-progress/beam-center-background-pick.md) |
 | Background Qr reference picks | feature | - | none | p2 | 2026-04-30 | [background-qr-reference-picks.md](in-progress/background-qr-reference-picks.md) |
 | 6H Qr reference SF picking | feature/bug | - | none | p1 | 2026-04-30 | [6h-qr-reference-sf-picking.md](in-progress/6h-qr-reference-sf-picking.md) |
@@ -95,21 +95,35 @@ markers, profile samples, and branch items, and reports detector-space
 `curve_distance_px` from point-to-polyline segment distance. The detector panel
 keeps accepted placed-star diagnostics, low-L `HK=<m> +/-` labels, projected
 centerlines, and transparent Delta-Qr bands including `HK=0`. The integrated
-Qr figure centers `HK=0`, labels only that row with `Intensity (a.u.)`, aligns
-non-specular L axes from `L=2`, and places the Data/Simulation legend in the
-top-right panel. JSON, nbformat, compile, static checks, and the two parallel
+Qr figure centers `HK=0`, labels the HK=0 row and left nonzero subplot axes
+with `Intensity (a.u.)`, aligns non-specular L axes from `L=2`, and places the
+Data/Simulation legend in the top-right panel. JSON, nbformat, compile, static checks, and the two parallel
 notebook pytest checks pass. Full notebook-section rerun and visual acceptance
 remain pending; full `tests/test_background_peak_fits_notebook.py` is still red
 in unrelated non-parallel notebook expectations. The 2026-05-10 Bi2Se3 update
 sets the parallel diagnostic default state to Bi2Se3, bumps the final Qz fit
-cache signature to v5, keeps supported weak low-L specular markers through
-nonlinear refinement, rejects unsupported nearby markers, and makes tail
-component aggregation fail closed on shape mismatch. Focused Bi2Se3 marker,
+cache signature to v8, keeps supported weak low-L specular markers through
+nonlinear refinement even when the preliminary shared baseline runs above the
+shoulder, adds a log-scale residual term so the Bi2Se3 m=0 full profile fits
+the log-scaled Qr integration plot more closely, preserves the matching Bi2Te3
+weak marker, rejects unsupported nearby markers, and makes tail component
+aggregation fail closed on shape mismatch. Focused Bi2Se3/Bi2Te3 marker,
 shape-mismatch, cache-signature, compile, and format checks pass locally. Full
 diagnostics test-file status is still red in unrelated notebook/script
 source-token assertions; `python -m ra_sim.dev check` is blocked by pre-existing
 formatting drift in `ra_sim/fitting/optimization.py`. No CI workflow, public
-API, saved-state schema, or deprecation/migration path changed.
+API, saved-state schema, or deprecation/migration path changed. The
+2026-05-11 PbI2 update keeps PbI2-specific lattice/rod state dynamic, applies
+same-Qz transverse Qr sideband subtraction to nonzero PbI2 profiles, hides
+unsupported `m=7`, and gates misleading nonzero model overlays when marker/L
+mapping or Qz-baseline cancellation diagnostics fail. Focused PbI2 acceptance,
+compile, and headless script execution pass; the regenerated PbI2 figure keeps
+`m=1` `Fit` overlays and omits misleading `m=3`/`m=4` overlays. Full
+diagnostics test-file status is `116 passed`, `2 skipped`, `6 failed` in the
+same unrelated source-token checks. No CI workflow, deployment, package API,
+saved-state schema, or deprecation/migration path changed; rollback is to
+revert the diagnostic script/test/doc commit and regenerate affected local
+caches/artifacts.
 
 Beam center background pick status note:
 `Pick Beam Center` is implemented in Setup > Beam Controls. The mode uses the
