@@ -3045,6 +3045,7 @@ QR_ROD_BG_MIN_SIDE_PIXELS = 8
 QR_ROD_BG_PERCENTILE = 50.0
 PBI2_PLOT_PEAK_TO_DATA_CANCEL_RATIO = 4.0
 PBI2_PLOT_BASELINE_TO_PEAK_CANCEL_RATIO = 0.50
+PBI2_ROD_PROFILE_L_AXIS_MAX = 3.0
 rod_phi_samples = max(361, int(as_float(variables.get("rod_points_per_gz_var"), 721)))
 psi_deg = as_float(variables.get("psi_var"), 0.0)
 
@@ -7943,6 +7944,7 @@ def rod_profile_plot_model_decision(
     if not (is_pbi2_nonzero and bool(transverse_background_enabled)):
         return {
             "plot_model": bool(default_density_column),
+            "data_column": "background_density",
             "density_column": default_density_column,
             "baseline_column": default_baseline_column,
             "subtract_baseline_from_data": True,
@@ -7954,17 +7956,6 @@ def rod_profile_plot_model_decision(
     l_mapping_valid = rod_profile_marker_l_mapping_is_valid(
         marker_source, m_value=int(m_value), branch_value=str(branch_value)
     )
-    if not l_mapping_valid:
-        return {
-            "plot_model": False,
-            "density_column": None,
-            "baseline_column": None,
-            "subtract_baseline_from_data": False,
-            "label": None,
-            "reason": "pbi2_invalid_l_mapping",
-            "metrics": {"valid_l_mapping": False},
-        }
-
     model_column = (
         "joint_fit_density"
         if "joint_fit_density" in table.columns
@@ -7972,56 +7963,84 @@ def rod_profile_plot_model_decision(
         if "fit_density" in table.columns
         else None
     )
+    data_column = (
+        "background_density_raw"
+        if "background_density_raw" in table.columns
+        else "background_density"
+    )
+    additive_background_column = (
+        "qr_sideband_background_density"
+        if "qr_sideband_background_density" in table.columns
+        else None
+    )
     if model_column is None:
         return {
             "plot_model": False,
+            "data_column": data_column,
             "density_column": None,
-            "baseline_column": None,
+            "baseline_column": additive_background_column,
             "subtract_baseline_from_data": False,
             "label": None,
             "reason": "missing_model_density",
-            "metrics": {"valid_l_mapping": True},
+            "metrics": {"valid_l_mapping": bool(l_mapping_valid)},
         }
 
     data_scale = _finite_abs_percentile(table.get("background_density", []), 90.0)
+    raw_data_scale = _finite_abs_percentile(table.get(data_column, []), 90.0)
     peak_scale = _finite_abs_percentile(table.get("joint_peak_density", []), 90.0)
-    baseline_scale = _finite_abs_percentile(
-        table.get("joint_linear_baseline_density", []), 90.0
-    )
+    baseline_scale = _finite_abs_percentile(table.get("joint_linear_baseline_density", []), 90.0)
+    sideband_scale = _finite_abs_percentile(table.get(additive_background_column, []), 90.0)
     denominator = max(data_scale, 1.0e-12)
     peak_to_data = peak_scale / denominator
     baseline_to_peak = baseline_scale / max(peak_scale, 1.0e-12)
-    metrics = {
-        "valid_l_mapping": True,
-        "data_abs_p90": float(data_scale),
-        "peak_abs_p90": float(peak_scale),
-        "baseline_abs_p90": float(baseline_scale),
-        "peak_to_data_ratio": float(peak_to_data),
-        "baseline_to_peak_ratio": float(baseline_to_peak),
-    }
-    if (
+    baseline_cancellation_suspected = bool(
         peak_to_data >= float(peak_to_data_cancel_ratio)
         and baseline_to_peak >= float(baseline_to_peak_cancel_ratio)
-    ):
-        return {
-            "plot_model": False,
-            "density_column": None,
-            "baseline_column": None,
-            "subtract_baseline_from_data": False,
-            "label": None,
-            "reason": "pbi2_baseline_cancellation",
-            "metrics": metrics,
-        }
+    )
+    metrics = {
+        "valid_l_mapping": bool(l_mapping_valid),
+        "data_abs_p90": float(data_scale),
+        "raw_data_abs_p90": float(raw_data_scale),
+        "peak_abs_p90": float(peak_scale),
+        "baseline_abs_p90": float(baseline_scale),
+        "sideband_background_abs_p90": float(sideband_scale),
+        "peak_to_data_ratio": float(peak_to_data),
+        "baseline_to_peak_ratio": float(baseline_to_peak),
+        "baseline_cancellation_suspected": baseline_cancellation_suspected,
+    }
 
     return {
         "plot_model": True,
+        "data_column": data_column,
         "density_column": model_column,
-        "baseline_column": None,
+        "baseline_column": additive_background_column,
         "subtract_baseline_from_data": False,
         "label": "Fit",
-        "reason": "pbi2_total_fit",
+        "reason": "pbi2_raw_with_background_fit",
         "metrics": metrics,
     }
+
+
+def rod_profile_normalized_payload_for_plot_decision(
+    profile_rows: pd.DataFrame,
+    plot_decision: dict[str, object],
+) -> tuple[bool, dict[str, np.ndarray | float]]:
+    table = pd.DataFrame(profile_rows)
+    model_column = str(plot_decision.get("density_column") or "")
+    baseline_column = str(plot_decision.get("baseline_column") or "")
+    data_column = str(plot_decision.get("data_column") or "background_density")
+    plot_model = bool(plot_decision.get("plot_model")) and model_column in table
+    model_density = (
+        table[model_column] if plot_model else np.zeros(table.shape[0], dtype=np.float64)
+    )
+    baseline_density = table[baseline_column] if baseline_column in table else None
+    data_density = table[data_column] if data_column in table else table["background_density"]
+    return plot_model, normalized_data_simulation_payload(
+        data_density,
+        model_density,
+        baseline_density,
+        subtract_baseline_from_data=bool(plot_decision.get("subtract_baseline_from_data", True)),
+    )
 
 
 def positive_log_plot_values(values: object):
@@ -8049,6 +8068,25 @@ def apply_positive_log_y_axis(ax: object, *series: object) -> None:
         ymax = ymin * 10.0
     ax.set_yscale("log")
     ax.set_ylim(ymin, ymax)
+
+
+def sample_uses_pbi2_rod_plot_policy(sample_stem: object) -> bool:
+    return str(sample_stem).lower().startswith("pbi2")
+
+
+def rod_profile_l_axis_limits_for_sample(
+    sample_stem: object,
+    limits: tuple[float, float],
+    *,
+    pbi2_l_max: float = 3.0,
+) -> tuple[float, float]:
+    lower, upper = (float(limits[0]), float(limits[1]))
+    if not sample_uses_pbi2_rod_plot_policy(sample_stem):
+        return lower, upper
+    capped_upper = float(pbi2_l_max)
+    if not np.isfinite(capped_upper):
+        return lower, upper
+    return lower, max(lower + 1.0e-6, capped_upper)
 
 
 try:
@@ -11525,24 +11563,11 @@ def shared_nonzero_rod_profile_y_axis_limits(
                     globals().get("QR_ROD_TRANSVERSE_BACKGROUND_ENABLED", False)
                 ),
             )
-            model_column = str(plot_decision.get("density_column") or "")
-            if bool(plot_decision.get("plot_model")) and model_column in sub:
-                model_density = sub[model_column]
-                baseline_column = str(plot_decision.get("baseline_column") or "")
-                baseline_density = sub[baseline_column] if baseline_column in sub else None
-            else:
-                model_density = np.zeros(sub.shape[0], dtype=np.float64)
-                baseline_density = None
-            norm_payload = normalized_data_simulation_payload(
-                sub["background_density"],
-                model_density,
-                baseline_density,
-                subtract_baseline_from_data=bool(
-                    plot_decision.get("subtract_baseline_from_data", True)
-                ),
+            plot_model, norm_payload = rod_profile_normalized_payload_for_plot_decision(
+                sub, plot_decision
             )
             y_values.append(np.asarray(norm_payload["data"], dtype=np.float64))
-            if bool(plot_decision.get("plot_model")):
+            if plot_model:
                 y_values.append(np.asarray(norm_payload["simulation"], dtype=np.float64))
     if not y_values:
         return tuple(float(value) for value in fallback_limits)
@@ -11624,8 +11649,9 @@ rod_note_lines = [
     f"Solid-angle correction enabled: `{bool(BACKGROUND_SOLID_ANGLE_CORRECTION)}`.",
     f"Qr-sideband transverse background subtraction enabled: `{bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED)}`. When enabled, `background_density_raw` is the central rod-band density, `qr_sideband_background_density` is the same-Qz off-rod estimate, and `background_density` is their difference.",
     "When caked sum fields are available, density uses sum_signal / sum_normalization. Otherwise it falls back to acceptance weights, then pixel_count.",
-    "For nonzero HK rods, plotted `Data` is `background_density - joint_linear_baseline_density` unless Qr-sideband subtraction is enabled; with sideband subtraction, plotted `Data` is sideband-corrected `background_density`.",
-    "For PbI2 nonzero rods with Qr-sideband subtraction, the dashed overlay is labeled `Fit` and uses total `joint_fit_density` only when marker/L mapping and baseline-cancellation diagnostics pass; otherwise the model overlay is omitted for that branch.",
+    "For nonzero HK rods outside the PbI2 Qr-sideband plot policy, plotted `Data` is `background_density - joint_linear_baseline_density` unless Qr-sideband subtraction is enabled; with sideband subtraction, plotted `Data` is sideband-corrected `background_density`.",
+    "For PbI2 nonzero rods with Qr-sideband subtraction, plotted `Data` is raw central `background_density_raw` and the dashed `Fit` is `joint_fit_density + qr_sideband_background_density`. Marker/L mapping and Qz-baseline cancellation checks are reported as diagnostics instead of suppressing available overlays.",
+    f"PbI2 Qr-rod profile plots use log-scaled intensity on all panels and cap the displayed L axis at `{PBI2_ROD_PROFILE_L_AXIS_MAX:g}`.",
     "For non-PbI2 nonzero rods, the plotted dashed `Simulation` remains peak-only `joint_peak_density`.",
     "For m=0 only, plotted `Data` is raw `background_density` and plotted `Simulation` is `joint_peak_density + joint_linear_baseline_density`.",
     "The CSV includes `joint_peak_density`, `joint_linear_baseline_density`, and `joint_fit_density = joint_peak_density + joint_linear_baseline_density`.",
@@ -11778,8 +11804,14 @@ for rod in nonzero_plot_rod_entries:
                 "branch": branch_value,
                 "plot_model": bool(plot_decision.get("plot_model", False)),
                 "label": str(plot_decision.get("label") or ""),
+                "data_column": str(plot_decision.get("data_column") or ""),
                 "density_column": str(plot_decision.get("density_column") or ""),
+                "baseline_column": str(plot_decision.get("baseline_column") or ""),
                 "reason": str(plot_decision.get("reason", "")),
+                "valid_l_mapping": metrics.get("valid_l_mapping", ""),
+                "baseline_cancellation_suspected": metrics.get(
+                    "baseline_cancellation_suspected", ""
+                ),
                 "peak_to_data_ratio": float(metrics.get("peak_to_data_ratio", np.nan)),
                 "baseline_to_peak_ratio": float(metrics.get("baseline_to_peak_ratio", np.nan)),
             }
@@ -11790,8 +11822,8 @@ if plot_model_decision_rows:
             "",
             "## Plot model decisions",
             "",
-            "| HK | branch | plotted model | density source | reason | peak/data p90 | baseline/peak p90 |",
-            "|---:|:---:|:---:|:---|:---|---:|---:|",
+            "| HK | branch | plotted model | data source | fit source | added background | reason | valid L map | Qz-baseline cancellation | peak/data p90 | baseline/peak p90 |",
+            "|---:|:---:|:---:|:---|:---|:---|:---|:---:|:---:|---:|---:|",
         ]
     )
     for row in plot_model_decision_rows:
@@ -11799,7 +11831,9 @@ if plot_model_decision_rows:
         baseline_to_peak = float(row["baseline_to_peak_ratio"])
         rod_note_lines.append(
             f"| {int(row['m'])} | {row['branch']} | {row['label'] if row['plot_model'] else 'omitted'} | "
-            f"{row['density_column'] or '-'} | {row['reason']} | "
+            f"{row['data_column'] or '-'} | {row['density_column'] or '-'} | "
+            f"{row['baseline_column'] or '-'} | {row['reason']} | "
+            f"{row['valid_l_mapping']} | {row['baseline_cancellation_suspected']} | "
             f"{peak_to_data:.4g} | {baseline_to_peak:.4g} |"
         )
 rod_profile_note.write_text("\n".join(rod_note_lines) + "\n", encoding="utf-8")
@@ -11810,13 +11844,22 @@ rod_profile_l_axis_limits = shared_rod_profile_l_axis_limits(
     nonzero_plot_rod_entries,
     phi_windows,
 )
+rod_profile_l_axis_limits = rod_profile_l_axis_limits_for_sample(
+    SAMPLE_STEM,
+    rod_profile_l_axis_limits,
+    pbi2_l_max=float(PBI2_ROD_PROFILE_L_AXIS_MAX),
+)
 rod_profile_nonzero_y_axis_limits = shared_nonzero_rod_profile_y_axis_limits(
     rod_profile_table,
     plot_marker_table,
     nonzero_plot_rod_entries,
     phi_windows,
 )
-rod_profile_hk0_l_axis_limits = (0.0, SPECULAR_QR_ROD_L_MAX)
+rod_profile_hk0_l_axis_limits = rod_profile_l_axis_limits_for_sample(
+    SAMPLE_STEM,
+    (0.0, SPECULAR_QR_ROD_L_MAX),
+    pbi2_l_max=float(PBI2_ROD_PROFILE_L_AXIS_MAX),
+)
 last_nonzero_plot_row = max(
     (row for row, rod in enumerate(plot_rod_entries) if int(rod["m"]) != 0),
     default=-1,
@@ -11849,6 +11892,7 @@ else:
     nonzero_profile_grid = None
     hk0_profile_grid = profile_grid
 axes = np.empty((len(plot_rod_entries), len(phi_windows)), dtype=object)
+pbi2_rod_profile_figure = sample_uses_pbi2_rod_plot_policy(SAMPLE_STEM)
 nonzero_profile_row = 0
 for row, rod in enumerate(plot_rod_entries):
     if int(rod["m"]) == 0:
@@ -11877,9 +11921,20 @@ for row, rod in enumerate(plot_rod_entries):
             x = x[order]
             data_norm = data_norm[order]
             simulation_norm = simulation_norm[order]
+            hk0_visible = (x >= rod_profile_hk0_l_axis_limits[0]) & (
+                x <= rod_profile_hk0_l_axis_limits[1]
+            )
+            data_plot = (
+                positive_log_plot_values(data_norm) if pbi2_rod_profile_figure else data_norm
+            )
+            simulation_plot = (
+                positive_log_plot_values(simulation_norm)
+                if pbi2_rod_profile_figure
+                else simulation_norm
+            )
             ax.plot(
                 x,
-                data_norm,
+                data_plot,
                 color=JOURNAL_DATA_COLOR,
                 linewidth=1.0,
                 alpha=0.92,
@@ -11888,7 +11943,7 @@ for row, rod in enumerate(plot_rod_entries):
             )
             ax.plot(
                 x,
-                simulation_norm,
+                simulation_plot,
                 color=JOURNAL_FIT_COLOR,
                 linewidth=1.0,
                 alpha=0.96,
@@ -11896,7 +11951,7 @@ for row, rod in enumerate(plot_rod_entries):
                 label="Simulation",
                 zorder=5,
             )
-            hk0_y_values = np.concatenate([data_norm, simulation_norm])
+            hk0_y_values = np.concatenate([data_norm[hk0_visible], simulation_norm[hk0_visible]])
             hk0_positive_y = hk0_y_values[np.isfinite(hk0_y_values) & (hk0_y_values > 0.0)]
         ax.grid(True, color=JOURNAL_GRID_COLOR, linewidth=0.45)
         ax.set_yscale("log")
@@ -11926,7 +11981,9 @@ for row, rod in enumerate(plot_rod_entries):
         ax = fig.add_subplot(nonzero_profile_grid[nonzero_profile_row, col])
         axes[row, col] = ax
         ax.set_xlim(*rod_profile_l_axis_limits)
-        ax.set_ylim(*rod_profile_nonzero_y_axis_limits)
+        if not pbi2_rod_profile_figure:
+            ax.set_ylim(*rod_profile_nonzero_y_axis_limits)
+        nonzero_log_y_series: list[np.ndarray] = []
         sub = rod_profile_table[
             (rod_profile_table["m"] == int(rod["m"]))
             & (rod_profile_table["branch"] == branch_name)
@@ -11947,20 +12004,8 @@ for row, rod in enumerate(plot_rod_entries):
                     baseline_to_peak_cancel_ratio=float(PBI2_PLOT_BASELINE_TO_PEAK_CANCEL_RATIO),
                 ),
             )
-            model_column = str(plot_decision.get("density_column") or "")
-            baseline_column = str(plot_decision.get("baseline_column") or "")
-            plot_model = bool(plot_decision.get("plot_model")) and model_column in sub
-            model_density = (
-                sub[model_column] if plot_model else np.zeros(sub.shape[0], dtype=np.float64)
-            )
-            plot_baseline_density = sub[baseline_column] if baseline_column in sub else None
-            norm_payload = normalized_data_simulation_payload(
-                sub["background_density"],
-                model_density,
-                plot_baseline_density,
-                subtract_baseline_from_data=bool(
-                    plot_decision.get("subtract_baseline_from_data", True)
-                ),
+            plot_model, norm_payload = rod_profile_normalized_payload_for_plot_decision(
+                sub, plot_decision
             )
             data_norm = np.asarray(norm_payload["data"], dtype=np.float64)
             simulation_norm = np.asarray(norm_payload["simulation"], dtype=np.float64)
@@ -11971,9 +12016,15 @@ for row, rod in enumerate(plot_rod_entries):
             x = x[order]
             data_norm = data_norm[order]
             simulation_norm = simulation_norm[order]
+            visible = (x >= rod_profile_l_axis_limits[0]) & (x <= rod_profile_l_axis_limits[1])
+            data_plot = (
+                positive_log_plot_values(data_norm) if pbi2_rod_profile_figure else data_norm
+            )
+            if pbi2_rod_profile_figure:
+                nonzero_log_y_series.append(data_norm[visible])
             ax.plot(
                 x,
-                data_norm,
+                data_plot,
                 color=JOURNAL_DATA_COLOR,
                 linewidth=1.0,
                 alpha=0.92,
@@ -11981,9 +12032,16 @@ for row, rod in enumerate(plot_rod_entries):
                 zorder=4,
             )
             if plot_model:
+                simulation_plot = (
+                    positive_log_plot_values(simulation_norm)
+                    if pbi2_rod_profile_figure
+                    else simulation_norm
+                )
+                if pbi2_rod_profile_figure:
+                    nonzero_log_y_series.append(simulation_norm[visible])
                 ax.plot(
                     x,
-                    simulation_norm,
+                    simulation_plot,
                     color=JOURNAL_FIT_COLOR,
                     linewidth=1.0,
                     alpha=0.96,
@@ -11991,7 +12049,10 @@ for row, rod in enumerate(plot_rod_entries):
                     label=str(plot_decision.get("label", "Fit")),
                     zorder=5,
                 )
-        ax.axhline(0.0, color="0.80", linewidth=0.45)
+        if pbi2_rod_profile_figure:
+            apply_positive_log_y_axis(ax, *nonzero_log_y_series)
+        else:
+            ax.axhline(0.0, color="0.80", linewidth=0.45)
         ax.grid(True, color=JOURNAL_GRID_COLOR, linewidth=0.45)
         ax.text(
             0.5,

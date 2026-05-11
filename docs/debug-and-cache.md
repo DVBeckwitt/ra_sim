@@ -105,12 +105,17 @@ Current status as of 2026-05-11:
 - PbI2 nonzero Qr-rod profiles use same-Qz transverse Qr sideband subtraction
   when enabled: `background_density_raw` keeps the central uncorrected profile,
   `qr_sideband_background_density` stores the local off-rod estimate, and
-  `background_density` is the sideband-corrected profile used for plotting
-- PbI2 nonzero profile plots suppress dashed model overlays when marker/L
-  mapping is invalid or when the fitted peak component is mostly canceled by a
-  Qz-linear nuisance baseline. Accepted branches plot `joint_fit_density` as
-  `Fit`; omitted branches are recorded in the generated markdown `Plot model
-  decisions` table.
+  `background_density` is the sideband-corrected profile used for fitting and
+  audit
+- PbI2 nonzero profile plots show raw central `background_density_raw` as
+  `Data`. Available dashed `Fit` overlays use `joint_fit_density` plus
+  `qr_sideband_background_density`, so the curve is drawn on the same raw-data
+  basis as the selected-region display. Marker/L mapping and Qz-baseline
+  cancellation checks are recorded in the generated markdown `Plot model
+  decisions` table but no longer suppress available m=3 or m=4 overlays.
+- PbI2 Qr-rod profile plots use logarithmic intensity axes on every panel and
+  cap the displayed L range at 3. This is a figure-display policy only; the CSV
+  and fitting artifacts retain the full computed profile rows.
 
 The diagnostic separates fitting coordinates from display labels. `fit_l` is
 the fitted marker coordinate used for Qz-to-L mapping and joint profile fits.
@@ -190,19 +195,20 @@ Focused validation status:
 
 - `python -m py_compile scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py`
   passes
-- `python -m pytest tests/test_background_peak_fits_notebook.py -k "qr_sideband or pbi2_plot_policy or marker_l_mapping_allows_duplicate or plot_policy_keeps_non_pbi2 or final_profile_plot_uses_model_decisions or shared_nonzero_rod_profile_y_axis_limits or final_rod_plot_filters_incomplete_detector_branch_support" -ra`
-  passes, `12 passed`
+- `python -m pytest tests/test_background_peak_fits_notebook.py -k "qr_sideband or pbi2_plot_policy or final_profile_plot_uses_model_decisions or pbi2_rod_profile_l_axis or pbi2_final_profile or shared_nonzero_rod_profile_y_axis_limits" -ra`
+  passes, `11 passed`
 - `python -m pytest tests/test_background_peak_fits_notebook.py -k "hk0_l3_star or qr_rod_peak or qr_rod_marker or marker_title or sample_name_override or import_export_buttons or labeled_weak_hk0_marker or qr_rod_final_cache_requires_fit_signature or final_rod_labels_point_from_upper_right or qr_rod_editor_qz_l_axis_coefficients or qr_rod_peak_editor_uses_l_axis" -ra`
   passes, `21 passed`
 - `python -m pytest tests/test_background_peak_fits_notebook.py -k "runner or backend or process" -ra`
   passes, `8 passed`
-- `RA_SIM_HEADLESS=1` and `RA_SIM_QR_ROD_PEAK_EDIT_MODE=skip` PbI2 diagnostic
-  script execution completed, regenerated the PbI2 Qr-rod profile artifacts,
-  retained the `m=1` fit overlays, omitted misleading `m=3`/`m=4` overlays,
-  and skipped unsupported `m=7`
+- `RA_SIM_QR_ROD_PEAK_EDIT_MODE=skip` PbI2 diagnostic script execution
+  completed, regenerated the PbI2 Qr-rod profile artifacts, retained `m=1`,
+  `m=3`, and `m=4` fit overlays on the raw-data basis, added the Qr sideband
+  background back to the dashed fits, used log axes on every PbI2 panel, capped
+  displayed L at 3, and skipped unsupported `m=7` in the final figure
 - full `tests/test_background_peak_fits_notebook.py` was rerun on 2026-05-11
   and remains red only in six unrelated notebook/script source-token checks:
-  `116 passed`, `2 skipped`, `6 failed`
+  `118 passed`, `2 skipped`, `6 failed`
 - current `python -m ra_sim.dev check` is still blocked by pre-existing
   formatting drift in `ra_sim/fitting/optimization.py`
 - Bi2Se3 guarded-process diagnostic validation completed with `fit_backend=process`,

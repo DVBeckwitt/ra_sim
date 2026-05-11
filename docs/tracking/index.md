@@ -130,12 +130,14 @@ source-token assertions; `python -m ra_sim.dev check` is blocked by pre-existing
 formatting drift in `ra_sim/fitting/optimization.py`. No CI workflow, public
 API, saved-state schema, or deprecation/migration path changed. The
 2026-05-11 PbI2 update keeps PbI2-specific lattice/rod state dynamic, applies
-same-Qz transverse Qr sideband subtraction to nonzero PbI2 profiles, hides
-unsupported `m=7`, and gates misleading nonzero model overlays when marker/L
-mapping or Qz-baseline cancellation diagnostics fail. Focused PbI2 acceptance,
-compile, and headless script execution pass; the regenerated PbI2 figure keeps
-`m=1` `Fit` overlays and omits misleading `m=3`/`m=4` overlays. Full
-diagnostics test-file status is `116 passed`, `2 skipped`, `6 failed` in the
+same-Qz transverse Qr sideband subtraction to nonzero PbI2 profiles, shows raw
+central rod data while adding the sideband background back to available fit
+overlays, hides unsupported `m=7`, records marker/L mapping and Qz-baseline
+cancellation checks as diagnostics, displays all PbI2 panels on log intensity
+axes, and caps the displayed L range at 3. Focused PbI2 acceptance, compile,
+and headless script execution pass; the regenerated PbI2 figure keeps available
+`Fit` overlays for nonzero rods on the raw-data basis. Full
+diagnostics test-file status is `118 passed`, `2 skipped`, `6 failed` in the
 same unrelated source-token checks. No CI workflow, deployment, package API,
 saved-state schema, or deprecation/migration path changed; rollback is to
 revert the diagnostic script/test/doc commit and regenerate affected local

@@ -731,8 +731,13 @@ def test_parallel_script_qr_sideband_profiles_bypass_fast_accumulators_and_keep_
     assert "detector_qr_band_per_qz_bin_with_qr_sideband_background" in profile_source
 
 
-def test_parallel_script_qr_sideband_plot_data_does_not_subtract_qz_baseline() -> None:
+def test_parallel_script_qr_sideband_plot_data_can_use_explicit_data_column() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    helper_source = source[
+        source.index("def rod_profile_normalized_payload_for_plot_decision(") : source.index(
+            "\ndef positive_log_plot_values("
+        )
+    ]
     y_limit_source = source[
         source.index("def shared_nonzero_rod_profile_y_axis_limits(") : source.index(
             "\nsupport_diagnostic_stem"
@@ -745,12 +750,28 @@ def test_parallel_script_qr_sideband_plot_data_does_not_subtract_qz_baseline() -
     ]
 
     assert "transverse_background_enabled=bool(" in y_limit_source
-    assert "transverse_background_enabled=bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED)" in final_profile_source
-    assert "plot_baseline_density = sub[baseline_column] if baseline_column in sub else None" in final_profile_source
+    assert (
+        "transverse_background_enabled=bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED)"
+        in final_profile_source
+    )
+    assert "rod_profile_normalized_payload_for_plot_decision(" in y_limit_source
+    assert "rod_profile_normalized_payload_for_plot_decision(" in final_profile_source
+    assert (
+        'data_column = str(plot_decision.get("data_column") or "background_density")'
+        in helper_source
+    )
+    assert (
+        'data_density = table[data_column] if data_column in table else table["background_density"]'
+        in helper_source
+    )
+    assert (
+        "baseline_density = table[baseline_column] if baseline_column in table else None"
+        in helper_source
+    )
     assert "Qr-sideband transverse background subtraction enabled" in source
 
 
-def test_parallel_script_pbi2_plot_policy_suppresses_baseline_cancelled_fit() -> None:
+def test_parallel_script_pbi2_plot_policy_keeps_baseline_cancelled_fit_as_diagnostic() -> None:
     namespace = _script_functions(
         "_finite_abs_percentile",
         "rod_profile_marker_l_mapping_is_valid",
@@ -760,6 +781,8 @@ def test_parallel_script_pbi2_plot_policy_suppresses_baseline_cancelled_fit() ->
     sub = pd.DataFrame(
         {
             "background_density": [3.5, 4.0, 3.8, 4.2],
+            "background_density_raw": [7.5, 8.0, 7.8, 8.2],
+            "qr_sideband_background_density": [4.0, 4.0, 4.0, 4.0],
             "joint_peak_density": [42.0, 45.0, 46.0, 43.0],
             "joint_linear_baseline_density": [-39.0, -41.5, -42.0, -40.0],
             "joint_fit_density": [3.0, 3.5, 4.0, 3.0],
@@ -782,10 +805,15 @@ def test_parallel_script_pbi2_plot_policy_suppresses_baseline_cancelled_fit() ->
         transverse_background_enabled=True,
     )
 
-    assert decision["plot_model"] is False
-    assert decision["density_column"] is None
-    assert decision["label"] is None
-    assert decision["reason"] == "pbi2_baseline_cancellation"
+    assert decision["plot_model"] is True
+    assert decision["data_column"] == "background_density_raw"
+    assert decision["density_column"] == "joint_fit_density"
+    assert decision["baseline_column"] == "qr_sideband_background_density"
+    assert decision["subtract_baseline_from_data"] is False
+    assert decision["label"] == "Fit"
+    assert decision["reason"] == "pbi2_raw_with_background_fit"
+    assert decision["metrics"]["valid_l_mapping"] is True
+    assert decision["metrics"]["baseline_cancellation_suspected"] is True
 
 
 def test_parallel_script_pbi2_plot_policy_uses_total_fit_when_safe() -> None:
@@ -798,6 +826,8 @@ def test_parallel_script_pbi2_plot_policy_uses_total_fit_when_safe() -> None:
     sub = pd.DataFrame(
         {
             "background_density": [8.0, 9.5, 8.8, 9.0],
+            "background_density_raw": [9.0, 10.5, 9.8, 10.0],
+            "qr_sideband_background_density": [1.0, 1.0, 1.0, 1.0],
             "joint_peak_density": [6.0, 6.5, 6.1, 6.3],
             "joint_linear_baseline_density": [0.5, 0.4, 0.5, 0.4],
             "joint_fit_density": [6.5, 6.9, 6.6, 6.7],
@@ -821,14 +851,17 @@ def test_parallel_script_pbi2_plot_policy_uses_total_fit_when_safe() -> None:
     )
 
     assert decision["plot_model"] is True
+    assert decision["data_column"] == "background_density_raw"
     assert decision["density_column"] == "joint_fit_density"
-    assert decision["baseline_column"] is None
+    assert decision["baseline_column"] == "qr_sideband_background_density"
     assert decision["subtract_baseline_from_data"] is False
     assert decision["label"] == "Fit"
-    assert decision["reason"] == "pbi2_total_fit"
+    assert decision["reason"] == "pbi2_raw_with_background_fit"
+    assert decision["metrics"]["valid_l_mapping"] is True
+    assert decision["metrics"]["baseline_cancellation_suspected"] is False
 
 
-def test_parallel_script_pbi2_plot_policy_suppresses_invalid_l_mapping() -> None:
+def test_parallel_script_pbi2_plot_policy_keeps_invalid_l_mapping_fit_as_diagnostic() -> None:
     namespace = _script_functions(
         "_finite_abs_percentile",
         "rod_profile_marker_l_mapping_is_valid",
@@ -838,6 +871,8 @@ def test_parallel_script_pbi2_plot_policy_suppresses_invalid_l_mapping() -> None
     sub = pd.DataFrame(
         {
             "background_density": [8.0, 9.5, 8.8],
+            "background_density_raw": [9.0, 10.5, 9.8],
+            "qr_sideband_background_density": [1.0, 1.0, 1.0],
             "joint_peak_density": [6.0, 6.5, 6.1],
             "joint_linear_baseline_density": [0.5, 0.4, 0.5],
             "joint_fit_density": [6.5, 6.9, 6.6],
@@ -859,8 +894,14 @@ def test_parallel_script_pbi2_plot_policy_suppresses_invalid_l_mapping() -> None
         transverse_background_enabled=True,
     )
 
-    assert decision["plot_model"] is False
-    assert decision["reason"] == "pbi2_invalid_l_mapping"
+    assert decision["plot_model"] is True
+    assert decision["data_column"] == "background_density_raw"
+    assert decision["density_column"] == "joint_fit_density"
+    assert decision["baseline_column"] == "qr_sideband_background_density"
+    assert decision["subtract_baseline_from_data"] is False
+    assert decision["label"] == "Fit"
+    assert decision["reason"] == "pbi2_raw_with_background_fit"
+    assert decision["metrics"]["valid_l_mapping"] is False
 
 
 def test_parallel_script_pbi2_marker_l_mapping_allows_duplicate_same_l_rows() -> None:
@@ -923,6 +964,11 @@ def test_parallel_script_plot_policy_keeps_non_pbi2_existing_model_selection() -
 
 def test_parallel_script_final_profile_plot_uses_model_decisions() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    helper_source = source[
+        source.index("def rod_profile_normalized_payload_for_plot_decision(") : source.index(
+            "\ndef positive_log_plot_values("
+        )
+    ]
     final_profile_source = source[
         source.index("for row, rod in enumerate(plot_rod_entries):") : source.index(
             "\nrod_profile_png"
@@ -932,8 +978,52 @@ def test_parallel_script_final_profile_plot_uses_model_decisions() -> None:
 
     assert "plot_model_decision_by_key" in final_profile_source
     assert "rod_profile_plot_model_decision(" in source
-    assert "sub.get(\"joint_peak_density\", sub[\"fit_density\"])" not in nonzero_profile_source
-    assert "label=str(plot_decision.get(\"label\", \"Fit\"))" in nonzero_profile_source
+    assert 'sub.get("joint_peak_density", sub["fit_density"])' not in nonzero_profile_source
+    assert "rod_profile_normalized_payload_for_plot_decision(" in nonzero_profile_source
+    assert (
+        'data_column = str(plot_decision.get("data_column") or "background_density")'
+        in helper_source
+    )
+    assert 'label=str(plot_decision.get("label", "Fit"))' in nonzero_profile_source
+
+
+def test_parallel_script_pbi2_rod_profile_l_axis_limits_cap_at_three() -> None:
+    namespace = _script_functions(
+        "sample_uses_pbi2_rod_plot_policy",
+        "rod_profile_l_axis_limits_for_sample",
+    )
+    uses_pbi2_policy = namespace["sample_uses_pbi2_rod_plot_policy"]
+    plot_limits = namespace["rod_profile_l_axis_limits_for_sample"]
+
+    assert uses_pbi2_policy("PbI2") is True
+    assert uses_pbi2_policy("pbi2_state") is True
+    assert uses_pbi2_policy("Bi2Se3") is False
+    assert plot_limits("PbI2", (2.0, 3.85), pbi2_l_max=3.0) == (2.0, 3.0)
+    assert plot_limits("PbI2", (0.0, 8.0), pbi2_l_max=3.0) == (0.0, 3.0)
+    assert plot_limits("Bi2Se3", (2.0, 3.85), pbi2_l_max=3.0) == (2.0, 3.85)
+
+
+def test_parallel_script_pbi2_final_profile_plots_use_log_y_and_l_cap() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    figure_source = source[
+        source.index(
+            "rod_profile_l_axis_limits = shared_rod_profile_l_axis_limits("
+        ) : source.index("\nplot_model_labels = sorted(")
+    ]
+
+    assert "PBI2_ROD_PROFILE_L_AXIS_MAX = 3.0" in source
+    assert "rod_profile_l_axis_limits = rod_profile_l_axis_limits_for_sample(" in figure_source
+    assert "rod_profile_hk0_l_axis_limits = rod_profile_l_axis_limits_for_sample(" in figure_source
+    assert (
+        "pbi2_rod_profile_figure = sample_uses_pbi2_rod_plot_policy(SAMPLE_STEM)" in figure_source
+    )
+    assert "positive_log_plot_values(data_norm)" in figure_source
+    assert "apply_positive_log_y_axis(ax, *nonzero_log_y_series)" in figure_source
+    assert (
+        "if not pbi2_rod_profile_figure:\n            ax.set_ylim(*rod_profile_nonzero_y_axis_limits)"
+        in figure_source
+    )
+    assert 'else:\n            ax.axhline(0.0, color="0.80", linewidth=0.45)' in figure_source
 
 
 def test_parallel_script_dynamic_specular_markers_use_active_lattice_c() -> None:
@@ -2559,6 +2649,7 @@ def test_parallel_script_shared_nonzero_rod_profile_y_axis_limits_ignore_hk0() -
         "rod_profile_marker_l_mapping_is_valid",
         "rod_profile_plot_model_decision",
         "normalized_data_simulation_payload",
+        "rod_profile_normalized_payload_for_plot_decision",
         "l_reference_rows",
         "qz_values_to_l_axis",
         "shared_nonzero_rod_profile_y_axis_limits",
@@ -2617,6 +2708,7 @@ def test_parallel_script_shared_nonzero_rod_profile_y_axis_limits_fallback_witho
         "rod_profile_marker_l_mapping_is_valid",
         "rod_profile_plot_model_decision",
         "normalized_data_simulation_payload",
+        "rod_profile_normalized_payload_for_plot_decision",
         "l_reference_rows",
         "qz_values_to_l_axis",
         "shared_nonzero_rod_profile_y_axis_limits",
@@ -2652,12 +2744,15 @@ def test_parallel_script_final_rod_profile_axes_use_shared_l_limits_except_hk0()
     helper_def = source.index("def shared_rod_profile_l_axis_limits(")
     nonzero_entries = source.index("nonzero_plot_rod_entries =", helper_def)
     limits_assign = source.index("rod_profile_l_axis_limits = shared_rod_profile_l_axis_limits(")
-    hk0_limits = source.index("rod_profile_hk0_l_axis_limits = (0.0, SPECULAR_QR_ROD_L_MAX)")
+    hk0_limits = source.index(
+        "rod_profile_hk0_l_axis_limits = rod_profile_l_axis_limits_for_sample("
+    )
     figure_loop = source.index("for row, rod in enumerate(plot_rod_entries):", limits_assign)
 
     assert helper_def < nonzero_entries < limits_assign < hk0_limits < figure_loop
     assert 'int(rod["m"]) != 0' in source[nonzero_entries:limits_assign]
     assert "nonzero_plot_rod_entries" in source[limits_assign:hk0_limits]
+    assert "(0.0, SPECULAR_QR_ROD_L_MAX)" in source[hk0_limits:figure_loop]
     assert "ax.set_xlim(*rod_profile_hk0_l_axis_limits)" in source[figure_loop:]
     assert "rod_profile_nonzero_y_axis_limits = shared_nonzero_rod_profile_y_axis_limits(" in source
     assert "ax.set_ylim(*rod_profile_nonzero_y_axis_limits)" in source[figure_loop:]

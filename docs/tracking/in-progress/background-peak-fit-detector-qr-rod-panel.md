@@ -115,12 +115,15 @@ to make the Qr rod detector and integration figures source-consistent:
   instead of producing blank figure rows.
 - PbI2 nonzero Qr-rod extraction uses same-Qz transverse Qr sideband
   subtraction. The central raw density remains in `background_density_raw`, the
-  sideband estimate is written as `qr_sideband_background_density`, and plotted
-  data uses sideband-corrected `background_density`.
+  sideband estimate is written as `qr_sideband_background_density`, and
+  sideband-corrected `background_density` remains the fitted/audit profile.
 - PbI2 nonzero profile plots now use a plot-model decision helper. Branches
-  with invalid marker/L mapping or strong peak/baseline cancellation omit the
-  dashed overlay; accepted PbI2 branches plot total `joint_fit_density` as
-  `Fit` instead of peak-only `Simulation`.
+  show raw central `background_density_raw` as `Data`; available dashed `Fit`
+  overlays plot `joint_fit_density + qr_sideband_background_density`.
+  Marker/L mapping and Qz-baseline cancellation checks remain diagnostics in
+  the markdown table instead of suppressing m=3 or m=4 overlays.
+- PbI2 Qr-rod profile panels are displayed on log-scaled intensity axes and
+  capped at `L=3`, without trimming the exported CSV/profile rows.
 - PbI2 generated rods remain disabled by default and final profile rows still
   require complete detector support, so the unsupported `m=7` row is skipped.
 
@@ -208,9 +211,10 @@ Feature status:
   full-profile fit seen on the log-scaled Qr integration plot while preserving
   the existing `fit_joint_qz_peak_sum(qz_center, background_density, qz_markers)`
   helper interface.
-- PbI2 sideband-corrected plot policy is implemented for the diagnostic `.py`.
-  The generated markdown includes a `Plot model decisions` table with the
-  plotted/omitted model source and reason per branch.
+- PbI2 raw-data/additive-sideband plot policy is implemented for the diagnostic
+  `.py`. The generated markdown includes a `Plot model decisions` table with
+  the plotted data source, fit source, added-background source, and diagnostic
+  flags per branch.
 - Tail-component aggregation now fails closed when `x`, target, finite-mask,
   and model shapes are inconsistent instead of partially replacing only one
   mask and risking a mismatched array index.
@@ -297,29 +301,35 @@ Passing checks:
 - Tail-component shape-mismatch coverage verifies the helper returns no
   components instead of raising or synthesizing unsupported data.
 - PbI2 sideband and plot-policy coverage verifies same-Qz Qr sideband
-  subtraction keeps raw, sideband, and corrected densities available; invalid
-  marker/L mappings suppress nonzero model overlays; accepted PbI2 branches use
-  total `joint_fit_density`; non-PbI2 model selection is unchanged; and
-  unsupported detector-incomplete rows such as `m=7` stay hidden.
+  subtraction keeps raw, sideband, and corrected densities available; PbI2
+  final plots use raw central profiles as data and add the sideband background
+  back to available total `joint_fit_density` overlays; invalid marker/L
+  mappings and Qz-baseline cancellation are retained as diagnostics instead of
+  overlay gates; non-PbI2 model selection is unchanged; and unsupported
+  detector-incomplete rows such as `m=7` stay hidden.
 - Focused PbI2 acceptance command passed:
-  `python -m pytest tests/test_background_peak_fits_notebook.py -k "qr_sideband or pbi2_plot_policy or marker_l_mapping_allows_duplicate or plot_policy_keeps_non_pbi2 or final_profile_plot_uses_model_decisions or shared_nonzero_rod_profile_y_axis_limits or final_rod_plot_filters_incomplete_detector_branch_support" -ra`
-  with `12 passed`.
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "qr_sideband or pbi2_plot_policy or final_profile_plot_uses_model_decisions or pbi2_rod_profile_l_axis or pbi2_final_profile or shared_nonzero_rod_profile_y_axis_limits" -ra`
+  with `11 passed`.
 - Headless PbI2 script execution passed with
-  `RA_SIM_HEADLESS=1` and `RA_SIM_QR_ROD_PEAK_EDIT_MODE=skip`; it regenerated
-  the PbI2 Qr-rod profile artifacts, kept `m=1` `Fit` overlays, omitted the
-  misleading `m=3`/`m=4` nonzero overlays, and skipped unsupported `m=7`.
+  `RA_SIM_QR_ROD_PEAK_EDIT_MODE=skip`; it regenerated the PbI2 Qr-rod profile
+  artifacts, kept `m=1`, `m=3`, and `m=4` `Fit` overlays on the raw-data basis,
+  wrote the plot-decision diagnostics table, capped displayed L at 3, used log
+  axes on all PbI2 panels, and skipped unsupported `m=7` in the final figure.
 - Focused command passed:
   `python -m pytest tests/test_background_peak_fits_notebook.py -k "joint_qz_fit or rod_profile_panels_use_centered_m_labels or qr_rod_marker_hash_changes_cache_key or marker_title_changes_cache_key or qr_rod_final_cache_requires_fit_signature or tail_component_aggregation_rejects_shape_mismatch" -ra`
 - Compile check passed for package, tests, and the diagnostic script:
   `python -m compileall -q ra_sim tests scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py`
-- Focused format check passed:
-  `python -m ruff format --check scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py tests/test_background_peak_fits_notebook.py`
+- Focused whitespace check passed:
+  `git diff --check`
+  The touched diagnostic/test files still contain older unrelated ruff-format
+  churn outside this slice, so this patch leaves those hunks untouched instead
+  of mixing a broad formatting cleanup into the PbI2 plotting fix.
 
 Known validation limits:
 
 - Full `tests/test_background_peak_fits_notebook.py` was rerun on 2026-05-11.
   It still has six unrelated notebook/script source-token expectation
-  failures, with `116 passed`, `2 skipped`, and `6 failed`. The failures are
+  failures, with `118 passed`, `2 skipped`, and `6 failed`. The failures are
   the older missing `ROD_PROFILE_MAX_TWO_THETA_DEG = 60.0` and
   `"fit_model": "rotated_gaussian_plane"` notebook tokens plus detector
   label-editor, specular-region, and sample-name override script-token
