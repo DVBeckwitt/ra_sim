@@ -54,11 +54,15 @@ GUI state import restore status note:
 Bug status fixed for JSON GUI-state import and timing startup restore. Both
 paths now mark saved-state restore as import-active, suppress intermediate
 simulation scheduling, defer caked-view preparation and Qr/Qz selector repaint,
-and allow only the final post-restore update to run after runtime flags are
-restored. No GUI control, CLI flag, saved-state schema, artifact format,
+and now render restored manual-pair overlays through the reuse-only path so
+manual-pick/source-row simulation caches are not rebuilt synchronously on the
+Tk import callback. Only the final post-restore update runs after runtime flags
+are restored. No GUI control, CLI flag, saved-state schema, artifact format,
 dependency, CI workflow, deprecation, or migration changed. Shipping status:
-focused GUI import/state/view tests, touched-file ruff checks, and compile pass
-locally. Full `python -m ra_sim.dev check` remains blocked only by unrelated
+focused GUI import/state/view tests, touched-file ruff checks, compile pass, and
+an actual GUI import of the local Bi2Se3 saved-state snapshot from the RA-SIM
+user data root all passed locally. Full `python -m ra_sim.dev check` remains
+blocked only by unrelated
 formatting drift in `ra_sim/fitting/optimization.py`. Rollback is a normal git
 revert of the runtime/test/doc commit; saved GUI states require no cleanup.
 

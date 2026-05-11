@@ -12324,6 +12324,13 @@ def _render_current_geometry_manual_pairs(*, update_status: bool = False) -> boo
         del update_status
         _clear_all_geometry_overlay_artists(redraw=True)
         return False
+    if bool(getattr(simulation_runtime_state, "gui_state_import_active", False)):
+        return bool(
+            _render_current_geometry_manual_pairs_base(
+                update_status=update_status,
+                click_path=True,
+            )
+        )
     return bool(_render_current_geometry_manual_pairs_base(update_status=update_status))
 
 

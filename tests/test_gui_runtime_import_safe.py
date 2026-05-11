@@ -22509,6 +22509,37 @@ def test_geometry_fit_caked_view_treats_gui_state_import_as_update_running(monke
     assert runtime_state.update_pending == "new-update-token"
 
 
+def test_gui_state_import_manual_pair_render_uses_reuse_only_path(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    render_calls: list[dict[str, object]] = []
+
+    def fake_render_current_pairs(**kwargs):
+        render_calls.append(dict(kwargs))
+        return True
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(gui_state_import_active=True),
+    )
+    monkeypatch.setattr(runtime_session, "_geometry_overlays_enabled", lambda: True)
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_all_geometry_overlay_artists",
+        lambda **_kwargs: pytest.fail("import-active render should not clear overlays"),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_render_current_geometry_manual_pairs_base",
+        fake_render_current_pairs,
+        raising=False,
+    )
+
+    assert runtime_session._render_current_geometry_manual_pairs(update_status=True) is True
+
+    assert render_calls == [{"update_status": True, "click_path": True}]
+
+
 def test_runtime_impl_gui_state_import_defers_q_group_selector_refresh() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
     block_start = source.index(
