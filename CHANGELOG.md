@@ -143,6 +143,7 @@
   - Optimized Selected-Qr rod interactions with debounced selection refreshes, shared detector/caked inputs, bounded per-feature caches, reusable 1D plot axes/lines, and optional `RA_SIM_PROFILE_QR_ROD=1` timing hooks.
   - Replaced modifier-key Selected-Qr rod multi-selection with an extended-selection rod list; selected keys remain saved in displayed rod order.
   - Changed the Selected-Qr rod `delta_Qr` control and saved `analysis_range.delta_qr` to mean full rod width, with legacy half-width saved states migrated on load and low-level mask builders still receiving half-width.
+  - Changed Selected-Qr rod integration controls to display L min/max bounds, plot per-rod integrated intensity against L when lattice `c` is available, and show the live fitted geometry values used for the caked mask/profile path while preserving saved Qz bounds.
   - Added a Match-tab `Place Background Qr Set` control for saving background-only Qr reference peaks with local peak-top refinement and `2theta,phi` labels instead of HKL values.
   - Fixed `Pick Beam Center` conversion to use the detector display extent instead of raw pixel-index inversion, with Row following clicked display row and Col mirrored across displayed detector width.
   - Fixed Q-space viewer geometry ownership so detector distance participates in simulation cache identity, Q-space conversion uses the geometry that produced the current image, Q-space-only display skips caking, and displayed Qr centers are finite and positive.

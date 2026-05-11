@@ -618,6 +618,7 @@ class IntegrationRangeControlsViewState:
     selected_qr_rod_key_by_label: dict[str, str] = field(default_factory=dict)
     selected_qr_rod_phi_customized: bool = False
     qz_min_value: float = 0.0
+    qz_display_scale_value: float = 1.0
     qz_min_container: Any = None
     qz_min_var: Any = None
     qz_min_label_var: Any = None
@@ -644,6 +645,8 @@ class IntegrationRangeControlsViewState:
     delta_qr_entry: Any = None
     delta_qr_cue_var: Any = None
     delta_qr_cue_label: Any = None
+    selected_qr_geometry_summary_var: Any = None
+    selected_qr_geometry_summary_label: Any = None
 
 
 @dataclass

@@ -9178,6 +9178,98 @@ def _default_qz_values_for_extent(
     return qz_lower, min(5.0, qz_upper)
 
 
+def _finite_selected_qr_rod_lattice_c(value: object) -> float | None:
+    try:
+        lattice_c = float(value)
+    except Exception:
+        return None
+    if not np.isfinite(lattice_c) or lattice_c <= 0.0:
+        return None
+    return float(lattice_c)
+
+
+def _current_selected_qr_rod_lattice_c() -> float | None:
+    return _finite_selected_qr_rod_lattice_c(_get_var_value(globals().get("c_var"), None))
+
+
+def _selected_qr_rod_qz_to_l_values(
+    qz_values: object,
+    lattice_c: object,
+) -> np.ndarray | None:
+    c_value = _finite_selected_qr_rod_lattice_c(lattice_c)
+    if c_value is None:
+        return None
+    try:
+        qz_array = np.asarray(qz_values, dtype=np.float64)
+    except Exception:
+        return None
+    return qz_array * (c_value / (2.0 * np.pi))
+
+
+def _selected_qr_rod_qz_display_scale_from_view_state(view_state: object | None = None) -> float:
+    if view_state is None:
+        view_state = globals().get("integration_range_controls_view_state")
+    try:
+        scale = float(getattr(view_state, "qz_display_scale_value", 1.0))
+    except Exception:
+        return 1.0
+    if not np.isfinite(scale) or scale <= 0.0:
+        return 1.0
+    return float(scale)
+
+
+def _selected_qr_rod_qz_to_display_value(
+    qz_value: object,
+    view_state: object | None = None,
+) -> float:
+    try:
+        qz_float = float(qz_value)
+    except Exception:
+        qz_float = 0.0
+    return qz_float * _selected_qr_rod_qz_display_scale_from_view_state(view_state)
+
+
+def _selected_qr_rod_display_to_qz_value(
+    display_value: object,
+    view_state: object | None = None,
+) -> float:
+    try:
+        display_float = float(display_value)
+    except Exception:
+        display_float = 0.0
+    return display_float / _selected_qr_rod_qz_display_scale_from_view_state(view_state)
+
+
+def _selected_qr_rod_geometry_summary_text() -> str:
+    def _number(var_name: str) -> float:
+        return float(_get_var_value(globals().get(var_name), np.nan))
+
+    try:
+        return (
+            f"Fit geometry: theta {_number('theta_initial_var'):.2f} deg | "
+            f"chi {_number('chi_var'):.2f} deg | "
+            f"psi_z {_number('psi_z_var'):.2f} deg | "
+            f"cor {_number('cor_angle_var'):.2f} deg | "
+            f"gamma {_number('gamma_var'):.2f} deg | "
+            f"Gamma {_number('Gamma_var'):.2f} deg | "
+            f"dist {_number('corto_detector_var') * 1e3:.2f} mm | "
+            f"center {_number('center_x_var'):.1f}/{_number('center_y_var'):.1f} px"
+        )
+    except Exception:
+        return "Fit geometry unavailable."
+
+
+def _sync_selected_qr_rod_geometry_summary_text() -> None:
+    view_state = globals().get("integration_range_controls_view_state")
+    summary_var = getattr(view_state, "selected_qr_geometry_summary_var", None)
+    setter = getattr(summary_var, "set", None)
+    if callable(setter):
+        try:
+            setter(_selected_qr_rod_geometry_summary_text())
+        except Exception:
+            pass
+
+
 def _selected_qr_rod_detector_mode_requested() -> bool:
     if _current_app_shell_view_mode() != "detector":
         return False
@@ -11547,25 +11639,33 @@ def _sync_selected_qr_rod_controls_state() -> None:
     )
     if qz_extent is not None:
         qz_lo, qz_hi = _qz_slider_bounds_from_extent(qz_extent)
+        qz_display_lo = _selected_qr_rod_qz_to_display_value(qz_lo, range_view_state)
+        qz_display_hi = _selected_qr_rod_qz_to_display_value(qz_hi, range_view_state)
         gui_integration_range_drag._set_runtime_slider_bounds(  # noqa: SLF001
             range_view_state,
             "qz_min",
-            qz_lo,
-            qz_hi,
+            qz_display_lo,
+            qz_display_hi,
         )
         gui_integration_range_drag._set_runtime_slider_bounds(  # noqa: SLF001
             range_view_state,
             "qz_max",
-            qz_lo,
-            qz_hi,
+            qz_display_lo,
+            qz_display_hi,
         )
-        current_qz_min = _read_analysis_range_value(
-            getattr(range_view_state, "qz_min_var", None),
-            getattr(range_view_state, "qz_min_value", qz_lo),
+        current_qz_min = _selected_qr_rod_display_to_qz_value(
+            _read_analysis_range_value(
+                getattr(range_view_state, "qz_min_var", None),
+                getattr(range_view_state, "qz_min_value", qz_display_lo),
+            ),
+            range_view_state,
         )
-        current_qz_max = _read_analysis_range_value(
-            getattr(range_view_state, "qz_max_var", None),
-            getattr(range_view_state, "qz_max_value", qz_hi),
+        current_qz_max = _selected_qr_rod_display_to_qz_value(
+            _read_analysis_range_value(
+                getattr(range_view_state, "qz_max_var", None),
+                getattr(range_view_state, "qz_max_value", qz_display_hi),
+            ),
+            range_view_state,
         )
         clamped_qz_min = min(max(float(current_qz_min), qz_lo), qz_hi)
         clamped_qz_max = min(max(float(current_qz_max), qz_lo), qz_hi)
@@ -11574,12 +11674,12 @@ def _sync_selected_qr_rod_controls_state() -> None:
         gui_integration_range_drag._set_runtime_range_value(  # noqa: SLF001
             range_view_state,
             "qz_min",
-            clamped_qz_min,
+            _selected_qr_rod_qz_to_display_value(clamped_qz_min, range_view_state),
         )
         gui_integration_range_drag._set_runtime_range_value(  # noqa: SLF001
             range_view_state,
             "qz_max",
-            clamped_qz_max,
+            _selected_qr_rod_qz_to_display_value(clamped_qz_max, range_view_state),
         )
 
     rod_mode_enabled = _read_analysis_bool_value(
@@ -13887,9 +13987,27 @@ def _auto_match_scale_factor_to_radial_peak():
                         simulation_runtime_state.last_1d_integration_data[
                             "primary_selected_qr_rod_key"
                         ] = primary_key
-                        simulation_runtime_state.last_1d_integration_data["x_axis_kind"] = "qz"
+                        axis_kind = str(
+                            simulation_runtime_state.last_1d_integration_data.get(
+                                "x_axis_kind",
+                                "",
+                            )
+                            or ""
+                        )
+                        axis_label = str(
+                            simulation_runtime_state.last_1d_integration_data.get(
+                                "x_axis_label",
+                                "",
+                            )
+                            or ""
+                        )
+                        if axis_kind not in {"l", "qz"}:
+                            axis_kind = "l" if primary_profile.get("l") is not None else "qz"
+                        if not axis_label:
+                            axis_label = "L (r.l.u.)" if axis_kind == "l" else "Qz (A^-1)"
+                        simulation_runtime_state.last_1d_integration_data["x_axis_kind"] = axis_kind
                         simulation_runtime_state.last_1d_integration_data["x_axis_label"] = (
-                            "Qz (A^-1)"
+                            axis_label
                         )
             except Exception:
                 sim_curve = None
@@ -13945,7 +14063,12 @@ def _auto_match_scale_factor_to_radial_peak():
     sim_vals = sim_vals[np.isfinite(sim_vals)]
     bg_vals = bg_vals[np.isfinite(bg_vals)]
     x_axis_kind = simulation_runtime_state.last_1d_integration_data.get("x_axis_kind")
-    profile_axis_name = "Qz" if x_axis_kind == "qz" else "radial"
+    if x_axis_kind == "qz":
+        profile_axis_name = "Qz"
+    elif x_axis_kind == "l":
+        profile_axis_name = "L"
+    else:
+        profile_axis_name = "radial"
     if sim_vals.size == 0 or bg_vals.size == 0:
         progress_label_positions.config(
             text=f"Auto-match failed: {profile_axis_name} curves are empty."
@@ -15558,19 +15681,40 @@ def _selected_qr_rod_profile_cache_signature(
         _selected_qr_rod_array_content_signature(shared.get("signal_sum")),
         _selected_qr_rod_array_content_signature(shared.get("normalization_sum")),
         _selected_qr_rod_array_content_signature(shared.get("acceptance")),
+        _finite_selected_qr_rod_lattice_c(shared.get("selected_qr_rod_lattice_c")),
     )
 
 
-def _selected_qr_rod_profile_cache_copy(
+def _selected_qr_rod_profile_with_l_center(
     profile: Mapping[str, object],
+    lattice_c: object,
 ) -> dict[str, np.ndarray]:
-    return {
+    copied = {
         "qz_center": np.asarray(profile["qz_center"], dtype=np.float64).copy(),
         "pixel_count": np.asarray(profile["pixel_count"], dtype=np.int64).copy(),
         "intensity_sum": np.asarray(profile["intensity_sum"], dtype=np.float64).copy(),
         "intensity_mean": np.asarray(profile["intensity_mean"], dtype=np.float64).copy(),
         "acceptance_sum": np.asarray(profile["acceptance_sum"], dtype=np.float64).copy(),
     }
+    l_center = _selected_qr_rod_qz_to_l_values(copied["qz_center"], lattice_c)
+    if l_center is not None and l_center.shape == copied["qz_center"].shape:
+        copied["l_center"] = np.asarray(l_center, dtype=np.float64).copy()
+    return copied
+
+
+def _selected_qr_rod_profile_cache_copy(
+    profile: Mapping[str, object],
+) -> dict[str, np.ndarray]:
+    copied = {
+        "qz_center": np.asarray(profile["qz_center"], dtype=np.float64).copy(),
+        "pixel_count": np.asarray(profile["pixel_count"], dtype=np.int64).copy(),
+        "intensity_sum": np.asarray(profile["intensity_sum"], dtype=np.float64).copy(),
+        "intensity_mean": np.asarray(profile["intensity_mean"], dtype=np.float64).copy(),
+        "acceptance_sum": np.asarray(profile["acceptance_sum"], dtype=np.float64).copy(),
+    }
+    if "l_center" in profile:
+        copied["l_center"] = np.asarray(profile["l_center"], dtype=np.float64).copy()
+    return copied
 
 
 def _selected_qr_rod_profile_component_cache_signature(
@@ -15999,6 +16143,7 @@ def _selected_qr_rod_caked_shared_profile_inputs(res2) -> dict[str, object] | No
         "delta_qr": delta_qr,
         "qz_min": qz_lo,
         "qz_max": qz_hi,
+        "selected_qr_rod_lattice_c": _current_selected_qr_rod_lattice_c(),
         "rod_profile_intensity_mode": _current_rod_profile_intensity_mode(),
         "caked_intensity_mode": _current_caked_intensity_mode(),
         "signal_sum": signal_sum,
@@ -16073,6 +16218,10 @@ def _selected_qr_rod_caked_profile_from_shared_inputs(
         component_signature,
     )
     if component_profile is not None:
+        component_profile = _selected_qr_rod_profile_with_l_center(
+            component_profile,
+            shared.get("selected_qr_rod_lattice_c"),
+        )
         if cache_signature is not None:
             _selected_qr_rod_bounded_cache_put(
                 cache,
@@ -16111,6 +16260,10 @@ def _selected_qr_rod_caked_profile_from_shared_inputs(
         "intensity_mean": np.asarray(profile["background_density"], dtype=np.float64),
         "acceptance_sum": np.asarray(profile["acceptance_sum"], dtype=np.float64),
     }
+    result = _selected_qr_rod_profile_with_l_center(
+        result,
+        shared.get("selected_qr_rod_lattice_c"),
+    )
     if cache_signature is not None:
         _selected_qr_rod_bounded_cache_put(
             cache,
@@ -16498,6 +16651,26 @@ def _set_1d_axes_for_selected_qr_rod_profile(y_label: str) -> None:
     ax_1d_azim.set_ylabel(y_label)
 
 
+def _selected_qr_rod_profile_x_axis(
+    profile: Mapping[str, object] | None,
+) -> tuple[np.ndarray | None, str, str]:
+    if isinstance(profile, Mapping) and "l_center" in profile:
+        try:
+            l_center = np.asarray(profile["l_center"], dtype=float)
+        except Exception:
+            l_center = None
+        if l_center is not None and l_center.ndim == 1 and l_center.size > 0:
+            return l_center, "l", "L (r.l.u.)"
+    if isinstance(profile, Mapping):
+        try:
+            qz_center = np.asarray(profile["qz_center"], dtype=float)
+        except Exception:
+            qz_center = None
+        if qz_center is not None and qz_center.ndim == 1:
+            return qz_center, "qz", "Qz (A^-1)"
+    return None, "qz", "Qz (A^-1)"
+
+
 def _clear_selected_qr_rod_detector_1d_plot() -> None:
     _clear_selected_qr_rod_line_state()
     if line_1d_rad is not None:
@@ -16595,7 +16768,9 @@ def _update_1d_plots_from_selected_qr_rods_caked(
     primary_bg_profile = None
     primary_sim_curve = None
     primary_bg_curve = None
-    primary_qz = None
+    primary_x = None
+    primary_x_axis_kind = "qz"
+    primary_x_axis_label = "Qz (A^-1)"
     plotted_any = False
 
     for idx, (axis, payload) in enumerate(zip(axes, rod_payloads, strict=False)):
@@ -16625,31 +16800,42 @@ def _update_1d_plots_from_selected_qr_rods_caked(
         axis.set_title(_selected_qr_rod_axis_title(payload))
         axis.set_ylabel(y_label)
         axis.set_yscale("linear")
-        if idx == len(rod_payloads) - 1:
-            axis.set_xlabel("Qz (A^-1)")
-        else:
-            axis.set_xlabel("")
 
-        qz_center = None
+        x_values = None
+        x_axis_kind = "qz"
+        x_axis_label = "Qz (A^-1)"
         sim_line = line_record.get("sim")
         bg_line = line_record.get("bg")
         if sim_profile is not None and sim_curve is not None:
-            qz_center = np.asarray(sim_profile["qz_center"], dtype=float)
-            sim_line.set_data(qz_center, sim_curve * scale)
+            x_values, x_axis_kind, x_axis_label = _selected_qr_rod_profile_x_axis(sim_profile)
+            sim_line.set_data(x_values, sim_curve * scale)
             plotted_any = True
         else:
             sim_line.set_data([], [])
         if bg_profile is not None and bg_curve is not None:
-            bg_qz_center = np.asarray(bg_profile["qz_center"], dtype=float)
-            bg_line.set_data(bg_qz_center, bg_curve)
-            if qz_center is None:
-                qz_center = bg_qz_center
+            bg_x_values, bg_axis_kind, bg_axis_label = _selected_qr_rod_profile_x_axis(bg_profile)
+            bg_line.set_data(bg_x_values, bg_curve)
+            if x_values is None:
+                x_values = bg_x_values
+                x_axis_kind = bg_axis_kind
+                x_axis_label = bg_axis_label
         else:
             bg_line.set_data([], [])
+        if idx == len(rod_payloads) - 1:
+            axis.set_xlabel(x_axis_label)
+        else:
+            axis.set_xlabel("")
         axis.legend()
 
         profiles_by_key[key] = {
-            "qz": qz_center,
+            "qz": None
+            if sim_profile is None
+            else np.asarray(sim_profile["qz_center"], dtype=float),
+            "l": (
+                None
+                if not isinstance(sim_profile, Mapping) or "l_center" not in sim_profile
+                else np.asarray(sim_profile["l_center"], dtype=float)
+            ),
             "sim": None if sim_curve is None else np.asarray(sim_curve, dtype=float),
             "bg": None if bg_curve is None else np.asarray(bg_curve, dtype=float),
             "sim_profile": sim_profile,
@@ -16669,7 +16855,9 @@ def _update_1d_plots_from_selected_qr_rods_caked(
             primary_bg_profile = bg_profile
             primary_sim_curve = sim_curve
             primary_bg_curve = bg_curve
-            primary_qz = qz_center
+            primary_x = x_values
+            primary_x_axis_kind = x_axis_kind
+            primary_x_axis_label = x_axis_label
             line_1d_rad = sim_line
             line_1d_rad_bg = bg_line
             line_1d_az = line_record.get("hidden_sim")
@@ -16684,13 +16872,13 @@ def _update_1d_plots_from_selected_qr_rods_caked(
             "selected_qr_rod_keys": list(selected_keys),
             "primary_selected_qr_rod_key": primary_key,
             "selected_qr_rod_profiles": profiles_by_key,
-            "radials_sim": primary_qz,
+            "radials_sim": primary_x,
             "intensities_2theta_sim": (
                 None if primary_sim_curve is None else np.asarray(primary_sim_curve, dtype=float)
             ),
             "azimuths_sim": None,
             "intensities_azimuth_sim": None,
-            "radials_bg": primary_qz if primary_bg_curve is not None else None,
+            "radials_bg": primary_x if primary_bg_curve is not None else None,
             "intensities_2theta_bg": (
                 None if primary_bg_curve is None else np.asarray(primary_bg_curve, dtype=float)
             ),
@@ -16711,8 +16899,8 @@ def _update_1d_plots_from_selected_qr_rods_caked(
             "selected_qr_rod_shape_pixel_count": int(
                 sum(int(payload.get("shape_pixel_count", 0) or 0) for payload in rod_payloads)
             ),
-            "x_axis_kind": "qz",
-            "x_axis_label": "Qz (A^-1)",
+            "x_axis_kind": primary_x_axis_kind,
+            "x_axis_label": primary_x_axis_label,
         }
     )
     _apply_1d_plot_log_scale(redraw=False)
@@ -26941,8 +27129,16 @@ def reset_to_defaults():
     )
     qz_extent = _current_caked_qz_extent()
     qz_lo, qz_hi = _default_qz_values_for_extent(qz_extent)
-    qz_min_var.set(qz_lo)
-    qz_max_var.set(qz_hi)
+    qz_min_display = _selected_qr_rod_qz_to_display_value(
+        qz_lo,
+        integration_range_controls_view_state,
+    )
+    qz_max_display = _selected_qr_rod_qz_to_display_value(
+        qz_hi,
+        integration_range_controls_view_state,
+    )
+    qz_min_var.set(qz_min_display)
+    qz_max_var.set(qz_max_display)
     delta_qr_var.set(0.1)
     integration_range_controls_view_state.integrate_selected_qr_rod_value = False
     integration_range_controls_view_state.mirror_selected_qr_phi_value = False
@@ -26953,8 +27149,8 @@ def reset_to_defaults():
     integration_range_controls_view_state.selected_qr_rod_key_value = ""
     integration_range_controls_view_state.selected_qr_rod_keys_value = []
     integration_range_controls_view_state.selected_qr_rod_phi_customized = False
-    integration_range_controls_view_state.qz_min_value = float(qz_lo)
-    integration_range_controls_view_state.qz_max_value = float(qz_hi)
+    integration_range_controls_view_state.qz_min_value = float(qz_min_display)
+    integration_range_controls_view_state.qz_max_value = float(qz_max_display)
     integration_range_controls_view_state.delta_qr_value = 0.1
     integration_range_controls_view_state.delta_qr_width_mode_value = "full_width"
     analysis_view_controls_view_state.show_1d_var.set(False)
@@ -36812,6 +37008,8 @@ def _apply_analysis_range_snapshot(snapshot: Mapping[str, object] | None) -> Non
             if not np.isfinite(numeric_value):
                 numeric_value = float(fallback)
             numeric_value = min(max(numeric_value, min(lo, hi)), max(lo, hi))
+        elif key in {"qz_min", "qz_max"}:
+            numeric_value = _selected_qr_rod_qz_to_display_value(numeric_value, view_state)
         setattr(view_state, f"{key}_value", numeric_value)
         gui_integration_range_drag._safe_var_set(  # noqa: SLF001
             getattr(view_state, f"{key}_var", None),
@@ -36967,6 +37165,15 @@ def _current_analysis_roi_values() -> dict[str, object]:
             ),
             "delta_qr_width_mode": "full_width",
         }
+    )
+    range_view_state = globals().get("integration_range_controls_view_state")
+    range_values["qz_min"] = _selected_qr_rod_display_to_qz_value(
+        range_values.get("qz_min", 0.0),
+        range_view_state,
+    )
+    range_values["qz_max"] = _selected_qr_rod_display_to_qz_value(
+        range_values.get("qz_max", 5.0),
+        range_view_state,
     )
     lo, hi = _SELECTED_QR_ROD_DELTA_QR_WIDTH_BOUNDS
     try:
@@ -38640,6 +38847,12 @@ def _render_analysis_integration_range_controls(
     if not callable(refresh_region_visuals_callback):
         refresh_region_visuals_callback = None
 
+    selected_qr_lattice_c = _current_selected_qr_rod_lattice_c()
+    selected_qr_qz_display_scale = (
+        float(selected_qr_lattice_c) / (2.0 * np.pi) if selected_qr_lattice_c is not None else 1.0
+    )
+    selected_qr_axis_label = "L" if selected_qr_lattice_c is not None else "Qz"
+
     gui_integration_range_drag.create_runtime_integration_range_controls(
         parent=parent,
         views_module=gui_views,
@@ -38666,6 +38879,9 @@ def _render_analysis_integration_range_controls(
         selected_qr_rod_options=_selected_qr_rod_option_pairs(_analysis_selected_qr_rod_entries()),
         qz_min=float(values.get("qz_min", 0.0)),
         qz_max=float(values.get("qz_max", 5.0)),
+        qz_display_scale=selected_qr_qz_display_scale,
+        qz_display_axis_label=selected_qr_axis_label,
+        selected_qr_geometry_summary=_selected_qr_rod_geometry_summary_text(),
         delta_qr=float(values.get("delta_qr", 0.1)),
         schedule_range_update=integration_range_update_runtime_callbacks.schedule_range_update,
         disable_peak_pick=lambda: _set_analysis_peak_pick_mode(False),
@@ -38696,6 +38912,7 @@ def _render_analysis_integration_range_controls(
     phi_min_slider = integration_range_controls_view_state.phi_min_slider
     phi_max_slider = integration_range_controls_view_state.phi_max_slider
     _sync_selected_qr_rod_controls_state()
+    _sync_selected_qr_rod_geometry_summary_text()
 
     if any(
         ref is None
@@ -40567,6 +40784,7 @@ def _refresh_refine_section_summaries(*_args) -> None:
     except Exception:
         detector_summary = ""
     gui_views.set_collapsible_header_summary(detector_frame, detector_summary)
+    _sync_selected_qr_rod_geometry_summary_text()
 
     try:
         lattice_summary = f"a {float(a_var.get()):.3f} A | c {float(c_var.get()):.3f} A"

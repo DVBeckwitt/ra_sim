@@ -79,6 +79,8 @@ _VIEW_MODE_CHOICES = (
     ("caked", "Caked"),
     ("q_space", "Q Space"),
 )
+
+
 def _attach_tooltip(widget: object, text: str) -> None:
     """Attach a minimal hover tooltip when the widget supports Tk bindings."""
 
@@ -4871,6 +4873,8 @@ def create_integration_range_controls(
     on_caked_intensity_mode_changed: Callable[[object], None] | None = None,
     on_rod_profile_intensity_mode_changed: Callable[[object], None] | None = None,
     on_selected_qr_rod_changed: Callable[[object], None] | None = None,
+    selected_qr_rod_axis_label: str = "Qz",
+    selected_qr_geometry_summary: str = "",
 ) -> None:
     """Create the 1D integration-range controls and store their widget refs."""
 
@@ -5029,6 +5033,15 @@ def create_integration_range_controls(
     )
     delta_qr_cue_label.pack(side=tk.TOP, anchor=tk.W, padx=5, pady=(0, 2))
 
+    selected_qr_geometry_summary_var = tk.StringVar(value=str(selected_qr_geometry_summary or ""))
+    selected_qr_geometry_summary_label = ttk.Label(
+        rod_section_frame,
+        textvariable=selected_qr_geometry_summary_var,
+        wraplength=360,
+        justify=tk.LEFT,
+    )
+    selected_qr_geometry_summary_label.pack(side=tk.TOP, anchor=tk.W, padx=5, pady=(0, 4))
+
     selected_qr_rod_container = ttk.Frame(rod_section_frame)
     selected_qr_rod_container.pack(side=tk.TOP, fill=tk.X, pady=2)
     selected_qr_rod_label = ttk.Label(selected_qr_rod_container, text="Qr rods:")
@@ -5178,7 +5191,7 @@ def create_integration_range_controls(
     _create_range_row(
         parent_frame=rod_section_frame,
         prefix="qz_min",
-        label_text="Qz Min:",
+        label_text=f"{str(selected_qr_rod_axis_label or 'Qz')} Min:",
         initial_value=qz_min,
         lower_bound=qz_min,
         upper_bound=qz_max,
@@ -5190,7 +5203,7 @@ def create_integration_range_controls(
     _create_range_row(
         parent_frame=rod_section_frame,
         prefix="qz_max",
-        label_text="Qz Max:",
+        label_text=f"{str(selected_qr_rod_axis_label or 'Qz')} Max:",
         initial_value=qz_max,
         lower_bound=qz_min,
         upper_bound=qz_max,
@@ -5212,6 +5225,8 @@ def create_integration_range_controls(
     view_state.include_selected_qr_rod_shape_checkbutton = include_selected_qr_rod_shape_checkbutton
     view_state.delta_qr_cue_var = delta_qr_cue_var
     view_state.delta_qr_cue_label = delta_qr_cue_label
+    view_state.selected_qr_geometry_summary_var = selected_qr_geometry_summary_var
+    view_state.selected_qr_geometry_summary_label = selected_qr_geometry_summary_label
     view_state.caked_intensity_mode_value = caked_intensity_mode_var.get()
     view_state.caked_intensity_mode_var = caked_intensity_mode_var
     view_state.caked_intensity_mode_label = caked_intensity_mode_label

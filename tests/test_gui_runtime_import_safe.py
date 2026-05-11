@@ -23120,6 +23120,125 @@ def test_runtime_session_current_analysis_range_values_preserve_rod_controls(
     }
 
 
+def test_runtime_session_current_analysis_roi_values_converts_l_display_bounds_to_qz(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    monkeypatch.setattr(
+        runtime_session,
+        "integration_range_controls_view_state",
+        SimpleNamespace(
+            tth_min_value=1.5,
+            tth_max_value=55.0,
+            phi_min_value=-12.0,
+            phi_max_value=18.0,
+            integrate_selected_qr_rod_value=True,
+            mirror_selected_qr_phi_value=False,
+            include_selected_qr_rod_shape_value=False,
+            caked_intensity_mode_value="density",
+            rod_profile_intensity_mode_value="density",
+            selected_qr_rod_key_value="phase-a|1",
+            selected_qr_rod_keys_value=["phase-a|1"],
+            qz_min_value=2.0,
+            qz_max_value=4.0,
+            qz_display_scale_value=2.0,
+            delta_qr_value=0.25,
+        ),
+        raising=False,
+    )
+    for name in (
+        "tth_min_var",
+        "tth_max_var",
+        "phi_min_var",
+        "phi_max_var",
+        "integrate_selected_qr_rod_var",
+        "mirror_selected_qr_phi_var",
+        "include_selected_qr_rod_shape_var",
+        "caked_intensity_mode_var",
+        "rod_profile_intensity_mode_var",
+        "selected_qr_rod_key_var",
+        "qz_min_var",
+        "qz_max_var",
+        "delta_qr_var",
+    ):
+        monkeypatch.setitem(runtime_session.__dict__, name, None)
+
+    roi_values = runtime_session._current_analysis_roi_values()
+
+    assert roi_values["qz_min"] == 1.0
+    assert roi_values["qz_max"] == 2.0
+
+
+def test_runtime_session_analysis_range_snapshot_keeps_saved_qz_with_l_display(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    class _Var:
+        def __init__(self, value=0.0) -> None:
+            self._value = value
+
+        def get(self):
+            return self._value
+
+        def set(self, value) -> None:
+            self._value = value
+
+    view_state = SimpleNamespace(
+        qz_min_value=0.0,
+        qz_max_value=0.0,
+        qz_min_var=_Var(0.0),
+        qz_max_var=_Var(0.0),
+        qz_display_scale_value=2.0,
+        delta_qr_value=0.25,
+        delta_qr_var=_Var(0.25),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "integration_range_controls_view_state",
+        view_state,
+        raising=False,
+    )
+    monkeypatch.setitem(runtime_session.__dict__, "qz_min_var", view_state.qz_min_var)
+    monkeypatch.setitem(runtime_session.__dict__, "qz_max_var", view_state.qz_max_var)
+
+    runtime_session._apply_analysis_range_snapshot({"qz_min": 1.0, "qz_max": 3.0})
+
+    assert view_state.qz_min_var.get() == 2.0
+    assert view_state.qz_max_var.get() == 6.0
+    roi_values = runtime_session._current_analysis_roi_values()
+    assert roi_values["qz_min"] == 1.0
+    assert roi_values["qz_max"] == 3.0
+
+
+def test_runtime_session_selected_qr_rod_geometry_summary_reads_live_fit_vars(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    monkeypatch.setattr(runtime_session, "theta_initial_var", _RuntimeVar(1.25), raising=False)
+    monkeypatch.setattr(runtime_session, "chi_var", _RuntimeVar(2.5), raising=False)
+    monkeypatch.setattr(runtime_session, "psi_z_var", _RuntimeVar(3.75), raising=False)
+    monkeypatch.setattr(runtime_session, "cor_angle_var", _RuntimeVar(4.25), raising=False)
+    monkeypatch.setattr(runtime_session, "gamma_var", _RuntimeVar(5.5), raising=False)
+    monkeypatch.setattr(runtime_session, "Gamma_var", _RuntimeVar(6.75), raising=False)
+    monkeypatch.setattr(runtime_session, "corto_detector_var", _RuntimeVar(0.3), raising=False)
+    monkeypatch.setattr(runtime_session, "center_x_var", _RuntimeVar(10.0), raising=False)
+    monkeypatch.setattr(runtime_session, "center_y_var", _RuntimeVar(11.0), raising=False)
+
+    summary = runtime_session._selected_qr_rod_geometry_summary_text()
+
+    assert "theta 1.25 deg" in summary
+    assert "chi 2.50 deg" in summary
+    assert "psi_z 3.75 deg" in summary
+    assert "cor 4.25 deg" in summary
+    assert "gamma 5.50 deg" in summary
+    assert "Gamma 6.75 deg" in summary
+    assert "dist 300.00 mm" in summary
+    assert "center 10.0/11.0 px" in summary
+
+
 def test_runtime_session_legacy_selected_qr_rod_key_migrates_to_key_list(
     monkeypatch,
 ) -> None:
@@ -25144,6 +25263,169 @@ def test_runtime_session_selected_qr_rod_profiles_share_caked_inputs_per_update(
     np.testing.assert_allclose(stored["rod-b"]["sim"], [10.0, 11.0, 12.0])
 
 
+def test_runtime_session_selected_qr_rod_profile_adds_l_center_from_lattice_c(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    qz_center = np.asarray([0.0, np.pi / 3.0], dtype=float)
+    mask = np.asarray([[True, True]], dtype=bool)
+    shared = {
+        "caked_image": np.asarray([[2.0, 4.0]], dtype=float),
+        "qz_map": np.asarray([[0.0, np.pi / 3.0]], dtype=float),
+        "qz_edges": np.asarray([-0.1, 0.5, 1.2], dtype=float),
+        "mask_payloads_by_key": {
+            "rod-a": {
+                "mask": mask,
+                "signature": ("rod", "a"),
+            },
+        },
+        "rod_profile_intensity_mode": "density",
+        "selected_qr_rod_lattice_c": 6.0,
+    }
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_selected_qr_rod_profile_cache_signature",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_selected_qr_rod_profile_component_cache_signature",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_selected_qr_rod_profile_from_component_cache",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_selected_qr_rod_seed_profile_component_cache",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "qz_profile_from_caked_mask",
+        lambda **_kwargs: {
+            "qz_center": qz_center,
+            "pixel_count": np.asarray([1, 1], dtype=np.int64),
+            "background_weighted_sum": np.asarray([2.0, 4.0], dtype=float),
+            "background_density": np.asarray([2.0, 4.0], dtype=float),
+            "acceptance_sum": np.asarray([1.0, 1.0], dtype=float),
+        },
+    )
+
+    profile = runtime_session._selected_qr_rod_caked_profile_from_shared_inputs(
+        shared,
+        {"qr": 1.1},
+        "rod-a",
+    )
+
+    np.testing.assert_allclose(profile["qz_center"], qz_center)
+    np.testing.assert_allclose(profile["l_center"], [0.0, 1.0])
+
+
+def test_runtime_session_selected_qr_rod_1d_plots_l_axis_when_available(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    sim_res2 = object()
+    payload = {
+        "selected_qr_rod_key": "rod-a",
+        "selected_entry": {"qr": 1.1},
+        "signature": ("rod", "a"),
+    }
+
+    class _Line:
+        def __init__(self) -> None:
+            self.data = None
+
+        def set_data(self, x, y) -> None:
+            self.data = (np.asarray(x), np.asarray(y))
+
+    class _Axis:
+        def __init__(self) -> None:
+            self.lines: list[_Line] = []
+            self.xlabel = None
+
+        def clear(self) -> None:
+            self.lines.clear()
+
+        def plot(self, x, y, *args, **kwargs):
+            del args, kwargs
+            line = _Line()
+            line.set_data(x, y)
+            self.lines.append(line)
+            return (line,)
+
+        def legend(self) -> None:
+            pass
+
+        def set_xlabel(self, value) -> None:
+            self.xlabel = value
+
+        def set_ylabel(self, _value) -> None:
+            pass
+
+        def set_title(self, _value) -> None:
+            pass
+
+        def set_yscale(self, _value) -> None:
+            pass
+
+        def relim(self) -> None:
+            pass
+
+        def autoscale_view(self, *args, **kwargs) -> None:
+            pass
+
+    axis = _Axis()
+
+    monkeypatch.setattr(
+        runtime_session, "_set_1d_layout_for_selected_qr_rods", lambda count: [axis]
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_selected_qr_rod_caked_shared_profile_inputs",
+        lambda res2: {"mask_payloads_by_key": {"rod-a": payload}},
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_selected_qr_rod_caked_profile_from_shared_inputs",
+        lambda shared, selected_entry, selected_key: {
+            "qz_center": np.asarray([0.0, np.pi / 3.0], dtype=float),
+            "l_center": np.asarray([0.0, 1.0], dtype=float),
+            "pixel_count": np.asarray([1, 1], dtype=np.int64),
+            "intensity_sum": np.asarray([2.0, 4.0], dtype=float),
+            "intensity_mean": np.asarray([2.0, 4.0], dtype=float),
+            "acceptance_sum": np.asarray([1.0, 1.0], dtype=float),
+        },
+    )
+    monkeypatch.setattr(runtime_session, "_current_rod_profile_intensity_mode", lambda: "density")
+    monkeypatch.setattr(runtime_session, "_get_scale_factor_value", lambda default=1.0: 1.0)
+    monkeypatch.setattr(runtime_session, "_render_analysis_peak_overlays", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(last_1d_integration_data={}),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "canvas_1d", None, raising=False)
+
+    assert runtime_session._update_1d_plots_from_selected_qr_rods_caked(
+        sim_res2=sim_res2,
+        bg_res2=None,
+        payloads=[payload],
+    )
+
+    np.testing.assert_allclose(axis.lines[0].data[0], [0.0, 1.0])
+    assert axis.xlabel == "L (r.l.u.)"
+    stored = runtime_session.simulation_runtime_state.last_1d_integration_data
+    assert stored["x_axis_kind"] == "l"
+    assert stored["x_axis_label"] == "L (r.l.u.)"
+    np.testing.assert_allclose(stored["selected_qr_rod_profiles"]["rod-a"]["l"], [0.0, 1.0])
+
+
 def test_runtime_session_selected_qr_rod_bounded_lru_cache_evicts(
     monkeypatch,
 ) -> None:
@@ -26612,6 +26894,62 @@ def test_runtime_session_auto_match_selected_qr_rod_uses_primary_caked_profile(
             "primary_selected_qr_rod_key"
         ]
         == "rod-a"
+    )
+
+
+def test_runtime_session_auto_match_selected_qr_rod_preserves_l_axis(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    scales: list[float] = []
+    statuses: list[str] = []
+
+    monkeypatch.setattr(runtime_session, "_selected_qr_rod_mode_requested", lambda: True)
+    monkeypatch.setattr(runtime_session, "_current_background_backend_for_comparison", lambda: None)
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            last_1d_integration_data={
+                "intensities_2theta_sim": None,
+                "intensities_2theta_bg": None,
+                "primary_selected_qr_rod_key": "rod-a",
+                "x_axis_kind": "l",
+                "x_axis_label": "L (r.l.u.)",
+                "selected_qr_rod_profiles": {
+                    "rod-a": {
+                        "l": np.asarray([0.0, 1.0], dtype=float),
+                        "sim": np.asarray([2.0, 4.0], dtype=float),
+                        "bg": np.asarray([10.0, 20.0], dtype=float),
+                    },
+                },
+            },
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "progress_label_positions",
+        SimpleNamespace(config=lambda **kwargs: statuses.append(kwargs["text"])),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_set_scale_factor_value",
+        lambda value, **_kwargs: scales.append(float(value)),
+    )
+    monkeypatch.setattr(
+        runtime_session, "apply_scale_factor_to_existing_results", lambda **_kwargs: None
+    )
+
+    runtime_session._auto_match_scale_factor_to_radial_peak()
+
+    assert scales == [5.0]
+    assert statuses and "L peak" in statuses[-1]
+    assert runtime_session.simulation_runtime_state.last_1d_integration_data["x_axis_kind"] == "l"
+    assert (
+        runtime_session.simulation_runtime_state.last_1d_integration_data["x_axis_label"]
+        == "L (r.l.u.)"
     )
 
 

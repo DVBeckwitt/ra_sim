@@ -3151,6 +3151,8 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
         on_caked_intensity_mode_changed=lambda value: mode_calls.append(("caked", value)),
         on_rod_profile_intensity_mode_changed=lambda value: mode_calls.append(value),
         on_selected_qr_rod_changed=lambda value: slider_calls.append(("rod-select", value)),
+        selected_qr_rod_axis_label="L",
+        selected_qr_geometry_summary="Fit geometry: theta 1.00 deg",
         on_apply_entry=lambda entry_var, value_var, slider: apply_calls.append(
             (
                 entry_var.get(),
@@ -3206,6 +3208,11 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
     assert view_state.delta_qr_entry.textvariable is view_state.delta_qr_entry_var
     assert view_state.delta_qr_cue_var.get() == "ΔQr = 0.0200 A^-1"
     assert view_state.delta_qr_cue_label.kwargs["textvariable"] is view_state.delta_qr_cue_var
+    assert view_state.selected_qr_geometry_summary_var.get() == "Fit geometry: theta 1.00 deg"
+    assert (
+        view_state.selected_qr_geometry_summary_label.kwargs["textvariable"]
+        is view_state.selected_qr_geometry_summary_var
+    )
     assert view_state.integrate_selected_qr_rod_checkbutton.kwargs["text"] == (
         "Enable selected Qr rod ROI"
     )
@@ -3259,6 +3266,8 @@ def test_create_integration_range_controls_store_vars_bindings_and_commands(
     assert view_state.delta_qr_slider.cget("from") == 0.001
     assert view_state.delta_qr_slider.cget("to") == 1.0
     assert any(label.text == "Delta Qr width (A^-1):" for label in _FakeLabel.created)
+    assert any(label.text == "L Min:" for label in _FakeLabel.created)
+    assert any(label.text == "L Max:" for label in _FakeLabel.created)
     assert view_state.selected_qr_rod_combobox is None
     assert isinstance(view_state.selected_qr_rod_listbox, _FakeListbox)
     assert view_state.selected_qr_rod_listbox.cget("selectmode") == views.tk.EXTENDED

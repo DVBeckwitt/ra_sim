@@ -66,6 +66,16 @@ def _format_runtime_delta_qr_cue(value: object) -> str:
     return f"ΔQr = {numeric_value:.4f} A^-1"
 
 
+def _normalize_runtime_qz_display_scale(value: object) -> float:
+    try:
+        scale = float(value)
+    except Exception:
+        return 1.0
+    if not np.isfinite(scale) or scale <= 0.0:
+        return 1.0
+    return float(scale)
+
+
 _QR_ROD_PROFILE_TIMINGS_MAX_RECORDS = 512
 _QR_ROD_PROFILE_TIMINGS: list[dict[str, object]] = []
 
@@ -3246,6 +3256,9 @@ def create_runtime_integration_range_controls(
     selected_qr_rod_options: list[tuple[str, str]] | None = None,
     qz_min: float = _DEFAULT_QZ_MIN,
     qz_max: float = _DEFAULT_QZ_MAX,
+    qz_display_scale: float = 1.0,
+    qz_display_axis_label: str = "Qz",
+    selected_qr_geometry_summary: str = "",
     delta_qr: float = _DEFAULT_DELTA_QR,
     delta_qr_width_mode: str = "full_width",
     schedule_range_update: Callable[..., object] | None,
@@ -3305,8 +3318,12 @@ def create_runtime_integration_range_controls(
         "rod_profile_intensity_mode",
         _normalize_runtime_rod_profile_intensity_mode(rod_profile_intensity_mode),
     )
-    _set_runtime_range_value(view_state, "qz_min", float(qz_min))
-    _set_runtime_range_value(view_state, "qz_max", float(qz_max))
+    qz_display_scale_value = _normalize_runtime_qz_display_scale(qz_display_scale)
+    setattr(view_state, "qz_display_scale_value", qz_display_scale_value)
+    qz_min_display = float(qz_min) * qz_display_scale_value
+    qz_max_display = float(qz_max) * qz_display_scale_value
+    _set_runtime_range_value(view_state, "qz_min", qz_min_display)
+    _set_runtime_range_value(view_state, "qz_max", qz_max_display)
     delta_qr_width = float(delta_qr)
     if str(delta_qr_width_mode) != "full_width":
         delta_qr_width *= 2.0
@@ -3320,9 +3337,11 @@ def create_runtime_integration_range_controls(
         tth_max=tth_max,
         phi_min=phi_min,
         phi_max=phi_max,
-        qz_min=float(qz_min),
-        qz_max=float(qz_max),
+        qz_min=qz_min_display,
+        qz_max=qz_max_display,
         delta_qr=float(delta_qr_width),
+        selected_qr_rod_axis_label=str(qz_display_axis_label or "Qz"),
+        selected_qr_geometry_summary=str(selected_qr_geometry_summary or ""),
         on_tth_min_changed=_make_runtime_range_slider_callback(
             view_state=view_state,
             value_var_name="tth_min_var",
