@@ -1305,7 +1305,7 @@ def test_detector_region_label_settings_round_trip_by_label_id() -> None:
     assert applied[1]["fontsize"] == 16.0
 
 
-def test_detector_region_label_editor_uses_tkinter_coordinate_controls() -> None:
+def test_detector_region_label_editor_uses_matplotlib_controls_on_detector_figure() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     function_source = source[
         source.index("def show_detector_region_label_position_popup(") : source.index(
@@ -1314,39 +1314,36 @@ def test_detector_region_label_editor_uses_tkinter_coordinate_controls() -> None
     ]
 
     for token in (
-        "import tkinter as tk",
-        "from tkinter import ttk",
-        "root = tk.Tk()",
-        "canvas = tk.Canvas(",
-        "canvas.create_image(",
-        "canvas.create_text(",
-        "canvas.tag_bind(",
-        "label_var = tk.StringVar",
-        "x_var = tk.StringVar",
-        "y_var = tk.StringVar",
-        "font_var = tk.StringVar",
-        "ttk.Combobox(",
-        "ttk.Entry(",
-        "ttk.Button(",
-        'text="X -"',
-        'text="X +"',
-        'text="Y -"',
-        'text="Y +"',
-        'text="Import"',
-        'text="Export"',
-        'text="Cancel"',
-        'text="Accept"',
+        "from matplotlib.widgets import Button, TextBox",
+        "TextBox(",
+        "Button(",
+        "fig.add_axes(",
+        "fig._ra_sim_detector_label_edit_widgets",
+        'textalignment="left"',
+        'Button(import_ax, "Import")',
+        'Button(export_ax, "Export")',
+        'Button(cancel_ax, "Cancel")',
+        'Button(accept_ax, "Accept")',
         "load_detector_label_settings(",
         "save_detector_label_settings(",
     ):
         assert token in function_source
 
-    assert "from matplotlib.widgets" not in function_source
-    assert "TextBox(" not in function_source
-    assert "Button(fig.add_axes" not in function_source
+    for removed_token in (
+        "import tkinter as tk",
+        "from tkinter import ttk",
+        "root = tk.Tk()",
+        "tk.Canvas(",
+        "tk.PhotoImage(",
+        "ttk.Combobox(",
+        "ttk.Entry(",
+        "ttk.Button(",
+        "tempfile.NamedTemporaryFile(",
+    ):
+        assert removed_token not in function_source
 
 
-def test_detector_region_label_editor_selects_labels_without_matplotlib_events() -> None:
+def test_detector_region_label_editor_selects_labels_with_matplotlib_events() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     function_source = source[
         source.index("def show_detector_region_label_position_popup(") : source.index(
@@ -1356,22 +1353,21 @@ def test_detector_region_label_editor_selects_labels_without_matplotlib_events()
 
     for token in (
         "def select_label(index: int)",
-        "label_selector.bind(",
-        'canvas.tag_bind(item, "<Button-1>"',
-        "update_canvas_label(",
+        "def label_index_from_event(event)",
+        "artist.contains(event)",
+        "_ra_sim_label_entry_index",
+        'fig.canvas.mpl_connect("button_press_event", on_press)',
+        'fig.canvas.mpl_connect("motion_notify_event", on_motion)',
+        'fig.canvas.mpl_connect("button_release_event", on_release)',
+        'fig.canvas.mpl_connect("key_press_event", on_key)',
         "sync_controls()",
     ):
         assert token in function_source
-    assert "mpl_connect(" not in function_source
-    assert "def on_motion(event)" not in function_source
-    assert "def on_release(event)" not in function_source
-    assert "def on_press(event)" not in function_source
-    assert '"dragging": False' not in function_source
-    assert ".get_lines()" not in function_source
-    assert ".images" not in function_source
+    assert "canvas.tag_bind(" not in function_source
+    assert "canvas.bind(" not in function_source
 
 
-def test_detector_region_label_editor_tunes_pixel_locations_below_image() -> None:
+def test_detector_region_label_editor_tunes_pixel_locations_in_data_space() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     function_source = source[
         source.index("def show_detector_region_label_position_popup(") : source.index(
@@ -1381,26 +1377,22 @@ def test_detector_region_label_editor_tunes_pixel_locations_below_image() -> Non
 
     for token in (
         "def set_label_position(",
-        "def apply_position_fields(",
-        "def nudge_label(",
-        'x_entry.bind("<Return>",',
-        'y_entry.bind("<Return>",',
-        'x_entry.bind("<FocusOut>",',
-        'y_entry.bind("<FocusOut>",',
-        "command=lambda: nudge_label(-1.0, 0.0)",
-        "command=lambda: nudge_label(1.0, 0.0)",
-        "command=lambda: nudge_label(0.0, -1.0)",
-        "command=lambda: nudge_label(0.0, 1.0)",
-        "canvas.coords(",
-        "x_var.set(",
-        "y_var.set(",
+        "event.xdata",
+        "event.ydata",
+        "clamp_detector_label_position(",
+        'edited[int(index)]["label_xy"]',
+        "def set_selected_label_text(",
+        "def step_font(",
+        "TextBox(label_box_ax,",
+        'Button(font_down_ax, "Font -")',
+        'Button(font_up_ax, "Font +")',
     ):
         assert token in function_source
     assert "setup_detector_label_editor_blit(" not in source
     assert "redraw_detector_label_editor_blit(" not in source
 
 
-def test_detector_region_label_editor_drags_labels_on_tk_canvas() -> None:
+def test_detector_region_label_editor_drags_labels_on_existing_matplotlib_axes() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     function_source = source[
         source.index("def show_detector_region_label_position_popup(") : source.index(
@@ -1409,27 +1401,20 @@ def test_detector_region_label_editor_drags_labels_on_tk_canvas() -> None:
     ]
 
     for token in (
-        'canvas.tag_bind(item, "<Button-1>"',
-        'canvas.tag_bind(item, "<B1-Motion>"',
-        'canvas.tag_bind(item, "<ButtonRelease-1>"',
-        "def canvas_event_xy(",
-        "canvas.canvasx(event.x)",
-        "canvas.canvasy(event.y)",
-        "def canvas_xy_to_data(",
-        "ax.transData.inverted().transform(",
-        "def start_label_drag(",
-        "def drag_label_motion(",
-        "def finish_label_drag(",
-        "def drag_active_label_motion(",
-        "def finish_active_label_drag(",
-        'canvas.bind("<B1-Motion>", drag_active_label_motion)',
-        'canvas.bind("<ButtonRelease-1>", finish_active_label_drag)',
-        '"dragging_index": None',
+        "def on_press(event)",
+        "def on_motion(event)",
+        "def on_release(_event)",
+        'selected["dragging"] = True',
+        'selected["dragging"] = False',
+        'if event.inaxes is not ax',
+        "set_label_position(",
+        'float(event.xdata) + float(selected.get("drag_offset_x", 0.0))',
+        'float(event.ydata) + float(selected.get("drag_offset_y", 0.0))',
     ):
         assert token in function_source
 
 
-def test_detector_region_label_editor_renders_static_matplotlib_image_for_tk_canvas() -> None:
+def test_detector_region_label_editor_reuses_figure_event_loop_without_closing() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     function_source = source[
         source.index("def show_detector_region_label_position_popup(") : source.index(
@@ -1438,14 +1423,96 @@ def test_detector_region_label_editor_renders_static_matplotlib_image_for_tk_can
     ]
 
     for token in (
-        "fig.savefig(",
-        "tempfile.NamedTemporaryFile(",
-        "photo = tk.PhotoImage(",
-        "display_width, display_height = fig.canvas.get_width_height()",
-        "def data_to_canvas_xy(",
-        "canvas_y = float(display_height) - float(display_y)",
+        "fig.canvas.start_event_loop(timeout=-1)",
+        "fig.canvas.stop_event_loop()",
+        "def finish_editor(",
+        "cleanup_editor_artifacts()",
+        "for connection_id in connection_ids:",
+        "fig.canvas.mpl_disconnect(connection_id)",
     ):
         assert token in function_source
+    assert "plt.show(block=True)" not in function_source
+    assert "plt.close(fig)" not in function_source
+
+
+def test_detector_region_label_editor_removes_temporary_in_figure_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from matplotlib.backend_bases import KeyEvent, MouseEvent
+
+    namespace = _script_functions(
+        "detector_label_id",
+        "detector_label_fontsize",
+        "detector_label_xy",
+        "detector_label_settings_payload",
+        "apply_detector_label_settings",
+        "load_detector_label_settings",
+        "save_detector_label_settings",
+        "draw_detector_region_label_artists",
+        "clamp_detector_label_position",
+        "show_detector_region_label_position_popup",
+    )
+    namespace["detector_region_label_fontsize"] = 8.6
+    namespace["detector_region_xlim"] = (0.0, 100.0)
+    namespace["detector_region_ylim"] = (100.0, 0.0)
+    show_editor = namespace["show_detector_region_label_position_popup"]
+
+    fig, ax = plt.subplots(figsize=(3, 2))
+    ax.imshow(np.ones((100, 100), dtype=np.float64), origin="upper")
+    event_loop_timeouts: list[float] = []
+
+    def run_editor_events(timeout: float = -1) -> None:
+        event_loop_timeouts.append(timeout)
+        fig.canvas.draw()
+        start_x, start_y = ax.transData.transform((40.0, 50.0))
+        end_x, end_y = ax.transData.transform((60.0, 70.0))
+        fig.canvas.callbacks.process(
+            "button_press_event",
+            MouseEvent("button_press_event", fig.canvas, start_x, start_y, button=1),
+        )
+        fig.canvas.callbacks.process(
+            "motion_notify_event",
+            MouseEvent("motion_notify_event", fig.canvas, end_x, end_y, button=1),
+        )
+        fig.canvas.callbacks.process(
+            "button_release_event",
+            MouseEvent("button_release_event", fig.canvas, end_x, end_y, button=1),
+        )
+        fig.canvas.callbacks.process(
+            "key_press_event", KeyEvent("key_press_event", fig.canvas, key="enter")
+        )
+
+    monkeypatch.setattr(
+        fig.canvas,
+        "start_event_loop",
+        run_editor_events,
+        raising=False,
+    )
+    monkeypatch.setattr(fig.canvas, "stop_event_loop", lambda: None, raising=False)
+
+    try:
+        edited, accepted = show_editor(
+            fig,
+            ax,
+            [
+                    {
+                        "label_id": "m=7:+",
+                        "text": "m = 7 +",
+                        "label_xy": np.array([40.0, 50.0], dtype=np.float64),
+                        "fontsize": 9.0,
+                    }
+            ],
+        )
+    finally:
+        plt.close(fig)
+
+    assert accepted is True
+    assert event_loop_timeouts == [-1]
+    assert len(fig.axes) == 1
+    assert len(ax.texts) == 0
+    assert not hasattr(fig, "_ra_sim_detector_label_edit_widgets")
+    assert edited[0]["text"] == "m = 7 +"
+    np.testing.assert_allclose(edited[0]["label_xy"], np.array([60.0, 70.0]))
 
 
 def test_detector_region_label_editor_wires_before_final_save() -> None:

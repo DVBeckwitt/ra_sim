@@ -55,6 +55,11 @@ to make the Qr rod detector and integration figures source-consistent:
   stronger band fill, and expanded Delta-Qr boundary so the actual selected
   region remains visible over high-intensity detector pixels without making the
   centerline dominate the region.
+- The detector selected-region Qr-label editor now runs on the same Matplotlib
+  detector figure instead of a separate Tk static-image canvas. Labels are
+  selected and dragged directly in detector pixel coordinates, the active label
+  text and font size can be adjusted in-figure, and import/export still use the
+  existing detector-label JSON schema.
 - Integrated Qr rod figure centers `HK=0`, labels its x-axis as `L`, labels the
   HK=0 row and left nonzero subplot axes with `Intensity (a.u.)`, aligns
   non-specular x ranges from `L=2`, and places the Data/Simulation legend in
@@ -175,6 +180,11 @@ Feature status:
   the central `HK=0` / `00L` rod. This is a display-only change; Qr/Qz maps,
   Delta-Qr values, selected masks, integration, fitting, and cache identities
   are unchanged.
+- The detector selected-region label editor now supports in-figure picking and
+  dragging for Qr-region labels. The helper signature and
+  `ra_sim.detector_label_settings.v1` JSON payload are unchanged, and the
+  temporary editor controls/artists are removed before the final figure is
+  saved.
 - Qr-rod peak marker editing is implemented in the diagnostic `.py` with
   default `RA_SIM_QR_ROD_PEAK_EDIT_MODE=auto`; `popup` forces the editor, `skip`
   disables it for unattended runs, and optional JSON round trip is available through
@@ -274,6 +284,10 @@ Passing checks:
   central `HK=0` / `00L` rod uses the dedicated high-contrast style,
   same-width centerline without a halo, stronger Delta-Qr band styling,
   unchanged Delta-Qr mask-builder input, and expanded boundary mask.
+- Targeted detector label-editor coverage verifies Matplotlib in-figure
+  controls, label selection through canvas events, data-space dragging, event
+  loop use without closing the final figure, cleanup of temporary editor
+  artifacts, runtime-mode handling, settings round trip, and final-save wiring.
 - Targeted Qr-rod marker edit coverage for per-rod marker replacement,
   marker-table cache-key hashing, headless/interactive mode resolution, JSON
   edit round trip including `marker_title`, final-label override behavior,
@@ -344,15 +358,16 @@ Passing checks:
 
 Known validation limits:
 
-- Full `tests/test_background_peak_fits_notebook.py` was rerun on 2026-05-11.
-  It still has six unrelated notebook/script source-token expectation
-  failures, with `118 passed`, `2 skipped`, and `6 failed`. The failures are
+- Full `tests/test_background_peak_fits_notebook.py` was rerun on 2026-05-11
+  after the detector-label editor slice. It still has four unrelated
+  notebook/script source-token expectation failures, with `124 passed`, `2
+  skipped`, and `4 failed`. The failures are
   the older missing `ROD_PROFILE_MAX_TWO_THETA_DEG = 60.0` and
-  `"fit_model": "rotated_gaussian_plane"` notebook tokens plus detector
-  label-editor, specular-region, and sample-name override script-token
-  expectations.
-- Current `python -m ra_sim.dev check` is blocked by pre-existing formatting
-  drift in `ra_sim/fitting/optimization.py`.
+  `"fit_model": "rotated_gaussian_plane"` notebook tokens plus the
+  specular-region and sample-name override script-token expectations.
+- Current `python -m ra_sim.dev check` is blocked by formatting drift in
+  `ra_sim/fitting/optimization.py` and the unrelated dirty
+  `ra_sim/gui/_runtime/runtime_session.py`.
 - The 2026-05-10 Bi2Se3 weak-marker fix was validated with focused tests using
   embedded real-profile values, not a full real-sample script run.
 - The PbI2 headless diagnostic path has been rerun. The L3 star crop,

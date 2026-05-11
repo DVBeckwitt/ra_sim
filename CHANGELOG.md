@@ -89,6 +89,7 @@
   - Added `hk0_l3_star.png` to the parallel background peak-fit diagnostic script as a colored, log-scaled raw detector crop from the beam center through the `HK=0`, `L=3` / `00L` marker.
   - Improved the parallel diagnostic detector selected-region figure so the central `HK=0` / `00L` rod uses high-contrast styling and a more prominent Delta-Qr band.
   - Adjusted the detector selected-region highlight so the central `HK=0` / `00L` rod keeps the same-width centerline while the visible Delta-Qr region becomes easier to inspect.
+  - Changed the detector selected-region label editor to pick and drag Qr-region labels directly on the same Matplotlib detector figure, while keeping the existing detector-label JSON settings schema.
   - Added `SAMPLE_NAME_OVERRIDE` / `RA_SIM_ALL_BACKGROUND_SAMPLE_NAME` to the parallel `.py` diagnostic so direct runs can replace only the sample label and filename stem, such as `Bi2Se3` to `Bi2Te3`, without changing the run directory.
   - Added a filename-keyed pre-editor cache to the parallel `.py` diagnostic so repeated runs with the same state/background filenames can reuse completed global peak fits, line-profile fits, and Qr-rod profile construction before the manual marker editor opens.
   - Restored default-on Qr-rod peak marker editing in the generated `.py` diagnostic with `RA_SIM_QR_ROD_PEAK_EDIT_MODE=popup|skip|auto`, JSON round trip through `RA_SIM_QR_ROD_PEAK_EDITS`, and marker-table cache-key invalidation before final joint Qz fitting.

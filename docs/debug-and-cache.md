@@ -168,6 +168,15 @@ accepting the popup preserves the edited title. Final Qr-rod figure labels are
 drawn above and to the right of the marked peak with a leader arrow pointing
 back to the peak, and generated fallback L labels are rounded to integers.
 
+The detector selected-region figure uses a separate label-position editor for
+the Qr-region labels controlled by `RA_SIM_DETECTOR_LABEL_SETTINGS`. In popup
+mode the labels are edited on the same Matplotlib detector figure that is later
+saved: click a label to select it, drag it in detector pixel coordinates, edit
+the `Label` field for display text, and use `Font -` / `Font +` for the active
+label size. `Import` and `Export` continue to round-trip the existing
+`ra_sim.detector_label_settings.v1` JSON schema, so saved label positions remain
+compatible with prior runs.
+
 On Windows, direct top-level execution of the generated `.py` diagnostic
 relaunches `process` and `auto` fit backend requests through the guarded runner
 before expensive fitting begins. This avoids `multiprocessing.spawn`
@@ -214,6 +223,9 @@ Focused validation status:
   passes, `21 passed`
 - `python -m pytest tests/test_background_peak_fits_notebook.py -k "runner or backend or process" -ra`
   passes, `8 passed`
+- `python -m pytest tests/test_background_peak_fits_notebook.py -k "detector_region_label" -ra`
+  passes, `15 passed`, including the in-figure detector-label editor contract,
+  settings round trip, runtime-mode handling, and final-save wiring
 - `RA_SIM_HEADLESS=1 RA_SIM_PBI2_DISABLE_BACKGROUND_SUBTRACTION=1` PbI2
   diagnostic script execution completed, skipped the marker and detector-label
   popups through default `auto` mode, recorded sideband subtraction disabled in
@@ -221,10 +233,11 @@ Focused validation status:
   used log axes on every PbI2 panel, capped displayed L at 3, and skipped
   unsupported `m=7` in the final figure
 - full `tests/test_background_peak_fits_notebook.py` was rerun on 2026-05-11
-  and remains red only in six unrelated notebook/script source-token checks:
-  `118 passed`, `2 skipped`, `6 failed`
-- current `python -m ra_sim.dev check` is still blocked by pre-existing
-  formatting drift in `ra_sim/fitting/optimization.py`
+  and remains red only in four unrelated notebook/script source-token checks:
+  `124 passed`, `2 skipped`, `4 failed`
+- current `python -m ra_sim.dev check` is blocked by formatting drift in
+  `ra_sim/fitting/optimization.py` and the unrelated dirty
+  `ra_sim/gui/_runtime/runtime_session.py`
 - Bi2Se3 guarded-process diagnostic validation completed with `fit_backend=process`,
   `backend=process_pool`, `pids=28`, `79/79` successful background peak fits,
   final Qr-rod cache write, marker CSV columns `fit_l`/`display_l`, and

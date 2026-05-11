@@ -111,7 +111,10 @@ markers, profile samples, and branch items, and reports detector-space
 `curve_distance_px` from point-to-polyline segment distance. The detector panel
 keeps accepted placed-star diagnostics, low-L `HK=<m> +/-` labels, projected
 centerlines, and transparent Delta-Qr bands including `HK=0`. The integrated
-Qr figure centers `HK=0`, labels the HK=0 row and left nonzero subplot axes
+Qr-label editor for that detector panel now runs directly on the same
+Matplotlib figure, so labels can be picked and dragged in place while keeping
+the existing detector-label JSON schema. The integrated Qr figure centers
+`HK=0`, labels the HK=0 row and left nonzero subplot axes
 with `Intensity (a.u.)`, aligns non-specular L axes from `L=2`, and places the
 Data/Simulation legend in the top-right panel. JSON, nbformat, compile, static checks, and the two parallel
 notebook pytest checks pass. Full notebook-section rerun and visual acceptance
@@ -126,8 +129,9 @@ weak marker, rejects unsupported nearby markers, and makes tail component
 aggregation fail closed on shape mismatch. Focused Bi2Se3/Bi2Te3 marker,
 shape-mismatch, cache-signature, compile, and format checks pass locally. Full
 diagnostics test-file status is still red in unrelated notebook/script
-source-token assertions; `python -m ra_sim.dev check` is blocked by pre-existing
-formatting drift in `ra_sim/fitting/optimization.py`. No CI workflow, public
+source-token assertions; `python -m ra_sim.dev check` is blocked by formatting
+drift in `ra_sim/fitting/optimization.py` and the unrelated dirty
+`ra_sim/gui/_runtime/runtime_session.py`. No CI workflow, public
 API, saved-state schema, or deprecation/migration path changed. The
 2026-05-11 PbI2 update keeps PbI2-specific lattice/rod state dynamic, applies
 same-Qz transverse Qr sideband subtraction to nonzero PbI2 profiles, shows raw
@@ -139,12 +143,15 @@ axes, caps the displayed L range at 3, and adds
 mode. Focused PbI2 acceptance, compile, and headless script execution pass; the
 headless run now skips marker/label popups through default `auto` edit mode and
 the regenerated PbI2 figure keeps available `Fit` overlays for nonzero rods on
-the raw-data basis. Full
-diagnostics test-file status is `118 passed`, `2 skipped`, `6 failed` in the
-same unrelated source-token checks. No CI workflow, deployment, package API,
+the raw-data basis. No CI workflow, deployment, package API,
 saved-state schema, or deprecation/migration path changed; rollback is to
 revert the diagnostic script/test/doc commit and regenerate affected local
 caches/artifacts.
+The 2026-05-11 detector-label editor slice moved Qr-label picking into the
+same Matplotlib detector figure while keeping the detector-label JSON schema
+stable. Focused detector-label coverage passes with `15 passed`; the full
+diagnostics test-file status is now `124 passed`, `2 skipped`, `4 failed`, all
+in unrelated notebook/script source-token checks.
 
 Beam center background pick status note:
 `Pick Beam Center` is implemented in Setup > Beam Controls. The mode uses the
