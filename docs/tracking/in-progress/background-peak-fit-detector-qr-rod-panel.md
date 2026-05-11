@@ -276,9 +276,14 @@ Feature status:
   the same cached fit data.
 - The helper interface is internal to the diagnostic script; no CLI, config,
   saved-state, or package API surface changed.
-- No dead Qr-rod helper or cache code was removed in this slice:
+- The obsolete internal `edit_qr_rod_peak_markers(...)` wrapper was removed
+  after the unified editor became the only active marker/region edit path.
   `marker_qz_values_for_profile(...)` and the Qr-rod pickle cache are still
-  referenced in the current `.py` diagnostic.
+  referenced in the current `.py` diagnostic and remain in place.
+- 2026-05-11 closeout: the unified editor remains the sole Qr-region and
+  peak-marker editing path. The deprecation was internal only: no operator
+  migration, CLI/config change, saved-state change, or cache-schema change is
+  required beyond the previously documented Qr-rod fit-cache invalidations.
 
 ## Validation
 
@@ -367,6 +372,11 @@ Passing checks:
 - Focused unified-editor command passed:
   `python -m pytest tests/test_background_peak_fits_notebook.py -k "unified_qr_rod_region_editor or unified_editor or detector_region_label_editor_wires_before_final_save or saved_figures_do_not_include_panel_letters or initial_placement_uses_default_geometry or axis_tick_labels_use_bottom_left_origin or qr_rod_peak_editor_is_wired_before_joint_fit_cache or pre_editor_cache_is_checked_before_expensive_stages or qr_rod_peak_editor_uses_l_axis" -ra`
   with `13 passed`.
+- Focused simplification closeout command passed:
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "unified_qr_rod_region_editor or unified_editor or qr_rod_peak_editor_uses_l_axis or import_export_buttons or qr_rod_peak_editor_shows_hk0_in_log_view or qr_rod_peak_editor_is_wired_before_joint_fit_cache or pre_editor_cache_is_checked_before_expensive_stages" -ra`
+  with `11 passed`.
+- Compile closeout passed for the touched diagnostic/test files:
+  `python -m compileall -q scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py tests/test_background_peak_fits_notebook.py`.
 - Focused whitespace check passed:
   `git diff --check`
   The touched diagnostic/test files still contain older unrelated ruff-format
@@ -382,9 +392,9 @@ Known validation limits:
   the older missing `ROD_PROFILE_MAX_TWO_THETA_DEG = 60.0` and
   `"fit_model": "rotated_gaussian_plane"` notebook tokens plus the
   specular-region and sample-name override script-token expectations.
-- Current `python -m ra_sim.dev check` is blocked by formatting drift in
-  `ra_sim/fitting/optimization.py` and the unrelated dirty
-  `ra_sim/gui/_runtime/runtime_session.py`.
+- Current full project check is not green from this dirty worktree: focused
+  Qr-rod tests pass, but broad format/check gates still report unrelated
+  formatting drift outside this cleanup slice.
 - The 2026-05-10 Bi2Se3 weak-marker fix was validated with focused tests using
   embedded real-profile values, not a full real-sample script run.
 - The PbI2 headless diagnostic path has been rerun. The L3 star crop,

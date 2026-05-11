@@ -3879,7 +3879,7 @@ def test_parallel_script_qr_rod_peak_editor_uses_l_axis() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     function_source = source[
         source.index("def show_qr_rod_peak_marker_popup(") : source.index(
-            "\ndef edit_qr_rod_peak_markers("
+            "\ndef qr_rod_profile_cache_with_final_fit("
         )
     ]
 
@@ -3897,7 +3897,7 @@ def test_parallel_script_qr_rod_peak_editor_has_import_export_buttons() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     function_source = source[
         source.index("def show_qr_rod_peak_marker_popup(") : source.index(
-            "\ndef edit_qr_rod_peak_markers("
+            "\ndef qr_rod_profile_cache_with_final_fit("
         )
     ]
 
@@ -3918,7 +3918,7 @@ def test_parallel_script_qr_rod_peak_editor_shows_hk0_in_log_view() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     function_source = source[
         source.index("def show_qr_rod_peak_marker_popup(") : source.index(
-            "\ndef edit_qr_rod_peak_markers("
+            "\ndef qr_rod_profile_cache_with_final_fit("
         )
     ]
 

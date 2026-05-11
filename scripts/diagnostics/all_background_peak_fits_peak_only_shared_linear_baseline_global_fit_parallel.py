@@ -1633,6 +1633,10 @@ def edit_qr_rod_region_editor(
     env: dict[str, object] | None = None,
 ) -> dict[str, object]:
     table = pd.DataFrame(marker_table).copy()
+    fallback_profile_table = pd.DataFrame(rod_profile_table).copy()
+    clean_label_entries = [
+        dict(entry) for entry in (detector_label_entries or []) if isinstance(entry, dict)
+    ]
     source_mode = "last_cached"
     path_text = "" if edit_path is None else str(edit_path).strip()
     if path_text:
@@ -1649,22 +1653,22 @@ def edit_qr_rod_region_editor(
     current_l_min = as_float(l_min, 0.0)
     current_l_max = as_float(l_max, SPECULAR_QR_ROD_L_MAX)
     runtime_mode = qr_rod_peak_edit_runtime_mode(mode, backend_name=backend_name, env=env)
-    if runtime_mode != "popup":
-        print(f"Qr-rod region editor: mode={runtime_mode} source={source_mode}")
+
+    def fallback_result(source: str) -> dict[str, object]:
         return {
             "marker_table": table,
-            "rod_profile_table": pd.DataFrame(rod_profile_table).copy(),
-            "detector_label_entries": [
-                dict(entry)
-                for entry in (detector_label_entries or [])
-                if isinstance(entry, dict)
-            ],
+            "rod_profile_table": fallback_profile_table.copy(),
+            "detector_label_entries": [dict(entry) for entry in clean_label_entries],
             "delta_qr": float(current_delta_qr),
             "l_min": float(current_l_min),
             "l_max": float(current_l_max),
             "accepted": False,
-            "source": source_mode,
+            "source": source,
         }
+
+    if runtime_mode != "popup":
+        print(f"Qr-rod region editor: mode={runtime_mode} source={source_mode}")
+        return fallback_result(source_mode)
 
     if not np.isfinite(current_l_min):
         current_l_min = 0.0
@@ -1689,29 +1693,14 @@ def edit_qr_rod_region_editor(
         if str(mode or "auto").strip().lower() == "popup":
             raise RuntimeError(f"Qr-rod region editor popup unavailable: {exc}") from exc
         print(f"skipped Qr-rod region editor popup: {exc}")
-        return {
-            "marker_table": table,
-            "rod_profile_table": pd.DataFrame(rod_profile_table).copy(),
-            "detector_label_entries": [
-                dict(entry)
-                for entry in (detector_label_entries or [])
-                if isinstance(entry, dict)
-            ],
-            "delta_qr": float(current_delta_qr),
-            "l_min": float(current_l_min),
-            "l_max": float(current_l_max),
-            "accepted": False,
-            "source": source_mode,
-        }
+        return fallback_result(source_mode)
 
     result = {
         "marker_table": edited_markers if accepted else table,
         "rod_profile_table": pd.DataFrame(
-            region_control_state.get("rod_profile_table", rod_profile_table)
+            region_control_state.get("rod_profile_table", fallback_profile_table)
         ).copy(),
-        "detector_label_entries": [
-            dict(entry) for entry in (detector_label_entries or []) if isinstance(entry, dict)
-        ],
+        "detector_label_entries": [dict(entry) for entry in clean_label_entries],
         "delta_qr": float(region_control_state.get("delta_qr", current_delta_qr)),
         "l_min": float(region_control_state.get("l_min", current_l_min)),
         "l_max": float(region_control_state.get("l_max", current_l_max)),
@@ -1742,60 +1731,6 @@ def apply_unified_qr_rod_region_editor_labels(
     if not isinstance(edited_entries, list) or not edited_entries:
         return [dict(entry) for entry in label_entries if isinstance(entry, dict)]
     return [dict(entry) for entry in edited_entries if isinstance(entry, dict)]
-
-
-def edit_qr_rod_peak_markers(
-    marker_table: pd.DataFrame,
-    rod_profile_table: pd.DataFrame,
-    *,
-    mode: object = "auto",
-    edit_path: object = None,
-    required_marker_table: pd.DataFrame | None = None,
-    backend_name: object = None,
-    env: dict[str, object] | None = None,
-) -> tuple[pd.DataFrame, str]:
-    table = pd.DataFrame(marker_table).copy()
-    source_mode = "last_cached"
-    path_text = "" if edit_path is None else str(edit_path).strip()
-    if path_text:
-        try:
-            table = load_qr_rod_peak_edits(path_text)
-            if required_marker_table is not None:
-                table = marker_table_with_specular_l_markers(table, required_marker_table)
-            source_mode = "imported_edits"
-            print(f"loaded Qr-rod peak edits={Path(path_text).expanduser()}")
-        except Exception as exc:
-            print(f"ignored Qr-rod peak edits={Path(path_text).expanduser()}: {exc}")
-
-    runtime_mode = qr_rod_peak_edit_runtime_mode(mode, backend_name=backend_name, env=env)
-    if runtime_mode != "popup":
-        print(f"Qr-rod peak marker editor: mode={runtime_mode} source={source_mode}")
-        return table, source_mode
-
-    try:
-        edited, accepted = show_qr_rod_peak_marker_popup(
-            table,
-            rod_profile_table,
-            backend_name=backend_name,
-            edit_path=path_text,
-            required_marker_table=required_marker_table,
-        )
-    except Exception as exc:
-        if str(mode or "auto").strip().lower() == "popup":
-            raise RuntimeError(f"Qr-rod peak marker popup unavailable: {exc}") from exc
-        print(f"skipped Qr-rod peak marker popup: {exc}")
-        return table, source_mode
-    if not accepted:
-        print(f"Qr-rod peak marker editor: mode=popup source={source_mode} accepted=False")
-        return table, source_mode
-    if path_text:
-        try:
-            saved_path = write_qr_rod_peak_edits(path_text, edited)
-            print(f"saved Qr-rod peak edits={saved_path}")
-        except Exception as exc:
-            print(f"failed saving Qr-rod peak edits={Path(path_text).expanduser()}: {exc}")
-    print("Qr-rod peak marker editor: mode=popup source=popup accepted=True")
-    return edited, "popup"
 
 
 def qr_rod_profile_cache_with_final_fit(
