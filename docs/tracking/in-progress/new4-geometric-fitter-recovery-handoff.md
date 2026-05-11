@@ -5,10 +5,33 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-05-03
+Last updated: 2026-05-11
 
 ## Current status
 
+- 2026-05-11 saved manual-pair geometry-fit handoff patch completed. Async
+  geometry-fit jobs now build job-local live rows from per-background saved
+  manual pairs before falling back to picker or Q-group caches, ignore warmed
+  manual-picker cache data stamped for another background, and allow
+  non-current worker backgrounds to consume job-local live rows when their
+  requested signatures match. Saved manual pairs with refined simulated
+  detector/native/caked coordinates now materialize those refined fields onto
+  source-row keys before normalization, so stale legacy `sim_col/sim_row` values
+  cannot override newer `refined_sim_x/refined_sim_y` data.
+- Bug/error fixed: selected-background geometry fits could reuse stale live
+  preview, manual-picker, or legacy source-coordinate rows instead of saved
+  manual-pair refined source coordinates, especially when the selected fit
+  background differed from the currently displayed GUI background. The focused
+  regression now covers the stale `sim_col/sim_row` plus fresh
+  `refined_sim_x/refined_sim_y` case.
+- Feature/status: this is an internal handoff/cache correctness fix. It does
+  not change CLI flags, config keys, saved-state schema, artifact schema, or
+  public geometry-fit interfaces. No deprecation or migration is required.
+- Validation status for this pass: the focused failing regression first failed
+  with stale `sim_col/sim_row`, then passed after the fix. The selected
+  geometry-fit handoff subset passes (`5 passed, 427 deselected`), and
+  `python -m py_compile ra_sim/gui/_runtime/runtime_session.py` passes. Broader
+  GUI/runtime and integration suites were not rerun for this patch.
 - 2026-05-03 narrow integration-hardening pass completed. Runtime
   diagnostics now keep mappings as dicts for user-facing/in-memory payloads and
   trace records, while cache signature canonicalization is unchanged. Raw

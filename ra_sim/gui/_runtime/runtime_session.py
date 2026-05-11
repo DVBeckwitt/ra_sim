@@ -41068,8 +41068,9 @@ def _geometry_fit_source_row_from_q_group_cache_row(
         source_keys=(
             ("detector_display_x", "detector_display_y"),
             ("display_col", "display_row"),
-            ("sim_col", "sim_row"),
+            ("refined_sim_x", "refined_sim_y"),
             ("sim_col_raw", "sim_row_raw"),
+            ("sim_col", "sim_row"),
             ("x", "y"),
             ("simulated_x", "simulated_y"),
         ),
@@ -41088,6 +41089,7 @@ def _geometry_fit_source_row_from_q_group_cache_row(
         row,
         source_keys=(
             ("detector_native_x", "detector_native_y"),
+            ("refined_sim_native_x", "refined_sim_native_y"),
             ("native_col", "native_row"),
             ("sim_native_col", "sim_native_row"),
         ),
@@ -41096,6 +41098,7 @@ def _geometry_fit_source_row_from_q_group_cache_row(
     _geometry_fit_copy_numeric_pair(
         row,
         source_keys=(
+            ("refined_sim_caked_x", "refined_sim_caked_y"),
             ("caked_x", "caked_y"),
             ("raw_caked_x", "raw_caked_y"),
             ("background_two_theta_deg", "background_phi_deg"),
@@ -41166,7 +41169,17 @@ def _geometry_fit_manual_picker_cache_data_for_job(
 ) -> dict[str, object]:
     cached_data = getattr(geometry_runtime_state, "manual_pick_cache_data", None)
     if isinstance(cached_data, dict) and cached_data:
-        return dict(cached_data)
+        cached_metadata = cached_data.get("cache_metadata")
+        cached_background_index = None
+        if isinstance(cached_metadata, Mapping):
+            cached_background_index = cached_metadata.get("background_index")
+        if cached_background_index is None:
+            return dict(cached_data)
+        try:
+            if int(cached_background_index) == int(background_index):
+                return dict(cached_data)
+        except Exception:
+            pass
     get_cache = globals().get("_get_geometry_manual_pick_cache")
     if callable(get_cache):
         try:
@@ -41188,6 +41201,7 @@ def _geometry_fit_job_local_source_rows_from_picker_or_q_group_cache(
     background_index: int,
     params_local: Mapping[str, object],
     display_background: object | None,
+    manual_pairs: Sequence[Mapping[str, object]] | None = None,
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
     q_group_entries = _geometry_fit_q_group_cache_entries()
     cache_data = _geometry_fit_manual_picker_cache_data_for_job(
@@ -41212,7 +41226,38 @@ def _geometry_fit_job_local_source_rows_from_picker_or_q_group_cache(
         )
         if row is not None
     ]
-    if normalized_picker_rows:
+    normalized_manual_pair_rows: list[dict[str, object]] = []
+    for idx, raw_row in enumerate(manual_pairs or ()):
+        if not isinstance(raw_row, Mapping):
+            continue
+        manual_row = {**dict(raw_row), "background_index": int(background_index)}
+        for source_x, source_y, target_x, target_y in (
+            ("refined_sim_x", "refined_sim_y", "sim_col", "sim_row"),
+            (
+                "refined_sim_native_x",
+                "refined_sim_native_y",
+                "detector_native_x",
+                "detector_native_y",
+            ),
+            ("refined_sim_caked_x", "refined_sim_caked_y", "caked_x", "caked_y"),
+        ):
+            try:
+                source_point = (float(manual_row[source_x]), float(manual_row[source_y]))
+            except Exception:
+                continue
+            if np.isfinite(source_point[0]) and np.isfinite(source_point[1]):
+                manual_row[target_x] = float(source_point[0])
+                manual_row[target_y] = float(source_point[1])
+        row = _geometry_fit_source_row_from_q_group_cache_row(
+            manual_row,
+            fallback_index=int(idx),
+        )
+        if row is not None:
+            normalized_manual_pair_rows.append(row)
+    if normalized_manual_pair_rows:
+        rows = normalized_manual_pair_rows
+        cache_source = "saved_manual_pairs"
+    elif normalized_picker_rows:
         rows = normalized_picker_rows
         cache_source = "manual_picker_cache"
     else:
@@ -41831,7 +41876,10 @@ def _build_geometry_fit_async_job(
             }
         )
         live_rows_handoff_diagnostics["live_preview_rows_count"] = int(len(live_preview_rows))
-        if not live_preview_rows:
+        current_manual_pairs = list(
+            manual_pairs_by_background.get(int(current_background_idx), ()) or ()
+        )
+        if current_manual_pairs or not live_preview_rows:
             background_payload = dict(background_images.get(current_background_idx) or {})
             fallback_params = dict(fit_params_snapshot)
             fallback_params["theta_initial"] = float(
@@ -41845,6 +41893,7 @@ def _build_geometry_fit_async_job(
                     background_index=current_background_idx,
                     params_local=fallback_params,
                     display_background=background_payload.get("display"),
+                    manual_pairs=current_manual_pairs,
                 )
             )
             live_rows_handoff_diagnostics.update(dict(fallback_diag))
@@ -41932,6 +41981,7 @@ def _build_geometry_fit_async_job(
                 background_index=background_idx,
                 params_local=fallback_params,
                 display_background=background_payload.get("display"),
+                manual_pairs=manual_pairs_by_background.get(int(background_idx), ()),
             )
         )
         live_rows_handoff_diagnostics.update(dict(fallback_diag))
@@ -44360,6 +44410,7 @@ def _run_async_geometry_fit_worker_job(
             projection_payload=projection_payload,
             can_use_live_runtime_cache=(
                 int(background_idx) == int(job_data.get("current_background_index", -1))
+                or bool(live_rows)
             ),
             build_live_rows=_worker_live_rows_payload,
             get_memory_intersection_cache=(

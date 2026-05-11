@@ -15761,6 +15761,106 @@ def test_async_geometry_fit_job_skips_empty_selected_backgrounds_when_current_ha
     assert "Bi2Se3_15d_5m.osc" in error
 
 
+def test_async_geometry_fit_job_prefers_current_saved_pairs_over_live_preview_rows(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    geometry_fit = runtime_session.gui_geometry_fit
+    detector_pair = {
+        "pair_id": "detector-0",
+        "hkl": (0, 0, 1),
+        "x": 10.0,
+        "y": 20.0,
+    }
+    stale_live_preview_row = {
+        "pair_id": "stale-live-preview",
+        "q_group_key": ("stale", "primary", 0),
+        "sim_col": 1.0,
+        "sim_row": 2.0,
+    }
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["Bi2Se3_15d_5m.osc"],
+        current_background_index=0,
+        image_size=4,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda _idx: [dict(detector_pair)],
+        load_background_by_index=lambda _idx: (
+            np.ones((4, 4), dtype=np.float64),
+            np.ones((4, 4), dtype=np.float64),
+        ),
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        geometry_manual_simulated_lookup=lambda _rows: {},
+        geometry_manual_entry_display_coords=lambda _entry: None,
+        unrotate_display_peaks=lambda entries, shape, *, k: list(entries),
+        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
+        select_fit_orientation=lambda *_args, **_kwargs: ({}, {"pairs": 0}),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        orient_image_for_fit=lambda image, **kwargs: image,
+        pick_uses_caked_space=lambda: False,
+    )
+    prepare_bindings = geometry_fit.GeometryFitRuntimePreparationBindings(
+        fit_config={"geometry": {"solver": {}}},
+        theta_initial=15.0,
+        apply_geometry_fit_background_selection=lambda **_kwargs: True,
+        current_geometry_fit_background_indices=lambda **_kwargs: [0],
+        geometry_fit_uses_shared_theta_offset=lambda _indices: False,
+        apply_background_theta_metadata=lambda **_kwargs: True,
+        current_background_theta_values=lambda **_kwargs: [15.0],
+        current_geometry_theta_offset=lambda **_kwargs: 0.0,
+        ensure_geometry_fit_caked_view=lambda: None,
+        manual_dataset_bindings=manual_dataset_bindings,
+        build_runtime_config=lambda _params: {"solver": {}},
+    )
+    bindings = SimpleNamespace(
+        value_callbacks=geometry_fit.GeometryFitRuntimeValueCallbacks(
+            current_var_names=lambda: ["gamma", "Gamma"],
+            current_params=lambda: {
+                "theta_initial": 15.0,
+                "center": [1.0, 1.0],
+                "corto_detector": 0.5,
+                "lambda": 1.54e-10,
+            },
+            current_ui_params=lambda: {},
+            var_map={},
+            build_mosaic_params=lambda **_kwargs: {},
+        ),
+        prepare_bindings_factory=lambda _var_names: prepare_bindings,
+        execution_bindings=SimpleNamespace(
+            downloads_dir=tmp_path,
+            log_dir=tmp_path,
+            solver_inputs=SimpleNamespace(miller=[], intensities=[], image_size=4),
+        ),
+        solve_fit=lambda *_args, **_kwargs: None,
+        stamp_factory=lambda: "20260510_000000",
+    )
+    runtime_stubs = {
+        "_geometry_source_snapshot_signature_for_background": lambda idx, params: (
+            "sig",
+            int(idx),
+        ),
+        "_live_cache_signature_summary": lambda signature: repr(signature),
+        "_build_live_preview_simulated_peaks_from_cache": lambda: [dict(stale_live_preview_row)],
+        "_last_live_preview_cache_metadata": lambda: {"cache_source": "peak_records"},
+        "_live_cache_inventory_snapshot": lambda: {"source_snapshot_count": 0},
+        "_geometry_manual_last_source_snapshot_diagnostics": lambda: {},
+        "_geometry_manual_last_simulation_diagnostics": lambda: {},
+        "get_last_intersection_cache": lambda: [],
+    }
+    for name, replacement in runtime_stubs.items():
+        monkeypatch.setattr(runtime_session, name, replacement, raising=False)
+
+    job = runtime_session._build_geometry_fit_async_job(bindings)
+
+    current_rows = job["live_rows_by_background"][0]
+    assert [row.get("pair_id") for row in current_rows] == ["detector-0"]
+    assert job["live_rows_cache_metadata_by_background"][0]["live_rows_cache_source"] == (
+        "saved_manual_pairs"
+    )
+    assert job["live_rows_cache_metadata_by_background"][0]["live_preview_rows_count"] == 1
+
+
 def test_geometry_fit_worker_rejects_stored_mixed_manual_fit_space_before_prepare(
     monkeypatch,
 ) -> None:
@@ -18160,6 +18260,241 @@ def test_worker_prebuild_generates_caked_payload_for_noncurrent_backgrounds(
         "source_cache_targeted_fresh_simulation_start"
     )
     assert kinds.index("projection_payload_ready") < kinds.index("source_cache_project_rows_start")
+
+
+def test_worker_prebuild_uses_job_local_live_rows_for_noncurrent_background(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    job = _make_geometry_fit_worker_job(runtime_session)
+    live_row = dict(_geometry_fit_worker_live_row(), background_index=0)
+    required_pair = dict(_geometry_fit_worker_required_pair(), background_index=0)
+
+    job["current_background_index"] = 2
+    job["required_indices"] = [0]
+    job["selected_background_indices"] = [0]
+    job["requested_signatures"] = {0: ("sig", 0)}
+    job["requested_signature_summaries"] = {0: "sig-summary"}
+    job["background_labels"] = {0: "bg0.osc"}
+    job["manual_pairs_by_background"] = {0: [required_pair]}
+    job["background_images"] = {
+        0: {
+            "native": np.ones((4, 4), dtype=np.float64),
+            "display": np.ones((4, 4), dtype=np.float64),
+        },
+        2: {
+            "native": np.full((4, 4), 2.0, dtype=np.float64),
+            "display": np.full((4, 4), 2.0, dtype=np.float64),
+        },
+    }
+    job["live_rows_signature"] = ("sig", 2)
+    job["live_rows_signature_by_background"] = {0: ("sig", 0)}
+    job["live_rows_by_background"] = {0: [live_row]}
+    job["live_rows_cache_metadata_by_background"] = {
+        0: {
+            "background_index": 0,
+            "cache_source": "q_group_snapshot",
+            "live_rows_signature_match": True,
+            "live_rows_signature_reason": "matched_job_local_snapshot",
+        }
+    }
+    job["memory_intersection_cache"] = []
+    job["memory_intersection_cache_signature"] = ("stale",)
+    job["current_hit_table_cache_by_background"] = {}
+    job["osc_files"] = ["bg0.osc", "bg1.osc", "bg2.osc"]
+
+    monkeypatch.setattr(
+        runtime_session,
+        "load_most_recent_logged_intersection_cache_metadata",
+        lambda: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "load_most_recent_logged_intersection_cache",
+        lambda: pytest.fail("job-local rows should avoid heavy logged cache"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_simulate_hit_tables_for_fit",
+        lambda *_args, **_kwargs: pytest.fail(
+            "job-local rows should avoid targeted fresh simulation"
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "prepare_geometry_fit_run",
+        lambda **_kwargs: runtime_session.gui_geometry_fit.GeometryFitPreparationResult(),
+    )
+
+    action_result = runtime_session._run_async_geometry_fit_worker_job(job)
+    events = _drain_geometry_fit_worker_events(job["event_queue"])
+    kinds = [str(event.get("kind")) for event in events]
+
+    assert action_result.error_text is None
+    assert "source_cache_live_runtime_cache_accepted" in kinds
+    assert "source_cache_targeted_fresh_simulation_start" not in kinds
+
+
+def test_job_local_picker_cache_ignores_cached_data_from_other_background(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    requested_row = dict(_geometry_fit_worker_live_row(), background_index=0)
+    stale_row = dict(_geometry_fit_worker_live_row(), background_index=2)
+    cache_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_runtime_state",
+        SimpleNamespace(
+            manual_pick_cache_data={
+                "detector_picker_source_rows": [stale_row],
+                "cache_metadata": {
+                    "background_index": 2,
+                    "current_background_index": 2,
+                },
+            }
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_geometry_manual_pick_cache",
+        lambda **kwargs: (
+            cache_calls.append(dict(kwargs))
+            or {
+                "detector_picker_source_rows": [requested_row],
+                "cache_metadata": {
+                    "background_index": 0,
+                    "current_background_index": 2,
+                },
+            }
+        ),
+        raising=False,
+    )
+
+    cache_data = runtime_session._geometry_fit_manual_picker_cache_data_for_job(
+        background_index=0,
+        params_local={"a": 4.143},
+        display_background=np.ones((4, 4), dtype=np.float64),
+    )
+
+    assert cache_calls
+    assert cache_calls[0]["background_index"] == 0
+    assert cache_data["cache_metadata"]["background_index"] == 0
+    assert cache_data["detector_picker_source_rows"][0]["background_index"] == 0
+
+
+def test_job_local_source_rows_use_saved_manual_pairs_before_coordinate_free_q_groups(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    required_pair = {
+        **_geometry_fit_worker_required_pair(),
+        "x": 30.0,
+        "y": 40.0,
+        "refined_sim_x": 10.0,
+        "refined_sim_y": 20.0,
+        "refined_sim_caked_x": 8.0,
+        "refined_sim_caked_y": -1.5,
+    }
+
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_runtime_state",
+        SimpleNamespace(manual_pick_cache_data={}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_get_geometry_manual_pick_cache",
+        lambda **_kwargs: {},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_q_group_cache_entries",
+        lambda: [{"key": ("q", 1), "hkl": (1, 0, 0)}],
+        raising=False,
+    )
+
+    rows, diagnostics = (
+        runtime_session._geometry_fit_job_local_source_rows_from_picker_or_q_group_cache(
+            background_index=0,
+            params_local={"a": 4.143},
+            display_background=np.ones((4, 4), dtype=np.float64),
+            manual_pairs=[required_pair],
+        )
+    )
+    validation = runtime_session.gui_geometry_fit.validate_geometry_fit_live_source_rows(
+        rows,
+        required_pairs=[required_pair],
+        require_canonical_required_pairs=True,
+    )
+
+    assert diagnostics["job_local_fallback_source"] == "saved_manual_pairs"
+    assert rows[0]["background_index"] == 0
+    assert rows[0]["sim_col"] == 10.0
+    assert rows[0]["sim_row"] == 20.0
+    assert rows[0]["caked_x"] == 8.0
+    assert rows[0]["caked_y"] == -1.5
+    assert validation["valid"] is True
+
+
+def test_job_local_source_rows_prefer_saved_manual_pairs_over_picker_cache(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    picker_row = {
+        **_geometry_fit_worker_live_row(),
+        "source_reflection_index": None,
+        "sim_col": 99.0,
+        "sim_row": 100.0,
+    }
+    manual_pair = {
+        **_geometry_fit_worker_required_pair(),
+        "x": 30.0,
+        "y": 40.0,
+        "sim_col": 99.0,
+        "sim_row": 100.0,
+        "refined_sim_x": 10.0,
+        "refined_sim_y": 20.0,
+    }
+
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_runtime_state",
+        SimpleNamespace(
+            manual_pick_cache_data={
+                "detector_picker_source_rows": [picker_row],
+                "cache_metadata": {"background_index": 0},
+            }
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_q_group_cache_entries",
+        lambda: [],
+        raising=False,
+    )
+
+    rows, diagnostics = (
+        runtime_session._geometry_fit_job_local_source_rows_from_picker_or_q_group_cache(
+            background_index=0,
+            params_local={"a": 4.143},
+            display_background=np.ones((4, 4), dtype=np.float64),
+            manual_pairs=[manual_pair],
+        )
+    )
+
+    assert diagnostics["job_local_fallback_source"] == "saved_manual_pairs"
+    assert rows[0]["source_reflection_index"] == 7
+    assert rows[0]["sim_col"] == 10.0
+    assert rows[0]["sim_row"] == 20.0
 
 
 def test_worker_does_not_call_current_view_projector_for_noncurrent_background(
