@@ -50,6 +50,18 @@ positive. Focused runtime/import-safe/update tests pass. Full dev check remains
 blocked by pre-existing formatting drift in dirty
 `ra_sim/fitting/optimization.py`.
 
+GUI state import restore status note:
+Bug status fixed for JSON GUI-state import and timing startup restore. Both
+paths now mark saved-state restore as import-active, suppress intermediate
+simulation scheduling, defer caked-view preparation and Qr/Qz selector repaint,
+and allow only the final post-restore update to run after runtime flags are
+restored. No GUI control, CLI flag, saved-state schema, artifact format,
+dependency, CI workflow, deprecation, or migration changed. Shipping status:
+focused GUI import/state/view tests, touched-file ruff checks, and compile pass
+locally. Full `python -m ra_sim.dev check` remains blocked only by unrelated
+formatting drift in `ra_sim/fitting/optimization.py`. Rollback is a normal git
+revert of the runtime/test/doc commit; saved GUI states require no cleanup.
+
 Replay status note: `Sim caked detector replay` has focused helper/runtime
 validation green for detector-origin and caked-origin manual background replay.
 Latest provenance patch makes `manual_background_input_origin` authoritative

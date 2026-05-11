@@ -13047,9 +13047,7 @@ def test_apply_main_caked_view_toggle_clears_view_bound_overlay_state_before_det
             set_main_figure_axes_axis_visibility=lambda *_args, **_kwargs: calls.append(
                 "axis_visibility"
             ),
-            apply_main_figure_axes_chrome=lambda *_args, **_kwargs: calls.append(
-                "axes_chrome"
-            ),
+            apply_main_figure_axes_chrome=lambda *_args, **_kwargs: calls.append("axes_chrome"),
         ),
         raising=False,
     )
@@ -22465,6 +22463,215 @@ def test_runtime_impl_gui_state_import_prepares_caked_view_before_manual_restore
     restore_index = block.index("gui_state_io.apply_gui_state_geometry(")
 
     assert detect_index < ensure_index < restore_index
+
+
+def test_geometry_fit_caked_view_treats_gui_state_import_as_update_running(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    runtime_state = SimpleNamespace(
+        update_pending="update-token",
+        integration_update_pending="integration-token",
+        update_running=False,
+        worker_active_job=None,
+        worker_queued_job=None,
+        gui_state_import_active=True,
+    )
+    observed_kwargs: dict[str, object] = {}
+
+    def fake_ensure_geometry_fit_caked_view(**kwargs):
+        observed_kwargs.update(kwargs)
+        return "new-update-token", "new-integration-token"
+
+    monkeypatch.setattr(runtime_session, "simulation_runtime_state", runtime_state)
+    monkeypatch.setattr(
+        runtime_session,
+        "analysis_view_controls_view_state",
+        SimpleNamespace(show_caked_2d_var=SimpleNamespace(get=lambda: False)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_manual_geometry,
+        "ensure_geometry_fit_caked_view",
+        fake_ensure_geometry_fit_caked_view,
+    )
+    monkeypatch.setattr(
+        runtime_session, "_geometry_manual_pick_uses_caked_space", lambda: False, raising=False
+    )
+    monkeypatch.setattr(runtime_session, "toggle_caked_2d", lambda *_args: None, raising=False)
+    monkeypatch.setattr(runtime_session, "do_update", lambda *_args: None, raising=False)
+    monkeypatch.setattr(runtime_session, "schedule_update", lambda *_args: None, raising=False)
+    monkeypatch.setattr(runtime_session, "root", object(), raising=False)
+
+    runtime_session._ensure_geometry_fit_caked_view(force_refresh=True)
+
+    assert observed_kwargs["update_running"] is True
+    assert observed_kwargs["force_refresh"] is True
+    assert observed_kwargs["integration_update_pending"] == "integration-token"
+    assert runtime_state.update_pending == "new-update-token"
+
+
+def test_runtime_impl_gui_state_import_defers_q_group_selector_refresh() -> None:
+    source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
+    block_start = source.index(
+        "def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:"
+    )
+    block_end = source.index("def _apply_gui_state_snapshot_for_manual_import(", block_start)
+    block = source[block_start:block_end]
+
+    import_active_index = block.index(
+        'if bool(getattr(simulation_runtime_state, "gui_state_import_active", False)):'
+    )
+    request_index = block.index("_request_geometry_q_group_refresh_if_available()")
+    refresh_index = block.index("geometry_q_group_runtime_callbacks.refresh_window()")
+
+    assert import_active_index < request_index < refresh_index
+
+
+def test_manual_gui_state_import_helper_schedules_after_flags_restore(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    runtime_state = SimpleNamespace(
+        startup_updates_suspended=False,
+        gui_state_import_active=False,
+        pending_startup_refresh=False,
+    )
+    events: list[tuple[object, ...]] = []
+
+    def fake_apply_snapshot(snapshot: dict[str, object]) -> str:
+        events.append(
+            (
+                "apply",
+                dict(snapshot),
+                runtime_state.startup_updates_suspended,
+                runtime_state.gui_state_import_active,
+                runtime_state.pending_startup_refresh,
+            )
+        )
+        runtime_state.pending_startup_refresh = True
+        return "Imported test state."
+
+    def fake_schedule_update() -> None:
+        events.append(
+            (
+                "schedule",
+                runtime_state.startup_updates_suspended,
+                runtime_state.gui_state_import_active,
+                runtime_state.pending_startup_refresh,
+            )
+        )
+
+    monkeypatch.setattr(runtime_session, "simulation_runtime_state", runtime_state)
+    monkeypatch.setattr(runtime_session, "_apply_full_gui_state_snapshot", fake_apply_snapshot)
+    monkeypatch.setattr(runtime_session, "schedule_update", fake_schedule_update)
+
+    message = runtime_session._apply_gui_state_snapshot_for_manual_import({"sample": "Bi2Se3"})
+
+    assert message == "Imported test state."
+    assert events == [
+        ("apply", {"sample": "Bi2Se3"}, True, True, False),
+        ("schedule", False, False, False),
+    ]
+    assert runtime_state.startup_updates_suspended is False
+    assert runtime_state.gui_state_import_active is False
+    assert runtime_state.pending_startup_refresh is False
+
+
+def test_manual_gui_state_import_helper_keeps_parent_suspension(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    runtime_state = SimpleNamespace(
+        startup_updates_suspended=True,
+        gui_state_import_active=False,
+        pending_startup_refresh=False,
+    )
+    schedule_calls = 0
+
+    def fake_apply_snapshot(_snapshot: dict[str, object]) -> str:
+        runtime_state.pending_startup_refresh = True
+        return "Imported under parent suspension."
+
+    def fake_schedule_update() -> None:
+        nonlocal schedule_calls
+        schedule_calls += 1
+
+    monkeypatch.setattr(runtime_session, "simulation_runtime_state", runtime_state)
+    monkeypatch.setattr(runtime_session, "_apply_full_gui_state_snapshot", fake_apply_snapshot)
+    monkeypatch.setattr(runtime_session, "schedule_update", fake_schedule_update)
+
+    message = runtime_session._apply_gui_state_snapshot_for_manual_import({})
+
+    assert message == "Imported under parent suspension."
+    assert schedule_calls == 0
+    assert runtime_state.startup_updates_suspended is True
+    assert runtime_state.gui_state_import_active is False
+    assert runtime_state.pending_startup_refresh is True
+
+
+def test_manual_gui_state_import_helper_restores_flags_after_failure(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    runtime_state = SimpleNamespace(
+        startup_updates_suspended=False,
+        gui_state_import_active=False,
+        pending_startup_refresh=False,
+    )
+    schedule_calls = 0
+
+    def fake_apply_snapshot(_snapshot: dict[str, object]) -> str:
+        runtime_state.pending_startup_refresh = True
+        raise RuntimeError("snapshot restore failed")
+
+    def fake_schedule_update() -> None:
+        nonlocal schedule_calls
+        schedule_calls += 1
+
+    monkeypatch.setattr(runtime_session, "simulation_runtime_state", runtime_state)
+    monkeypatch.setattr(runtime_session, "_apply_full_gui_state_snapshot", fake_apply_snapshot)
+    monkeypatch.setattr(runtime_session, "schedule_update", fake_schedule_update)
+
+    with pytest.raises(RuntimeError, match="snapshot restore failed"):
+        runtime_session._apply_gui_state_snapshot_for_manual_import({})
+
+    assert schedule_calls == 0
+    assert runtime_state.startup_updates_suspended is False
+    assert runtime_state.gui_state_import_active is False
+    assert runtime_state.pending_startup_refresh is False
+
+
+def test_timing_startup_state_restore_marks_gui_state_import_active(monkeypatch, tmp_path) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    state_path = tmp_path / "startup_state.json"
+    state_path.write_text("{}", encoding="utf-8")
+    runtime_state = SimpleNamespace(
+        startup_updates_suspended=False,
+        gui_state_import_active=False,
+        timing_saved_state_restore_active=False,
+    )
+    observed_restore_state: list[tuple[bool, bool, bool]] = []
+
+    def fake_apply_snapshot(_snapshot: dict[str, object]) -> str:
+        observed_restore_state.append(
+            (
+                runtime_state.startup_updates_suspended,
+                runtime_state.gui_state_import_active,
+                runtime_state.timing_saved_state_restore_active,
+            )
+        )
+        return "Imported startup state."
+
+    monkeypatch.setenv("RA_SIM_TIMING_RESTORE_STATE", str(state_path))
+    monkeypatch.setattr(runtime_session, "timing_enabled", lambda: True)
+    monkeypatch.setattr(runtime_session, "simulation_runtime_state", runtime_state)
+    monkeypatch.setattr(runtime_session, "load_gui_state_file", lambda _path: {"state": {}})
+    monkeypatch.setattr(runtime_session, "_saved_state_snapshot_metadata", lambda _snapshot: {})
+    monkeypatch.setattr(
+        runtime_session, "_saved_state_timing_event", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(runtime_session, "_apply_full_gui_state_snapshot", fake_apply_snapshot)
+
+    runtime_session._timing_apply_startup_state_restore()
+
+    assert observed_restore_state == [(True, True, True)]
+    assert runtime_state.startup_updates_suspended is False
+    assert runtime_state.gui_state_import_active is False
+    assert runtime_state.timing_saved_state_restore_active is False
+    assert runtime_state.timing_saved_state_restore_completed is True
 
 
 def test_runtime_impl_full_gui_state_export_includes_selected_qr_rod_fields() -> None:

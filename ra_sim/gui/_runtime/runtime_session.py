@@ -7670,6 +7670,7 @@ def _ensure_geometry_fit_caked_view(*, force_refresh: bool = False) -> None:
             integration_update_pending=simulation_runtime_state.integration_update_pending,
             update_running=bool(
                 simulation_runtime_state.update_running
+                or getattr(simulation_runtime_state, "gui_state_import_active", False)
                 or simulation_runtime_state.worker_active_job is not None
                 or simulation_runtime_state.worker_queued_job is not None
             ),
@@ -28005,7 +28006,10 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
     _apply_geometry_fit_background_selection(trigger_update=False)
     _refresh_background_status()
     _update_geometry_preview_exclude_button_label()
-    geometry_q_group_runtime_callbacks.refresh_window()
+    if bool(getattr(simulation_runtime_state, "gui_state_import_active", False)):
+        _request_geometry_q_group_refresh_if_available()
+    else:
+        geometry_q_group_runtime_callbacks.refresh_window()
     peak_selection_runtime_callbacks.reselect_current_peak()
     ensure_valid_resolution_choice()
     with _saved_state_timing_span("saved_state.caked_state_restore"):
@@ -28032,6 +28036,38 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
         schedule_update()
 
     return gui_state_io.build_gui_state_import_summary(warnings)
+
+
+def _apply_gui_state_snapshot_for_manual_import(snapshot: dict[str, object]) -> str:
+    previous_startup_updates_suspended = bool(
+        getattr(simulation_runtime_state, "startup_updates_suspended", False)
+    )
+    previous_gui_state_import_active = bool(
+        getattr(simulation_runtime_state, "gui_state_import_active", False)
+    )
+    previous_pending_startup_refresh = bool(
+        getattr(simulation_runtime_state, "pending_startup_refresh", False)
+    )
+    pending_startup_refresh = False
+
+    simulation_runtime_state.startup_updates_suspended = True
+    simulation_runtime_state.gui_state_import_active = True
+    simulation_runtime_state.pending_startup_refresh = False
+    try:
+        message = _apply_full_gui_state_snapshot(snapshot)
+        pending_startup_refresh = bool(
+            getattr(simulation_runtime_state, "pending_startup_refresh", False)
+        )
+    finally:
+        simulation_runtime_state.startup_updates_suspended = previous_startup_updates_suspended
+        simulation_runtime_state.gui_state_import_active = previous_gui_state_import_active
+        simulation_runtime_state.pending_startup_refresh = previous_pending_startup_refresh
+
+    if pending_startup_refresh and not previous_startup_updates_suspended:
+        schedule_update()
+    elif pending_startup_refresh:
+        simulation_runtime_state.pending_startup_refresh = True
+    return message
 
 
 def _export_full_gui_state() -> None:
@@ -28134,7 +28170,7 @@ def _import_full_gui_state() -> None:
 
     try:
         payload = load_gui_state_file(file_path)
-        message = _apply_full_gui_state_snapshot(payload.get("state", {}))
+        message = _apply_gui_state_snapshot_for_manual_import(payload.get("state", {}))
     except Exception as exc:
         progress_label.config(text=f"Failed to import GUI state: {exc}")
         return
@@ -41507,9 +41543,7 @@ def _build_geometry_fit_async_job(
             params_i,
         )
         requested_signatures[int(idx)] = requested_signature
-        requested_signature_summaries[int(idx)] = _live_cache_signature_summary(
-            requested_signature
-        )
+        requested_signature_summaries[int(idx)] = _live_cache_signature_summary(requested_signature)
 
     for idx in required_indices:
         native_background, display_background = manual_dataset_bindings.load_background_by_index(
@@ -41624,9 +41658,7 @@ def _build_geometry_fit_async_job(
     ]
     missing_manual_pair_set = {int(idx) for idx in missing_manual_pair_indices}
     usable_manual_pair_indices = [
-        int(idx)
-        for idx in required_indices
-        if int(idx) not in missing_manual_pair_set
+        int(idx) for idx in required_indices if int(idx) not in missing_manual_pair_set
     ]
     if missing_manual_pair_indices and usable_manual_pair_indices:
         usable_set = {int(idx) for idx in usable_manual_pair_indices}
@@ -47120,17 +47152,22 @@ def _timing_apply_startup_state_restore() -> None:
         previous_startup_updates_suspended = bool(
             getattr(simulation_runtime_state, "startup_updates_suspended", False)
         )
+        previous_gui_state_import_active = bool(
+            getattr(simulation_runtime_state, "gui_state_import_active", False)
+        )
         simulation_runtime_state.startup_updates_suspended = True
+        simulation_runtime_state.gui_state_import_active = True
         simulation_runtime_state.timing_saved_state_restore_active = True
-        payload = load_gui_state_file(state_path)
-        snapshot = dict(payload.get("state", {}))
-        context.update(_saved_state_snapshot_metadata(snapshot))
-        simulation_runtime_state.timing_saved_state_context = dict(context)
-        _saved_state_timing_event("saved_state.metadata")
         try:
+            payload = load_gui_state_file(state_path)
+            snapshot = dict(payload.get("state", {}))
+            context.update(_saved_state_snapshot_metadata(snapshot))
+            simulation_runtime_state.timing_saved_state_context = dict(context)
+            _saved_state_timing_event("saved_state.metadata")
             message = _apply_full_gui_state_snapshot(snapshot)
         finally:
             simulation_runtime_state.startup_updates_suspended = previous_startup_updates_suspended
+            simulation_runtime_state.gui_state_import_active = previous_gui_state_import_active
             simulation_runtime_state.timing_saved_state_restore_active = False
     except Exception as exc:
         _saved_state_timing_event(
@@ -47143,7 +47180,6 @@ def _timing_apply_startup_state_restore() -> None:
             exc_type=type(exc).__name__,
             error=str(exc),
         )
-        simulation_runtime_state.timing_saved_state_restore_active = False
         raise
     simulation_runtime_state.timing_saved_state_restore_completed = True
     _saved_state_timing_event(
