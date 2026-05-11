@@ -167,15 +167,19 @@ title used for that peak in the final Qr-rod figure; clicking another marker or
 accepting the popup preserves the edited title. Final Qr-rod figure labels are
 drawn above and to the right of the marked peak with a leader arrow pointing
 back to the peak, and generated fallback L labels are rounded to integers.
+The same popup now carries the Qr integration controls: `Delta Qr (+/- A^-1)`,
+`L Min`, and `L Max`. Moving Delta Qr refreshes the integrated profile table
+shown in every rod subplot by rerunning the existing detector Qr/Qz profile
+accumulator with the new width. The accepted Delta Qr and L window replace the
+profile rows sent to the final joint Qz fit and are included in the final-fit
+cache identity.
 
-The detector selected-region figure uses a separate label-position editor for
-the Qr-region labels controlled by `RA_SIM_DETECTOR_LABEL_SETTINGS`. In popup
-mode the labels are edited on the same Matplotlib detector figure that is later
-saved: click a label to select it, drag it in detector pixel coordinates, edit
-the `Label` field for display text, and use `Font -` / `Font +` for the active
-label size. `Import` and `Export` continue to round-trip the existing
-`ra_sim.detector_label_settings.v1` JSON schema, so saved label positions remain
-compatible with prior runs.
+The detector selected-region label-position helper remains available for the
+`RA_SIM_DETECTOR_LABEL_SETTINGS` JSON schema, but the parallel diagnostic final
+save path no longer opens that second popup after the Qr-rod marker editor. If
+the unified editor result carries detector-label entries they are used;
+otherwise the generated default label positions are drawn directly on the saved
+detector selected-region figure.
 
 On Windows, direct top-level execution of the generated `.py` diagnostic
 relaunches `process` and `auto` fit backend requests through the guarded runner
@@ -226,6 +230,9 @@ Focused validation status:
 - `python -m pytest tests/test_background_peak_fits_notebook.py -k "detector_region_label" -ra`
   passes, `15 passed`, including the in-figure detector-label editor contract,
   settings round trip, runtime-mode handling, and final-save wiring
+- `python -m pytest tests/test_background_peak_fits_notebook.py -k "unified_qr_rod_region_editor or unified_editor or detector_region_label_editor_wires_before_final_save or saved_figures_do_not_include_panel_letters or initial_placement_uses_default_geometry or axis_tick_labels_use_bottom_left_origin or qr_rod_peak_editor_is_wired_before_joint_fit_cache or pre_editor_cache_is_checked_before_expensive_stages or qr_rod_peak_editor_uses_l_axis" -ra`
+  passes, `13 passed`, including same-popup Delta Qr/L controls, live profile
+  refresh callback wiring, and accepted profile-table handoff to the final fit
 - `RA_SIM_HEADLESS=1 RA_SIM_PBI2_DISABLE_BACKGROUND_SUBTRACTION=1` PbI2
   diagnostic script execution completed, skipped the marker and detector-label
   popups through default `auto` mode, recorded sideband subtraction disabled in
@@ -234,7 +241,7 @@ Focused validation status:
   unsupported `m=7` in the final figure
 - full `tests/test_background_peak_fits_notebook.py` was rerun on 2026-05-11
   and remains red only in four unrelated notebook/script source-token checks:
-  `124 passed`, `2 skipped`, `4 failed`
+  `130 passed`, `2 skipped`, `4 failed`
 - current `python -m ra_sim.dev check` is blocked by formatting drift in
   `ra_sim/fitting/optimization.py` and the unrelated dirty
   `ra_sim/gui/_runtime/runtime_session.py`

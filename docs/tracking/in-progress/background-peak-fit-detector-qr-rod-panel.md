@@ -83,6 +83,11 @@ to make the Qr rod detector and integration figures source-consistent:
 - The editor plots each rod panel on fitted `L` coordinates instead of raw Qz,
   with integer x-axis ticks. Dragging/clicking still saves marker positions as
   Qz through the panel's Qz-to-L mapping.
+- The same Qr-rod editor now includes Delta Qr, `L Min`, and `L Max` controls.
+  Delta Qr changes refresh the integrated profile table drawn in every subplot
+  by reusing the existing detector Qr/Qz profile accumulator, and accepted
+  Delta Qr/L values are applied to the profile rows used by the final joint Qz
+  fit and cache key.
 - Each Qr-rod peak marker now has an editable final-figure title. Blank titles
   fall back to `L=<rounded display_l>`, and the editor `Label` text box sets
   the exact text used when the final Qr-rod figure is drawn.
@@ -185,6 +190,13 @@ Feature status:
   `ra_sim.detector_label_settings.v1` JSON payload are unchanged, and the
   temporary editor controls/artists are removed before the final figure is
   saved.
+- The unified Qr-rod editor now owns the operator-facing Qr-region adjustment
+  order for the parallel diagnostic: marker editing, Delta Qr, and L-window
+  changes happen in the same Matplotlib popup before the final joint Qz fit.
+  The older detector-label editor helper remains for schema compatibility, but
+  the final detector selected-region save path consumes unified-editor label
+  entries when present and otherwise draws the generated defaults without
+  opening a second popup.
 - Qr-rod peak marker editing is implemented in the diagnostic `.py` with
   default `RA_SIM_QR_ROD_PEAK_EDIT_MODE=auto`; `popup` forces the editor, `skip`
   disables it for unattended runs, and optional JSON round trip is available through
@@ -291,8 +303,10 @@ Passing checks:
 - Targeted Qr-rod marker edit coverage for per-rod marker replacement,
   marker-table cache-key hashing, headless/interactive mode resolution, JSON
   edit round trip including `marker_title`, final-label override behavior,
-  in-popup import/export wiring, sample-name override wiring, `HK=0` specular
-  marker inclusion, and editor call ordering before the joint-fit cache lookup.
+  in-popup import/export wiring, Delta Qr/L-window control state, live
+  integrated-profile refresh callback wiring, accepted profile-table handoff,
+  sample-name override wiring, `HK=0` specular marker inclusion, and editor call
+  ordering before the joint-fit cache lookup.
 - Targeted weak-peak regression coverage verifies a labeled HK=0 weak marker
   at `006`-like relative intensity remains present in the final joint-fit
   component list.
@@ -350,6 +364,9 @@ Passing checks:
   `python -m pytest tests/test_background_peak_fits_notebook.py -k "joint_qz_fit or rod_profile_panels_use_centered_m_labels or qr_rod_marker_hash_changes_cache_key or marker_title_changes_cache_key or qr_rod_final_cache_requires_fit_signature or tail_component_aggregation_rejects_shape_mismatch" -ra`
 - Compile check passed for package, tests, and the diagnostic script:
   `python -m compileall -q ra_sim tests scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py`
+- Focused unified-editor command passed:
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "unified_qr_rod_region_editor or unified_editor or detector_region_label_editor_wires_before_final_save or saved_figures_do_not_include_panel_letters or initial_placement_uses_default_geometry or axis_tick_labels_use_bottom_left_origin or qr_rod_peak_editor_is_wired_before_joint_fit_cache or pre_editor_cache_is_checked_before_expensive_stages or qr_rod_peak_editor_uses_l_axis" -ra`
+  with `13 passed`.
 - Focused whitespace check passed:
   `git diff --check`
   The touched diagnostic/test files still contain older unrelated ruff-format
@@ -359,8 +376,8 @@ Passing checks:
 Known validation limits:
 
 - Full `tests/test_background_peak_fits_notebook.py` was rerun on 2026-05-11
-  after the detector-label editor slice. It still has four unrelated
-  notebook/script source-token expectation failures, with `124 passed`, `2
+  after the unified Qr-rod editor slice. It still has four unrelated
+  notebook/script source-token expectation failures, with `130 passed`, `2
   skipped`, and `4 failed`. The failures are
   the older missing `ROD_PROFILE_MAX_TWO_THETA_DEG = 60.0` and
   `"fit_model": "rotated_gaussian_plane"` notebook tokens plus the

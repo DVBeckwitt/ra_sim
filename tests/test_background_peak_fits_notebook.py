@@ -1166,7 +1166,9 @@ def test_detector_region_label_initial_placement_uses_default_geometry() -> None
         )
     ]
     detector_figure_start = source.index("rod_label_entries: list[dict[str, object]] = []")
-    editor_call = source.index("edit_detector_region_label_positions(", detector_figure_start)
+    editor_call = source.index(
+        "apply_unified_qr_rod_region_editor_labels(", detector_figure_start
+    )
     section = source[detector_figure_start:editor_call]
 
     assert "choose_detector_label_position(" not in low_l_source
@@ -1519,7 +1521,9 @@ def test_detector_region_label_editor_removes_temporary_in_figure_artifacts(
 def test_detector_region_label_editor_wires_before_final_save() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     detector_figure_start = source.index("rod_label_entries: list[dict[str, object]] = []")
-    editor_call = source.index("edit_detector_region_label_positions(", detector_figure_start)
+    editor_call = source.index(
+        "apply_unified_qr_rod_region_editor_labels(", detector_figure_start
+    )
     save_call = source.index(
         "detector_region_png, detector_region_pdf = save_manuscript_figure",
         detector_figure_start,
@@ -1723,7 +1727,7 @@ def test_detector_region_axis_tick_labels_use_bottom_left_origin() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     detector_region_source = source[
         source.index('ax.set_xlabel("Detector x pixel') : source.index(
-            "\nrod_label_entries = edit_detector_region_label_positions("
+            "\nrod_label_entries = apply_unified_qr_rod_region_editor_labels("
         )
     ]
     assert "detector_bottom_left_axis_tick_labels(" in detector_region_source
@@ -3602,7 +3606,7 @@ def test_parallel_script_qr_rod_peak_editor_is_wired_before_joint_fit_cache() ->
         "marker_table = marker_table_with_specular_l_markers(",
         marker_table_index,
     )
-    editor_call = source.index("edit_qr_rod_peak_markers(", marker_table_index)
+    editor_call = source.index("edit_qr_rod_region_editor(", marker_table_index)
     cache_key_call = source.index("qr_rod_peak_edit_cache_key(", marker_table_index)
     final_fit_call = source.index("add_joint_qz_fit_columns(", marker_table_index)
 
@@ -3621,6 +3625,228 @@ def test_parallel_script_qr_rod_peak_editor_is_wired_before_joint_fit_cache() ->
     assert 'getattr(event, "inaxes", None) is getattr(box, "ax", None)' in source
 
 
+def test_parallel_script_uses_unified_qr_rod_region_editor_before_final_fit() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    marker_table_index = source.index(
+        "\nmarker_table = pd.DataFrame(marker_rows)",
+        source.index("if not profile_rows:"),
+    )
+    editor_call = source.index("edit_qr_rod_region_editor(", marker_table_index)
+    cache_key_call = source.index("qr_rod_peak_edit_cache_key(", marker_table_index)
+    final_fit_call = source.index("add_joint_qz_fit_columns(", marker_table_index)
+
+    assert editor_call < cache_key_call < final_fit_call
+    assert "show_qr_rod_peak_marker_popup(" in source
+    assert "detector_label_entries" in source
+    assert "delta_qr" in source
+    assert "l_min" in source
+    assert "l_max" in source
+
+
+def test_parallel_script_unified_editor_replaces_late_detector_label_popup() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    detector_figure_start = source.index("rod_label_entries: list[dict[str, object]] = []")
+    save_call = source.index(
+        "detector_region_png, detector_region_pdf = save_manuscript_figure",
+        detector_figure_start,
+    )
+    detector_save_section = source[detector_figure_start:save_call]
+
+    assert "edit_detector_region_label_positions(" not in detector_save_section
+    assert "apply_unified_qr_rod_region_editor_labels(" in detector_save_section
+
+
+def test_parallel_script_unified_editor_has_region_controls() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    function_source = source[
+        source.index("def show_qr_rod_peak_marker_popup(") : source.index(
+            "\ndef edit_qr_rod_region_editor("
+        )
+    ]
+    wrapper_source = source[
+        source.index("def edit_qr_rod_region_editor(") : source.index(
+            "\ndef apply_unified_qr_rod_region_editor_labels("
+        )
+    ]
+
+    for token in (
+        "from matplotlib.widgets import Button, Slider, TextBox",
+        'Slider(delta_qr_ax, "Delta Qr (+/- A^-1)"',
+        'TextBox(l_min_ax, "L Min"',
+        'TextBox(l_max_ax, "L Max"',
+        "profile_update_callback",
+        'region_control_state["rod_profile_table"]',
+        "refresh_region_profile_table()",
+        "fig._ra_sim_qr_rod_peak_edit_widgets",
+    ):
+        assert token in function_source
+    assert "region_state=region_control_state" in wrapper_source
+    assert "profile_update_callback=profile_update_callback" in wrapper_source
+
+
+def test_parallel_script_unified_editor_region_controls_update_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    namespace = _script_functions(
+        "as_float",
+        "qr_rod_peak_edit_runtime_mode",
+        "show_qr_rod_peak_marker_popup",
+        "marker_table_with_specular_l_markers",
+        "qz_l_linear_coeff_from_marker_rows",
+        "marker_row_title",
+        "clean_marker_title",
+        "replace_qr_rod_marker_group_qz",
+        "positive_log_plot_values",
+        "apply_positive_log_y_axis",
+        "snap_qr_rod_markers_to_profile_peaks",
+        "l_tick_label",
+        "_safe_run_name",
+        "load_qr_rod_peak_edits",
+        "write_qr_rod_peak_edits",
+    )
+    show_editor = namespace["show_qr_rod_peak_marker_popup"]
+    region_state = {"delta_qr": 0.01, "l_min": 0.0, "l_max": 3.0}
+
+    def fake_show(*_args, **_kwargs) -> None:
+        fig = plt.gcf()
+        widgets = list(getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets"))
+        for widget in widgets:
+            widget_type = type(widget).__name__
+            label = getattr(getattr(widget, "label", None), "get_text", lambda: "")()
+            if widget_type == "Slider":
+                widget.set_val(0.02)
+            elif widget_type == "TextBox" and label == "L Min":
+                widget.set_val("0.5")
+            elif widget_type == "TextBox" and label == "L Max":
+                widget.set_val("2.5")
+        plt.close(fig)
+
+    marker_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_marker": 1.0, "fit_l": 1.0, "display_l": 1.0},
+            {"m": 1, "branch": "+", "qz_marker": 2.0, "fit_l": 2.0, "display_l": 2.0},
+        ]
+    )
+    rod_profile_table = pd.DataFrame(
+        {
+            "m": [1, 1, 1],
+            "branch": ["+", "+", "+"],
+            "qz_center": [0.5, 1.5, 2.5],
+            "background_density": [1.0, 2.0, 1.0],
+        }
+    )
+
+    monkeypatch.setattr(plt, "show", fake_show)
+    _edited, accepted = show_editor(
+        marker_table,
+        rod_profile_table,
+        backend_name="TkAgg",
+        region_state=region_state,
+    )
+
+    assert accepted is True
+    assert {
+        "delta_qr": region_state["delta_qr"],
+        "l_min": region_state["l_min"],
+        "l_max": region_state["l_max"],
+    } == {"delta_qr": 0.02, "l_min": 0.5, "l_max": 2.5}
+
+
+def test_parallel_script_unified_editor_delta_qr_refreshes_profile_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    namespace = _script_functions(
+        "as_float",
+        "qr_rod_peak_edit_runtime_mode",
+        "show_qr_rod_peak_marker_popup",
+        "marker_table_with_specular_l_markers",
+        "qz_l_linear_coeff_from_marker_rows",
+        "marker_row_title",
+        "clean_marker_title",
+        "replace_qr_rod_marker_group_qz",
+        "positive_log_plot_values",
+        "apply_positive_log_y_axis",
+        "snap_qr_rod_markers_to_profile_peaks",
+        "l_tick_label",
+        "_safe_run_name",
+        "load_qr_rod_peak_edits",
+        "write_qr_rod_peak_edits",
+    )
+    show_editor = namespace["show_qr_rod_peak_marker_popup"]
+    region_state = {"delta_qr": 0.01, "l_min": 0.0, "l_max": 3.0}
+    update_calls: list[tuple[float, float, float]] = []
+
+    def refresh_profiles(delta_qr: float, l_min: float, l_max: float) -> pd.DataFrame:
+        update_calls.append((float(delta_qr), float(l_min), float(l_max)))
+        return pd.DataFrame(
+            {
+                "m": [1, 1],
+                "branch": ["+", "+"],
+                "qz_center": [1.0, 2.0],
+                "background_density": [10.0, 20.0],
+            }
+        )
+
+    def fake_show(*_args, **_kwargs) -> None:
+        fig = plt.gcf()
+        for widget in list(getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets")):
+            if type(widget).__name__ == "Slider":
+                widget.set_val(0.02)
+        plt.close(fig)
+
+    marker_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_marker": 1.0, "fit_l": 1.0, "display_l": 1.0},
+            {"m": 1, "branch": "+", "qz_marker": 2.0, "fit_l": 2.0, "display_l": 2.0},
+        ]
+    )
+    rod_profile_table = pd.DataFrame(
+        {
+            "m": [1, 1],
+            "branch": ["+", "+"],
+            "qz_center": [1.0, 2.0],
+            "background_density": [1.0, 2.0],
+        }
+    )
+
+    monkeypatch.setattr(plt, "show", fake_show)
+    _edited, accepted = show_editor(
+        marker_table,
+        rod_profile_table,
+        backend_name="TkAgg",
+        region_state=region_state,
+        profile_update_callback=refresh_profiles,
+    )
+
+    assert accepted is True
+    assert update_calls == [(0.02, 0.0, 3.0)]
+    refreshed = pd.DataFrame(region_state["rod_profile_table"])
+    assert refreshed["background_density"].tolist() == [10.0, 20.0]
+
+
+def test_parallel_script_unified_editor_result_updates_final_profile_table() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    editor_call = source.index("qr_rod_region_editor_result = edit_qr_rod_region_editor(")
+    cache_key_call = source.index("qr_rod_peak_edit_cache_key(", editor_call)
+    final_fit_call = source.index("add_joint_qz_fit_columns(", editor_call)
+    section = source[editor_call:final_fit_call]
+
+    assert "def recompute_qr_rod_region_profiles(" in source
+    assert "profile_update_callback=recompute_qr_rod_region_profiles" in section
+    assert 'qr_rod_region_editor_result.get("rod_profile_table", rod_profile_table)' in section
+    assert "rod_profile_table_for_l_window(" in section
+    assert "delta_qr_override=delta_qr_value" in source
+    assert editor_call < cache_key_call < final_fit_call
+
+
 def test_parallel_script_pre_editor_cache_is_checked_before_expensive_stages() -> None:
     if not PARALLEL_SCRIPT_PATH.exists():
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
@@ -3633,7 +3859,7 @@ def test_parallel_script_pre_editor_cache_is_checked_before_expensive_stages() -
     profile_cache_lookup = source.index('"profile_fits", PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE')
     profile_fit_call = source.index("_fit_profile_cache_item(bg, item)", profile_cache_lookup)
     qr_rod_pre_cache_lookup = source.index('"qr_rod_pre_editor", PRE_EDITOR_QR_ROD_STAGE_SIGNATURE')
-    marker_editor_call = source.index("edit_qr_rod_peak_markers(", qr_rod_pre_cache_lookup)
+    marker_editor_call = source.index("edit_qr_rod_region_editor(", qr_rod_pre_cache_lookup)
 
     assert background_cache_lookup < process_fit_call
     assert profile_cache_lookup < profile_fit_call
@@ -3716,7 +3942,9 @@ def test_parallel_script_saved_figures_do_not_include_panel_letters() -> None:
         source.index("def add_panel_labels(") : source.index("\ndef maybe_suptitle(")
     ]
     detector_region_source = source[
-        source.index("rod_label_entries = edit_detector_region_label_positions(") : source.index(
+        source.index(
+            "rod_label_entries = apply_unified_qr_rod_region_editor_labels("
+        ) : source.index(
             "\ndetector_region_png, detector_region_pdf = save_manuscript_figure"
         )
     ]

@@ -99,6 +99,7 @@
   - Fixed the Qr-rod peak marker editor so dynamically projected `HK=0` / `00L` specular markers are included before final-fit cache lookup and fitting.
   - Changed the Qr-rod peak marker editor Snap action to snap all markers in the selected rod panel to nearby local profile peaks.
   - Changed the Qr-rod peak marker editor plots to use fitted integer `L` x-axes while still saving marker positions as Qz.
+  - Changed the parallel Qr-rod editor so Delta Qr, `L Min`, and `L Max` controls live in the same marker-editor popup; Delta Qr refreshes the integrated profile intensities shown in the subplots, accepted values feed the final joint-fit table and cache key, and the final detector-label save path no longer opens a second popup.
   - Added editable per-peak Qr-rod marker titles so the popup `Label` field controls the final Qr-rod figure text, with blank titles falling back to `L=<rounded display_l>`.
   - Rounded generated Qr-rod peak fallback L labels to integer values while preserving user-edited marker titles.
   - Moved final Qr-rod peak labels to the upper-right of each marked peak with leader arrows pointing back to the peak.

@@ -1025,12 +1025,14 @@ def show_qr_rod_peak_marker_popup(
     backend_name: object = None,
     edit_path: object = None,
     required_marker_table: pd.DataFrame | None = None,
+    region_state: dict[str, object] | None = None,
+    profile_update_callback: object | None = None,
 ) -> tuple[pd.DataFrame, bool]:
     backend = str(backend_name if backend_name is not None else mpl.get_backend())
     if qr_rod_peak_edit_runtime_mode("auto", backend_name=backend, env={}) != "popup":
         raise RuntimeError(f"Matplotlib backend {backend!r} is not interactive")
     try:
-        from matplotlib.widgets import Button, TextBox
+        from matplotlib.widgets import Button, Slider, TextBox
     except Exception as exc:
         raise RuntimeError(f"Matplotlib editor widgets are unavailable: {exc}") from exc
 
@@ -1053,20 +1055,45 @@ def show_qr_rod_peak_marker_popup(
     if not groups:
         return edited, False
 
+    region_controls_enabled = isinstance(region_state, dict)
+    region_control_state = region_state if isinstance(region_state, dict) else {}
+    if region_controls_enabled:
+        current_delta_qr = max(1.0e-9, as_float(region_control_state.get("delta_qr"), 1.0e-3))
+        current_l_min = as_float(region_control_state.get("l_min"), 0.0)
+        current_l_max = as_float(
+            region_control_state.get("l_max"), max(current_l_min + 1.0, 8.0)
+        )
+        if not np.isfinite(current_l_min):
+            current_l_min = 0.0
+        if not np.isfinite(current_l_max) or current_l_max <= current_l_min:
+            current_l_max = max(current_l_min + 1.0, 8.0)
+        region_control_state["delta_qr"] = float(current_delta_qr)
+        region_control_state["l_min"] = float(current_l_min)
+        region_control_state["l_max"] = float(current_l_max)
+        region_control_state["rod_profile_table"] = profiles.copy()
+
     cols = min(3, max(1, len(groups)))
     rows = int(math.ceil(len(groups) / cols))
+    control_extra_height = 1.15 if region_controls_enabled else 0.6
     fig, axes = plt.subplots(
         rows,
         cols,
         squeeze=False,
-        figsize=(4.2 * cols, 2.7 * rows + 0.6),
+        figsize=(4.2 * cols, 2.7 * rows + control_extra_height),
         num="Qr rod peak marker editor",
     )
     try:
         fig.canvas.manager.set_window_title("Qr rod peak marker editor")
     except Exception:
         pass
-    fig.subplots_adjust(left=0.07, right=0.98, top=0.92, bottom=0.18, hspace=0.55, wspace=0.30)
+    fig.subplots_adjust(
+        left=0.07,
+        right=0.98,
+        top=0.92,
+        bottom=0.26 if region_controls_enabled else 0.18,
+        hspace=0.55,
+        wspace=0.30,
+    )
 
     flat_axes = list(axes.ravel())
     axes_by_group = dict(zip(groups, flat_axes))
@@ -1080,6 +1107,38 @@ def show_qr_rod_peak_marker_popup(
     edit_file_state: dict[str, object] = {
         "path": "" if edit_path is None else str(edit_path).strip()
     }
+
+    def current_l_bounds() -> tuple[float, float] | None:
+        if not region_controls_enabled:
+            return None
+        l_min_value = as_float(region_control_state.get("l_min"), 0.0)
+        l_max_value = as_float(region_control_state.get("l_max"), l_min_value + 1.0)
+        if not np.isfinite(l_min_value):
+            l_min_value = 0.0
+        if not np.isfinite(l_max_value) or l_max_value <= l_min_value:
+            l_max_value = l_min_value + 1.0
+        return tuple(sorted((float(l_min_value), float(l_max_value))))
+
+    def refresh_region_profile_table() -> None:
+        nonlocal profiles
+        if not region_controls_enabled or not callable(profile_update_callback):
+            return
+        l_bounds = current_l_bounds()
+        if l_bounds is None:
+            return
+        delta_qr_value = max(1.0e-9, as_float(region_control_state.get("delta_qr"), 1.0e-3))
+        l_min_value, l_max_value = l_bounds
+        try:
+            updated = profile_update_callback(delta_qr_value, l_min_value, l_max_value)
+        except Exception as exc:
+            region_control_state["profile_update_error"] = str(exc)
+            return
+        updated_table = pd.DataFrame(updated).copy()
+        if updated_table.empty or not {"m", "branch", "qz_center"}.issubset(updated_table):
+            return
+        profiles = updated_table
+        region_control_state["rod_profile_table"] = profiles.copy()
+        region_control_state.pop("profile_update_error", None)
 
     def group_marker_rows(m_value: int, branch_value: str) -> pd.DataFrame:
         if edited.empty or not {"m", "branch", "qz_marker"}.issubset(edited):
@@ -1241,6 +1300,7 @@ def show_qr_rod_peak_marker_popup(
     def redraw() -> None:
         selected_group = selected.get("group")
         selected_index = selected.get("index")
+        l_bounds = current_l_bounds()
         for group, ax in axes_by_group.items():
             m_value, branch_value = group
             ax.clear()
@@ -1248,6 +1308,9 @@ def show_qr_rod_peak_marker_popup(
             x_l = qz_to_editor_l(m_value, branch_value, x_qz)
             y_plot = positive_log_plot_values(y)
             finite_profile = np.isfinite(x_l) & np.isfinite(y)
+            if l_bounds is not None:
+                l_lo, l_hi = l_bounds
+                finite_profile = finite_profile & (x_l >= float(l_lo)) & (x_l <= float(l_hi))
             if np.any(finite_profile):
                 order = np.argsort(x_l[finite_profile])
                 ax.plot(
@@ -1262,6 +1325,9 @@ def show_qr_rod_peak_marker_popup(
             y_markers = marker_y_values(markers, x_qz, y)
             y_markers_plot = positive_log_plot_values(y_markers)
             finite = np.isfinite(marker_l) & np.isfinite(y_markers)
+            if l_bounds is not None:
+                l_lo, l_hi = l_bounds
+                finite = finite & (marker_l >= float(l_lo)) & (marker_l <= float(l_hi))
             if np.any(finite):
                 colors = ["white"] * int(np.count_nonzero(finite))
                 if selected_group == group and selected_index is not None:
@@ -1302,9 +1368,37 @@ def show_qr_rod_peak_marker_popup(
             ax.set_xlabel("L", fontsize=8)
             ax.set_ylabel("Intensity (log)", fontsize=8)
             apply_positive_log_y_axis(ax, y, y_markers)
+            if l_bounds is not None:
+                ax.set_xlim(*l_bounds)
             ax.xaxis.set_major_locator(mpl.ticker.MaxNLocator(integer=True))
             ax.tick_params(labelsize=7)
         fig.canvas.draw_idle()
+
+    def refresh_region_controls() -> None:
+        refresh_region_profile_table()
+        redraw()
+
+    def set_region_delta_qr(value: object) -> None:
+        if not region_controls_enabled:
+            return
+        region_control_state["delta_qr"] = max(1.0e-9, as_float(value, 1.0e-3))
+        refresh_region_controls()
+
+    def set_region_l_min(text: object) -> None:
+        if not region_controls_enabled:
+            return
+        value = as_float(text, region_control_state.get("l_min", 0.0))
+        if np.isfinite(value):
+            region_control_state["l_min"] = float(value)
+        refresh_region_controls()
+
+    def set_region_l_max(text: object) -> None:
+        if not region_controls_enabled:
+            return
+        value = as_float(text, region_control_state.get("l_max", 8.0))
+        if np.isfinite(value):
+            region_control_state["l_max"] = float(value)
+        refresh_region_controls()
 
     def select_nearest(group: tuple[int, str], x_value: float) -> bool:
         markers = group_markers(group[0], group[1])
@@ -1471,6 +1565,24 @@ def show_qr_rod_peak_marker_popup(
         result["accepted"] = False
         plt.close(fig)
 
+    region_widgets: list[object] = []
+    if region_controls_enabled:
+        delta_qr_ax = fig.add_axes([0.08, 0.105, 0.30, 0.045])
+        l_min_ax = fig.add_axes([0.46, 0.105, 0.10, 0.045])
+        l_max_ax = fig.add_axes([0.62, 0.105, 0.10, 0.045])
+        delta_qr_value = max(1.0e-9, as_float(region_control_state.get("delta_qr"), 1.0e-3))
+        delta_qr_slider = Slider(delta_qr_ax, "Delta Qr (+/- A^-1)", 1.0e-9, max(
+            delta_qr_value * 4.0, delta_qr_value + 1.0e-6
+        ), valinit=delta_qr_value)
+        l_min_initial = f"{as_float(region_control_state.get('l_min'), 0.0):.6g}"
+        l_max_initial = f"{as_float(region_control_state.get('l_max'), 8.0):.6g}"
+        l_min_box = TextBox(l_min_ax, "L Min", initial=l_min_initial)
+        l_max_box = TextBox(l_max_ax, "L Max", initial=l_max_initial)
+        delta_qr_slider.on_changed(set_region_delta_qr)
+        l_min_box.on_submit(set_region_l_min)
+        l_max_box.on_submit(set_region_l_max)
+        region_widgets.extend([delta_qr_slider, l_min_box, l_max_box])
+
     button_axes = [
         fig.add_axes([0.46, 0.035, 0.085, 0.05]),
         fig.add_axes([0.55, 0.035, 0.085, 0.05]),
@@ -1493,7 +1605,7 @@ def show_qr_rod_peak_marker_popup(
     buttons[2].on_clicked(export_peak_edits)
     buttons[3].on_clicked(cancel)
     buttons[4].on_clicked(accept)
-    fig._ra_sim_qr_rod_peak_edit_widgets = [title_box, *buttons]
+    fig._ra_sim_qr_rod_peak_edit_widgets = [title_box, *region_widgets, *buttons]
     fig.canvas.mpl_connect("button_press_event", on_press)
     fig.canvas.mpl_connect("motion_notify_event", on_motion)
     fig.canvas.mpl_connect("button_release_event", on_release)
@@ -1503,6 +1615,133 @@ def show_qr_rod_peak_marker_popup(
     if not result["accepted"]:
         return original, False
     return edited.reset_index(drop=True), True
+
+
+def edit_qr_rod_region_editor(
+    marker_table: pd.DataFrame,
+    rod_profile_table: pd.DataFrame,
+    *,
+    mode: object = "auto",
+    edit_path: object = None,
+    detector_label_entries: list[dict[str, object]] | None = None,
+    delta_qr: object = None,
+    l_min: object = None,
+    l_max: object = None,
+    profile_update_callback: object | None = None,
+    required_marker_table: pd.DataFrame | None = None,
+    backend_name: object = None,
+    env: dict[str, object] | None = None,
+) -> dict[str, object]:
+    table = pd.DataFrame(marker_table).copy()
+    source_mode = "last_cached"
+    path_text = "" if edit_path is None else str(edit_path).strip()
+    if path_text:
+        try:
+            table = load_qr_rod_peak_edits(path_text)
+            if required_marker_table is not None:
+                table = marker_table_with_specular_l_markers(table, required_marker_table)
+            source_mode = "imported_edits"
+            print(f"loaded Qr-rod peak edits={Path(path_text).expanduser()}")
+        except Exception as exc:
+            print(f"ignored Qr-rod peak edits={Path(path_text).expanduser()}: {exc}")
+
+    current_delta_qr = max(1.0e-9, as_float(delta_qr, qr_rod_delta_qr))
+    current_l_min = as_float(l_min, 0.0)
+    current_l_max = as_float(l_max, SPECULAR_QR_ROD_L_MAX)
+    runtime_mode = qr_rod_peak_edit_runtime_mode(mode, backend_name=backend_name, env=env)
+    if runtime_mode != "popup":
+        print(f"Qr-rod region editor: mode={runtime_mode} source={source_mode}")
+        return {
+            "marker_table": table,
+            "rod_profile_table": pd.DataFrame(rod_profile_table).copy(),
+            "detector_label_entries": [
+                dict(entry)
+                for entry in (detector_label_entries or [])
+                if isinstance(entry, dict)
+            ],
+            "delta_qr": float(current_delta_qr),
+            "l_min": float(current_l_min),
+            "l_max": float(current_l_max),
+            "accepted": False,
+            "source": source_mode,
+        }
+
+    if not np.isfinite(current_l_min):
+        current_l_min = 0.0
+    if not np.isfinite(current_l_max) or current_l_max <= current_l_min:
+        current_l_max = max(current_l_min + 1.0, SPECULAR_QR_ROD_L_MAX)
+    region_control_state = {
+        "delta_qr": float(current_delta_qr),
+        "l_min": float(current_l_min),
+        "l_max": float(current_l_max),
+    }
+    try:
+        edited_markers, accepted = show_qr_rod_peak_marker_popup(
+            table,
+            rod_profile_table,
+            backend_name=backend_name,
+            edit_path=path_text,
+            required_marker_table=required_marker_table,
+            region_state=region_control_state,
+            profile_update_callback=profile_update_callback,
+        )
+    except Exception as exc:
+        if str(mode or "auto").strip().lower() == "popup":
+            raise RuntimeError(f"Qr-rod region editor popup unavailable: {exc}") from exc
+        print(f"skipped Qr-rod region editor popup: {exc}")
+        return {
+            "marker_table": table,
+            "rod_profile_table": pd.DataFrame(rod_profile_table).copy(),
+            "detector_label_entries": [
+                dict(entry)
+                for entry in (detector_label_entries or [])
+                if isinstance(entry, dict)
+            ],
+            "delta_qr": float(current_delta_qr),
+            "l_min": float(current_l_min),
+            "l_max": float(current_l_max),
+            "accepted": False,
+            "source": source_mode,
+        }
+
+    result = {
+        "marker_table": edited_markers if accepted else table,
+        "rod_profile_table": pd.DataFrame(
+            region_control_state.get("rod_profile_table", rod_profile_table)
+        ).copy(),
+        "detector_label_entries": [
+            dict(entry) for entry in (detector_label_entries or []) if isinstance(entry, dict)
+        ],
+        "delta_qr": float(region_control_state.get("delta_qr", current_delta_qr)),
+        "l_min": float(region_control_state.get("l_min", current_l_min)),
+        "l_max": float(region_control_state.get("l_max", current_l_max)),
+        "accepted": bool(accepted),
+        "source": "popup" if accepted else source_mode,
+    }
+    if bool(result.get("accepted", False)) and path_text:
+        try:
+            saved_path = write_qr_rod_peak_edits(path_text, pd.DataFrame(result["marker_table"]))
+            print(f"saved Qr-rod peak edits={saved_path}")
+        except Exception as exc:
+            print(f"failed saving Qr-rod peak edits={Path(path_text).expanduser()}: {exc}")
+    print(
+        "Qr-rod region editor: "
+        f"mode=popup source={result.get('source', source_mode)} "
+        f"accepted={bool(result.get('accepted', False))}"
+    )
+    return result
+
+
+def apply_unified_qr_rod_region_editor_labels(
+    label_entries: list[dict[str, object]],
+    editor_result: object,
+) -> list[dict[str, object]]:
+    if not isinstance(editor_result, dict):
+        return [dict(entry) for entry in label_entries if isinstance(entry, dict)]
+    edited_entries = editor_result.get("detector_label_entries")
+    if not isinstance(edited_entries, list) or not edited_entries:
+        return [dict(entry) for entry in label_entries if isinstance(entry, dict)]
+    return [dict(entry) for entry in edited_entries if isinstance(entry, dict)]
 
 
 def edit_qr_rod_peak_markers(
@@ -7510,6 +7749,7 @@ def profile_from_detector_qr_qz(
     detector_solid_angle: np.ndarray | None,
     detector_two_theta_map: np.ndarray | None,
     theta_initial_deg_used_for_q: float | None = None,
+    delta_qr_override: object = None,
 ) -> pd.DataFrame:
     image = np.asarray(bg["detector_image"], dtype=np.float64)
     model = np.asarray(positive_l_detector_peak_model_for_display(bg), dtype=np.float64)
@@ -7556,7 +7796,7 @@ def profile_from_detector_qr_qz(
         )
 
     qr0 = float(rod["qr"])
-    delta_qr = float(qr_rod_delta_qr)
+    delta_qr = max(1.0e-9, as_float(delta_qr_override, qr_rod_delta_qr))
     qr_lo = max(0.0, qr0 - delta_qr)
     qr_hi = qr0 + delta_qr
     theta_initial_for_q = (
@@ -11309,6 +11549,191 @@ if not qr_rod_pre_editor_cache_hit:
     )
     write_pre_editor_cache(PRE_EDITOR_CACHE_PATH, PRE_EDITOR_CACHE_KEY, pre_editor_cache)
     print(f"saved pre-editor Qr-rod profile cache={PRE_EDITOR_CACHE_PATH}")
+
+
+def qz_edges_from_profile_group(profile_group: pd.DataFrame) -> np.ndarray | None:
+    group = pd.DataFrame(profile_group).copy()
+    if group.empty:
+        return None
+    if {"qz_min", "qz_max"}.issubset(group.columns):
+        group = group.sort_values("qz_min", kind="mergesort")
+        qz_min = pd.to_numeric(group["qz_min"], errors="coerce").to_numpy(dtype=np.float64)
+        qz_max = pd.to_numeric(group["qz_max"], errors="coerce").to_numpy(dtype=np.float64)
+        finite = np.isfinite(qz_min) & np.isfinite(qz_max) & (qz_max > qz_min)
+        if np.count_nonzero(finite) >= 1:
+            qz_min = qz_min[finite]
+            qz_max = qz_max[finite]
+            edges = np.concatenate([qz_min[:1], qz_max])
+            if edges.size >= 2 and np.all(np.isfinite(edges)) and np.all(np.diff(edges) > 0.0):
+                return edges.astype(np.float64, copy=False)
+    if "qz_center" not in group:
+        return None
+    centers = pd.to_numeric(group["qz_center"], errors="coerce").to_numpy(dtype=np.float64)
+    centers = np.unique(np.sort(centers[np.isfinite(centers)]))
+    if centers.size < 2:
+        return None
+    mids = 0.5 * (centers[:-1] + centers[1:])
+    first_width = max(float(mids[0] - centers[0]), 1.0e-9)
+    last_width = max(float(centers[-1] - mids[-1]), 1.0e-9)
+    return np.concatenate(
+        [
+            np.asarray([max(POSITIVE_QZ_MIN, float(centers[0] - first_width))]),
+            mids,
+            np.asarray([float(centers[-1] + last_width)]),
+        ]
+    ).astype(np.float64, copy=False)
+
+
+def rod_profile_table_for_l_window(
+    profile_table: pd.DataFrame,
+    marker_source: pd.DataFrame,
+    l_min: object,
+    l_max: object,
+) -> pd.DataFrame:
+    table = pd.DataFrame(profile_table).copy().reset_index(drop=True)
+    if table.empty or "qz_center" not in table or not {"m", "branch"}.issubset(table.columns):
+        return table
+    l_lo = as_float(l_min, np.nan)
+    l_hi = as_float(l_max, np.nan)
+    if not (np.isfinite(l_lo) and np.isfinite(l_hi)):
+        return table
+    l_lo, l_hi = sorted((float(l_lo), float(l_hi)))
+    if l_hi <= l_lo:
+        return table
+    keep = np.zeros(len(table), dtype=bool)
+    for (m_value, branch_value), sub in table.groupby(["m", "branch"], sort=False):
+        l_values = qz_values_to_l_axis(
+            sub["qz_center"],
+            m_value=int(m_value),
+            branch_value=str(branch_value),
+            marker_source=marker_source,
+        )
+        keep[np.asarray(sub.index, dtype=int)] = (
+            np.isfinite(l_values) & (l_values >= l_lo) & (l_values <= l_hi)
+        )
+    return table.loc[keep].reset_index(drop=True)
+
+
+def rod_profile_l_window_from_table(
+    profile_table: pd.DataFrame,
+    marker_source: pd.DataFrame,
+    *,
+    fallback: tuple[float, float] = (0.0, 8.0),
+) -> tuple[float, float]:
+    table = pd.DataFrame(profile_table).copy()
+    if table.empty or "qz_center" not in table or not {"m", "branch"}.issubset(table.columns):
+        return tuple(float(value) for value in fallback)
+    values: list[np.ndarray] = []
+    for (m_value, branch_value), sub in table.groupby(["m", "branch"], sort=False):
+        values.append(
+            qz_values_to_l_axis(
+                sub["qz_center"],
+                m_value=int(m_value),
+                branch_value=str(branch_value),
+                marker_source=marker_source,
+            )
+        )
+    if not values:
+        return tuple(float(value) for value in fallback)
+    finite = np.concatenate([np.asarray(value, dtype=np.float64).reshape(-1) for value in values])
+    finite = finite[np.isfinite(finite)]
+    if finite.size < 1:
+        return tuple(float(value) for value in fallback)
+    l_min = float(np.nanmin(finite))
+    l_max = float(np.nanmax(finite))
+    if not (np.isfinite(l_min) and np.isfinite(l_max)) or l_max <= l_min:
+        return tuple(float(value) for value in fallback)
+    return l_min, l_max
+
+
+qr_rod_editor_base_profiles = rod_profile_table.copy()
+qr_rod_editor_profile_cache: dict[tuple[float, float, float], pd.DataFrame] = {}
+
+
+def recompute_qr_rod_region_profiles(
+    delta_qr_value: object,
+    l_min_value: object,
+    l_max_value: object,
+) -> pd.DataFrame:
+    delta_qr = max(1.0e-9, as_float(delta_qr_value, qr_rod_delta_qr))
+    l_min_number = as_float(l_min_value, 0.0)
+    l_max_number = as_float(l_max_value, np.nan)
+    cache_key = (
+        round(float(delta_qr), 12),
+        round(float(l_min_number), 9) if np.isfinite(l_min_number) else float("nan"),
+        round(float(l_max_number), 9) if np.isfinite(l_max_number) else float("nan"),
+    )
+    cached = qr_rod_editor_profile_cache.get(cache_key)
+    if cached is not None:
+        return cached.copy()
+
+    branch_lookup = {
+        str(branch_name): (float(phi_min), float(phi_max), str(branch_label))
+        for branch_name, phi_min, phi_max, branch_label in phi_windows
+    }
+    rod_lookup = {int(rod["m"]): dict(rod) for rod in rod_entries}
+    rebuilt_rows: list[pd.DataFrame] = []
+    for (m_value, branch_value), sub in qr_rod_editor_base_profiles.groupby(
+        ["m", "branch"], sort=False
+    ):
+        edges = qz_edges_from_profile_group(sub)
+        if edges is None:
+            continue
+        m_int = int(m_value)
+        branch_text = str(branch_value)
+        if m_int == 0 and branch_text == "qz":
+            rebuilt = profile_from_detector_qr_qz(
+                profile_bg,
+                specular_rod_entry,
+                branch_name="qz",
+                branch_label="m = 0",
+                qz_edges=edges,
+                phi_min=float(specular_phi_min_deg),
+                phi_max=float(specular_phi_max_deg),
+                detector_q_maps=specular_detector_q_maps,
+                detector_phi_map=profile_detector_phi_map,
+                detector_solid_angle=profile_detector_solid_angle,
+                detector_two_theta_map=profile_detector_two_theta_map,
+                theta_initial_deg_used_for_q=specular_detector_theta_initial_deg,
+                delta_qr_override=delta_qr_value,
+            )
+        elif m_int in rod_lookup and branch_text in branch_lookup:
+            phi_min, phi_max, branch_label = branch_lookup[branch_text]
+            rebuilt = profile_from_detector_qr_qz(
+                profile_bg,
+                rod_lookup[m_int],
+                branch_name=branch_text,
+                branch_label=branch_label,
+                qz_edges=edges,
+                phi_min=phi_min,
+                phi_max=phi_max,
+                detector_q_maps=profile_detector_q_maps,
+                detector_phi_map=profile_detector_phi_map,
+                detector_solid_angle=profile_detector_solid_angle,
+                detector_two_theta_map=profile_detector_two_theta_map,
+                delta_qr_override=delta_qr_value,
+            )
+        else:
+            continue
+        if not rebuilt.empty:
+            rebuilt_rows.append(rebuilt)
+
+    if rebuilt_rows:
+        refreshed = pd.concat(rebuilt_rows, ignore_index=True)
+        refreshed = refreshed[
+            np.asarray(refreshed["qz_center"], dtype=np.float64) > POSITIVE_QZ_MIN
+        ].copy()
+    else:
+        refreshed = qr_rod_editor_base_profiles.copy()
+    refreshed = rod_profile_table_for_l_window(
+        refreshed, marker_table, l_min_number, l_max_number
+    )
+    if refreshed.empty:
+        refreshed = qr_rod_editor_base_profiles.copy()
+    qr_rod_editor_profile_cache[cache_key] = refreshed.copy()
+    return refreshed
+
+
 QR_ROD_PROFILE_CACHE_PATH = qr_rod_profile_cache_path(OUT_DIR, STATE_PATH)
 if _truthy_setting(
     "RESET_QR_ROD_PROFILE_CACHE_OVERRIDE", "RA_SIM_RESET_QR_ROD_PROFILE_CACHE", False
@@ -11322,14 +11747,44 @@ qr_rod_peak_edits_path = _setting_text(
 qr_rod_peak_edit_mode = _setting_text(
     "QR_ROD_PEAK_EDIT_MODE_OVERRIDE", "RA_SIM_QR_ROD_PEAK_EDIT_MODE", "auto"
 )
-marker_table, qr_rod_peak_edit_source = edit_qr_rod_peak_markers(
+qr_rod_editor_initial_l_min, qr_rod_editor_initial_l_max = rod_profile_l_window_from_table(
+    rod_profile_table,
+    marker_table,
+    fallback=(0.0, SPECULAR_QR_ROD_L_MAX),
+)
+qr_rod_region_editor_result = edit_qr_rod_region_editor(
     marker_table,
     rod_profile_table,
     mode=qr_rod_peak_edit_mode,
     edit_path=qr_rod_peak_edits_path or None,
+    detector_label_entries=[],
+    delta_qr=qr_rod_delta_qr,
+    l_min=qr_rod_editor_initial_l_min,
+    l_max=qr_rod_editor_initial_l_max,
+    profile_update_callback=recompute_qr_rod_region_profiles,
     required_marker_table=specular_l_marker_table,
     backend_name=mpl.get_backend(),
     env=os.environ,
+)
+marker_table = pd.DataFrame(qr_rod_region_editor_result["marker_table"]).copy()
+qr_rod_peak_edit_source = str(qr_rod_region_editor_result.get("source", "last_cached"))
+qr_rod_delta_qr = max(
+    1.0e-9, as_float(qr_rod_region_editor_result.get("delta_qr"), qr_rod_delta_qr)
+)
+qr_rod_editor_l_min = as_float(
+    qr_rod_region_editor_result.get("l_min"), qr_rod_editor_initial_l_min
+)
+qr_rod_editor_l_max = as_float(
+    qr_rod_region_editor_result.get("l_max"), qr_rod_editor_initial_l_max
+)
+rod_profile_table = pd.DataFrame(
+    qr_rod_region_editor_result.get("rod_profile_table", rod_profile_table)
+).copy()
+rod_profile_table = rod_profile_table_for_l_window(
+    rod_profile_table,
+    marker_table,
+    qr_rod_editor_l_min,
+    qr_rod_editor_l_max,
 )
 qr_rod_peak_edit_key = qr_rod_peak_edit_cache_key(
     None if qr_rod_peak_edit_source == "last_cached" else qr_rod_peak_edits_path or None,
@@ -11338,7 +11793,12 @@ qr_rod_peak_edit_key = qr_rod_peak_edit_cache_key(
     lattice_signature=ACTIVE_LATTICE_CACHE_SIGNATURE,
     q_group_signature=Q_GROUP_ROWS_CACHE_SIGNATURE,
     rod_reference_policy=ROD_REFERENCE_POLICY_SIGNATURE,
-    rod_profile_policy=ROD_PROFILE_BACKGROUND_POLICY_SIGNATURE,
+    rod_profile_policy={
+        **ROD_PROFILE_BACKGROUND_POLICY_SIGNATURE,
+        "editor_delta_qr": float(qr_rod_delta_qr),
+        "editor_l_min": float(qr_rod_editor_l_min),
+        "editor_l_max": float(qr_rod_editor_l_max),
+    },
 )
 if qr_rod_profile_cache_has_final_fit(qr_rod_profile_cache or {}, qr_rod_peak_edit_key):
     rod_profile_table = pd.DataFrame(qr_rod_profile_cache["final_rod_profile_table"]).copy()
@@ -13546,14 +14006,9 @@ ax.set_xticklabels(x_tick_labels)
 ax.set_yticks(y_ticks)
 ax.set_yticklabels(y_tick_labels)
 
-rod_label_entries = edit_detector_region_label_positions(
-    fig,
-    ax,
+rod_label_entries = apply_unified_qr_rod_region_editor_labels(
     rod_label_entries,
-    mode=qr_rod_peak_edit_mode,
-    settings_path=detector_label_settings_path,
-    backend_name=mpl.get_backend(),
-    env=os.environ,
+    qr_rod_region_editor_result,
 )
 draw_detector_region_label_artists(ax, rod_label_entries)
 
