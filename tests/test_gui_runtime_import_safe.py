@@ -27716,6 +27716,88 @@ def test_runtime_session_sync_selected_qr_rod_controls_state_allows_detector_vie
     assert listbox.state_value == "disabled"
 
 
+def test_runtime_session_qr_cylinder_entry_factory_receives_listed_q_groups(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    captured: dict[str, object] = {}
+    listed_rows = [{"key": ("q_group", "primary", 1, 0), "qr": 1.4472}]
+
+    class _Var:
+        def __init__(self, value: object) -> None:
+            self._value = value
+
+        def get(self) -> object:
+            return self._value
+
+    monkeypatch.setattr(runtime_session, "a_var", _Var(5.0), raising=False)
+    monkeypatch.setattr(runtime_session, "av", 4.0, raising=False)
+    monkeypatch.setattr(runtime_session, "av2", 6.0, raising=False)
+    monkeypatch.setattr(runtime_session, "SIM_MILLER1", np.empty((0, 3)), raising=False)
+    monkeypatch.setattr(runtime_session, "SIM_MILLER2", np.empty((0, 3)), raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_listed_geometry_q_group_entries",
+        lambda: listed_rows,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_size", 8, raising=False)
+    monkeypatch.setattr(runtime_session, "SIM_DISPLAY_ROTATE_K", 0, raising=False)
+    monkeypatch.setattr(runtime_session, "center_y_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "center_x_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "corto_detector_var", _Var(1.0), raising=False)
+    monkeypatch.setattr(runtime_session, "gamma_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "Gamma_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "chi_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "psi", 0.0, raising=False)
+    monkeypatch.setattr(runtime_session, "psi_z_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "zs_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "zb_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "pixel_size_m", 1.0, raising=False)
+    monkeypatch.setattr(runtime_session, "lambda_", 1.0, raising=False)
+    monkeypatch.setattr(runtime_session, "n2", 1.0 + 0.0j, raising=False)
+    monkeypatch.setattr(runtime_session, "ax", object(), raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_runtime_state",
+        SimpleNamespace(qr_cylinder_overlay_artists=[], qr_cylinder_overlay_cache={}),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_overlay_actions_view_state",
+        SimpleNamespace(show_qr_cylinder_overlay_var=_Var(False)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_qr_cylinder_caked_projection_context",
+        lambda: None,
+    )
+
+    def _build_workflow(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            active_entries_factory="entries",
+            render_config_factory="config",
+            runtime="runtime",
+            bindings_factory="bindings",
+            refresh="refresh",
+            toggle="toggle",
+        )
+
+    monkeypatch.setattr(
+        runtime_session.gui_runtime_qr_cylinder_overlay,
+        "build_runtime_qr_cylinder_overlay_workflow",
+        _build_workflow,
+    )
+
+    runtime_session._initialize_runtime_controls_block_05()
+
+    active_kwargs = captured["active_entry_factory_kwargs"]
+    assert active_kwargs["geometry_q_group_entries"]() == listed_rows
+
+
 def test_runtime_session_current_qr_cylinder_caked_projection_context_prefers_live_bundle_shape(
     monkeypatch,
 ) -> None:

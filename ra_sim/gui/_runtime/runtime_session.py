@@ -11491,6 +11491,13 @@ def _initialize_runtime_controls_block_05() -> None:
                 "secondary_candidate": (lambda: av2),
                 "primary_miller_all": (lambda: globals().get("SIM_MILLER1")),
                 "secondary_miller_all": (lambda: globals().get("SIM_MILLER2")),
+                "geometry_q_group_entries": (
+                    lambda: (
+                        globals()["_listed_geometry_q_group_entries"]()
+                        if callable(globals().get("_listed_geometry_q_group_entries"))
+                        else []
+                    )
+                ),
             },
             render_config_factory_kwargs={
                 "render_in_caked_space_factory": (lambda: _active_caked_primary_view()),

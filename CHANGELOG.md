@@ -162,6 +162,7 @@
   - Changed Selected-Qr rod integration controls to display L min/max bounds, plot per-rod integrated intensity against L when lattice `c` is available, and show the live fitted geometry values used for the caked mask/profile path while preserving saved Qz bounds.
   - Added a Match-tab `Place Background Qr Set` control for saving background-only Qr reference peaks with local peak-top refinement and `2theta,phi` labels instead of HKL values.
   - Fixed Selected-Qr rod ROI profile caching so nested caked projection signatures no longer crash the GUI callback when enabling the ROI from restored Bi2Te3/Bi2S3-style states.
+  - Fixed restored PbI2-style Qr/Qz geometry rows so they seed Selected-Qr rod ROI options even when live Bragg-Qr simulation rod inventory is empty.
   - Fixed `Pick Beam Center` conversion to use the detector display extent instead of raw pixel-index inversion, with Row following clicked display row and Col mirrored across displayed detector width.
   - Fixed Q-space viewer geometry ownership so detector distance participates in simulation cache identity, Q-space conversion uses the geometry that produced the current image, Q-space-only display skips caking, and displayed Qr centers are finite and positive.
   - Fixed full GUI-state import so legacy manual placements with detector pixels but missing caked `2theta,phi` anchors rebuild those anchors from the exact caked projection before geometry figures or fits consume them.

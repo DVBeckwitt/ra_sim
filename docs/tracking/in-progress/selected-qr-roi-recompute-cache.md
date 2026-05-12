@@ -1,6 +1,6 @@
 # Selected-Qr ROI Recompute Cache
 
-Status: implemented. Cache-crash follow-up fixed and validated on 2026-05-12.
+Status: implemented. Cache-crash and restored-row follow-ups fixed and validated on 2026-05-12.
 
 ## Problem
 
@@ -59,5 +59,50 @@ Validation:
   passed: 39 selected-Qr tests.
 - `python -m pytest tests/test_gui_views.py tests/test_gui_state_io.py -ra`
   passed: 78 GUI view/state tests.
+- `python -m ra_sim.dev check` passed: ruff format/check, ruff lint, fast
+  pytest tier, and mypy.
+
+Shipping handoff:
+
+- CI/automation: no CI pipeline files changed. The existing local quality gate
+  `python -m ra_sim.dev check` covers formatter, linter, fast pytest tier, and
+  mypy for this patch.
+- Deprecation/migration: none. The fix reuses restored Qr/Qz rows and keeps
+  saved-state fields plus selected-rod key format unchanged.
+- Rollback: revert the restored-row wiring in `bragg_qr_manager.py` and the
+  runtime `geometry_q_group_entries` callback in `runtime_session.py`; no data
+  migration, cache migration, or cleanup job is required.
+- Launch status: ready for local GUI use. The actual `PbI2.json` file was not
+  present in the repo or likely local search paths, so validation uses the
+  restored `("q_group", source, m, L)` row shape produced by the existing
+  Qr/Qz manager.
+
+## 2026-05-12 Restored Qr/Qz Row Follow-Up
+
+Bug/error status:
+
+- Fixed: PbI2-style restored GUI states whose Qr rods are present as saved
+  geometry Qr/Qz rows can populate Selected-Qr rod ROI choices even when live
+  Bragg-Qr rod inventory is empty.
+- Root cause: Selected-Qr rod choices were sourced from live Bragg-Qr
+  simulation/Miller inventory only; restored `("q_group", source, m, L)` rows
+  were listed for geometry but did not seed parent `(source, m)` rod options.
+- Change: the active Qr-cylinder entry builder now accepts the existing listed
+  geometry Qr/Qz rows as an optional internal source, collapses L rows by
+  `(source, m)`, and keeps the existing Selected-Qr option key format.
+- Public interfaces: unchanged. No GUI control, saved-state field, CLI flag,
+  config key, artifact schema, dependency, CI pipeline, or migration path was
+  added.
+- Deprecation/migration: none. Existing PbI2, Bi2Te3, and Bi2S3 saved states
+  keep the same state format.
+- Shipping status: ready for local use after focused validation.
+
+Validation:
+
+- `python -m pytest tests/test_gui_bragg_qr_manager.py -ra` passed: 16 tests.
+- `python -m pytest tests/test_gui_runtime_import_safe.py -k selected_qr_rod -ra`
+  passed: 39 selected-Qr tests.
+- `python -m pytest tests/test_gui_state_io.py tests/test_gui_state_restore_helpers.py -ra`
+  passed: 40 saved-state tests.
 - `python -m ra_sim.dev check` passed: ruff format/check, ruff lint, fast
   pytest tier, and mypy.

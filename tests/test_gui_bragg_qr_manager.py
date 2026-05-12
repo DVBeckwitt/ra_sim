@@ -382,6 +382,45 @@ def test_bragg_qr_runtime_value_helpers_build_live_entries_and_overlay_data() ->
     ]
 
 
+def test_active_qr_cylinder_overlay_entries_include_restored_q_group_rows() -> None:
+    simulation_runtime_state = state.SimulationRuntimeState()
+    q_group_rows = [
+        {"key": ("q_group", "primary", 0, 2), "qr": 0.0},
+        {"key": ("q_group", "primary", 1, 0), "qr": 1.4472},
+        {"key": ("q_group", "primary", 1, 1), "qr": 1.4472},
+        {"q_group_key": ("q_group", "primary", 3, 2)},
+    ]
+
+    entries = bragg_qr_manager.build_active_qr_cylinder_overlay_entries(
+        simulation_runtime_state,
+        primary_candidate=lambda: "5.0",
+        primary_fallback=4.0,
+        secondary_candidate=lambda: "6.0",
+        geometry_q_group_entries=q_group_rows,
+    )
+
+    assert entries == [
+        {
+            "key": ("primary", 0),
+            "source": "primary",
+            "m": 0,
+            "qr": 0.0,
+        },
+        {
+            "key": ("primary", 1),
+            "source": "primary",
+            "m": 1,
+            "qr": 1.4472,
+        },
+        {
+            "key": ("primary", 3),
+            "source": "primary",
+            "m": 3,
+            "qr": controllers.qr_value_for_m(3, 5.0),
+        },
+    ]
+
+
 def test_bragg_qr_runtime_binding_builder_reads_live_lattice_values(monkeypatch) -> None:
     simulation_runtime_state = state.SimulationRuntimeState()
     lattice_values = {"primary": "5.0", "secondary": "6.0"}

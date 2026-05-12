@@ -122,6 +122,7 @@ def build_active_qr_cylinder_overlay_entries(
     secondary_candidate: object | None = None,
     primary_miller_all: object = None,
     secondary_miller_all: object = None,
+    geometry_q_group_entries: object = None,
 ) -> list[dict[str, object]]:
     """Return active Bragg-Qr groups used by the analytic Qr-cylinder overlay."""
 
@@ -143,21 +144,65 @@ def build_active_qr_cylinder_overlay_entries(
     secondary_m = _m_values_from_miller_array(secondary_miller_all)
 
     entries: list[dict[str, object]] = []
+    seen_keys: set[tuple[str, int]] = set()
+
+    def _add_entry(
+        source_label: object,
+        m_idx: object,
+        lattice_a: object,
+        *,
+        qr_value: object = np.nan,
+    ) -> None:
+        try:
+            source_norm = gui_controllers.normalize_bragg_qr_source_label(str(source_label))
+            m_int = int(m_idx)
+        except (TypeError, ValueError):
+            return
+        entry_key = (source_norm, m_int)
+        if entry_key in seen_keys:
+            return
+        try:
+            qr_val = float(qr_value)
+        except Exception:
+            qr_val = float("nan")
+        if not np.isfinite(qr_val):
+            qr_val = gui_controllers.qr_value_for_m(m_int, lattice_a)
+        if not np.isfinite(qr_val) or qr_val < 0.0:
+            return
+        entries.append(
+            {
+                "key": entry_key,
+                "source": source_norm,
+                "m": m_int,
+                "qr": float(qr_val),
+            }
+        )
+        seen_keys.add(entry_key)
+
     for source_label, lattice_a, m_values in (
         ("primary", primary_a, primary_m),
         ("secondary", secondary_a, secondary_m),
     ):
         for m_idx in sorted(m_values):
-            qr_val = gui_controllers.qr_value_for_m(int(m_idx), lattice_a)
-            if not np.isfinite(qr_val) or qr_val < 0.0:
+            _add_entry(source_label, m_idx, lattice_a)
+
+    restored_rows = _resolve_runtime_value(geometry_q_group_entries)
+    if isinstance(restored_rows, Sequence) and not isinstance(restored_rows, (str, bytes)):
+        for row in restored_rows:
+            if not isinstance(row, Mapping):
                 continue
-            entries.append(
-                {
-                    "key": (str(source_label), int(m_idx)),
-                    "source": str(source_label),
-                    "m": int(m_idx),
-                    "qr": float(qr_val),
-                }
+            group_key = row.get("key") or row.get("q_group_key")
+            if not isinstance(group_key, (list, tuple)) or len(group_key) < 4:
+                continue
+            if str(group_key[0]) != "q_group":
+                continue
+            source_label = gui_controllers.normalize_bragg_qr_source_label(str(group_key[1]))
+            lattice_a = secondary_a if source_label == "secondary" else primary_a
+            _add_entry(
+                source_label,
+                group_key[2],
+                lattice_a,
+                qr_value=row.get("qr", np.nan),
             )
     return entries
 
@@ -170,16 +215,23 @@ def make_runtime_active_qr_cylinder_overlay_entries_factory(
     secondary_candidate: object | None = None,
     primary_miller_all: object = None,
     secondary_miller_all: object = None,
+    geometry_q_group_entries: object = None,
 ) -> Callable[[], list[dict[str, object]]]:
     """Return a zero-arg factory for the live Qr-cylinder overlay entries."""
 
+    entry_kwargs = {
+        "primary_candidate": primary_candidate,
+        "primary_fallback": primary_fallback,
+        "secondary_candidate": secondary_candidate,
+        "primary_miller_all": primary_miller_all,
+        "secondary_miller_all": secondary_miller_all,
+    }
+    if geometry_q_group_entries is not None:
+        entry_kwargs["geometry_q_group_entries"] = geometry_q_group_entries
+
     return lambda: build_active_qr_cylinder_overlay_entries(
         simulation_runtime_state,
-        primary_candidate=primary_candidate,
-        primary_fallback=primary_fallback,
-        secondary_candidate=secondary_candidate,
-        primary_miller_all=primary_miller_all,
-        secondary_miller_all=secondary_miller_all,
+        **entry_kwargs,
     )
 
 
