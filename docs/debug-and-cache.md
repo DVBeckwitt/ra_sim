@@ -91,7 +91,7 @@ report `backend=process_pool` with multiple PIDs. Use
 `BACKGROUND_FIT_BACKEND=thread` or `BACKGROUND_FIT_BACKEND=serial` to opt out
 of that relaunch for debugging.
 
-Current status as of 2026-05-11:
+Current status as of 2026-05-12:
 
 - pre-editor cache filename:
   `<state-stem>_pre_qr_rod_marker_editor_cache.pkl`
@@ -125,6 +125,12 @@ Current status as of 2026-05-11:
   marker table from the post-editor marker rows so manually moved specular
   markers drive the marker CSV, detector selected-region figure, and
   `hk0_l3_star.png`
+- `all_background_peak_fits.ipynb` has been removed from the active diagnostic
+  path; the maintained executable artifact is the parallel `.py` diagnostic and
+  regression tests now load joint-Qz helpers from that script
+- saved background image products default to raw detector/caked backgrounds
+  through `BACKGROUND_IMAGE_SUBTRACTION_DISABLED_OVERRIDE=1`; fitted peak
+  models remain written separately for diagnostics
 - final-fit cache keys include
   `fit_signature=joint_qz_labeled_marker_fit_specular_theta_i0_l8_v8` so older
   cached joint fits that could drop weak labeled markers, overfill the m=0
@@ -144,9 +150,14 @@ Current status as of 2026-05-11:
   basis as the selected-region display. Marker/L mapping and Qz-baseline
   cancellation checks are recorded in the generated markdown `Plot model
   decisions` table but no longer suppress available m=3 or m=4 overlays.
-- PbI2 Qr-rod profile plots use logarithmic intensity axes on every panel and
-  cap the displayed L range at 3. This is a figure-display policy only; the CSV
-  and fitting artifacts retain the full computed profile rows.
+- PbI2 Qr-rod profile plots use a logarithmic intensity axis only for `HK=0`.
+  Nonzero HK panels use linear intensity and the shared `0.5 <= L <= 3.0`
+  display window. PbI2 `HK=0` uses the material-specific defaults
+  `L_min=1.5` and `theta_i=40°`; the marker editor and detector companion
+  preview use the same HK=0 L bounds.
+- configured-hidden Qr-rod rows such as `HK=7` are omitted from the editor,
+  support diagnostics, and final profile subplots without changing exported
+  profile CSV contents.
 - For PbI2 debugging runs that must show no Qr-rod background subtraction, set
   `RA_SIM_PBI2_DISABLE_BACKGROUND_SUBTRACTION=1`. This forces PbI2 transverse
   sideband subtraction off, records the mode in the pre-editor and final-fit

@@ -22,6 +22,7 @@ QR_ROD_PEAK_EDIT_MODE_OVERRIDE = ""
 DETECTOR_LABEL_SETTINGS_PATH_OVERRIDE = ""
 RESET_PRE_EDITOR_CACHE_OVERRIDE = ""
 PBI2_DISABLE_BACKGROUND_SUBTRACTION_OVERRIDE = ""
+BACKGROUND_IMAGE_SUBTRACTION_DISABLED_OVERRIDE = "1"
 
 # Faster development output. Use 300 / 1 for final vector figures.
 FIGURE_DPI_OVERRIDE = "200"
@@ -124,7 +125,7 @@ PRE_EDITOR_CACHE_SCHEMA = "ra_sim.background_pre_editor_cache.v1"
 PRE_EDITOR_CACHE_SIGNATURE = "pre_qr_rod_marker_editor_inputs_v1"
 PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE = "background_peak_fit_results_v1"
 PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE = "profile_fit_cache_v1"
-PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_specular_theta_i0_l8_v4"
+PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_l_defaults_v5"
 
 
 def _cache_normalize_value(value: object) -> object:
@@ -460,14 +461,36 @@ def qz_l_linear_coeff_from_marker_rows(marker_rows: object) -> tuple[float, floa
     finite = np.isfinite(ref_qz) & np.isfinite(ref_l)
     ref_qz = ref_qz[finite]
     ref_l = ref_l[finite]
+    if ref_qz.size < 1:
+        return 1.0, 0.0
+    order = np.argsort(ref_qz, kind="mergesort")
+    ref_qz = ref_qz[order]
+    ref_l = ref_l[order]
+    unique_qz: list[float] = []
+    unique_l: list[float] = []
+    for qz_value in np.unique(ref_qz):
+        same_qz = np.isclose(ref_qz, float(qz_value), rtol=1.0e-9, atol=1.0e-9)
+        same_l = ref_l[same_qz]
+        if same_l.size == 0:
+            continue
+        if float(np.nanmax(same_l) - np.nanmin(same_l)) > 1.0e-6:
+            return 1.0, 0.0
+        unique_qz.append(float(qz_value))
+        unique_l.append(float(same_l[0]))
+    ref_qz = np.asarray(unique_qz, dtype=np.float64)
+    ref_l = np.asarray(unique_l, dtype=np.float64)
     if ref_qz.size >= 2 and float(np.nanmax(ref_qz)) > float(np.nanmin(ref_qz)):
+        if np.any(np.diff(ref_l) < -1.0e-6) or float(np.nanmax(ref_l)) <= float(
+            np.nanmin(ref_l)
+        ):
+            return 1.0, 0.0
         slope, intercept = np.polyfit(ref_qz, ref_l, 1)
     elif ref_qz.size == 1 and abs(float(ref_qz[0])) > 1.0e-12:
         slope = float(ref_l[0]) / float(ref_qz[0])
         intercept = 0.0
     else:
         slope, intercept = 1.0, 0.0
-    if not (np.isfinite(slope) and np.isfinite(intercept)) or abs(float(slope)) <= 1.0e-12:
+    if not (np.isfinite(slope) and np.isfinite(intercept)) or float(slope) <= 1.0e-12:
         return 1.0, 0.0
     return float(slope), float(intercept)
 
@@ -508,6 +531,24 @@ def qz_bounds_for_l_window(
     if not (np.isfinite(qz_lo) and np.isfinite(qz_hi)) or qz_hi <= qz_lo:
         return None
     return qz_lo, qz_hi
+
+
+def qr_rod_l_bounds_for_group(
+    m_value: int,
+    fallback_bounds: tuple[float, float] | None = None,
+) -> tuple[float, float] | None:
+    if int(m_value) != 0:
+        return fallback_bounds
+    lower = as_float(globals().get("SPECULAR_QR_ROD_L_MIN"), 0.0)
+    upper_default = globals().get("SPECULAR_QR_ROD_L_MAX", 8.0)
+    if bool(globals().get("IS_PBI2_SAMPLE_STEM", False)):
+        upper_default = globals().get("PBI2_ROD_PROFILE_L_AXIS_MAX", upper_default)
+    upper = as_float(upper_default, lower + 1.0)
+    if not np.isfinite(lower):
+        lower = 0.0
+    if not np.isfinite(upper) or upper <= lower:
+        upper = max(lower + 1.0, as_float(globals().get("SPECULAR_QR_ROD_L_MAX"), 8.0))
+    return tuple(sorted((float(lower), float(upper))))
 
 
 def drawable_rod_profile_keys(
@@ -844,15 +885,35 @@ def marker_table_with_specular_l_markers(
     base = base.reindex(columns=columns)
     specular = specular.reindex(columns=columns)
     if duplicate_key is not None:
+        def specular_qz_duplicate_key(row: dict[str, object]) -> float | None:
+            try:
+                is_hk0 = int(row.get("m")) == 0 and str(row.get("branch")) == "qz"
+                qz_value = float(row.get("qz_marker"))
+            except Exception:
+                return None
+            if not is_hk0 or not np.isfinite(qz_value):
+                return None
+            return round(float(qz_value), 9)
+
         seen = set()
         if not base.empty:
             seen.update(tuple(row[col] for col in duplicate_key) for row in base.to_dict("records"))
+        seen_specular_qz: set[float] = set()
+        for row in base.to_dict("records"):
+            qz_key = specular_qz_duplicate_key(row)
+            if qz_key is not None:
+                seen_specular_qz.add(qz_key)
         keep_rows: list[dict[str, object]] = []
         for row in specular.to_dict("records"):
             key = tuple(row[col] for col in duplicate_key)
             if key in seen:
                 continue
+            qz_key = specular_qz_duplicate_key(row)
+            if qz_key is not None and qz_key in seen_specular_qz:
+                continue
             seen.add(key)
+            if qz_key is not None:
+                seen_specular_qz.add(qz_key)
             keep_rows.append(row)
         specular = pd.DataFrame(keep_rows, columns=columns)
     return pd.concat([base, specular], ignore_index=True, sort=False).reset_index(drop=True)
@@ -1047,10 +1108,13 @@ def show_qr_rod_peak_marker_popup(
         return edited, False
 
     groups: list[tuple[int, str]] = []
+    hidden_editor_hk = set(int(value) for value in globals().get("QR_ROD_HIDDEN_PLOT_HK", ()))
     for row in profiles[["m", "branch"]].drop_duplicates().to_dict("records"):
         try:
             group = (int(row["m"]), str(row["branch"]))
         except Exception:
+            continue
+        if group[0] in hidden_editor_hk:
             continue
         if group not in groups:
             groups.append(group)
@@ -1446,16 +1510,17 @@ def show_qr_rod_peak_marker_popup(
     def redraw() -> None:
         selected_group = selected.get("group")
         selected_index = selected.get("index")
-        l_bounds = current_l_bounds()
         for group, ax in axes_by_group.items():
             m_value, branch_value = group
             ax.clear()
             x_qz, y = profile_xy(m_value, branch_value)
             x_l = qz_to_editor_l(m_value, branch_value, x_qz)
-            y_plot = positive_log_plot_values(y)
+            editor_log_y = int(m_value) == 0
+            y_plot = positive_log_plot_values(y) if editor_log_y else y
             finite_profile = np.isfinite(x_l) & np.isfinite(y)
-            if l_bounds is not None:
-                l_lo, l_hi = l_bounds
+            group_l_bounds = qr_rod_l_bounds_for_group(int(m_value), current_l_bounds())
+            if group_l_bounds is not None:
+                l_lo, l_hi = group_l_bounds
                 finite_profile = finite_profile & (x_l >= float(l_lo)) & (x_l <= float(l_hi))
             if np.any(finite_profile):
                 order = np.argsort(x_l[finite_profile])
@@ -1469,10 +1534,10 @@ def show_qr_rod_peak_marker_popup(
             marker_l = qz_to_editor_l(m_value, branch_value, markers)
             marker_rows = group_marker_rows(m_value, branch_value)
             y_markers = marker_y_values(markers, x_qz, y)
-            y_markers_plot = positive_log_plot_values(y_markers)
+            y_markers_plot = positive_log_plot_values(y_markers) if editor_log_y else y_markers
             finite = np.isfinite(marker_l) & np.isfinite(y_markers)
-            if l_bounds is not None:
-                l_lo, l_hi = l_bounds
+            if group_l_bounds is not None:
+                l_lo, l_hi = group_l_bounds
                 finite = finite & (marker_l >= float(l_lo)) & (marker_l <= float(l_hi))
             if np.any(finite):
                 colors = ["white"] * int(np.count_nonzero(finite))
@@ -1512,10 +1577,23 @@ def show_qr_rod_peak_marker_popup(
             title_color = "#d95f02" if selected_group == group else "black"
             ax.set_title(f"HK={m_value} {branch_value}", fontsize=9, color=title_color)
             ax.set_xlabel("L", fontsize=8)
-            ax.set_ylabel("Intensity (log)", fontsize=8)
-            apply_positive_log_y_axis(ax, y, y_markers)
-            if l_bounds is not None:
-                ax.set_xlim(*l_bounds)
+            ax.set_ylabel("Intensity (log)" if editor_log_y else "Intensity", fontsize=8)
+            if editor_log_y:
+                apply_positive_log_y_axis(ax, y, y_markers)
+            else:
+                ax.set_yscale("linear")
+                visible_y = np.concatenate([y[finite_profile], y_markers[finite]])
+                visible_y = visible_y[np.isfinite(visible_y)]
+                if visible_y.size:
+                    y_min = float(np.nanmin(visible_y))
+                    y_max = float(np.nanmax(visible_y))
+                    span = y_max - y_min
+                    if not np.isfinite(span) or span <= 0.0:
+                        span = max(abs(y_max), 1.0)
+                    pad = max(span * 0.08, 1.0e-6)
+                    ax.set_ylim(y_min - pad, y_max + pad)
+            if group_l_bounds is not None:
+                ax.set_xlim(*group_l_bounds)
             ax.xaxis.set_major_locator(mpl.ticker.MaxNLocator(integer=True))
             ax.tick_params(labelsize=7)
         fig.canvas.draw_idle()
@@ -2125,7 +2203,11 @@ PEAK_FIT_BACKGROUND_HUBER_K = 1.5
 PEAK_FIT_MULTISTART_WIDTH_FACTORS = (1.0, 1.8, 2.8)
 PEAK_FIT_MAX_NFEV = 1400
 ROD_PROFILE_QZ_BINS = 96
+NONZERO_QR_ROD_L_MIN = 0.5
+NONZERO_QR_ROD_L_MAX = 3.0
 SPECULAR_QR_ROD_L_MAX = 8.0
+PBI2_SPECULAR_QR_ROD_L_MIN = 1.5
+PBI2_SPECULAR_THETA_INITIAL_DEG = 40.0
 ALLOW_GENERATED_ROD_REFERENCES = _truthy_setting(
     "ALLOW_GENERATED_ROD_REFERENCES_OVERRIDE", "RA_SIM_ALLOW_GENERATED_ROD_REFERENCES", False
 )
@@ -2323,8 +2405,14 @@ print(
 )
 
 # No diffuse/radial/lower-envelope background is subtracted in this notebook.
-# The only subtraction product generated is measured detector-count density minus fitted peak density.
-PEAK_SUBTRACTION_ONLY = True
+# Temporarily keep saved background image products raw; fit models are still
+# generated separately for overlays and diagnostics.
+BACKGROUND_IMAGE_SUBTRACTION_DISABLED = _truthy_setting(
+    "BACKGROUND_IMAGE_SUBTRACTION_DISABLED_OVERRIDE",
+    "RA_SIM_BACKGROUND_IMAGE_SUBTRACTION_DISABLED",
+    True,
+)
+PEAK_SUBTRACTION_ONLY = not bool(BACKGROUND_IMAGE_SUBTRACTION_DISABLED)
 
 
 # PRL-style figure defaults. Matplotlib consumes inches; widths are defined
@@ -3392,7 +3480,8 @@ PBI2_DISABLE_BACKGROUND_SUBTRACTION = IS_PBI2_SAMPLE_STEM and _truthy_setting(
     False,
 )
 QR_ROD_TRANSVERSE_BACKGROUND_ENABLED = (
-    not bool(PBI2_DISABLE_BACKGROUND_SUBTRACTION)
+    not bool(BACKGROUND_IMAGE_SUBTRACTION_DISABLED)
+    and not bool(PBI2_DISABLE_BACKGROUND_SUBTRACTION)
     and (
         IS_PBI2_SAMPLE_STEM
         or _truthy_setting(
@@ -3402,6 +3491,7 @@ QR_ROD_TRANSVERSE_BACKGROUND_ENABLED = (
         )
     )
 )
+QR_ROD_HIDDEN_PLOT_HK = (7,)
 QR_ROD_BG_SIDE_BAND_INNER_SCALE = 1.30
 QR_ROD_BG_SIDE_BAND_OUTER_SCALE = 2.80
 QR_ROD_BG_MIN_SIDE_PIXELS = 8
@@ -3409,8 +3499,12 @@ QR_ROD_BG_PERCENTILE = 50.0
 PBI2_PLOT_PEAK_TO_DATA_CANCEL_RATIO = 4.0
 PBI2_PLOT_BASELINE_TO_PEAK_CANCEL_RATIO = 0.50
 PBI2_ROD_PROFILE_L_AXIS_MAX = 3.0
+SPECULAR_QR_ROD_L_MIN = PBI2_SPECULAR_QR_ROD_L_MIN if IS_PBI2_SAMPLE_STEM else 0.0
 ROD_PROFILE_BACKGROUND_POLICY_SIGNATURE = {
+    "background_image_subtraction_disabled": bool(BACKGROUND_IMAGE_SUBTRACTION_DISABLED),
     "pbi2_disable_background_subtraction": bool(PBI2_DISABLE_BACKGROUND_SUBTRACTION),
+    "pbi2_shared_nonzero_branch_qz_bounds": bool(IS_PBI2_SAMPLE_STEM),
+    "specular_qr_rod_l_min": float(SPECULAR_QR_ROD_L_MIN),
     "qr_rod_transverse_background": bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED),
     "qr_rod_bg_side_band_inner_scale": float(QR_ROD_BG_SIDE_BAND_INNER_SCALE),
     "qr_rod_bg_side_band_outer_scale": float(QR_ROD_BG_SIDE_BAND_OUTER_SCALE),
@@ -4256,7 +4350,10 @@ PRE_EDITOR_CACHE_INPUT_SIGNATURE = {
         "rod_phi_samples": int(rod_phi_samples),
         "rod_qz_shared_linear_baseline": bool(ROD_QZ_SHARED_LINEAR_BASELINE_ENABLED),
         "rod_qz_nonlinear_refinement": bool(ROD_QZ_NONLINEAR_REFINEMENT_ENABLED),
+        "background_image_subtraction_disabled": bool(BACKGROUND_IMAGE_SUBTRACTION_DISABLED),
         "pbi2_disable_background_subtraction": bool(PBI2_DISABLE_BACKGROUND_SUBTRACTION),
+        "specular_qr_rod_l_min": float(SPECULAR_QR_ROD_L_MIN),
+        "pbi2_specular_theta_initial_deg": float(PBI2_SPECULAR_THETA_INITIAL_DEG),
         "qr_rod_transverse_background": bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED),
         "qr_rod_bg_side_band_inner_scale": float(QR_ROD_BG_SIDE_BAND_INNER_SCALE),
         "qr_rod_bg_side_band_outer_scale": float(QR_ROD_BG_SIDE_BAND_OUTER_SCALE),
@@ -4607,8 +4704,12 @@ for prep in background_preps:
         caked_peak_model[np.ix_(item["phi_idx"], item["theta_idx"])] += item["peak_fit"]
 
     detector_peak_model = render_detector_peak_model(theta_map, phi_map, fit_results)
-    caked_peak_subtracted_image = caked_density_image - caked_peak_model
-    detector_peak_subtracted_image = detector_image - detector_peak_model
+    if bool(BACKGROUND_IMAGE_SUBTRACTION_DISABLED):
+        caked_peak_subtracted_image = caked_density_image.copy()
+        detector_peak_subtracted_image = detector_image.copy()
+    else:
+        caked_peak_subtracted_image = caked_density_image - caked_peak_model
+        detector_peak_subtracted_image = detector_image - detector_peak_model
 
     np.save(OUT_DIR / f"background_{bg_idx:02d}_caked_peak_fit_model.npy", caked_peak_model)
     np.save(OUT_DIR / f"background_{bg_idx:02d}_detector_peak_fit_model.npy", detector_peak_model)
@@ -4662,6 +4763,7 @@ for prep in background_preps:
         f"{display_label}: fit={len(fit_results)} fail={len(failures)} "
         f"tth_max={float(prep['tth_max']):.3f} background_subtraction=none "
         f"peak_subtraction_only={bool(PEAK_SUBTRACTION_ONLY)} "
+        f"background_image_subtraction_disabled={bool(BACKGROUND_IMAGE_SUBTRACTION_DISABLED)} "
         f"solid_angle_correction={bool(BACKGROUND_SOLID_ANGLE_CORRECTION)} "
         f"prep_elapsed={float(prep['prep_elapsed_s']):.2f}s global_fit_workers={global_fit_workers} fit_backend={active_fit_backend}"
     )
@@ -6906,6 +7008,40 @@ def qz_bounds_for_phi_window(
     return lo, hi
 
 
+def pbi2_shared_nonzero_branch_qz_bounds(
+    sample_stem: object,
+    m_value: int,
+    branch_bounds: object,
+) -> tuple[float, float] | None:
+    if not sample_uses_pbi2_rod_plot_policy(sample_stem) or int(m_value) == 0:
+        return None
+    bounds: list[tuple[float, float]] = []
+    for item in branch_bounds:
+        if item is None:
+            continue
+        try:
+            qz_bounds = positive_qz_bounds(*item)
+        except Exception:
+            qz_bounds = None
+        if qz_bounds is not None:
+            bounds.append(qz_bounds)
+    if not bounds:
+        return None
+    return float(min(lo for lo, _hi in bounds)), float(max(hi for _lo, hi in bounds))
+
+
+def profile_qz_bounds_for_branch(
+    sample_stem: object,
+    m_value: int,
+    branch_qz_bounds: tuple[float, float] | None,
+    *,
+    shared_qz_bounds: tuple[float, float] | None = None,
+) -> tuple[float, float] | None:
+    if sample_uses_pbi2_rod_plot_policy(sample_stem) and int(m_value) != 0:
+        return shared_qz_bounds if shared_qz_bounds is not None else branch_qz_bounds
+    return branch_qz_bounds
+
+
 def filter_projected_samples_by_branch_sign(
     samples: dict[str, object], branch_sign: int | None
 ) -> dict[str, object]:
@@ -8482,6 +8618,17 @@ def rod_profile_l_axis_limits_for_sample(
     if not np.isfinite(capped_upper):
         return lower, upper
     return lower, max(lower + 1.0e-6, capped_upper)
+
+
+def specular_detector_theta_initial_for_sample(
+    sample_stem: object,
+    tilt_deg: object,
+    *,
+    pbi2_theta_initial_deg: float = 40.0,
+) -> float:
+    if sample_uses_pbi2_rod_plot_policy(sample_stem):
+        return float(pbi2_theta_initial_deg)
+    return 3.0 * float(tilt_deg)
 
 
 try:
@@ -10995,7 +11142,11 @@ profile_detector_q_maps = notebook_detector_qr_qz_maps(
 )
 if profile_detector_q_maps is None:
     raise RuntimeError("detector Qr/Qz maps are required for detector-space Qr rod profiles")
-specular_detector_theta_initial_deg = 3.0 * float(ROD_PROFILE_TILT_DEG)
+specular_detector_theta_initial_deg = specular_detector_theta_initial_for_sample(
+    SAMPLE_STEM,
+    ROD_PROFILE_TILT_DEG,
+    pbi2_theta_initial_deg=float(PBI2_SPECULAR_THETA_INITIAL_DEG),
+)
 specular_detector_q_config = detector_qspace_config_with_theta_initial(
     profile_bg["qr_overlay_config"],
     specular_detector_theta_initial_deg,
@@ -11446,7 +11597,7 @@ specular_all_qz_values = specular_detector_qz_map[
 specular_qz_bounds = qz_bounds_for_l_window(
     specular_all_qz_values,
     specular_l_marker_table,
-    l_min=0.0,
+    l_min=SPECULAR_QR_ROD_L_MIN,
     l_max=SPECULAR_QR_ROD_L_MAX,
     positive_qz_min=POSITIVE_QZ_MIN,
 )
@@ -11491,7 +11642,7 @@ if not qr_rod_pre_editor_cache_hit:
                 ROD_PROFILE_TILT_DEG,
                 0.0,
                 "(0,L)",
-                f"no detector Qr/Qz values in dynamic specular window for L <= {SPECULAR_QR_ROD_L_MAX:g}",
+                f"no detector Qr/Qz values in dynamic specular window for {SPECULAR_QR_ROD_L_MIN:g} <= L <= {SPECULAR_QR_ROD_L_MAX:g}",
             )
         )
 
@@ -11507,6 +11658,7 @@ for rod in [] if qr_rod_pre_editor_cache_hit else rod_entries:
             (ROD_PROFILE_TILT_DEG, float(rod["qr"]), "projected samples unavailable")
         )
         continue
+    branch_payloads: list[dict[str, object]] = []
     for branch_name, phi_min, phi_max, branch_label in phi_windows:
         branch_samples, branch_sign = select_projected_samples_for_rod_branch(
             profile_bg,
@@ -11516,7 +11668,35 @@ for rod in [] if qr_rod_pre_editor_cache_hit else rod_entries:
             phi_min=phi_min,
             phi_max=phi_max,
         )
-        qz_bounds = qz_bounds_for_phi_window(branch_samples, phi_min, phi_max)
+        branch_payloads.append(
+            {
+                "branch_name": branch_name,
+                "phi_min": phi_min,
+                "phi_max": phi_max,
+                "branch_label": branch_label,
+                "branch_samples": branch_samples,
+                "branch_sign": branch_sign,
+                "branch_qz_bounds": qz_bounds_for_phi_window(branch_samples, phi_min, phi_max),
+            }
+        )
+    shared_branch_qz_bounds = pbi2_shared_nonzero_branch_qz_bounds(
+        SAMPLE_STEM,
+        int(rod["m"]),
+        [payload["branch_qz_bounds"] for payload in branch_payloads],
+    )
+    for payload in branch_payloads:
+        branch_name = str(payload["branch_name"])
+        phi_min = float(payload["phi_min"])
+        phi_max = float(payload["phi_max"])
+        branch_label = str(payload["branch_label"])
+        branch_samples = payload["branch_samples"]
+        branch_sign = payload["branch_sign"]
+        qz_bounds = profile_qz_bounds_for_branch(
+            SAMPLE_STEM,
+            int(rod["m"]),
+            payload["branch_qz_bounds"],
+            shared_qz_bounds=shared_branch_qz_bounds,
+        )
         if qz_bounds is None:
             profile_failures.append(
                 (ROD_PROFILE_TILT_DEG, float(rod["qr"]), branch_label, "no projected qz span")
@@ -11828,38 +12008,6 @@ def rod_profile_table_for_l_window(
             np.isfinite(l_values) & (l_values >= l_lo) & (l_values <= l_hi)
         )
     return table.loc[keep].reset_index(drop=True)
-
-
-def rod_profile_l_window_from_table(
-    profile_table: pd.DataFrame,
-    marker_source: pd.DataFrame,
-    *,
-    fallback: tuple[float, float] = (0.0, 8.0),
-) -> tuple[float, float]:
-    table = pd.DataFrame(profile_table).copy()
-    if table.empty or "qz_center" not in table or not {"m", "branch"}.issubset(table.columns):
-        return tuple(float(value) for value in fallback)
-    values: list[np.ndarray] = []
-    for (m_value, branch_value), sub in table.groupby(["m", "branch"], sort=False):
-        values.append(
-            qz_values_to_l_axis(
-                sub["qz_center"],
-                m_value=int(m_value),
-                branch_value=str(branch_value),
-                marker_source=marker_source,
-            )
-        )
-    if not values:
-        return tuple(float(value) for value in fallback)
-    finite = np.concatenate([np.asarray(value, dtype=np.float64).reshape(-1) for value in values])
-    finite = finite[np.isfinite(finite)]
-    if finite.size < 1:
-        return tuple(float(value) for value in fallback)
-    l_min = float(np.nanmin(finite))
-    l_max = float(np.nanmax(finite))
-    if not (np.isfinite(l_min) and np.isfinite(l_max)) or l_max <= l_min:
-        return tuple(float(value) for value in fallback)
-    return l_min, l_max
 
 
 qr_rod_editor_base_profiles = rod_profile_table.copy()
@@ -12230,7 +12378,7 @@ def build_qr_rod_detector_region_preview_figure() -> tuple[object, object] | Non
                     np.nanmax(preview_specular_qz_values),
                     m_value=0,
                     branch_value="qz",
-                    l_bounds=l_bounds,
+                    l_bounds=qr_rod_l_bounds_for_group(0, l_bounds),
                     marker_source=marker_source,
                 )
                 if specular_bounds is not None:
@@ -12298,11 +12446,8 @@ qr_rod_peak_edits_path = _setting_text(
 qr_rod_peak_edit_mode = _setting_text(
     "QR_ROD_PEAK_EDIT_MODE_OVERRIDE", "RA_SIM_QR_ROD_PEAK_EDIT_MODE", "auto"
 )
-qr_rod_editor_initial_l_min, qr_rod_editor_initial_l_max = rod_profile_l_window_from_table(
-    rod_profile_table,
-    marker_table,
-    fallback=(0.0, SPECULAR_QR_ROD_L_MAX),
-)
+qr_rod_editor_initial_l_min = float(NONZERO_QR_ROD_L_MIN)
+qr_rod_editor_initial_l_max = float(NONZERO_QR_ROD_L_MAX)
 qr_rod_detector_region_preview_figures = []
 qr_rod_detector_region_preview_update_callback = None
 if (
@@ -12365,6 +12510,7 @@ qr_rod_peak_edit_key = qr_rod_peak_edit_cache_key(
     rod_reference_policy=ROD_REFERENCE_POLICY_SIGNATURE,
     rod_profile_policy={
         **ROD_PROFILE_BACKGROUND_POLICY_SIGNATURE,
+        "specular_theta_initial_deg": float(specular_detector_theta_initial_deg),
         "editor_delta_qr": float(qr_rod_delta_qr),
         "editor_l_min": float(qr_rod_editor_l_min),
         "editor_l_max": float(qr_rod_editor_l_max),
@@ -12485,8 +12631,14 @@ def shared_rod_profile_l_axis_limits(
     branch_windows: object,
     *,
     min_l: float = 2.0,
+    max_l: float | None = None,
     fallback_span: float = 1.0,
 ) -> tuple[float, float]:
+    lower = float(min_l)
+    if max_l is not None:
+        upper = float(max_l)
+        if np.isfinite(upper):
+            return lower, max(lower + 1.0e-6, upper)
     l_values: list[np.ndarray] = []
     table = pd.DataFrame(profile_table).copy()
     markers = pd.DataFrame(marker_source).copy()
@@ -12516,15 +12668,15 @@ def shared_rod_profile_l_axis_limits(
                 )
             )
     if not l_values:
-        return float(min_l), float(min_l + max(float(fallback_span), 1.0e-6))
+        return lower, float(lower + max(float(fallback_span), 1.0e-6))
     finite = np.concatenate(
         [np.asarray(values, dtype=np.float64).reshape(-1) for values in l_values]
     )
     finite = finite[np.isfinite(finite) & (finite > 0.0)]
     if finite.size == 0:
-        return float(min_l), float(min_l + max(float(fallback_span), 1.0e-6))
-    upper = max(float(np.nanmax(finite)), float(min_l) + max(float(fallback_span), 1.0e-6))
-    return float(min_l), float(upper)
+        return lower, float(lower + max(float(fallback_span), 1.0e-6))
+    upper = max(float(np.nanmax(finite)), lower + max(float(fallback_span), 1.0e-6))
+    return lower, float(upper)
 
 
 def shared_nonzero_rod_profile_y_axis_limits(
@@ -12599,6 +12751,7 @@ def shared_nonzero_rod_profile_y_axis_limits(
 
 
 support_diagnostic_stem = f"{ROD_PROFILE_STEM}_support_diagnostics"
+support_hidden_hk = set(int(value) for value in QR_ROD_HIDDEN_PLOT_HK)
 fig, support_axes = plt.subplots(
     2, 2, figsize=(JOURNAL_FULL_WIDTH_IN, 4.8), constrained_layout=True
 )
@@ -12608,6 +12761,8 @@ for ax, metric, ylabel in zip(
     ("Pixel count", "Acceptance sum", "Raw background sum", "Background density"),
 ):
     for (m_value, branch_value), sub in rod_profile_table.groupby(["m", "branch"]):
+        if int(m_value) in support_hidden_hk:
+            continue
         sub = sub[np.asarray(sub["pixel_count"], dtype=np.float64) > 0].copy()
         if sub.empty or metric not in sub:
             continue
@@ -12656,17 +12811,18 @@ rod_note_lines = [
     "",
     f"The figure uses only the {ROD_PROFILE_TILT_LABEL}° background. Non-specular traces are integrated directly in detector Qr/Qz space.",
     f"Nonzero rods use detector Q maps at `theta_i = {float(ROD_PROFILE_TILT_DEG):.6g}°`.",
-    f"Specular `m = 0` Qr integration uses detector Q maps at `theta_i0 = 3*theta_i = {float(specular_detector_theta_initial_deg):.6g}°` and is limited to `L <= {SPECULAR_QR_ROD_L_MAX:g}`.",
+    f"Specular `m = 0` Qr integration uses detector Q maps at `theta_i = {float(specular_detector_theta_initial_deg):.6g}°` and is limited to `{SPECULAR_QR_ROD_L_MIN:g} <= L <= {SPECULAR_QR_ROD_L_MAX:g}`.",
     "Before integration, each non-specular HK rod center is adjusted from fitted detector peak Qr samples; every Qz bin then uses the adjusted Qr0 +/- delta_Qr, branch, positive Qz, and the 2theta display limit before summing intensity.",
     "The detector-region figure is a detector-space Qr overlay diagnostic: the background is linear detector intensity with robust percentile clipping, translucent ribbons show the active Delta Qr support with dashed boundary strokes, solid curves are projected fitted-geometry rod centerlines, and solid-white m labels start from the default geometry before manual adjustment; the intensity scale is saved as a separate file.",
     "The plotted traces are acceptance-normalized detector-count densities unless BACKGROUND_SOLID_ANGLE_CORRECTION is enabled. Raw summed columns are retained for audit only.",
     f"Solid-angle correction enabled: `{bool(BACKGROUND_SOLID_ANGLE_CORRECTION)}`.",
+    f"Background image subtraction disabled: `{bool(BACKGROUND_IMAGE_SUBTRACTION_DISABLED)}`. When enabled, saved `peak_subtracted` image products are raw background images; fitted peak models remain saved separately.",
     f"Qr-sideband transverse background subtraction enabled: `{bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED)}`. When enabled, `background_density_raw` is the central rod-band density, `qr_sideband_background_density` is the same-Qz off-rod estimate, and `background_density` is their difference.",
     f"PbI2 no-background debug mode: `{bool(PBI2_DISABLE_BACKGROUND_SUBTRACTION)}`. When enabled, PbI2 Qr-rod transverse sideband subtraction is forced off and raw `background_density` is plotted against full `joint_fit_density`.",
     "When caked sum fields are available, density uses sum_signal / sum_normalization. Otherwise it falls back to acceptance weights, then pixel_count.",
     "For nonzero HK rods outside the PbI2 Qr-sideband plot policy, plotted `Data` is `background_density - joint_linear_baseline_density` unless Qr-sideband subtraction is enabled; with sideband subtraction, plotted `Data` is sideband-corrected `background_density`.",
     "For PbI2 nonzero rods with Qr-sideband subtraction, plotted `Data` is raw central `background_density_raw` and the dashed `Fit` is `joint_fit_density + qr_sideband_background_density`. Marker/L mapping and Qz-baseline cancellation checks are reported as diagnostics instead of suppressing available overlays.",
-    f"PbI2 Qr-rod profile plots use log-scaled intensity only for `HK=0`; nonzero HK panels use linear intensity and cap the displayed L axis at `{PBI2_ROD_PROFILE_L_AXIS_MAX:g}`.",
+    f"Qr-rod profile plots use log-scaled intensity only for `HK=0`; nonzero HK panels use linear intensity and display `{NONZERO_QR_ROD_L_MIN:g} <= L <= {NONZERO_QR_ROD_L_MAX:g}`.",
     "For non-PbI2 nonzero rods, the plotted dashed `Simulation` remains peak-only `joint_peak_density`.",
     "For m=0 only, plotted `Data` is raw `background_density` and plotted `Simulation` is `joint_peak_density + joint_linear_baseline_density`.",
     "The CSV includes `joint_peak_density`, `joint_linear_baseline_density`, and `joint_fit_density = joint_peak_density + joint_linear_baseline_density`.",
@@ -12675,6 +12831,7 @@ rod_note_lines = [
     "Subplot labels show `m = H^2 + H*K + K^2`; marker tick labels show compressed (HK,L) values for the fitted points.",
     "Nonzero-m masks still use detector-space Qr/Qz internally and extend to the projected sign endpoint.",
     "The detector-region figure labels the specular rod as `m = 0`; the displayed support is the same detector Qr/Qz region used for profile extraction.",
+    f"Hidden Qr-rod subplot HK values: `{', '.join(str(int(value)) for value in QR_ROD_HIDDEN_PLOT_HK) or 'none'}`.",
     "",
     "## Rods",
     "",
@@ -12754,16 +12911,29 @@ def plot_tail_component_distributions(
         )
 
 
+hidden_plot_hk = set(int(value) for value in QR_ROD_HIDDEN_PLOT_HK)
 drawable_profile_keys = drawable_rod_profile_keys(rod_profile_table, plot_marker_table)
 detector_plot_rod_entries = detector_complete_branch_rod_entries(rod_entries, region_overlays)
+detector_plot_rod_entries_all = list(detector_plot_rod_entries)
+detector_plot_rod_entries = [
+    rod for rod in detector_plot_rod_entries_all if int(rod["m"]) not in hidden_plot_hk
+]
 plot_rod_entries = [
     rod
     for rod in detector_plot_rod_entries
     if any((int(rod["m"]), branch_name) in drawable_profile_keys for branch_name, *_ in phi_windows)
 ]
-detector_plot_rod_keys = {rod_identity_key(rod) for rod in detector_plot_rod_entries}
+detector_plot_rod_keys_all = {rod_identity_key(rod) for rod in detector_plot_rod_entries_all}
+skipped_hidden_plot_hk = [
+    int(rod["m"]) for rod in detector_plot_rod_entries_all if int(rod["m"]) in hidden_plot_hk
+]
 skipped_incomplete_detector_hk = [
-    int(rod["m"]) for rod in rod_entries if rod_identity_key(rod) not in detector_plot_rod_keys
+    int(rod["m"])
+    for rod in rod_entries
+    if (
+        int(rod["m"]) not in hidden_plot_hk
+        and rod_identity_key(rod) not in detector_plot_rod_keys_all
+    )
 ]
 skipped_empty_plot_hk = [
     int(rod["m"])
@@ -12774,6 +12944,11 @@ skipped_empty_plot_hk = [
 ]
 if (0, "qz") in drawable_profile_keys:
     plot_rod_entries.append(specular_rod_entry)
+if skipped_hidden_plot_hk:
+    print(
+        "skipped configured-hidden Qr-rod final figure rows: "
+        + ", ".join(f"HK={value}" for value in skipped_hidden_plot_hk)
+    )
 if skipped_incomplete_detector_hk:
     print(
         "skipped incomplete detector-support Qr-rod final figure rows: "
@@ -12859,11 +13034,8 @@ rod_profile_l_axis_limits = shared_rod_profile_l_axis_limits(
     plot_marker_table,
     nonzero_plot_rod_entries,
     phi_windows,
-)
-rod_profile_l_axis_limits = rod_profile_l_axis_limits_for_sample(
-    SAMPLE_STEM,
-    rod_profile_l_axis_limits,
-    pbi2_l_max=float(PBI2_ROD_PROFILE_L_AXIS_MAX),
+    min_l=float(NONZERO_QR_ROD_L_MIN),
+    max_l=float(NONZERO_QR_ROD_L_MAX),
 )
 rod_profile_nonzero_y_axis_limits = shared_nonzero_rod_profile_y_axis_limits(
     rod_profile_table,
@@ -12873,7 +13045,7 @@ rod_profile_nonzero_y_axis_limits = shared_nonzero_rod_profile_y_axis_limits(
 )
 rod_profile_hk0_l_axis_limits = rod_profile_l_axis_limits_for_sample(
     SAMPLE_STEM,
-    (0.0, SPECULAR_QR_ROD_L_MAX),
+    (SPECULAR_QR_ROD_L_MIN, SPECULAR_QR_ROD_L_MAX),
     pbi2_l_max=float(PBI2_ROD_PROFILE_L_AXIS_MAX),
 )
 last_nonzero_plot_row = max(

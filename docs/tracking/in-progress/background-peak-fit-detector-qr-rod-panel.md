@@ -8,7 +8,8 @@ Last updated: 2026-05-12
 Status: implemented locally, Qr-rod editor startup and L-bound callback crash
 fixed, detector label editing/import/export restored through a responsive Tk
 canvas popup, detector companion preview/deferred Delta Qr validation passing,
-PbI2 nonzero branch L-axis/y-axis display fixed
+PbI2 HK=0/nonzero L defaults aligned across editor/preview/final plots, legacy
+notebook consumers migrated to the maintained `.py` diagnostic
 
 ## Problem
 
@@ -161,6 +162,19 @@ to make the Qr rod detector and integration figures source-consistent:
   `RA_SIM_PBI2_DISABLE_BACKGROUND_SUBTRACTION=1`. It forces transverse sideband
   subtraction off for PbI2 rods, records the mode in cache signatures, and plots
   raw `background_density` against full `joint_fit_density`.
+- Background image subtraction is temporarily disabled by default for saved
+  background images. The generated `peak_subtracted` detector/caked images stay
+  raw while fitted peak models remain saved separately for inspection.
+- PbI2 `HK=0` now uses `L_min=1.5` and `theta_i=40°`; nonzero HK rods use the
+  shared `0.5 <= L <= 3.0` display window and linear y axes. The Qr-rod editor,
+  detector companion preview, and final profile figure use the same HK-specific
+  L-bound helper, so the preview no longer shows the specular band with nonzero
+  defaults.
+- Configured-hidden rods such as `HK=7` are skipped in the editor/support/final
+  Qr-rod plots without changing the generated profile CSV tables.
+- The legacy `all_background_peak_fits.ipynb` diagnostic artifact is removed
+  from the active path. Regression coverage that still exercised joint-Qz
+  helpers now loads the maintained parallel `.py` script instead.
 - Headless PbI2 debug runs now use the default `auto` Qr-rod marker edit mode,
   which still opens the popup on interactive Matplotlib backends but skips it
   when `RA_SIM_HEADLESS` or CI mode is active.
@@ -574,16 +588,19 @@ Passing checks:
   unrelated dirty formatting in `ra_sim/fitting/optimization.py`.
 - Focused whitespace check passed:
   `git diff --check`
+- 2026-05-12 PbI2/no-subtraction/notebook-migration closeout passed focused
+  Qr-rod regressions, full `tests/test_background_peak_fits_notebook.py`, full
+  `tests/test_geometry_fitting.py`, scoped compile, scoped Ruff, and
+  `git diff --check`; `python -m ra_sim.dev check` also passed with
+  `281 passed`. No release/version bump, CI workflow change, public API change,
+  config schema change, saved-state migration, or artifact schema migration is
+  required. Rollback is a normal git revert of the diagnostic script/test/doc
+  changes.
 
 Known validation limits:
 
-- Full `tests/test_background_peak_fits_notebook.py` was rerun on 2026-05-12
-  after the detector companion-preview slice. It still has four unrelated
-  notebook/script source-token expectation failures, with `133 passed`, `2
-  skipped`, and `4 failed`. The failures are
-  the older missing `ROD_PROFILE_MAX_TWO_THETA_DEG = 60.0` and
-  `"fit_model": "rotated_gaussian_plane"` notebook tokens plus the
-  specular-region and sample-name override script-token expectations.
+- Full `tests/test_background_peak_fits_notebook.py` is passing after the
+  legacy notebook consumer migration.
 - The 2026-05-10 Bi2Se3 weak-marker fix was validated with focused tests using
   embedded real-profile values, not a full real-sample script run.
 - The PbI2 headless diagnostic path has been rerun. The L3 star crop,
