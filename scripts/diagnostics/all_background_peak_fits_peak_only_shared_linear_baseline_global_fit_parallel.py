@@ -11699,8 +11699,19 @@ def qz_edges_from_profile_group(profile_group: pd.DataFrame) -> np.ndarray | Non
 def l_reference_rows(
     *, m_value: int, branch_value: str, marker_source: pd.DataFrame | None = None
 ) -> pd.DataFrame:
-    source = plot_marker_table if marker_source is None else marker_source
-    if source is None or source.empty or "qz_marker" not in source or "l" not in source:
+    source = globals().get("plot_marker_table", pd.DataFrame()) if marker_source is None else marker_source
+    if source is None or source.empty or "qz_marker" not in source:
+        return pd.DataFrame()
+    fit_l_column = (
+        "fit_l"
+        if "fit_l" in source
+        else "l"
+        if "l" in source
+        else "display_l"
+        if "display_l" in source
+        else ""
+    )
+    if not fit_l_column:
         return pd.DataFrame()
     sub = source[
         (np.asarray(source["m"], dtype=int) == int(m_value))
@@ -11709,17 +11720,35 @@ def l_reference_rows(
     if sub.empty:
         return sub
     qz = np.asarray(sub["qz_marker"], dtype=np.float64)
-    fit_l_column = "fit_l" if "fit_l" in sub else "l"
     l_values = np.asarray(sub[fit_l_column], dtype=np.float64)
     finite = np.isfinite(qz) & np.isfinite(l_values)
     sub = sub.loc[finite].copy()
     if sub.empty:
         return sub
+    qz = qz[finite]
+    l_values = l_values[finite]
+    keep_positions: list[int] = []
+    for qz_value in np.unique(qz):
+        same_qz = np.isclose(qz, float(qz_value), rtol=1.0e-9, atol=1.0e-9)
+        same_l = l_values[same_qz]
+        if same_l.size == 0:
+            continue
+        if float(np.nanmax(same_l) - np.nanmin(same_l)) > 1.0e-6:
+            return sub.iloc[0:0].copy()
+        keep_positions.append(int(np.flatnonzero(same_qz)[0]))
+    sub = sub.iloc[keep_positions].copy()
     if "fit_l" not in sub:
-        sub["fit_l"] = np.asarray(sub["l"], dtype=np.float64)
+        sub["fit_l"] = np.asarray(sub[fit_l_column], dtype=np.float64)
     if "display_l" not in sub:
         sub["display_l"] = np.asarray(sub["fit_l"], dtype=np.float64)
     sub = sub.sort_values("qz_marker")
+    ref_qz = np.asarray(sub["qz_marker"], dtype=np.float64)
+    ref_l = np.asarray(sub["fit_l"], dtype=np.float64)
+    if ref_qz.size > 1:
+        if np.nanmax(ref_qz) <= np.nanmin(ref_qz):
+            return sub.iloc[0:0].copy()
+        if np.any(np.diff(ref_l) < -1.0e-6) or np.nanmax(ref_l) <= np.nanmin(ref_l):
+            return sub.iloc[0:0].copy()
     return sub.drop_duplicates(subset=["qz_marker"], keep="first")
 
 
@@ -11731,6 +11760,12 @@ def qz_values_to_l_axis(
         m_value=int(m_value), branch_value=str(branch_value), marker_source=marker_source
     )
     if refs.empty:
+        try:
+            lattice_c = float(globals().get("ACTIVE_LATTICE_C", np.nan))
+        except Exception:
+            lattice_c = float("nan")
+        if np.isfinite(lattice_c) and lattice_c > 0.0:
+            return qz * (lattice_c / (2.0 * np.pi))
         return qz.copy()
     ref_qz = np.asarray(refs["qz_marker"], dtype=np.float64)
     ref_l = np.asarray(refs["fit_l"] if "fit_l" in refs else refs["l"], dtype=np.float64)
@@ -11745,6 +11780,12 @@ def qz_values_to_l_axis(
 def qz_to_l_linear_coeff(*, m_value: int, branch_value: str) -> tuple[float, float]:
     refs = l_reference_rows(m_value=int(m_value), branch_value=str(branch_value))
     if refs.empty:
+        try:
+            lattice_c = float(globals().get("ACTIVE_LATTICE_C", np.nan))
+        except Exception:
+            lattice_c = float("nan")
+        if np.isfinite(lattice_c) and lattice_c > 0.0:
+            return float(lattice_c / (2.0 * np.pi)), 0.0
         return 1.0, 0.0
     ref_qz = np.asarray(refs["qz_marker"], dtype=np.float64)
     ref_l = np.asarray(refs["fit_l"] if "fit_l" in refs else refs["l"], dtype=np.float64)
@@ -12625,7 +12666,7 @@ rod_note_lines = [
     "When caked sum fields are available, density uses sum_signal / sum_normalization. Otherwise it falls back to acceptance weights, then pixel_count.",
     "For nonzero HK rods outside the PbI2 Qr-sideband plot policy, plotted `Data` is `background_density - joint_linear_baseline_density` unless Qr-sideband subtraction is enabled; with sideband subtraction, plotted `Data` is sideband-corrected `background_density`.",
     "For PbI2 nonzero rods with Qr-sideband subtraction, plotted `Data` is raw central `background_density_raw` and the dashed `Fit` is `joint_fit_density + qr_sideband_background_density`. Marker/L mapping and Qz-baseline cancellation checks are reported as diagnostics instead of suppressing available overlays.",
-    f"PbI2 Qr-rod profile plots use log-scaled intensity on all panels and cap the displayed L axis at `{PBI2_ROD_PROFILE_L_AXIS_MAX:g}`.",
+    f"PbI2 Qr-rod profile plots use log-scaled intensity only for `HK=0`; nonzero HK panels use linear intensity and cap the displayed L axis at `{PBI2_ROD_PROFILE_L_AXIS_MAX:g}`.",
     "For non-PbI2 nonzero rods, the plotted dashed `Simulation` remains peak-only `joint_peak_density`.",
     "For m=0 only, plotted `Data` is raw `background_density` and plotted `Simulation` is `joint_peak_density + joint_linear_baseline_density`.",
     "The CSV includes `joint_peak_density`, `joint_linear_baseline_density`, and `joint_fit_density = joint_peak_density + joint_linear_baseline_density`.",
@@ -12956,9 +12997,7 @@ for row, rod in enumerate(plot_rod_entries):
         ax = fig.add_subplot(nonzero_profile_grid[nonzero_profile_row, col])
         axes[row, col] = ax
         ax.set_xlim(*rod_profile_l_axis_limits)
-        if not pbi2_rod_profile_figure:
-            ax.set_ylim(*rod_profile_nonzero_y_axis_limits)
-        nonzero_log_y_series: list[np.ndarray] = []
+        ax.set_ylim(*rod_profile_nonzero_y_axis_limits)
         sub = rod_profile_table[
             (rod_profile_table["m"] == int(rod["m"]))
             & (rod_profile_table["branch"] == branch_name)
@@ -12992,12 +13031,7 @@ for row, rod in enumerate(plot_rod_entries):
             x = x[order]
             data_norm = data_norm[order]
             simulation_norm = simulation_norm[order]
-            visible = (x >= rod_profile_l_axis_limits[0]) & (x <= rod_profile_l_axis_limits[1])
-            data_plot = (
-                positive_log_plot_values(data_norm) if pbi2_rod_profile_figure else data_norm
-            )
-            if pbi2_rod_profile_figure:
-                nonzero_log_y_series.append(data_norm[visible])
+            data_plot = data_norm
             ax.plot(
                 x,
                 data_plot,
@@ -13008,13 +13042,7 @@ for row, rod in enumerate(plot_rod_entries):
                 zorder=4,
             )
             if plot_model:
-                simulation_plot = (
-                    positive_log_plot_values(simulation_norm)
-                    if pbi2_rod_profile_figure
-                    else simulation_norm
-                )
-                if pbi2_rod_profile_figure:
-                    nonzero_log_y_series.append(simulation_norm[visible])
+                simulation_plot = simulation_norm
                 ax.plot(
                     x,
                     simulation_plot,
@@ -13025,10 +13053,7 @@ for row, rod in enumerate(plot_rod_entries):
                     label=str(plot_decision.get("label", "Fit")),
                     zorder=5,
                 )
-        if pbi2_rod_profile_figure:
-            apply_positive_log_y_axis(ax, *nonzero_log_y_series)
-        else:
-            ax.axhline(0.0, color="0.80", linewidth=0.45)
+        ax.axhline(0.0, color="0.80", linewidth=0.45)
         ax.grid(True, color=JOURNAL_GRID_COLOR, linewidth=0.45)
         ax.text(
             0.5,

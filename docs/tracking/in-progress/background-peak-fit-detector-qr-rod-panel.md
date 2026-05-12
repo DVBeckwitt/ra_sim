@@ -152,8 +152,10 @@ to make the Qr rod detector and integration figures source-consistent:
   overlays plot `joint_fit_density + qr_sideband_background_density`.
   Marker/L mapping and Qz-baseline cancellation checks remain diagnostics in
   the markdown table instead of suppressing m=3 or m=4 overlays.
-- PbI2 Qr-rod profile panels are displayed on log-scaled intensity axes and
-  capped at `L=3`, without trimming the exported CSV/profile rows.
+- PbI2 Qr-rod profile panels are capped at `L=3`, without trimming the
+  exported CSV/profile rows. Only `HK=0` remains log-scaled; nonzero HK panels
+  use the shared linear intensity axis so signed sideband-corrected values stay
+  visible.
 - PbI2 no-background debug mode is available through
   `RA_SIM_PBI2_DISABLE_BACKGROUND_SUBTRACTION=1`. It forces transverse sideband
   subtraction off for PbI2 rods, records the mode in cache signatures, and plots
@@ -320,6 +322,11 @@ Feature status:
   `.py`. The generated markdown includes a `Plot model decisions` table with
   the plotted data source, fit source, added-background source, and diagnostic
   flags per branch.
+- PbI2 nonzero-branch L-axis display now rejects missing, conflicting, or
+  non-monotonic marker-derived `qz -> L` mappings and falls back to the active
+  lattice `c` spacing. This fixes the case where detector overlays were in the
+  right locations but same-`m` `+/-` profile panels looked unrelated because one
+  branch used raw Qz or a bad marker fit as the displayed L axis.
 - PbI2 no-background debug mode is implemented for the diagnostic `.py` through
   `PBI2_DISABLE_BACKGROUND_SUBTRACTION_OVERRIDE` or
   `RA_SIM_PBI2_DISABLE_BACKGROUND_SUBTRACTION`. It is diagnostic-only and does
@@ -424,9 +431,10 @@ Passing checks:
   subtraction keeps raw, sideband, and corrected densities available; PbI2
   final plots use raw central profiles as data and add the sideband background
   back to available total `joint_fit_density` overlays; invalid marker/L
-  mappings and Qz-baseline cancellation are retained as diagnostics instead of
-  overlay gates; non-PbI2 model selection is unchanged; and unsupported
-  detector-incomplete rows such as `m=7` stay hidden.
+  mappings fall back to the active lattice for display while Qz-baseline
+  cancellation remains diagnostic-only; non-PbI2 model selection is unchanged;
+  unsupported detector-incomplete rows such as `m=7` stay hidden; nonzero PbI2
+  panels use linear y axes while `HK=0` stays log-scaled.
 - PbI2 no-background debug coverage verifies the environment/local override
   disables transverse sideband subtraction, changes both pre-editor and final
   Qr-rod cache signatures, and makes the plot policy compare raw
@@ -547,6 +555,14 @@ Passing checks:
   `RA_SIM_HEADLESS=1 RA_SIM_QR_ROD_PEAK_EDIT_MODE=skip`; it reached
   `Qr-rod region editor: mode=skip source=last_cached` and completed in the
   guarded runner without constructing the popup-only detector preview.
+- Focused PbI2 L-axis/y-axis regression passed:
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "pbi2 or rod_profile_l_axis or final_profile_plot" -ra`
+  with `11 passed`, plus scoped `compileall` and `ruff` on the touched
+  diagnostic/test files.
+- Read-only PbI2 artifact sanity using the patched helper and active
+  `c=6.78 A` showed the formerly divergent branch display ranges now agree:
+  `m=3 +/-` both span about `L=0.49..2.98`, and `m=4 +/-` both span about
+  `L=0.53..3.0`.
 - Focused whitespace check passed:
   `git diff --check`
 

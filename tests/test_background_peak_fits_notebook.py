@@ -1010,6 +1010,42 @@ def test_parallel_script_pbi2_marker_l_mapping_allows_duplicate_same_l_rows() ->
     assert mapping_is_valid(conflicting, m_value=1, branch_value="-") is False
 
 
+def test_parallel_script_invalid_or_missing_marker_l_mapping_uses_lattice_l_axis() -> None:
+    namespace = _script_functions(
+        "l_reference_rows",
+        "rod_profile_marker_l_mapping_is_valid",
+        "qz_values_to_l_axis",
+    )
+    namespace["ACTIVE_LATTICE_C"] = 10.0
+    qz_values_to_l_axis = namespace["qz_values_to_l_axis"]
+    markers = pd.DataFrame(
+        [
+            {"m": 4, "branch": "-", "qz_marker": 1.0, "fit_l": 1.0},
+            {"m": 4, "branch": "-", "qz_marker": 1.0, "fit_l": 4.0},
+            {"m": 4, "branch": "-", "qz_marker": 2.0, "fit_l": 2.0},
+            {"m": 3, "branch": "-", "qz_marker": 0.4, "fit_l": 3.0},
+            {"m": 3, "branch": "-", "qz_marker": 2.0, "fit_l": 1.0},
+            {"m": 3, "branch": "-", "qz_marker": 3.0, "fit_l": 2.0},
+        ]
+    )
+    qz_values = np.asarray([1.0, 2.0], dtype=np.float64)
+    expected_lattice_l = qz_values * 10.0 / (2.0 * np.pi)
+
+    invalid_branch_l = qz_values_to_l_axis(
+        qz_values, m_value=4, branch_value="-", marker_source=markers
+    )
+    missing_branch_l = qz_values_to_l_axis(
+        qz_values, m_value=4, branch_value="+", marker_source=markers
+    )
+    nonmonotonic_branch_l = qz_values_to_l_axis(
+        qz_values, m_value=3, branch_value="-", marker_source=markers
+    )
+
+    np.testing.assert_allclose(invalid_branch_l, expected_lattice_l)
+    np.testing.assert_allclose(missing_branch_l, expected_lattice_l)
+    np.testing.assert_allclose(nonmonotonic_branch_l, expected_lattice_l)
+
+
 def test_parallel_script_plot_policy_keeps_non_pbi2_existing_model_selection() -> None:
     namespace = _script_functions(
         "_finite_abs_percentile",
@@ -1085,13 +1121,17 @@ def test_parallel_script_pbi2_rod_profile_l_axis_limits_cap_at_three() -> None:
     assert plot_limits("Bi2Se3", (2.0, 3.85), pbi2_l_max=3.0) == (2.0, 3.85)
 
 
-def test_parallel_script_pbi2_final_profile_plots_use_log_y_and_l_cap() -> None:
+def test_parallel_script_pbi2_final_profile_plots_log_only_hk0_and_cap_l() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     figure_source = source[
         source.index(
             "rod_profile_l_axis_limits = shared_rod_profile_l_axis_limits("
         ) : source.index("\nplot_model_labels = sorted(")
     ]
+    hk0_profile_source = figure_source[
+        figure_source.index('if int(rod["m"]) == 0:') : figure_source.index("for col,")
+    ]
+    nonzero_profile_source = figure_source[figure_source.index("for col,") :]
 
     assert "PBI2_ROD_PROFILE_L_AXIS_MAX = 3.0" in source
     assert "rod_profile_l_axis_limits = rod_profile_l_axis_limits_for_sample(" in figure_source
@@ -1099,13 +1139,18 @@ def test_parallel_script_pbi2_final_profile_plots_use_log_y_and_l_cap() -> None:
     assert (
         "pbi2_rod_profile_figure = sample_uses_pbi2_rod_plot_policy(SAMPLE_STEM)" in figure_source
     )
-    assert "positive_log_plot_values(data_norm)" in figure_source
-    assert "apply_positive_log_y_axis(ax, *nonzero_log_y_series)" in figure_source
+    assert "positive_log_plot_values(data_norm)" in hk0_profile_source
+    assert 'ax.set_yscale("log")' in hk0_profile_source
+    assert "positive_log_plot_values(data_norm)" not in nonzero_profile_source
+    assert "apply_positive_log_y_axis(" not in nonzero_profile_source
+    assert "data_plot = data_norm" in nonzero_profile_source
+    assert "simulation_plot = simulation_norm" in nonzero_profile_source
+    assert "ax.set_ylim(*rod_profile_nonzero_y_axis_limits)" in nonzero_profile_source
     assert (
         "if not pbi2_rod_profile_figure:\n            ax.set_ylim(*rod_profile_nonzero_y_axis_limits)"
-        in figure_source
+        not in nonzero_profile_source
     )
-    assert 'else:\n            ax.axhline(0.0, color="0.80", linewidth=0.45)' in figure_source
+    assert 'ax.axhline(0.0, color="0.80", linewidth=0.45)' in nonzero_profile_source
 
 
 def test_parallel_script_dynamic_specular_markers_use_active_lattice_c() -> None:
