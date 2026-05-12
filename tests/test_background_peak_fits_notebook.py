@@ -3873,6 +3873,20 @@ def test_parallel_script_pre_editor_cache_is_checked_before_expensive_stages() -
     assert '"sample_name": SAMPLE_NAME' not in signature_block
 
 
+def test_parallel_script_qz_l_axis_helper_is_defined_before_editor_l_window_setup() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    helper_def = source.index("def qz_values_to_l_axis(")
+    editor_l_window_setup = source.index(
+        "qr_rod_editor_initial_l_min, qr_rod_editor_initial_l_max = rod_profile_l_window_from_table("
+    )
+
+    assert source.count("def qz_values_to_l_axis(") == 1
+    assert helper_def < editor_l_window_setup
+
+
 def test_parallel_script_qr_rod_peak_editor_uses_l_axis() -> None:
     if not PARALLEL_SCRIPT_PATH.exists():
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")

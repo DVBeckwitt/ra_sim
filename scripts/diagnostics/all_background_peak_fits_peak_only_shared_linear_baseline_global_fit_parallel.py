@@ -11519,6 +11519,69 @@ def qz_edges_from_profile_group(profile_group: pd.DataFrame) -> np.ndarray | Non
     ).astype(np.float64, copy=False)
 
 
+def l_reference_rows(
+    *, m_value: int, branch_value: str, marker_source: pd.DataFrame | None = None
+) -> pd.DataFrame:
+    source = plot_marker_table if marker_source is None else marker_source
+    if source is None or source.empty or "qz_marker" not in source or "l" not in source:
+        return pd.DataFrame()
+    sub = source[
+        (np.asarray(source["m"], dtype=int) == int(m_value))
+        & (source["branch"].astype(str) == str(branch_value))
+    ].copy()
+    if sub.empty:
+        return sub
+    qz = np.asarray(sub["qz_marker"], dtype=np.float64)
+    fit_l_column = "fit_l" if "fit_l" in sub else "l"
+    l_values = np.asarray(sub[fit_l_column], dtype=np.float64)
+    finite = np.isfinite(qz) & np.isfinite(l_values)
+    sub = sub.loc[finite].copy()
+    if sub.empty:
+        return sub
+    if "fit_l" not in sub:
+        sub["fit_l"] = np.asarray(sub["l"], dtype=np.float64)
+    if "display_l" not in sub:
+        sub["display_l"] = np.asarray(sub["fit_l"], dtype=np.float64)
+    sub = sub.sort_values("qz_marker")
+    return sub.drop_duplicates(subset=["qz_marker"], keep="first")
+
+
+def qz_values_to_l_axis(
+    qz_values: object, *, m_value: int, branch_value: str, marker_source: pd.DataFrame | None = None
+) -> np.ndarray:
+    qz = np.asarray(qz_values, dtype=np.float64)
+    refs = l_reference_rows(
+        m_value=int(m_value), branch_value=str(branch_value), marker_source=marker_source
+    )
+    if refs.empty:
+        return qz.copy()
+    ref_qz = np.asarray(refs["qz_marker"], dtype=np.float64)
+    ref_l = np.asarray(refs["fit_l"] if "fit_l" in refs else refs["l"], dtype=np.float64)
+    if ref_qz.size >= 2 and np.nanmax(ref_qz) > np.nanmin(ref_qz):
+        slope, intercept = np.polyfit(ref_qz, ref_l, 1)
+        return slope * qz + intercept
+    if ref_qz.size == 1 and np.isfinite(ref_qz[0]) and abs(float(ref_qz[0])) > 1.0e-12:
+        return qz * (float(ref_l[0]) / float(ref_qz[0]))
+    return qz.copy()
+
+
+def qz_to_l_linear_coeff(*, m_value: int, branch_value: str) -> tuple[float, float]:
+    refs = l_reference_rows(m_value=int(m_value), branch_value=str(branch_value))
+    if refs.empty:
+        return 1.0, 0.0
+    ref_qz = np.asarray(refs["qz_marker"], dtype=np.float64)
+    ref_l = np.asarray(refs["fit_l"] if "fit_l" in refs else refs["l"], dtype=np.float64)
+    finite = np.isfinite(ref_qz) & np.isfinite(ref_l)
+    ref_qz = ref_qz[finite]
+    ref_l = ref_l[finite]
+    if ref_qz.size >= 2 and np.nanmax(ref_qz) > np.nanmin(ref_qz):
+        slope, intercept = np.polyfit(ref_qz, ref_l, 1)
+        return float(slope), float(intercept)
+    if ref_qz.size == 1 and abs(float(ref_qz[0])) > 1.0e-12:
+        return float(ref_l[0] / ref_qz[0]), 0.0
+    return 1.0, 0.0
+
+
 def rod_profile_table_for_l_window(
     profile_table: pd.DataFrame,
     marker_source: pd.DataFrame,
@@ -11806,69 +11869,6 @@ print(f"saved={component_csv}")
 plot_marker_table = marker_table.copy()
 if not plot_marker_table.empty and "m" in plot_marker_table:
     plot_marker_table["hk"] = np.asarray(plot_marker_table["m"], dtype=int)
-
-
-def l_reference_rows(
-    *, m_value: int, branch_value: str, marker_source: pd.DataFrame | None = None
-) -> pd.DataFrame:
-    source = plot_marker_table if marker_source is None else marker_source
-    if source is None or source.empty or "qz_marker" not in source or "l" not in source:
-        return pd.DataFrame()
-    sub = source[
-        (np.asarray(source["m"], dtype=int) == int(m_value))
-        & (source["branch"].astype(str) == str(branch_value))
-    ].copy()
-    if sub.empty:
-        return sub
-    qz = np.asarray(sub["qz_marker"], dtype=np.float64)
-    fit_l_column = "fit_l" if "fit_l" in sub else "l"
-    l_values = np.asarray(sub[fit_l_column], dtype=np.float64)
-    finite = np.isfinite(qz) & np.isfinite(l_values)
-    sub = sub.loc[finite].copy()
-    if sub.empty:
-        return sub
-    if "fit_l" not in sub:
-        sub["fit_l"] = np.asarray(sub["l"], dtype=np.float64)
-    if "display_l" not in sub:
-        sub["display_l"] = np.asarray(sub["fit_l"], dtype=np.float64)
-    sub = sub.sort_values("qz_marker")
-    return sub.drop_duplicates(subset=["qz_marker"], keep="first")
-
-
-def qz_values_to_l_axis(
-    qz_values: object, *, m_value: int, branch_value: str, marker_source: pd.DataFrame | None = None
-) -> np.ndarray:
-    qz = np.asarray(qz_values, dtype=np.float64)
-    refs = l_reference_rows(
-        m_value=int(m_value), branch_value=str(branch_value), marker_source=marker_source
-    )
-    if refs.empty:
-        return qz.copy()
-    ref_qz = np.asarray(refs["qz_marker"], dtype=np.float64)
-    ref_l = np.asarray(refs["fit_l"] if "fit_l" in refs else refs["l"], dtype=np.float64)
-    if ref_qz.size >= 2 and np.nanmax(ref_qz) > np.nanmin(ref_qz):
-        slope, intercept = np.polyfit(ref_qz, ref_l, 1)
-        return slope * qz + intercept
-    if ref_qz.size == 1 and np.isfinite(ref_qz[0]) and abs(float(ref_qz[0])) > 1.0e-12:
-        return qz * (float(ref_l[0]) / float(ref_qz[0]))
-    return qz.copy()
-
-
-def qz_to_l_linear_coeff(*, m_value: int, branch_value: str) -> tuple[float, float]:
-    refs = l_reference_rows(m_value=int(m_value), branch_value=str(branch_value))
-    if refs.empty:
-        return 1.0, 0.0
-    ref_qz = np.asarray(refs["qz_marker"], dtype=np.float64)
-    ref_l = np.asarray(refs["fit_l"] if "fit_l" in refs else refs["l"], dtype=np.float64)
-    finite = np.isfinite(ref_qz) & np.isfinite(ref_l)
-    ref_qz = ref_qz[finite]
-    ref_l = ref_l[finite]
-    if ref_qz.size >= 2 and np.nanmax(ref_qz) > np.nanmin(ref_qz):
-        slope, intercept = np.polyfit(ref_qz, ref_l, 1)
-        return float(slope), float(intercept)
-    if ref_qz.size == 1 and abs(float(ref_qz[0])) > 1.0e-12:
-        return float(ref_l[0] / ref_qz[0]), 0.0
-    return 1.0, 0.0
 
 
 def positive_l_qz_bounds(

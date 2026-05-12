@@ -4,8 +4,8 @@ Type: bug/feature
 Owner: -
 Issue: none
 Priority: p1
-Last updated: 2026-05-11
-Status: implemented locally, PbI2 figure regenerated, focused validation passing
+Last updated: 2026-05-12
+Status: implemented locally, Qr-rod editor startup fixed, focused validation passing
 
 ## Problem
 
@@ -174,6 +174,11 @@ Bug/error status:
 - The Qr-rod marker-label helper ordering bug is fixed; profile annotation and
   redraw paths no longer call `rod_marker_annotation_label(...)` before it is
   defined.
+- The Qr-rod L-axis helper ordering bug is fixed in the generated `.py`
+  diagnostic; cached pre-editor reruns now define `qz_values_to_l_axis(...)`
+  before the editor L-window setup calls `rod_profile_l_window_from_table(...)`.
+  This resolves the observed PbI2 `NameError` before the marker editor can
+  open.
 - Existing unrelated non-parallel notebook test failures remain out of scope.
 
 Feature status:
@@ -375,6 +380,12 @@ Passing checks:
 - Focused simplification closeout command passed:
   `python -m pytest tests/test_background_peak_fits_notebook.py -k "unified_qr_rod_region_editor or unified_editor or qr_rod_peak_editor_uses_l_axis or import_export_buttons or qr_rod_peak_editor_shows_hk0_in_log_view or qr_rod_peak_editor_is_wired_before_joint_fit_cache or pre_editor_cache_is_checked_before_expensive_stages" -ra`
   with `11 passed`.
+- Qr-rod editor startup regression passed:
+  `python -m pytest tests/test_background_peak_fits_notebook.py::test_parallel_script_qz_l_axis_helper_is_defined_before_editor_l_window_setup -ra`.
+- Runtime-safe PbI2 diagnostic script execution passed with
+  `RA_SIM_QR_ROD_PEAK_EDIT_MODE=skip`; it reached
+  `Qr-rod region editor: mode=skip source=last_cached` and exited `0`, proving
+  the former `NameError` path is cleared without requiring a blocking popup.
 - Compile closeout passed for the touched diagnostic/test files:
   `python -m compileall -q scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py tests/test_background_peak_fits_notebook.py`.
 - Focused whitespace check passed:
