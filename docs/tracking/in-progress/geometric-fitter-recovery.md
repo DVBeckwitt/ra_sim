@@ -1408,6 +1408,43 @@ Dynamic Qr/Qz acceptance guard review closure, 2026-05-12:
   normal git revert of the acceptance guard, diagnostic-label, and focused test
   changes.
 
+Dynamic angular rejection localization, 2026-05-12:
+
+- The dynamic caked-degree objective now records compact per-row angular
+  residual records independent of verbose diagnostics. The final RMS/max
+  summary is recomputed from those row records and checked against the older
+  array audit, so a future summary mismatch fails closed instead of hiding
+  behind a secondary aggregation path.
+- Multi-background dynamic fits now merge those row records before computing
+  global RMS/max and worst-row summaries. The full row list stays private; the
+  public summary exposes only aggregate fields and the top worst rows.
+- The final point-match summary now probes fitted-variable sensitivity by
+  evaluating the dynamic objective at base, plus, and minus parameter steps.
+  If all fitted variables are insensitive, the result is fail-closed with
+  `dynamic_objective_not_sensitive_to_fit_variables` and recommends threading
+  trial parameters to the projector/source-row path.
+- Worst-row diagnostics now compare each worst locked row with current
+  same-`q_group_key`/`hkl` source-row candidates. This classifies branch/source
+  pairing evidence without remapping automatically, and also labels phi-wrap,
+  dataset-dominance, objective-insensitivity, and summary-mismatch cases.
+- GUI rejection text now includes the top worst caked residual rows, failure
+  class, and recommended next fix while keeping the full details in the log.
+  The log now prints row count, caked RMS/max, sensitivity status, failure
+  classification, and the top 10 rows.
+- Bug/error status: diagnostic localization added for the current coherent
+  `rms=88.3075deg` Bi2Se3 rejection. This patch does not force acceptance and
+  does not change thresholds; it identifies whether the remaining failure is
+  parameter threading, branch/source pairing, phi wrapping, dataset outliers,
+  or a physical/manual-pick mismatch.
+- Feature status: internal diagnostics and GUI rejection text only; no new GUI
+  control, CLI flag, public API, config key, saved-state schema, artifact
+  schema, dependency, CI workflow, deprecation, or migration.
+- Validation status: focused new regression tests pass locally. Full requested
+  validation and the real Bi2Se3 GUI rerun remain the next gate before claiming
+  the underlying fit passes.
+- Shipping status: safe as a diagnostic bug-fix slice. Rollback is a normal git
+  revert of the row-summary, sensitivity, classification, GUI text, and tests.
+
 Do not use `run_geometry_fit_quality_baseline.py` as the first optimizer debug
 tool. Run it only after the ladder identifies a stable parameter set.
 

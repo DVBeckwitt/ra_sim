@@ -36526,6 +36526,42 @@ def test_gui_dynamic_caked_metric_rejects_large_angular_residual() -> None:
     ) in reasons
 
 
+def test_caked_angular_rejection_includes_worst_rows_and_classification() -> None:
+    result = SimpleNamespace(
+        success=True,
+        point_match_summary={
+            "acceptance_metric_space": "caked_deg",
+            "metric_unit": "deg",
+            "final_rms_deg": 88.307519,
+            "final_max_deg": 144.44,
+            "matched_pair_count": 82,
+            "detector_pixel_metric_complete": False,
+            "worst_angular_residual_rows": [
+                {
+                    "dataset_label": "bg0",
+                    "pair_id": "pair-0",
+                    "hkl": [2, 0, 0],
+                    "source_branch_index": 1,
+                    "angular_residual_norm_deg": 144.44,
+                }
+            ],
+            "dynamic_angular_failure_classification": "branch_source_pairing_mismatch",
+            "recommended_next_fix": "repair_locked_branch_identity",
+        },
+    )
+
+    reasons = geometry_fit.build_geometry_fit_rejection_reason_lines(result, rms=88.307519)
+    joined = "\n".join(reasons)
+
+    assert "Caked angular residual" in joined
+    assert "Worst caked residuals" in joined
+    assert "hkl=" in joined
+    assert "branch=" in joined
+    assert "norm=" in joined
+    assert "Failure class:" in joined
+    assert "Recommended next fix:" in joined
+
+
 def test_gui_dynamic_caked_metric_enforces_same_frame_detector_thresholds() -> None:
     result = SimpleNamespace(
         success=True,

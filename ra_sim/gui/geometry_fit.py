@@ -22744,6 +22744,46 @@ def build_geometry_fit_rejection_reason_lines(
                 "Detector-pixel acceptance was not applied because no complete "
                 "same-frame detector-pixel metric was available."
             )
+        if isinstance(point_match_summary, Mapping):
+            worst_rows = [
+                row
+                for row in (point_match_summary.get("worst_angular_residual_rows", ()) or ())
+                if isinstance(row, Mapping)
+            ][:3]
+            if worst_rows:
+                reasons.append("Worst caked residuals:")
+                for rank, row in enumerate(worst_rows, start=1):
+                    bg = str(
+                        row.get(
+                            "dataset_label",
+                            row.get("dataset_index", row.get("background_index", "?")),
+                        )
+                    )
+                    pair_id = str(row.get("pair_id", row.get("manual_pair_id", "?")))
+                    hkl = row.get("hkl", "?")
+                    branch = row.get(
+                        "source_branch_index",
+                        row.get("nearest_same_q_group_hkl_candidate_branch_index", "?"),
+                    )
+                    norm = _geometry_fit_metric_float(
+                        row.get(
+                            "angular_residual_norm_deg",
+                            row.get("locked_branch_residual_norm_deg", np.nan),
+                        )
+                    )
+                    norm_text = f"{float(norm):.2f}" if np.isfinite(norm) else "nan"
+                    reasons.append(
+                        f"{rank}. bg={bg} pair={pair_id} hkl={hkl} "
+                        f"branch={branch} norm={norm_text} deg"
+                    )
+            failure_class = str(
+                point_match_summary.get("dynamic_angular_failure_classification", "") or ""
+            ).strip()
+            if failure_class:
+                reasons.append(f"Failure class: {failure_class}")
+            recommended_fix = str(point_match_summary.get("recommended_next_fix", "") or "").strip()
+            if recommended_fix:
+                reasons.append(f"Recommended next fix: {recommended_fix}")
 
     identifiability_summary = getattr(result, "identifiability_summary", None)
     underconstrained = isinstance(identifiability_summary, Mapping) and bool(

@@ -428,6 +428,362 @@ def _angular_degree_residual_audit_summary(
     return summary
 
 
+def _summarize_dynamic_angular_residual_rows(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    top_n: int = 10,
+) -> Dict[str, object]:
+    normalized_rows: List[Dict[str, object]] = []
+    raw_sq_sum = 0.0
+    raw_sum = 0.0
+    raw_max = float("nan")
+    raw_component_max = float("nan")
+    weighted_sq_sum = 0.0
+    weighted_max = float("nan")
+    weighted_count = 0
+    by_dataset: Dict[tuple[int, str], Dict[str, object]] = {}
+
+    def _row_int(value: object, fallback: int = -1) -> int:
+        try:
+            result = int(value)
+        except Exception:
+            return int(fallback)
+        return int(result)
+
+    for row in rows or ():
+        if not isinstance(row, Mapping):
+            continue
+        delta_two_theta = _safe_float(row.get("delta_two_theta_deg"), float("nan"))
+        delta_phi = _safe_float(
+            row.get("wrapped_delta_phi_deg", row.get("delta_phi_deg")),
+            float("nan"),
+        )
+        if not (np.isfinite(delta_two_theta) and np.isfinite(delta_phi)):
+            continue
+        weighted_delta_two_theta = _safe_float(
+            row.get("weighted_delta_two_theta_deg"),
+            float("nan"),
+        )
+        weighted_delta_phi = _safe_float(row.get("weighted_delta_phi_deg"), float("nan"))
+        weight = _safe_float(row.get("weight"), float("nan"))
+        if not (np.isfinite(weighted_delta_two_theta) and np.isfinite(weighted_delta_phi)):
+            if np.isfinite(weight):
+                weighted_delta_two_theta = float(weight) * float(delta_two_theta)
+                weighted_delta_phi = float(weight) * float(delta_phi)
+        angular_norm = float(math.hypot(delta_two_theta, delta_phi))
+        weighted_norm = (
+            float(math.hypot(weighted_delta_two_theta, weighted_delta_phi))
+            if np.isfinite(weighted_delta_two_theta) and np.isfinite(weighted_delta_phi)
+            else float("nan")
+        )
+        record = dict(row)
+        record["dataset_index"] = _row_int(record.get("dataset_index"))
+        record["dataset_label"] = str(record.get("dataset_label", ""))
+        record["pair_index"] = _row_int(record.get("pair_index"), len(normalized_rows))
+        record["pair_id"] = str(record.get("pair_id") or record.get("manual_pair_id") or "")
+        record["delta_two_theta_deg"] = float(delta_two_theta)
+        record["wrapped_delta_phi_deg"] = float(delta_phi)
+        record["angular_residual_norm_deg"] = float(angular_norm)
+        if np.isfinite(weighted_delta_two_theta):
+            record["weighted_delta_two_theta_deg"] = float(weighted_delta_two_theta)
+        if np.isfinite(weighted_delta_phi):
+            record["weighted_delta_phi_deg"] = float(weighted_delta_phi)
+        if np.isfinite(weighted_norm):
+            record["weighted_angular_residual_norm_deg"] = float(weighted_norm)
+        normalized_rows.append(record)
+
+        raw_sum += float(angular_norm)
+        raw_sq_sum += float(angular_norm) * float(angular_norm)
+        raw_max = (
+            float(angular_norm)
+            if not np.isfinite(raw_max)
+            else float(max(raw_max, float(angular_norm)))
+        )
+        component_max = float(max(abs(delta_two_theta), abs(delta_phi)))
+        raw_component_max = (
+            component_max
+            if not np.isfinite(raw_component_max)
+            else float(max(raw_component_max, component_max))
+        )
+        if np.isfinite(weighted_norm):
+            weighted_count += 1
+            weighted_sq_sum += float(weighted_norm) * float(weighted_norm)
+            weighted_max = (
+                float(weighted_norm)
+                if not np.isfinite(weighted_max)
+                else float(max(weighted_max, float(weighted_norm)))
+            )
+
+        dataset_key = (int(record["dataset_index"]), str(record["dataset_label"]))
+        dataset_summary = by_dataset.setdefault(
+            dataset_key,
+            {
+                "dataset_index": int(record["dataset_index"]),
+                "dataset_label": str(record["dataset_label"]),
+                "_raw_count": 0,
+                "_raw_sum": 0.0,
+                "_raw_sq_sum": 0.0,
+                "_raw_max": float("nan"),
+                "_weighted_count": 0,
+                "_weighted_sq_sum": 0.0,
+                "_weighted_max": float("nan"),
+            },
+        )
+        dataset_summary["_raw_count"] = int(dataset_summary["_raw_count"]) + 1
+        dataset_summary["_raw_sum"] = float(dataset_summary["_raw_sum"]) + float(angular_norm)
+        dataset_summary["_raw_sq_sum"] = float(dataset_summary["_raw_sq_sum"]) + (
+            float(angular_norm) * float(angular_norm)
+        )
+        dataset_raw_max = float(dataset_summary["_raw_max"])
+        dataset_summary["_raw_max"] = (
+            float(angular_norm)
+            if not np.isfinite(dataset_raw_max)
+            else float(max(dataset_raw_max, float(angular_norm)))
+        )
+        if np.isfinite(weighted_norm):
+            dataset_summary["_weighted_count"] = int(dataset_summary["_weighted_count"]) + 1
+            dataset_summary["_weighted_sq_sum"] = float(dataset_summary["_weighted_sq_sum"]) + (
+                float(weighted_norm) * float(weighted_norm)
+            )
+            dataset_weighted_max = float(dataset_summary["_weighted_max"])
+            dataset_summary["_weighted_max"] = (
+                float(weighted_norm)
+                if not np.isfinite(dataset_weighted_max)
+                else float(max(dataset_weighted_max, float(weighted_norm)))
+            )
+
+    raw_count = int(len(normalized_rows))
+    top_limit = max(0, int(top_n))
+    worst_rows = sorted(
+        normalized_rows,
+        key=lambda record: (
+            -float(record.get("angular_residual_norm_deg", float("nan"))),
+            int(record.get("dataset_index", -1)),
+            int(record.get("pair_index", -1)),
+            str(record.get("pair_id", "")),
+        ),
+    )[:top_limit]
+    dataset_rows: List[Dict[str, object]] = []
+    for dataset_key in sorted(by_dataset):
+        dataset_summary = by_dataset[dataset_key]
+        dataset_count = int(dataset_summary["_raw_count"])
+        dataset_weighted_count = int(dataset_summary["_weighted_count"])
+        dataset_rows.append(
+            {
+                "dataset_index": int(dataset_summary["dataset_index"]),
+                "dataset_label": str(dataset_summary["dataset_label"]),
+                "raw_angular_row_count": int(dataset_count),
+                "raw_angular_rms_deg": (
+                    float(math.sqrt(float(dataset_summary["_raw_sq_sum"]) / dataset_count))
+                    if dataset_count
+                    else float("nan")
+                ),
+                "raw_angular_mean_deg": (
+                    float(float(dataset_summary["_raw_sum"]) / dataset_count)
+                    if dataset_count
+                    else float("nan")
+                ),
+                "raw_angular_max_deg": float(dataset_summary["_raw_max"]),
+                "weighted_angular_rms_weighted_deg": (
+                    float(
+                        math.sqrt(
+                            float(dataset_summary["_weighted_sq_sum"]) / dataset_weighted_count
+                        )
+                    )
+                    if dataset_weighted_count
+                    else float("nan")
+                ),
+                "weighted_angular_max_weighted_deg": float(dataset_summary["_weighted_max"]),
+            }
+        )
+    return {
+        "raw_angular_row_count": int(raw_count),
+        "raw_angular_rms_deg": (
+            float(math.sqrt(raw_sq_sum / raw_count)) if raw_count else float("nan")
+        ),
+        "raw_angular_mean_deg": (float(raw_sum / raw_count) if raw_count else float("nan")),
+        "raw_angular_max_deg": float(raw_max),
+        "raw_angular_component_max_abs_deg": float(raw_component_max),
+        "weighted_angular_rms_weighted_deg": (
+            float(math.sqrt(weighted_sq_sum / weighted_count)) if weighted_count else float("nan")
+        ),
+        "weighted_angular_max_weighted_deg": float(weighted_max),
+        "angular_residual_by_dataset": dataset_rows,
+        "worst_angular_residual_rows": worst_rows,
+    }
+
+
+def _annotate_worst_dynamic_angular_rows_with_candidates(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    source_rows_by_dataset: Mapping[int, Sequence[Mapping[str, object]]],
+    top_n: int = 10,
+) -> List[Dict[str, object]]:
+    def _identity_token(value: object) -> str:
+        return repr(_dynamic_reanchor_jsonable(value))
+
+    def _row_caked_pair(row: Mapping[str, object]) -> tuple[float, float] | None:
+        for key in (
+            "sim_visual_caked_deg",
+            "sim_refined_caked_deg",
+            "sim_nominal_caked_deg",
+            "predicted_caked_deg",
+            "observed_caked_deg",
+        ):
+            value = row.get(key)
+            if isinstance(value, (list, tuple, np.ndarray)) and len(value) >= 2:
+                first = _safe_float(value[0], float("nan"))
+                second = _safe_float(value[1], float("nan"))
+                if np.isfinite(first) and np.isfinite(second):
+                    return float(first), float(second)
+        first = _safe_float(row.get("two_theta_deg", row.get("caked_x")), float("nan"))
+        second = _safe_float(row.get("phi_deg", row.get("caked_y")), float("nan"))
+        if np.isfinite(first) and np.isfinite(second):
+            return float(first), float(second)
+        return None
+
+    def _observed_pair(row: Mapping[str, object]) -> tuple[float, float] | None:
+        value = row.get("observed_caked_deg")
+        if isinstance(value, (list, tuple, np.ndarray)) and len(value) >= 2:
+            first = _safe_float(value[0], float("nan"))
+            second = _safe_float(value[1], float("nan"))
+            if np.isfinite(first) and np.isfinite(second):
+                return float(first), float(second)
+        return None
+
+    row_summary = _summarize_dynamic_angular_residual_rows(rows, top_n=top_n)
+    annotated_rows: List[Dict[str, object]] = []
+    for row in row_summary.get("worst_angular_residual_rows", ()) or ():
+        if not isinstance(row, Mapping):
+            continue
+        annotated = dict(row)
+        dataset_index = int(annotated.get("dataset_index", -1))
+        observed = _observed_pair(annotated)
+        q_group_token = _identity_token(annotated.get("q_group_key"))
+        hkl_token = _identity_token(annotated.get("hkl"))
+        locked_norm = _safe_float(
+            annotated.get("angular_residual_norm_deg"),
+            float("nan"),
+        )
+        same_candidates: List[Dict[str, object]] = []
+        nearest_branch_index: object = None
+        nearest_norm = float("nan")
+        if observed is not None:
+            for candidate in source_rows_by_dataset.get(dataset_index, ()) or ():
+                if not isinstance(candidate, Mapping):
+                    continue
+                if _identity_token(candidate.get("q_group_key")) != q_group_token:
+                    continue
+                if _identity_token(candidate.get("hkl")) != hkl_token:
+                    continue
+                candidate_pair = _row_caked_pair(candidate)
+                if candidate_pair is None:
+                    continue
+                delta_two_theta = float(candidate_pair[0] - observed[0])
+                delta_phi = float(_wrap_phi_deg(float(candidate_pair[1]) - float(observed[1])))
+                candidate_norm = float(math.hypot(delta_two_theta, delta_phi))
+                candidate_branch = candidate.get(
+                    "source_branch_index",
+                    candidate.get("physical_branch_slot", candidate.get("source_peak_index")),
+                )
+                same_candidates.append(
+                    {
+                        "branch_index": candidate_branch,
+                        "residual_norm_deg": float(candidate_norm),
+                    }
+                )
+                if not np.isfinite(nearest_norm) or candidate_norm < nearest_norm:
+                    nearest_norm = float(candidate_norm)
+                    nearest_branch_index = candidate_branch
+        unwrapped_phi = _safe_float(annotated.get("delta_phi_deg_unwrapped"), float("nan"))
+        wrapped_phi = _safe_float(annotated.get("wrapped_delta_phi_deg"), float("nan"))
+        annotated["same_q_group_hkl_candidate_count"] = int(len(same_candidates))
+        annotated["nearest_same_q_group_hkl_candidate_branch_index"] = nearest_branch_index
+        annotated["nearest_same_q_group_hkl_candidate_residual_norm_deg"] = float(nearest_norm)
+        annotated["locked_branch_residual_norm_deg"] = float(locked_norm)
+        annotated["branch_swap_would_help"] = bool(
+            np.isfinite(nearest_norm)
+            and np.isfinite(locked_norm)
+            and nearest_norm + 1.0e-9 < locked_norm
+        )
+        annotated["phi_wrap_helped"] = bool(
+            np.isfinite(unwrapped_phi)
+            and np.isfinite(wrapped_phi)
+            and abs(unwrapped_phi) > 90.0
+            and abs(wrapped_phi) <= 10.0
+        )
+        annotated_rows.append(annotated)
+    return annotated_rows
+
+
+def _classify_dynamic_angular_failure(summary: Mapping[str, object]) -> Dict[str, object]:
+    if summary.get("raw_angular_summary_matches_array_audit") is False or str(
+        summary.get("raw_angular_summary_mismatch_reject_reason", "") or ""
+    ):
+        return {
+            "dynamic_angular_failure_classification": "summary_mismatch",
+            "recommended_next_fix": "recompute_summary_from_row_records",
+        }
+    if str(summary.get("objective_param_sensitivity_status", "") or "") == (
+        "all_fit_vars_insensitive"
+    ):
+        return {
+            "dynamic_angular_failure_classification": "objective_param_insensitive",
+            "recommended_next_fix": "thread_trial_params_to_projector",
+        }
+    worst_rows = [
+        row
+        for row in (summary.get("worst_angular_residual_rows", ()) or ())
+        if isinstance(row, Mapping)
+    ]
+    if any(bool(row.get("phi_wrap_helped", False)) for row in worst_rows):
+        return {
+            "dynamic_angular_failure_classification": "phi_wrap_accounting_bug",
+            "recommended_next_fix": "use_wrapped_delta_phi_for_dynamic_summary",
+        }
+    for row in worst_rows:
+        nearest = _safe_float(
+            row.get("nearest_same_q_group_hkl_candidate_residual_norm_deg"),
+            float("nan"),
+        )
+        locked = _safe_float(row.get("locked_branch_residual_norm_deg"), float("nan"))
+        if (
+            bool(row.get("branch_swap_would_help", False))
+            and np.isfinite(nearest)
+            and np.isfinite(locked)
+            and nearest <= 5.0
+            and locked >= 10.0
+        ):
+            return {
+                "dynamic_angular_failure_classification": "branch_source_pairing_mismatch",
+                "recommended_next_fix": "repair_locked_branch_identity",
+            }
+
+    dataset_entries = [
+        entry
+        for entry in (summary.get("angular_residual_by_dataset", ()) or ())
+        if isinstance(entry, Mapping)
+    ]
+    contributions: List[float] = []
+    for entry in dataset_entries:
+        count = int(_safe_float(entry.get("raw_angular_row_count"), 0.0))
+        rms = _safe_float(entry.get("raw_angular_rms_deg"), float("nan"))
+        if count > 0 and np.isfinite(rms):
+            contributions.append(float(count) * float(rms) * float(rms))
+    total = float(sum(contributions))
+    if len(contributions) > 1 and total > 0.0 and max(contributions) / total >= 0.65:
+        return {
+            "dynamic_angular_failure_classification": (
+                "dataset_specific_outlier_or_background_mismatch"
+            ),
+            "recommended_next_fix": "remove_or_repick_manual_outliers",
+        }
+    return {
+        "dynamic_angular_failure_classification": "manual_outliers_or_physical_bad_fit",
+        "recommended_next_fix": "remove_or_repick_manual_outliers",
+    }
+
+
 def _merged_angular_degree_residual_audit_summary(
     summaries: Sequence[Mapping[str, object]],
     diagnostics: Sequence[Mapping[str, object]] = (),
@@ -4933,6 +5289,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
     weighted_delta_phi_deg_values: List[float] = []
     priority_weight_values: List[float] = []
     optimizer_point_residual_values: List[float] = []
+    angular_residual_rows: List[Dict[str, object]] = []
     matched_pair_count = 0
     missing_pairs = 0
     fixed_source_resolved_count = 0
@@ -4983,6 +5340,8 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
     )
     line_match_records: List[Dict[str, object]] = []
     live_cache_records: List[Dict[str, object]] = []
+    candidate_source_rows: List[Dict[str, object]] = []
+    candidate_source_row_keys: Set[str] = set()
     dynamic_reanchor_enabled = bool(
         dataset_ctx.dynamic_reanchor_enabled and callable(dataset_ctx.dynamic_reanchor_callback)
     )
@@ -5009,6 +5368,29 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         text = str(value)
         if text and text not in values:
             values.append(text)
+
+    def _remember_candidate_source_rows(fit_prediction_payload: Mapping[str, object]) -> None:
+        for source_row in fit_prediction_payload.get("_trial_source_rows", ()) or ():
+            if not isinstance(source_row, Mapping):
+                continue
+            row_copy = dict(source_row)
+            row_key = repr(
+                _dynamic_reanchor_jsonable(
+                    (
+                        row_copy.get("q_group_key"),
+                        row_copy.get("hkl"),
+                        row_copy.get("source_branch_index"),
+                        row_copy.get("source_table_index"),
+                        row_copy.get("source_row_index"),
+                        row_copy.get("two_theta_deg", row_copy.get("caked_x")),
+                        row_copy.get("phi_deg", row_copy.get("caked_y")),
+                    )
+                )
+            )
+            if row_key in candidate_source_row_keys:
+                continue
+            candidate_source_row_keys.add(row_key)
+            candidate_source_rows.append(row_copy)
 
     def _mark_lost_pair(
         idx: int,
@@ -6340,6 +6722,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                 )
             continue
 
+        _remember_candidate_source_rows(fit_prediction)
         nominal_caked = fit_prediction.get("sim_nominal_caked_deg", (np.nan, np.nan))
         refined_caked = fit_prediction.get("sim_refined_caked_deg", (np.nan, np.nan))
         if _fixed_manual_qr_pair_requires_shared_resolver(measured_entry):
@@ -6441,6 +6824,46 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         weighted_delta_two_theta_deg_values.append(float(weighted_delta_two_theta))
         weighted_delta_phi_deg_values.append(float(weighted_delta_phi))
         priority_weight_values.append(float(priority_weight))
+        pair_id = str(diag.get("pair_id") or f"{dataset_ctx.dataset_index}:{idx}")
+        angular_residual_rows.append(
+            {
+                "dataset_index": int(dataset_ctx.dataset_index),
+                "dataset_label": str(dataset_ctx.label),
+                "theta_initial_deg": float(theta_value),
+                "pair_index": int(idx),
+                "pair_id": pair_id,
+                "manual_pair_id": pair_id,
+                "q_group_key": _dynamic_reanchor_jsonable(diag.get("q_group_key")),
+                "hkl": _dynamic_reanchor_jsonable(diag.get("hkl")),
+                "source_branch_index": diag.get("source_branch_index"),
+                "source_table_index": diag.get("source_table_index"),
+                "source_row_index": diag.get("source_row_index"),
+                "source_peak_index": diag.get("source_peak_index"),
+                "observed_caked_deg": [float(measured_two_theta), float(measured_phi)],
+                "predicted_caked_deg": [float(sim_two_theta), float(sim_phi)],
+                "delta_two_theta_deg": float(delta_two_theta),
+                "delta_phi_deg_unwrapped": float(sim_phi - measured_phi),
+                "wrapped_delta_phi_deg": float(delta_phi),
+                "angular_residual_norm_deg": float(angular_distance),
+                "weight": float(priority_weight),
+                "weighted_delta_two_theta_deg": float(weighted_delta_two_theta),
+                "weighted_delta_phi_deg": float(weighted_delta_phi),
+                "weighted_angular_residual_norm_deg": float(weighted_angular_distance),
+                "fit_prediction_source": fit_prediction.get("prediction_source"),
+                "resolution_reason": str(sim_reason),
+                "locked_qr_detector_point_source": fit_prediction.get(
+                    "locked_qr_detector_point_source"
+                ),
+                "source_rows_rebuilt_or_reused": fit_prediction.get(
+                    "source_rows_rebuilt_or_reused"
+                ),
+                "objective_cache_mode": fit_prediction.get("objective_cache_mode"),
+                "objective_cache_hit": bool(fit_prediction.get("objective_cache_hit", False)),
+                "objective_cache_reject_reason": fit_prediction.get(
+                    "objective_cache_reject_reason"
+                ),
+            }
+        )
         optimizer_point_residual_values.extend(
             (
                 float(residual_components[idx, 0]),
@@ -6745,6 +7168,8 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         "fit_space_projector_kind": dataset_ctx.fit_space_projector_kind,
         **_prediction_source_rows_cache_stats(fit_prediction_shared_source_rows_cache),
         "_live_cache_records": live_cache_records,
+        "_angular_residual_rows": angular_residual_rows,
+        "_candidate_source_rows": candidate_source_rows,
         **_fit_space_provenance_summary(
             local,
             cached_anchor_count=fit_space_anchor_count_cached,
@@ -6797,21 +7222,38 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         summary["unweighted_peak_rms_deg"] = float("nan")
         summary["unweighted_peak_mean_deg"] = float("nan")
         summary["unweighted_peak_max_deg"] = float("nan")
-    summary.update(
-        _angular_degree_residual_audit_summary(
-            measured_two_theta_deg=measured_two_theta_deg_values,
-            measured_phi_deg=measured_phi_deg_values,
-            projected_two_theta_deg=projected_two_theta_deg_values,
-            projected_phi_deg=projected_phi_deg_values,
-            delta_two_theta_deg=raw_delta_two_theta_deg_values,
-            wrapped_delta_phi_deg=raw_wrapped_delta_phi_deg_values,
-            weighted_delta_two_theta_deg=weighted_delta_two_theta_deg_values,
-            weighted_delta_phi_deg=weighted_delta_phi_deg_values,
-            priority_weights=priority_weight_values,
-            solver_residual_vector=residual_arr,
-            optimizer_point_residual_vector=optimizer_point_residual_values,
-        )
+    summary_from_arrays = _angular_degree_residual_audit_summary(
+        measured_two_theta_deg=measured_two_theta_deg_values,
+        measured_phi_deg=measured_phi_deg_values,
+        projected_two_theta_deg=projected_two_theta_deg_values,
+        projected_phi_deg=projected_phi_deg_values,
+        delta_two_theta_deg=raw_delta_two_theta_deg_values,
+        wrapped_delta_phi_deg=raw_wrapped_delta_phi_deg_values,
+        weighted_delta_two_theta_deg=weighted_delta_two_theta_deg_values,
+        weighted_delta_phi_deg=weighted_delta_phi_deg_values,
+        priority_weights=priority_weight_values,
+        solver_residual_vector=residual_arr,
+        optimizer_point_residual_vector=optimizer_point_residual_values,
     )
+    summary.update(summary_from_arrays)
+    row_summary = _summarize_dynamic_angular_residual_rows(angular_residual_rows, top_n=10)
+    existing_rms = _safe_float(summary_from_arrays.get("raw_angular_rms_deg"), float("nan"))
+    row_rms = _safe_float(row_summary.get("raw_angular_rms_deg"), float("nan"))
+    summary.update(row_summary)
+    summary["raw_angular_summary_source"] = "dynamic_angular_residual_rows"
+    summary["raw_angular_summary_matches_array_audit"] = bool(
+        np.isfinite(existing_rms) and np.isfinite(row_rms) and abs(existing_rms - row_rms) <= 1e-9
+    )
+    if not bool(summary["raw_angular_summary_matches_array_audit"]):
+        summary["raw_angular_summary_mismatch_reject_reason"] = (
+            "row_records_and_array_audit_disagree"
+        )
+    summary["worst_angular_residual_rows"] = _annotate_worst_dynamic_angular_rows_with_candidates(
+        angular_residual_rows,
+        source_rows_by_dataset={int(dataset_ctx.dataset_index): candidate_source_rows},
+        top_n=10,
+    )
+    summary.update(_classify_dynamic_angular_failure(summary))
     summary.setdefault("raw_angular_rms_deg", summary.get("unweighted_peak_rms_deg"))
     summary.setdefault("raw_angular_max_deg", summary.get("unweighted_peak_max_deg"))
     detector_pixel_metric_is_same_frame_complete = bool(
@@ -18819,6 +19261,12 @@ def _resolve_qr_fit_prediction_from_trial_params(
             point_source = "trial_source_rows_unresolved"
         resolution_payload["locked_qr_detector_point_source"] = point_source
     out.update(dict(resolution_payload))
+    if isinstance(source_rows_payload, Mapping):
+        out["_trial_source_rows"] = [
+            dict(row)
+            for row in (source_rows_payload.get("rows", ()) or ())
+            if isinstance(row, Mapping)
+        ]
     if sim_point is None:
         reason = str(resolution_payload.get("resolution_reason", "locked_branch_unavailable"))
         out.update({"available": False, "unavailable_reason": reason})
@@ -21826,6 +22274,9 @@ def fit_geometry_parameters(
             **fit_space_summary_defaults,
         }
         live_cache_records: List[Dict[str, object]] = []
+        merged_angular_residual_rows: List[Dict[str, object]] = []
+        candidate_source_rows_by_dataset: Dict[int, List[Dict[str, object]]] = {}
+        candidate_source_row_keys_by_dataset: Dict[int, Set[str]] = {}
 
         def _evaluate_dynamic_matches_for_dataset(
             item: Tuple[Dict[str, object], GeometryFitDatasetContext],
@@ -21904,6 +22355,36 @@ def fit_geometry_parameters(
             for record in summary_i.get("_live_cache_records", ()) or ():
                 if isinstance(record, Mapping):
                     live_cache_records.append(dict(record))
+            for record in summary_i.get("_angular_residual_rows", ()) or ():
+                if isinstance(record, Mapping):
+                    merged_angular_residual_rows.append(dict(record))
+            dataset_index = int(summary_i.get("dataset_index", len(per_dataset_summaries) - 1))
+            dataset_candidate_rows = candidate_source_rows_by_dataset.setdefault(dataset_index, [])
+            dataset_candidate_keys = candidate_source_row_keys_by_dataset.setdefault(
+                dataset_index,
+                set(),
+            )
+            for record in summary_i.get("_candidate_source_rows", ()) or ():
+                if not isinstance(record, Mapping):
+                    continue
+                record_copy = dict(record)
+                record_key = repr(
+                    _dynamic_reanchor_jsonable(
+                        (
+                            record_copy.get("q_group_key"),
+                            record_copy.get("hkl"),
+                            record_copy.get("source_branch_index"),
+                            record_copy.get("source_table_index"),
+                            record_copy.get("source_row_index"),
+                            record_copy.get("two_theta_deg", record_copy.get("caked_x")),
+                            record_copy.get("phi_deg", record_copy.get("caked_y")),
+                        )
+                    )
+                )
+                if record_key in dataset_candidate_keys:
+                    continue
+                dataset_candidate_keys.add(record_key)
+                dataset_candidate_rows.append(record_copy)
             if collect_diagnostics and diagnostics_i:
                 diagnostics.extend(diagnostics_i)
 
@@ -21975,13 +22456,38 @@ def fit_geometry_parameters(
             else:
                 summary[mean_key] = float("nan")
             summary[max_key] = float(matched_max)
-        summary.update(
-            _merged_angular_degree_residual_audit_summary(
-                per_dataset_summaries,
-                diagnostics,
-                solver_residual_vector=residual_arr,
+        summary_from_arrays = _merged_angular_degree_residual_audit_summary(
+            per_dataset_summaries,
+            diagnostics,
+            solver_residual_vector=residual_arr,
+        )
+        summary.update(summary_from_arrays)
+        row_summary = _summarize_dynamic_angular_residual_rows(
+            merged_angular_residual_rows,
+            top_n=10,
+        )
+        existing_rms = _safe_float(summary_from_arrays.get("raw_angular_rms_deg"), float("nan"))
+        row_rms = _safe_float(row_summary.get("raw_angular_rms_deg"), float("nan"))
+        summary["_angular_residual_rows"] = merged_angular_residual_rows
+        summary.update(row_summary)
+        summary["raw_angular_summary_source"] = "dynamic_angular_residual_rows"
+        summary["raw_angular_summary_matches_array_audit"] = bool(
+            np.isfinite(existing_rms)
+            and np.isfinite(row_rms)
+            and abs(existing_rms - row_rms) <= 1e-9
+        )
+        if not bool(summary["raw_angular_summary_matches_array_audit"]):
+            summary["raw_angular_summary_mismatch_reject_reason"] = (
+                "row_records_and_array_audit_disagree"
+            )
+        summary["worst_angular_residual_rows"] = (
+            _annotate_worst_dynamic_angular_rows_with_candidates(
+                merged_angular_residual_rows,
+                source_rows_by_dataset=candidate_source_rows_by_dataset,
+                top_n=10,
             )
         )
+        summary.update(_classify_dynamic_angular_failure(summary))
         summary["detector_pixel_rms_px"] = summary.get("unweighted_peak_rms_px", float("nan"))
         summary["detector_pixel_max_px"] = summary.get("unweighted_peak_max_px", float("nan"))
         summary.setdefault("caked_pixel_rms_px", float("nan"))
@@ -22276,13 +22782,143 @@ def fit_geometry_parameters(
         _evaluate_dynamic_point_matches if dynamic_point_geometry_fit else _evaluate_pixel_matches
     )
 
+    def _dynamic_objective_param_sensitivity_summary(
+        base_x: np.ndarray,
+        *,
+        evaluator: Callable[..., Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]],
+        top_n: int = 5,
+    ) -> Dict[str, object]:
+        del top_n
+        base_x_arr = np.asarray(base_x, dtype=float).reshape(-1)
+        active_names = [str(name) for name in var_names]
+
+        def _evaluate_x(x_values: np.ndarray) -> tuple[np.ndarray, float]:
+            local_values = _apply_trial_params(np.asarray(x_values, dtype=float))
+            residual_values, _diagnostics, _summary = evaluator(
+                local_values,
+                collect_diagnostics=False,
+            )
+            residual_arr = np.asarray(residual_values, dtype=float).reshape(-1)
+            return residual_arr, float(
+                _robust_cost(
+                    residual_arr,
+                    loss=solver_loss,
+                    f_scale=solver_f_scale,
+                )
+            )
+
+        def _delta_stats(
+            trial_residual: np.ndarray,
+            base_residual: np.ndarray,
+        ) -> tuple[float, float]:
+            trial_arr = np.asarray(trial_residual, dtype=float).reshape(-1)
+            base_arr = np.asarray(base_residual, dtype=float).reshape(-1)
+            if trial_arr.shape != base_arr.shape:
+                return float("inf"), float("inf")
+            delta = trial_arr - base_arr
+            finite = delta[np.isfinite(delta)]
+            if not finite.size:
+                return float("nan"), float("nan")
+            return float(np.max(np.abs(finite))), float(np.linalg.norm(finite))
+
+        try:
+            base_residual, base_cost = _evaluate_x(base_x_arr)
+        except Exception as exc:
+            return {
+                "objective_param_sensitivity_by_var": [],
+                "objective_param_sensitivity_status": "not_evaluated",
+                "objective_param_sensitivity_error": str(exc),
+            }
+
+        records: List[Dict[str, object]] = []
+        for idx, name in enumerate(active_names):
+            if idx >= base_x_arr.size:
+                continue
+            value = float(base_x_arr[idx])
+            step = (
+                1.0e-3
+                if name in {"gamma", "Gamma", "theta_initial"} or name.startswith("theta_initial")
+                else max(abs(value) * 1.0e-6, 1.0e-6)
+            )
+            plus_x = base_x_arr.copy()
+            minus_x = base_x_arr.copy()
+            plus_x[idx] = float(value + step)
+            minus_x[idx] = float(value - step)
+            try:
+                plus_residual, plus_cost = _evaluate_x(plus_x)
+                plus_max, plus_l2 = _delta_stats(plus_residual, base_residual)
+            except Exception as exc:
+                plus_cost = float("nan")
+                plus_max = float("nan")
+                plus_l2 = float("nan")
+                plus_error = str(exc)
+            else:
+                plus_error = ""
+            try:
+                minus_residual, minus_cost = _evaluate_x(minus_x)
+                minus_max, minus_l2 = _delta_stats(minus_residual, base_residual)
+            except Exception as exc:
+                minus_cost = float("nan")
+                minus_max = float("nan")
+                minus_l2 = float("nan")
+                minus_error = str(exc)
+            else:
+                minus_error = ""
+            prediction_changed = bool(
+                (np.isfinite(plus_max) and plus_max > 1.0e-12)
+                or (np.isfinite(minus_max) and minus_max > 1.0e-12)
+                or (np.isfinite(plus_cost) and abs(float(plus_cost) - float(base_cost)) > 1.0e-12)
+                or (np.isfinite(minus_cost) and abs(float(minus_cost) - float(base_cost)) > 1.0e-12)
+            )
+            record: Dict[str, object] = {
+                "var_name": str(name),
+                "step": float(step),
+                "base_cost": float(base_cost),
+                "plus_cost": float(plus_cost),
+                "minus_cost": float(minus_cost),
+                "max_abs_residual_delta_plus": float(plus_max),
+                "max_abs_residual_delta_minus": float(minus_max),
+                "l2_residual_delta_plus": float(plus_l2),
+                "l2_residual_delta_minus": float(minus_l2),
+                "prediction_changed": bool(prediction_changed),
+            }
+            if plus_error:
+                record["plus_error"] = plus_error
+            if minus_error:
+                record["minus_error"] = minus_error
+            records.append(record)
+
+        changed_count = sum(1 for record in records if bool(record.get("prediction_changed")))
+        if records and changed_count == len(records):
+            status = "sensitive"
+        elif changed_count > 0:
+            status = "partially_insensitive"
+        else:
+            status = "all_fit_vars_insensitive"
+        return {
+            "objective_param_sensitivity_by_var": records,
+            "objective_param_sensitivity_status": status,
+        }
+
     def _public_point_match_summary(
         summary_in: Mapping[str, object] | None,
     ) -> Dict[str, object]:
         if not isinstance(summary_in, Mapping):
             return {}
+
+        def _public_value(value: object) -> object:
+            if isinstance(value, Mapping):
+                return {
+                    str(key): _public_value(val)
+                    for key, val in dict(value).items()
+                    if not str(key).startswith("_")
+                }
+            if isinstance(value, (list, tuple)):
+                return [_public_value(item) for item in value]
+            return value
+
         return {
-            str(key): value
+            str(key): _public_value(value)
             for key, value in dict(summary_in).items()
             if not str(key).startswith("_")
         }
@@ -32336,6 +32972,24 @@ def fit_geometry_parameters(
                 result.final_metric_units = "px" if point_match_mode else ""
                 point_match_summary.setdefault("metric_name", str(result.final_metric_name))
                 point_match_summary.setdefault("metric_unit", "px")
+            if str(result.final_metric_name) == "dynamic_angular_point_match":
+                sensitivity_summary = _dynamic_objective_param_sensitivity_summary(
+                    np.asarray(result.x, dtype=float),
+                    evaluator=point_match_evaluator,
+                )
+                point_match_summary.update(sensitivity_summary)
+                point_match_summary.update(_classify_dynamic_angular_failure(point_match_summary))
+                if (
+                    point_match_summary.get("objective_param_sensitivity_status")
+                    == "all_fit_vars_insensitive"
+                ):
+                    point_match_summary["first_acceptance_metric_divergence"] = (
+                        "dynamic_objective_not_sensitive_to_fit_variables"
+                    )
+                    point_match_summary["recommended_next_fix"] = "thread_trial_params_to_projector"
+                    result.success = False
+                    result.status = -9
+                    result.message = "dynamic_objective_not_sensitive_to_fit_variables"
             point_match_summary["single_ray_coarse_enabled"] = False
             point_match_summary["full_beam_polish_enabled"] = bool(
                 full_beam_polish_summary.get("enabled", False)
@@ -32839,6 +33493,64 @@ def fit_geometry_parameters(
         f"{completion_metric_text}"
         f"{metric_part}{matched_pair_count_text})"
     )
+    if metric_space_text == "caked_deg" and isinstance(point_match_summary, Mapping):
+        _emit_status(
+            "dynamic angular residual summary: "
+            f"count={int(point_match_summary.get('raw_angular_row_count', 0) or 0)} "
+            f"rms={float(point_match_summary.get('raw_angular_rms_deg', np.nan)):.6f}deg "
+            f"max={float(point_match_summary.get('raw_angular_max_deg', np.nan)):.2f}deg"
+        )
+        _emit_status(
+            "dynamic angular failure classification: "
+            f"{str(point_match_summary.get('dynamic_angular_failure_classification', '') or '')}"
+        )
+        _emit_status(
+            "objective sensitivity: "
+            f"{str(point_match_summary.get('objective_param_sensitivity_status', '') or '')}"
+        )
+        worst_rows = [
+            row
+            for row in (point_match_summary.get("worst_angular_residual_rows", ()) or ())
+            if isinstance(row, Mapping)
+        ][:10]
+        if worst_rows:
+            _emit_status("worst angular residual rows:")
+            for rank, row in enumerate(worst_rows, start=1):
+                observed = row.get("observed_caked_deg")
+                predicted = row.get("predicted_caked_deg")
+                delta = [
+                    row.get("delta_two_theta_deg", np.nan),
+                    row.get("wrapped_delta_phi_deg", np.nan),
+                ]
+                _emit_status(
+                    "rank={rank} dataset={dataset} pair_id={pair_id} "
+                    "q_group_key={q_group_key} hkl={hkl} branch={branch} "
+                    "observed={observed} predicted={predicted} delta={delta} "
+                    "norm={norm:.6f} "
+                    "nearest_same_q_group_hkl_candidate_norm={nearest:.6f} "
+                    "branch_swap_would_help={branch_swap}".format(
+                        rank=int(rank),
+                        dataset=row.get(
+                            "dataset_label",
+                            row.get("dataset_index", row.get("background_index", "?")),
+                        ),
+                        pair_id=row.get("pair_id", row.get("manual_pair_id", "?")),
+                        q_group_key=row.get("q_group_key"),
+                        hkl=row.get("hkl"),
+                        branch=row.get("source_branch_index", "?"),
+                        observed=observed,
+                        predicted=predicted,
+                        delta=delta,
+                        norm=_safe_float(row.get("angular_residual_norm_deg"), float("nan")),
+                        nearest=_safe_float(
+                            row.get(
+                                "nearest_same_q_group_hkl_candidate_residual_norm_deg",
+                            ),
+                            float("nan"),
+                        ),
+                        branch_swap=bool(row.get("branch_swap_would_help", False)),
+                    )
+                )
 
     return result
 

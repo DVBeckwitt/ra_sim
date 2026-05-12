@@ -4271,6 +4271,265 @@ def _point_only_projector_payload(
     }
 
 
+def test_dynamic_angular_summary_reports_worst_rows() -> None:
+    summary = opt._summarize_dynamic_angular_residual_rows(
+        [
+            {
+                "dataset_index": 0,
+                "dataset_label": "bg0",
+                "pair_index": 0,
+                "pair_id": "good",
+                "delta_two_theta_deg": 0.3,
+                "wrapped_delta_phi_deg": 0.4,
+                "weighted_delta_two_theta_deg": 0.3,
+                "weighted_delta_phi_deg": 0.4,
+            },
+            {
+                "dataset_index": 0,
+                "dataset_label": "bg0",
+                "pair_index": 1,
+                "pair_id": "bad",
+                "delta_two_theta_deg": 3.0,
+                "wrapped_delta_phi_deg": 4.0,
+                "weighted_delta_two_theta_deg": 3.0,
+                "weighted_delta_phi_deg": 4.0,
+            },
+        ]
+    )
+
+    assert summary["raw_angular_row_count"] == 2
+    assert summary["raw_angular_rms_deg"] == pytest.approx(math.sqrt((0.5**2 + 5.0**2) / 2.0))
+    assert summary["raw_angular_max_deg"] == pytest.approx(5.0)
+    assert summary["worst_angular_residual_rows"][0]["pair_id"] == "bad"
+
+
+def test_dynamic_angular_summary_by_dataset_is_count_weighted() -> None:
+    summary = opt._summarize_dynamic_angular_residual_rows(
+        [
+            {
+                "dataset_index": 0,
+                "dataset_label": "bg0",
+                "pair_id": "big",
+                "delta_two_theta_deg": 10.0,
+                "wrapped_delta_phi_deg": 0.0,
+                "weighted_delta_two_theta_deg": 10.0,
+                "weighted_delta_phi_deg": 0.0,
+            },
+            *[
+                {
+                    "dataset_index": 1,
+                    "dataset_label": "bg1",
+                    "pair_id": f"small-{idx}",
+                    "delta_two_theta_deg": 1.0,
+                    "wrapped_delta_phi_deg": 0.0,
+                    "weighted_delta_two_theta_deg": 1.0,
+                    "weighted_delta_phi_deg": 0.0,
+                }
+                for idx in range(3)
+            ],
+        ]
+    )
+
+    assert summary["raw_angular_rms_deg"] == pytest.approx(
+        math.sqrt((100.0 + 1.0 + 1.0 + 1.0) / 4.0)
+    )
+    by_dataset = {entry["dataset_index"]: entry for entry in summary["angular_residual_by_dataset"]}
+    assert by_dataset[0]["raw_angular_max_deg"] == pytest.approx(10.0)
+    assert by_dataset[1]["raw_angular_max_deg"] == pytest.approx(1.0)
+
+
+def test_dynamic_angular_phi_wrap_uses_wrapped_delta_for_summary() -> None:
+    summary = opt._summarize_dynamic_angular_residual_rows(
+        [
+            {
+                "dataset_index": 0,
+                "dataset_label": "bg0",
+                "pair_id": "wrapped",
+                "observed_caked_deg": [40.0, 179.0],
+                "predicted_caked_deg": [40.0, -179.0],
+                "delta_two_theta_deg": 0.0,
+                "delta_phi_deg_unwrapped": -358.0,
+                "wrapped_delta_phi_deg": 2.0,
+                "weighted_delta_two_theta_deg": 0.0,
+                "weighted_delta_phi_deg": 2.0,
+            }
+        ]
+    )
+
+    worst = summary["worst_angular_residual_rows"][0]
+    assert worst["delta_phi_deg_unwrapped"] == pytest.approx(-358.0)
+    assert worst["wrapped_delta_phi_deg"] == pytest.approx(2.0)
+    assert summary["raw_angular_max_deg"] == pytest.approx(2.0)
+    assert worst["angular_residual_norm_deg"] == pytest.approx(2.0)
+
+
+def test_dynamic_dataset_evaluator_records_angular_rows_without_diagnostics() -> None:
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        return _locked_qr_source_rows_payload([_point_only_dynamic_qr_row(40.0, -179.0)])
+
+    def projector(cols, rows, *, local_params=None, **_kwargs):
+        del local_params
+        assert np.asarray(cols, dtype=float).tolist() == [12.0]
+        assert np.asarray(rows, dtype=float).tolist() == [13.0]
+        return _point_only_projector_payload(40.0, -179.0)
+
+    measured = _locked_qr_fixed_source_entry(
+        native_col=12.0,
+        native_row=13.0,
+        background_two_theta_deg=40.0,
+        background_phi_deg=179.0,
+        caked_x=40.0,
+        caked_y=179.0,
+        fit_space_anchor_override=True,
+        fit_space_anchor_source="manual_caked_click",
+    )
+    dataset_ctx = _point_only_qr_dataset_ctx(source_rows_builder, projector)
+    dataset_ctx.subset.measured_entries = [measured]
+    local = _base_params(30, optics_mode=1)
+    local.update(
+        {
+            "center_x": 15.0,
+            "center_y": 15.0,
+            "center": [15.0, 15.0],
+            "_qr_fit_point_only_projection": True,
+        }
+    )
+
+    _residual, diagnostics, summary = opt._evaluate_geometry_fit_dataset_dynamic_point_matches(
+        local,
+        dataset_ctx,
+        image_size=30,
+        missing_pair_penalty_deg=5.0,
+        theta_value=0.0,
+        collect_diagnostics=False,
+    )
+
+    assert diagnostics == []
+    rows = summary["_angular_residual_rows"]
+    assert len(rows) == 1
+    assert rows[0]["wrapped_delta_phi_deg"] == pytest.approx(2.0)
+    assert summary["worst_angular_residual_rows"][0]["pair_id"] == rows[0]["pair_id"]
+
+
+def test_dynamic_point_match_summary_merges_row_records_across_datasets(
+    monkeypatch,
+) -> None:
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        return (
+            np.zeros((image_size, image_size), dtype=np.float64),
+            [],
+            np.empty((0, 0, 0)),
+            np.empty(0),
+            np.empty(0),
+            [],
+        )
+
+    def fake_least_squares(residual_fn, x0, **_kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 30
+    params = _base_params(image_size, optics_mode=1)
+    params.update(
+        {
+            "center_x": 15.0,
+            "center_y": 15.0,
+            "center": [15.0, 15.0],
+        }
+    )
+
+    def dataset_spec(dataset_index: int, label: str, predicted_two_theta: float) -> dict:
+        measured = _locked_qr_fixed_source_entry(
+            pair_id=f"{label}-pair",
+            native_col=12.0,
+            native_row=13.0,
+            background_two_theta_deg=40.0,
+            background_phi_deg=0.0,
+            caked_x=40.0,
+            caked_y=0.0,
+            fit_space_anchor_override=True,
+            fit_space_anchor_source="manual_caked_click",
+        )
+
+        def source_rows_builder(*, local_params=None):
+            del local_params
+            return _locked_qr_source_rows_payload(
+                [_point_only_dynamic_qr_row(predicted_two_theta, 0.0)]
+            )
+
+        def projector(_cols, _rows, *, local_params=None, **_kwargs):
+            del local_params
+            return _point_only_projector_payload(predicted_two_theta, 0.0)
+
+        return {
+            "dataset_index": int(dataset_index),
+            "label": label,
+            "theta_initial": 0.0,
+            "measured_peaks": [measured],
+            "experimental_image": np.zeros((image_size, image_size), dtype=np.float64),
+            "fit_space_projector": projector,
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "qr_fit_trial_source_rows_builder": source_rows_builder,
+            "qr_fit_trial_source_rows_builder_kind": "unit_test_dynamic_rows",
+            "sim_caked_image_builder": lambda *_args, **_kwargs: pytest.fail(
+                "point-only mode must not generate a caked image"
+            ),
+            "sim_caked_image_builder_kind": "must_not_call",
+        }
+
+    result = opt.fit_geometry_parameters(
+        np.array([[2.0, 0.0, 0.0]], dtype=np.float64),
+        np.array([1.0], dtype=np.float64),
+        image_size,
+        params,
+        measured_peaks=[],
+        var_names=["theta_initial"],
+        experimental_image=np.zeros((image_size, image_size), dtype=np.float64),
+        dataset_specs=[
+            dataset_spec(0, "bg0", 50.0),
+            dataset_spec(1, "bg1", 41.0),
+        ],
+        refinement_config={
+            "solver": {
+                "manual_point_fit_mode": True,
+                "dynamic_point_geometry_fit": True,
+                "_qr_fit_point_only_projection": True,
+                "fixed_manual_prediction_preflight_guard": True,
+                "restarts": 0,
+                "weighted_matching": False,
+                "use_measurement_uncertainty": False,
+                "max_nfev": 1,
+            },
+            "single_ray": {"enabled": False},
+            "identifiability": {"enabled": False},
+            "full_beam_polish": {"enabled": False},
+            "image_refinement": {"enabled": False},
+        },
+    )
+
+    summary = result.point_match_summary
+    assert summary["raw_angular_row_count"] == 2
+    assert summary["raw_angular_rms_deg"] == pytest.approx(math.sqrt((10.0**2 + 1.0**2) / 2.0))
+    assert summary["worst_angular_residual_rows"][0]["dataset_label"] == "bg0"
+    assert "_angular_residual_rows" not in summary
+    assert all("_angular_residual_rows" not in item for item in summary["per_dataset"])
+    assert all("_candidate_source_rows" not in item for item in summary["per_dataset"])
+
+
 def test_qr_fit_point_only_projection_uses_dynamic_sim_visual_caked_deg_and_skips_image_refinement(
     monkeypatch,
 ) -> None:
@@ -5169,6 +5428,112 @@ def _dynamic_point_only_fit_result_for_metric_tests(monkeypatch):
     )
 
 
+def _dynamic_point_only_sensitivity_result(monkeypatch, *, sensitive: bool):
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        return (
+            np.zeros((image_size, image_size), dtype=np.float64),
+            [],
+            np.empty((0, 0, 0)),
+            np.empty(0),
+            np.empty(0),
+            [],
+        )
+
+    def fake_least_squares(residual_fn, x0, **_kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    def predicted_from_params(local_params: Mapping[str, object] | None) -> tuple[float, float]:
+        params = local_params if isinstance(local_params, Mapping) else {}
+        gamma = float(params.get("gamma", 0.0) or 0.0) if sensitive else 0.0
+        return 41.0 + gamma, 0.0
+
+    def source_rows_builder(*, local_params=None):
+        two_theta, phi = predicted_from_params(local_params)
+        return _locked_qr_source_rows_payload([_point_only_dynamic_qr_row(two_theta, phi)])
+
+    def projector(_cols, _rows, *, local_params=None, **_kwargs):
+        two_theta, phi = predicted_from_params(local_params)
+        return _point_only_projector_payload(two_theta, phi)
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 30
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+    measured = _locked_qr_fixed_source_entry(
+        native_col=12.0,
+        native_row=13.0,
+        background_two_theta_deg=40.0,
+        background_phi_deg=0.0,
+        caked_x=40.0,
+        caked_y=0.0,
+        fit_space_anchor_override=True,
+        fit_space_anchor_source="manual_caked_click",
+    )
+    params = _base_params(image_size, optics_mode=1)
+    params.update(
+        {
+            "center_x": 15.0,
+            "center_y": 15.0,
+            "center": [15.0, 15.0],
+        }
+    )
+    dataset_specs = [
+        {
+            "dataset_index": 0,
+            "label": "bg0",
+            "theta_initial": 0.0,
+            "measured_peaks": [measured],
+            "experimental_image": experimental_image,
+            "fit_space_projector": projector,
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "qr_fit_trial_source_rows_builder": source_rows_builder,
+            "qr_fit_trial_source_rows_builder_kind": "unit_test_dynamic_rows",
+            "sim_caked_image_builder": lambda *_args, **_kwargs: pytest.fail(
+                "point-only mode must not generate a caked image"
+            ),
+            "sim_caked_image_builder_kind": "must_not_call",
+        }
+    ]
+    return opt.fit_geometry_parameters(
+        np.array([[2.0, 0.0, 0.0]], dtype=np.float64),
+        np.array([1.0], dtype=np.float64),
+        image_size,
+        params,
+        measured_peaks=[measured],
+        var_names=["gamma"],
+        experimental_image=experimental_image,
+        dataset_specs=dataset_specs,
+        refinement_config={
+            "solver": {
+                "manual_point_fit_mode": True,
+                "dynamic_point_geometry_fit": True,
+                "_qr_fit_point_only_projection": True,
+                "fixed_manual_prediction_preflight_guard": True,
+                "restarts": 0,
+                "weighted_matching": False,
+                "use_measurement_uncertainty": False,
+                "max_nfev": 1,
+            },
+            "single_ray": {"enabled": False},
+            "identifiability": {"enabled": False},
+            "full_beam_polish": {"enabled": False},
+            "image_refinement": {"enabled": False},
+        },
+    )
+
+
 def test_dynamic_angular_point_match_final_metric_uses_caked_deg_not_pixel_rms(
     monkeypatch,
 ) -> None:
@@ -5274,6 +5639,101 @@ def test_rung3_objective_changes_dynamic_sim_source_when_trial_params_change(
     assert theta_changed["simulated_two_theta_deg"] != pytest.approx(
         base["simulated_two_theta_deg"]
     )
+
+
+def test_dynamic_objective_param_sensitivity_detects_insensitive_projector(
+    monkeypatch,
+) -> None:
+    result = _dynamic_point_only_sensitivity_result(monkeypatch, sensitive=False)
+    summary = result.point_match_summary
+
+    assert summary["objective_param_sensitivity_status"] == "all_fit_vars_insensitive"
+    assert summary["recommended_next_fix"] == "thread_trial_params_to_projector"
+    assert summary["first_acceptance_metric_divergence"] == (
+        "dynamic_objective_not_sensitive_to_fit_variables"
+    )
+    assert summary["objective_param_sensitivity_by_var"][0]["prediction_changed"] is False
+
+
+def test_dynamic_objective_param_sensitivity_detects_sensitive_projector(
+    monkeypatch,
+) -> None:
+    result = _dynamic_point_only_sensitivity_result(monkeypatch, sensitive=True)
+    summary = result.point_match_summary
+
+    assert summary["objective_param_sensitivity_status"] == "sensitive"
+    assert summary["objective_param_sensitivity_by_var"][0]["var_name"] == "gamma"
+    assert summary["objective_param_sensitivity_by_var"][0]["prediction_changed"] is True
+
+
+def test_worst_row_candidate_diagnostic_identifies_branch_swap_without_remapping() -> None:
+    rows = [
+        {
+            "dataset_index": 0,
+            "dataset_label": "bg0",
+            "pair_index": 0,
+            "pair_id": "locked-bad",
+            "q_group_key": ["q_group", "primary", 1, 10],
+            "hkl": [2, 0, 0],
+            "source_branch_index": 0,
+            "observed_caked_deg": [40.0, 0.0],
+            "predicted_caked_deg": [140.0, 0.0],
+            "delta_two_theta_deg": 100.0,
+            "delta_phi_deg_unwrapped": 0.0,
+            "wrapped_delta_phi_deg": 0.0,
+            "weighted_delta_two_theta_deg": 100.0,
+            "weighted_delta_phi_deg": 0.0,
+        }
+    ]
+    annotated = opt._annotate_worst_dynamic_angular_rows_with_candidates(
+        rows,
+        source_rows_by_dataset={
+            0: [
+                {
+                    "q_group_key": ["q_group", "primary", 1, 10],
+                    "hkl": [2, 0, 0],
+                    "source_branch_index": 0,
+                    "two_theta_deg": 140.0,
+                    "phi_deg": 0.0,
+                },
+                {
+                    "q_group_key": ["q_group", "primary", 1, 10],
+                    "hkl": [2, 0, 0],
+                    "source_branch_index": 1,
+                    "two_theta_deg": 41.0,
+                    "phi_deg": 0.0,
+                },
+            ],
+        },
+    )
+
+    assert annotated[0]["same_q_group_hkl_candidate_count"] == 2
+    assert annotated[0]["nearest_same_q_group_hkl_candidate_branch_index"] == 1
+    assert annotated[0]["nearest_same_q_group_hkl_candidate_residual_norm_deg"] == pytest.approx(
+        1.0
+    )
+    assert annotated[0]["locked_branch_residual_norm_deg"] == pytest.approx(100.0)
+    assert annotated[0]["branch_swap_would_help"] is True
+
+    classification = opt._classify_dynamic_angular_failure(
+        {
+            "raw_angular_summary_matches_array_audit": True,
+            "objective_param_sensitivity_status": "sensitive",
+            "worst_angular_residual_rows": annotated,
+            "angular_residual_by_dataset": [
+                {
+                    "dataset_index": 0,
+                    "raw_angular_row_count": 1,
+                    "raw_angular_rms_deg": 100.0,
+                }
+            ],
+            "raw_angular_rms_deg": 100.0,
+        }
+    )
+    assert classification["dynamic_angular_failure_classification"] == (
+        "branch_source_pairing_mismatch"
+    )
+    assert classification["recommended_next_fix"] == "repair_locked_branch_identity"
 
 
 def test_locked_qr_fixed_source_resolves_stale_row_by_q_group_hkl_branch_slot() -> None:
