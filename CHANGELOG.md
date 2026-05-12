@@ -37,6 +37,8 @@
 
 - **Fitting and optimization**
   - Added a popup-mode detector Qr-region companion preview beside the Qr-rod peak marker editor in the parallel background peak-fit diagnostic script, explicitly showing the companion window, refreshing detector overlays live during Delta Qr/L-window edits, and deferring expensive Delta Qr profile reintegration until slider release or accept.
+  - Fixed the parallel Qr-rod marker editor so `L Min` / `L Max` submissions reject malformed profile-refresh tables, keep redraw errors inside the editor callback, and no longer let the global Enter shortcut close the popup while an L-bound text box is being edited.
+  - Restored the detector selected-region label-position editor before final detector-region save in the parallel background peak-fit diagnostic script, replacing the freezing Matplotlib label-drag path with a Tk canvas popup that supports drag/nudge/text/font editing plus import/export through the existing detector-label settings JSON.
   - Fixed geometry-fit live-cache preflight so source-matched q-group rows can satisfy generated-disordered manual pairs without falling through to fresh simulation or caked-projector setup, and restored locked/stale QR prediction-branch source switching before `locked_qr_row_unavailable` is returned.
   - Fixed manual Qr/Qz caked replay and fit handoff so detector-origin saved rows redraw through detector projection, visual caked aliases stay separate from fit/cache aliases, required caked projector errors stay precise, and cold detector clicks fail fast instead of rebuilding picker caches on the UI path.
   - Fixed caked-to-detector Qr replay fallback rotation so source-backed caked replay uses `display_rotate_k`, not its inverse, when the bound detector display callback is unavailable.
@@ -63,6 +65,7 @@
   - Added New4 ladder worker phase/partial-report telemetry, residual-evaluation timing, cache-rebuild counters, and timeout diagnostics; singleton solve rungs can skip the duplicate initial dry-run objective and use the first solver evaluation instead.
   - Added a mixed-update geometry-fitter cache regression suite covering unsafe mixed fast-path fallbacks, stale worker result handling, deferred q-group refresh, projection handoff validity, and objective-cache reject reasons.
   - Fixed GUI geometry-fit overlay redraws in caked point-only fits so green `fit sim` markers use the current fitted prediction point, including legacy progress rows whose caked prediction is stored under `fit_prediction_detector_display_px`, without treating detector-space display pixels as caked angles.
+  - Added GUI geometry-fit coordinate-lineage diagnostics that join cached handoff points, fit-dataset predictions, residual-eval snapshots, final point matches, and drawn green-marker probes by the same Qr/Qz source identity.
   - Warmed detector-native and detector-display coordinates immediately for caked manual Qr/Qz picks, so saved caked selections no longer require a detector-view toggle before fitting or replay.
   - Added a repeatable geometry-fitter cache regression gate script with local and strict modes, fast cache/handoff/objective coverage, workflow-slice validation, slow-geometry strict coverage, and optional New4 artifact handling.
   - Added a fast end-to-end QR selector to geometry-fitter handoff scenario covering fast-path invalidation sequencing, point-provider parity, projection-cache invalidation, and objective-cache reuse/reject behavior without requiring New4 artifacts.
@@ -96,7 +99,7 @@
   - Added `hk0_l3_star.png` to the parallel background peak-fit diagnostic script as a colored, log-scaled raw detector crop from the beam center through the `HK=0`, `L=3` / `00L` marker.
   - Improved the parallel diagnostic detector selected-region figure so the central `HK=0` / `00L` rod uses high-contrast styling and a more prominent Delta-Qr band.
   - Adjusted the detector selected-region highlight so the central `HK=0` / `00L` rod keeps the same-width centerline while the visible Delta-Qr region becomes easier to inspect.
-  - Changed the detector selected-region label editor to pick and drag Qr-region labels directly on the same Matplotlib detector figure, while keeping the existing detector-label JSON settings schema.
+  - Changed the detector selected-region label editor to pick and drag Qr-region labels on a responsive Tk canvas snapshot, while keeping the existing detector-label JSON settings schema.
   - Added `SAMPLE_NAME_OVERRIDE` / `RA_SIM_ALL_BACKGROUND_SAMPLE_NAME` to the parallel `.py` diagnostic so direct runs can replace only the sample label and filename stem, such as `Bi2Se3` to `Bi2Te3`, without changing the run directory.
   - Added a filename-keyed pre-editor cache to the parallel `.py` diagnostic so repeated runs with the same state/background filenames can reuse completed global peak fits, line-profile fits, and Qr-rod profile construction before the manual marker editor opens.
   - Restored default-on Qr-rod peak marker editing in the generated `.py` diagnostic with `RA_SIM_QR_ROD_PEAK_EDIT_MODE=popup|skip|auto`, JSON round trip through `RA_SIM_QR_ROD_PEAK_EDITS`, and marker-table cache-key invalidation before final joint Qz fitting.
@@ -104,7 +107,7 @@
   - Fixed the Qr-rod peak marker editor so dynamically projected `HK=0` / `00L` specular markers are included before final-fit cache lookup and fitting.
   - Changed the Qr-rod peak marker editor Snap action to snap all markers in the selected rod panel to nearby local profile peaks.
   - Changed the Qr-rod peak marker editor plots to use fitted integer `L` x-axes while still saving marker positions as Qz.
-  - Changed the parallel Qr-rod editor so Delta Qr, `L Min`, and `L Max` controls live in the same marker-editor popup; Delta Qr drag updates the detector preview immediately and refreshes integrated profile intensities on slider release or accept, accepted values feed the final joint-fit table and cache key, and the final detector-label save path no longer opens a second popup.
+  - Changed the parallel Qr-rod editor so Delta Qr, `L Min`, and `L Max` controls live in the same marker-editor popup; Delta Qr drag updates the detector preview immediately and refreshes integrated profile intensities on slider release or accept, accepted values feed the final joint-fit table and cache key, and final detector-label placement remains a separate label-position popup before save.
   - Added editable per-peak Qr-rod marker titles so the popup `Label` field controls the final Qr-rod figure text, with blank titles falling back to `L=<rounded display_l>`.
   - Rounded generated Qr-rod peak fallback L labels to integer values while preserving user-edited marker titles.
   - Moved final Qr-rod peak labels to the upper-right of each marked peak with leader arrows pointing back to the peak.

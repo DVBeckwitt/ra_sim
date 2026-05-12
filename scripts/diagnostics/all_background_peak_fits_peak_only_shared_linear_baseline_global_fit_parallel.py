@@ -1106,10 +1106,45 @@ def show_qr_rod_peak_marker_popup(
     result = {"accepted": True}
     selected: dict[str, object] = {"group": None, "index": None, "dragging": False}
     title_box_state: dict[str, object] = {"box": None, "syncing": False}
+    text_input_widgets: list[object] = []
     edit_file_state: dict[str, object] = {
         "path": "" if edit_path is None else str(edit_path).strip()
     }
     region_profile_refresh_pending = False
+
+    def editor_debug_enabled() -> bool:
+        os_module = globals().get("os")
+        env = getattr(os_module, "environ", {}) if os_module is not None else {}
+        value = str(globals().get("QR_ROD_EDITOR_DEBUG_OVERRIDE", "") or "").strip()
+        if not value:
+            value = str(env.get("RA_SIM_QR_ROD_EDITOR_DEBUG", "") or "").strip()
+        return value.lower() in {"1", "true", "yes", "on", "debug"}
+
+    def editor_debug(phase: str, **fields: object) -> None:
+        if not editor_debug_enabled():
+            return
+        os_module = globals().get("os")
+        env = getattr(os_module, "environ", {}) if os_module is not None else {}
+        payload = {
+            "phase": str(phase),
+            "delta_qr": region_control_state.get("delta_qr"),
+            "l_min": region_control_state.get("l_min"),
+            "l_max": region_control_state.get("l_max"),
+            **fields,
+        }
+        text = f"qr_rod_editor_debug={json.dumps(payload, sort_keys=True, default=str)}"
+        print(text, flush=True)
+        log_path = str(env.get("RA_SIM_QR_ROD_EDITOR_DEBUG_LOG", "") or "").strip()
+        if not log_path:
+            return
+        try:
+            path = Path(log_path).expanduser()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(text + "\n")
+        except Exception:
+            pass
+
     if companion_figures is None:
         companion_figure_list: list[object] = []
     else:
@@ -1171,13 +1206,51 @@ def show_qr_rod_peak_marker_popup(
             region_control_state["profile_update_error"] = str(exc)
             return False
         updated_table = pd.DataFrame(updated).copy()
-        if updated_table.empty or not {"m", "branch", "qz_center"}.issubset(updated_table):
+        required_columns = {"m", "branch", "qz_center", "background_density"}
+        if updated_table.empty or not required_columns.issubset(updated_table.columns):
+            region_control_state["profile_update_error"] = (
+                "profile update returned no drawable rows"
+            )
+            editor_debug(
+                "profile_update.rejected",
+                rows=int(updated_table.shape[0]),
+                columns=list(updated_table.columns),
+            )
             return False
+        m_values = pd.to_numeric(updated_table["m"], errors="coerce").to_numpy(dtype=np.float64)
+        qz_values = pd.to_numeric(updated_table["qz_center"], errors="coerce").to_numpy(
+            dtype=np.float64
+        )
+        density_values = pd.to_numeric(
+            updated_table["background_density"], errors="coerce"
+        ).to_numpy(dtype=np.float64)
+        branch_values = updated_table["branch"].astype(str).str.strip()
+        valid_rows = (
+            np.isfinite(m_values)
+            & np.isfinite(qz_values)
+            & np.isfinite(density_values)
+            & (branch_values != "")
+            & (branch_values.str.lower() != "nan")
+        )
+        if not np.any(valid_rows):
+            region_control_state["profile_update_error"] = (
+                "profile update returned no drawable rows"
+            )
+            editor_debug(
+                "profile_update.rejected",
+                rows=int(updated_table.shape[0]),
+                valid_rows=0,
+                columns=list(updated_table.columns),
+            )
+            return False
+        if not np.all(valid_rows):
+            updated_table = updated_table.loc[valid_rows].copy()
         profiles = updated_table
         region_control_state["rod_profile_table"] = profiles.copy()
         region_profile_refresh_pending = False
         region_control_state.pop("profile_refresh_pending", None)
         region_control_state.pop("profile_update_error", None)
+        editor_debug("profile_update.accepted", rows=int(profiles.shape[0]))
         return True
 
     def mark_region_profile_refresh_pending() -> None:
@@ -1450,7 +1523,17 @@ def show_qr_rod_peak_marker_popup(
     def refresh_region_controls() -> None:
         refresh_region_profile_table()
         refresh_detector_region_preview()
-        redraw()
+        try:
+            redraw()
+        except Exception as exc:
+            region_control_state["redraw_error"] = str(exc)
+            editor_debug(
+                "redraw.error",
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+        else:
+            region_control_state.pop("redraw_error", None)
 
     def set_region_delta_qr(value: object) -> None:
         if not region_controls_enabled:
@@ -1465,6 +1548,7 @@ def show_qr_rod_peak_marker_popup(
         value = as_float(text, region_control_state.get("l_min", 0.0))
         if np.isfinite(value):
             region_control_state["l_min"] = float(value)
+        editor_debug("l_min.submit", text=text)
         refresh_region_controls()
 
     def set_region_l_max(text: object) -> None:
@@ -1473,6 +1557,7 @@ def show_qr_rod_peak_marker_popup(
         value = as_float(text, region_control_state.get("l_max", 8.0))
         if np.isfinite(value):
             region_control_state["l_max"] = float(value)
+        editor_debug("l_max.submit", text=text)
         refresh_region_controls()
 
     def select_nearest(group: tuple[int, str], x_value: float) -> bool:
@@ -1616,8 +1701,14 @@ def show_qr_rod_peak_marker_popup(
         flush_region_profile_refresh()
 
     def on_key(event) -> None:
+        event_axes = getattr(event, "inaxes", None)
+        for text_widget in text_input_widgets:
+            if event_axes is getattr(text_widget, "ax", None) or bool(
+                getattr(text_widget, "capturekeystrokes", False)
+            ):
+                return
         box = title_box_state.get("box")
-        if box is not None and getattr(event, "inaxes", None) is getattr(box, "ax", None):
+        if box is not None and event_axes is getattr(box, "ax", None):
             return
         key = str(getattr(event, "key", "")).lower()
         if key in {"delete", "backspace"}:
@@ -1660,6 +1751,7 @@ def show_qr_rod_peak_marker_popup(
         l_min_box.on_submit(set_region_l_min)
         l_max_box.on_submit(set_region_l_max)
         region_widgets.extend([delta_qr_slider, l_min_box, l_max_box])
+        text_input_widgets.extend([l_min_box, l_max_box])
 
     button_axes = [
         fig.add_axes([0.46, 0.035, 0.085, 0.05]),
@@ -1671,6 +1763,7 @@ def show_qr_rod_peak_marker_popup(
     title_box = TextBox(fig.add_axes([0.08, 0.035, 0.34, 0.05]), "Label", textalignment="left")
     title_box.on_submit(set_selected_marker_title)
     title_box_state["box"] = title_box
+    text_input_widgets.append(title_box)
     buttons = [
         Button(button_axes[0], "Snap"),
         Button(button_axes[1], "Import"),
@@ -13714,9 +13807,11 @@ def show_detector_region_label_position_popup(
     settings_path: object = None,
 ) -> tuple[list[dict[str, object]], bool]:
     try:
-        from matplotlib.widgets import Button, TextBox
+        import tempfile
+        import tkinter as tk
+        from tkinter import ttk
     except Exception as exc:
-        raise RuntimeError(f"Matplotlib detector label editor widgets are unavailable: {exc}") from exc
+        raise RuntimeError(f"Tk detector label editor widgets are unavailable: {exc}") from exc
 
     edited = [dict(entry) for entry in label_entries]
     original = [dict(entry) for entry in label_entries]
@@ -13730,14 +13825,17 @@ def show_detector_region_label_position_popup(
     settings_text = "" if settings_path is None else str(settings_path).strip()
     selected: dict[str, object] = {
         "index": int(drawable_indices[0]),
-        "accepted": True,
+        "accepted": False,
         "dragging": False,
         "drag_offset_x": 0.0,
         "drag_offset_y": 0.0,
     }
-    title_box_state: dict[str, object] = {"box": None, "syncing": False}
-    label_artists: list[object] = []
-    control_axes: list[object] = []
+    label_canvas_items: dict[int, int] = {}
+    label_text_var: object = None
+    canvas: object = None
+    root: object = None
+    image_path: Path | None = None
+    image_height = 1.0
     key_nudges = {
         "left": (-1.0, 0.0),
         "right": (1.0, 0.0),
@@ -13751,49 +13849,23 @@ def show_detector_region_label_position_popup(
     def active_position() -> np.ndarray | None:
         return detector_label_xy(edited[active_index()])
 
-    def remove_label_artists() -> None:
-        while label_artists:
-            artist = label_artists.pop()
-            try:
-                artist.remove()
-            except Exception:
-                pass
-
     def sync_controls() -> None:
-        box = title_box_state.get("box")
-        if box is None:
+        if label_text_var is None:
             return
-        title_box_state["syncing"] = True
-        try:
-            box.set_val(str(edited[active_index()].get("text", "")))
-        finally:
-            title_box_state["syncing"] = False
+        label_text_var.set(str(edited[active_index()].get("text", "")))
 
-    def redraw_labels() -> None:
-        remove_label_artists()
-        label_artists.extend(draw_detector_region_label_artists(ax, edited))
-        active = active_index()
-        for artist in label_artists:
-            try:
-                artist.set_picker(True)
-            except Exception:
-                pass
-            if int(getattr(artist, "_ra_sim_label_entry_index", -1)) == active:
-                try:
-                    artist.set_bbox(
-                        {
-                            "boxstyle": "round,pad=0.12",
-                            "facecolor": "none",
-                            "edgecolor": "#00d5ff",
-                            "linewidth": 0.8,
-                        }
-                    )
-                except Exception:
-                    pass
-        sync_controls()
-        fig.canvas.draw_idle()
+    def data_to_canvas_xy(pos: np.ndarray) -> tuple[float, float]:
+        display_x, display_y = ax.transData.transform((float(pos[0]), float(pos[1])))
+        return float(display_x), float(image_height - float(display_y))
 
-    def set_label_position(index: int, x_value: object, y_value: object) -> None:
+    def canvas_to_data_xy(x_value: object, y_value: object) -> np.ndarray:
+        display_y = float(image_height) - float(y_value)
+        data_x, data_y = ax.transData.inverted().transform((float(x_value), display_y))
+        return np.asarray([float(data_x), float(data_y)], dtype=np.float64)
+
+    def set_label_canvas_position(index: int, x_value: object, y_value: object) -> None:
+        if canvas is None:
+            return
         try:
             x_new = float(x_value)
             y_new = float(y_value)
@@ -13802,66 +13874,58 @@ def show_detector_region_label_position_popup(
         if not (np.isfinite(x_new) and np.isfinite(y_new)):
             return
         edited[int(index)]["label_xy"] = clamp_detector_label_position(
-            np.asarray([x_new, y_new], dtype=np.float64)
+            canvas_to_data_xy(x_new, y_new)
         )
-        redraw_labels()
+        item = label_canvas_items.get(int(index))
+        if item is not None:
+            canvas.coords(item, x_new, y_new)
 
-    def set_selected_label_text(text: object, *, redraw_figure: bool = True) -> None:
-        if bool(title_box_state.get("syncing", False)):
-            return
+    def set_selected_label_text(text: object) -> None:
         edited[active_index()]["text"] = str(text)
-        if redraw_figure:
-            redraw_labels()
+        if canvas is None:
+            return
+        item = label_canvas_items.get(active_index())
+        if item is not None:
+            canvas.itemconfigure(item, text=str(text))
 
     def flush_label_box() -> None:
-        box = title_box_state.get("box")
-        if box is not None:
-            set_selected_label_text(getattr(box, "text", ""), redraw_figure=False)
+        if label_text_var is not None:
+            set_selected_label_text(label_text_var.get())
+
+    def select_label(index: int) -> None:
+        if int(index) not in drawable_index_set:
+            return
+        selected["index"] = int(index)
+        if canvas is not None:
+            for entry_index, item in label_canvas_items.items():
+                canvas.itemconfigure(item, fill="white")
+                if int(entry_index) == int(index):
+                    canvas.itemconfigure(item, fill="#00d5ff")
+                    canvas.tag_raise(item)
+        sync_controls()
 
     def nudge_label(dx: float, dy: float) -> None:
         pos = active_position()
-        if pos is None:
+        if pos is None or canvas is None:
             return
-        set_label_position(active_index(), float(pos[0]) + float(dx), float(pos[1]) + float(dy))
+        item = label_canvas_items.get(active_index())
+        if item is None:
+            return
+        x_value, y_value = canvas.coords(item)
+        set_label_canvas_position(active_index(), float(x_value) + float(dx), float(y_value) + float(dy))
 
     def step_font(delta: float) -> None:
         edited[active_index()]["fontsize"] = float(
             np.clip(detector_label_fontsize(edited[active_index()]) + float(delta), 4.0, 32.0)
         )
-        redraw_labels()
-
-    def label_index_from_event(event) -> int | None:
-        if event.inaxes is not ax:
-            return None
-        for artist in reversed(label_artists):
-            try:
-                contains, _details = artist.contains(event)
-            except Exception:
-                contains = False
-            if contains:
-                try:
-                    index = int(getattr(artist, "_ra_sim_label_entry_index"))
-                except Exception:
-                    continue
-                if index in drawable_index_set:
-                    return index
-        if event.xdata is None or event.ydata is None:
-            return None
-        event_xy = np.asarray([float(event.x), float(event.y)], dtype=np.float64)
-        nearest_index: int | None = None
-        nearest_distance = np.inf
-        for index in drawable_indices:
-            pos = detector_label_xy(edited[int(index)])
-            if pos is None:
-                continue
-            display_xy = np.asarray(ax.transData.transform((float(pos[0]), float(pos[1]))))
-            distance = float(np.linalg.norm(display_xy - event_xy))
-            if distance < nearest_distance:
-                nearest_index = int(index)
-                nearest_distance = distance
-        if nearest_index is not None and nearest_distance <= 18.0:
-            return nearest_index
-        return None
+        if canvas is None:
+            return
+        item = label_canvas_items.get(active_index())
+        if item is not None:
+            canvas.itemconfigure(
+                item,
+                font=("Arial", int(round(detector_label_fontsize(edited[active_index()]))), "bold"),
+            )
 
     def import_label_settings(_event=None) -> None:
         nonlocal edited
@@ -13875,7 +13939,19 @@ def show_detector_region_label_position_popup(
             )
             if active_index() not in drawable_index_set:
                 selected["index"] = int(drawable_indices[0])
-            redraw_labels()
+            for index in drawable_indices:
+                item = label_canvas_items.get(int(index))
+                pos = detector_label_xy(edited[int(index)])
+                if item is None or pos is None or canvas is None:
+                    continue
+                x_value, y_value = data_to_canvas_xy(pos)
+                canvas.coords(item, x_value, y_value)
+                canvas.itemconfigure(
+                    item,
+                    text=str(edited[int(index)].get("text", "")),
+                    font=("Arial", int(round(detector_label_fontsize(edited[int(index)]))), "bold"),
+                )
+            select_label(active_index())
             print(f"loaded detector label settings={Path(settings_text).expanduser()}")
         except Exception as exc:
             print(f"ignored detector label settings={Path(settings_text).expanduser()}: {exc}")
@@ -13895,7 +13971,7 @@ def show_detector_region_label_position_popup(
         flush_label_box()
         selected["accepted"] = bool(accepted)
         try:
-            fig.canvas.stop_event_loop()
+            root.destroy()
         except Exception:
             pass
 
@@ -13905,117 +13981,129 @@ def show_detector_region_label_position_popup(
     def cancel(_event=None) -> None:
         finish_editor(False)
 
-    def on_press(event) -> None:
-        if event.inaxes is not ax:
+    def on_label_press(event, index: int) -> None:
+        if canvas is None:
             return
-        index = label_index_from_event(event)
-        if index is None or event.xdata is None or event.ydata is None:
+        select_label(int(index))
+        item = label_canvas_items.get(int(index))
+        if item is None:
             return
-        selected["index"] = int(index)
-        pos = detector_label_xy(edited[int(index)])
-        if pos is not None:
-            selected["drag_offset_x"] = float(pos[0]) - float(event.xdata)
-            selected["drag_offset_y"] = float(pos[1]) - float(event.ydata)
+        x_value, y_value = canvas.coords(item)
+        selected["drag_offset_x"] = float(x_value) - float(canvas.canvasx(event.x))
+        selected["drag_offset_y"] = float(y_value) - float(canvas.canvasy(event.y))
         selected["dragging"] = True
-        redraw_labels()
 
-    def on_motion(event) -> None:
-        if not bool(selected.get("dragging", False)):
+    def on_label_motion(event) -> None:
+        if canvas is None or not bool(selected.get("dragging", False)):
             return
-        if event.inaxes is not ax or event.xdata is None or event.ydata is None:
-            return
-        dragging_index = selected.get("index")
-        if dragging_index is None:
-            return
-        set_label_position(
-            int(dragging_index),
-            float(event.xdata) + float(selected.get("drag_offset_x", 0.0)),
-            float(event.ydata) + float(selected.get("drag_offset_y", 0.0)),
+        set_label_canvas_position(
+            active_index(),
+            float(canvas.canvasx(event.x)) + float(selected.get("drag_offset_x", 0.0)),
+            float(canvas.canvasy(event.y)) + float(selected.get("drag_offset_y", 0.0)),
         )
 
-    def on_release(_event) -> None:
+    def on_label_release(_event) -> None:
         selected["dragging"] = False
         selected["drag_offset_x"] = 0.0
         selected["drag_offset_y"] = 0.0
 
     def on_key(event) -> None:
-        box = title_box_state.get("box")
-        if box is not None and getattr(event, "inaxes", None) is getattr(box, "ax", None):
-            return
-        key = str(getattr(event, "key", "")).lower()
+        key = str(getattr(event, "keysym", "")).lower()
         if key in key_nudges:
             nudge_label(*key_nudges[key])
-        elif key in {"enter", "return"}:
+        elif key in {"return", "kp_enter"}:
             finish_editor(True)
         elif key == "escape":
             finish_editor(False)
 
-    def cleanup_editor_artifacts() -> None:
-        remove_label_artists()
-        for control_ax in control_axes:
-            try:
-                control_ax.remove()
-            except Exception:
-                pass
-        try:
-            delattr(fig, "_ra_sim_detector_label_edit_widgets")
-        except Exception:
-            pass
-        fig.canvas.draw_idle()
-
-    label_box_ax = fig.add_axes([0.08, 0.018, 0.28, 0.045])
-    font_down_ax = fig.add_axes([0.39, 0.018, 0.075, 0.045])
-    font_up_ax = fig.add_axes([0.47, 0.018, 0.075, 0.045])
-    import_ax = fig.add_axes([0.57, 0.018, 0.075, 0.045])
-    export_ax = fig.add_axes([0.65, 0.018, 0.075, 0.045])
-    cancel_ax = fig.add_axes([0.75, 0.018, 0.075, 0.045])
-    accept_ax = fig.add_axes([0.83, 0.018, 0.075, 0.045])
-    control_axes.extend(
-        [label_box_ax, font_down_ax, font_up_ax, import_ax, export_ax, cancel_ax, accept_ax]
-    )
-
-    title_box = TextBox(label_box_ax, "Label", textalignment="left")
-    title_box.on_submit(set_selected_label_text)
-    title_box_state["box"] = title_box
-    font_down_button = Button(font_down_ax, "Font -")
-    font_up_button = Button(font_up_ax, "Font +")
-    import_button = Button(import_ax, "Import")
-    export_button = Button(export_ax, "Export")
-    cancel_button = Button(cancel_ax, "Cancel")
-    accept_button = Button(accept_ax, "Accept")
-    font_down_button.on_clicked(lambda event: step_font(-1.0))
-    font_up_button.on_clicked(lambda event: step_font(1.0))
-    import_button.on_clicked(import_label_settings)
-    export_button.on_clicked(export_label_settings)
-    cancel_button.on_clicked(cancel)
-    accept_button.on_clicked(accept)
-    fig._ra_sim_detector_label_edit_widgets = [
-        title_box,
-        font_down_button,
-        font_up_button,
-        import_button,
-        export_button,
-        cancel_button,
-        accept_button,
-    ]
-    connection_ids = [
-        fig.canvas.mpl_connect("button_press_event", on_press),
-        fig.canvas.mpl_connect("motion_notify_event", on_motion),
-        fig.canvas.mpl_connect("button_release_event", on_release),
-        fig.canvas.mpl_connect("key_press_event", on_key),
-        fig.canvas.mpl_connect("close_event", cancel),
-    ]
-
     try:
-        redraw_labels()
-        fig.canvas.start_event_loop(timeout=-1)
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as handle:
+            image_path = Path(handle.name)
+        fig.canvas.draw()
+        fig.savefig(image_path, dpi=fig.dpi)
+        root = tk.Tk()
+        root.title("Detector label positions")
+        root.protocol("WM_DELETE_WINDOW", cancel)
+
+        image = tk.PhotoImage(file=str(image_path))
+        image_width = int(image.width())
+        image_height = float(image.height())
+        root._ra_sim_detector_label_image = image
+
+        main = ttk.Frame(root, padding=8)
+        main.grid(row=0, column=0, sticky="nsew")
+        root.rowconfigure(0, weight=1)
+        root.columnconfigure(0, weight=1)
+
+        canvas = tk.Canvas(
+            main,
+            width=image_width,
+            height=int(image_height),
+            background="black",
+            highlightthickness=0,
+        )
+        canvas.grid(row=0, column=0, columnspan=8, sticky="nsew")
+        canvas.create_image(0, 0, image=image, anchor="nw")
+
+        control_frame = ttk.Frame(main)
+        control_frame.grid(row=1, column=0, columnspan=8, sticky="ew", pady=(8, 0))
+        label_text_var = tk.StringVar(root, value=str(edited[active_index()].get("text", "")))
+        ttk.Label(control_frame, text="Label").grid(row=0, column=0, sticky="w")
+        label_entry = ttk.Entry(control_frame, textvariable=label_text_var, width=28)
+        label_entry.grid(row=0, column=1, sticky="ew", padx=(4, 8))
+        control_frame.columnconfigure(1, weight=1)
+        label_entry.bind("<Return>", lambda _event: flush_label_box())
+        label_entry.bind("<FocusOut>", lambda _event: flush_label_box())
+        ttk.Button(control_frame, text="Font -", command=lambda: step_font(-1.0)).grid(
+            row=0, column=2, padx=2
+        )
+        ttk.Button(control_frame, text="Font +", command=lambda: step_font(1.0)).grid(
+            row=0, column=3, padx=2
+        )
+        ttk.Button(control_frame, text="Import", command=import_label_settings).grid(
+            row=0, column=4, padx=2
+        )
+        ttk.Button(control_frame, text="Export", command=export_label_settings).grid(
+            row=0, column=5, padx=2
+        )
+        ttk.Button(control_frame, text="Cancel", command=cancel).grid(row=0, column=6, padx=2)
+        ttk.Button(control_frame, text="Accept", command=accept).grid(row=0, column=7, padx=2)
+
+        for index in drawable_indices:
+            pos = detector_label_xy(edited[int(index)])
+            if pos is None:
+                continue
+            x_value, y_value = data_to_canvas_xy(pos)
+            item = canvas.create_text(
+                x_value,
+                y_value,
+                text=str(edited[int(index)].get("text", "")),
+                fill="white",
+                activefill="#00d5ff",
+                font=("Arial", int(round(detector_label_fontsize(edited[int(index)]))), "bold"),
+                anchor="center",
+                tags=("detector_label", f"detector_label_{int(index)}"),
+            )
+            label_canvas_items[int(index)] = int(item)
+            canvas.tag_bind(item, "<ButtonPress-1>", lambda event, i=int(index): on_label_press(event, i))
+            canvas.tag_bind(item, "<B1-Motion>", on_label_motion)
+            canvas.tag_bind(item, "<ButtonRelease-1>", on_label_release)
+
+        select_label(active_index())
+        for key in ("<Left>", "<Right>", "<Up>", "<Down>", "<Return>", "<Escape>"):
+            root.bind(key, on_key)
+        root.mainloop()
     finally:
-        for connection_id in connection_ids:
+        if root is not None:
             try:
-                fig.canvas.mpl_disconnect(connection_id)
+                root.destroy()
             except Exception:
                 pass
-        cleanup_editor_artifacts()
+        if image_path is not None:
+            try:
+                image_path.unlink()
+            except Exception:
+                pass
 
     if not bool(selected["accepted"]):
         return original, False
@@ -14382,6 +14470,15 @@ ax.set_yticklabels(y_tick_labels)
 rod_label_entries = apply_unified_qr_rod_region_editor_labels(
     rod_label_entries,
     qr_rod_region_editor_result,
+)
+rod_label_entries = edit_detector_region_label_positions(
+    fig,
+    ax,
+    rod_label_entries,
+    mode="auto",
+    settings_path=detector_label_settings_path,
+    backend_name=mpl.get_backend(),
+    env=os.environ,
 )
 draw_detector_region_label_artists(ax, rod_label_entries)
 

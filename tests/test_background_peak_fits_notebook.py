@@ -1307,7 +1307,7 @@ def test_detector_region_label_settings_round_trip_by_label_id() -> None:
     assert applied[1]["fontsize"] == 16.0
 
 
-def test_detector_region_label_editor_uses_matplotlib_controls_on_detector_figure() -> None:
+def test_detector_region_label_editor_uses_tk_canvas_controls() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     function_source = source[
         source.index("def show_detector_region_label_position_popup(") : source.index(
@@ -1316,36 +1316,35 @@ def test_detector_region_label_editor_uses_matplotlib_controls_on_detector_figur
     ]
 
     for token in (
-        "from matplotlib.widgets import Button, TextBox",
-        "TextBox(",
-        "Button(",
-        "fig.add_axes(",
-        "fig._ra_sim_detector_label_edit_widgets",
-        'textalignment="left"',
-        'Button(import_ax, "Import")',
-        'Button(export_ax, "Export")',
-        'Button(cancel_ax, "Cancel")',
-        'Button(accept_ax, "Accept")',
+        "import tkinter as tk",
+        "from tkinter import ttk",
+        "tempfile.NamedTemporaryFile(",
+        "tk.PhotoImage(",
+        "tk.Canvas(",
+        "canvas.create_image(",
+        "canvas.create_text(",
+        "canvas.tag_bind(",
+        'ttk.Button(control_frame, text="Import"',
+        'ttk.Button(control_frame, text="Export"',
+        'ttk.Button(control_frame, text="Cancel"',
+        'ttk.Button(control_frame, text="Accept"',
         "load_detector_label_settings(",
         "save_detector_label_settings(",
+        "root.mainloop()",
     ):
         assert token in function_source
 
     for removed_token in (
-        "import tkinter as tk",
-        "from tkinter import ttk",
-        "root = tk.Tk()",
-        "tk.Canvas(",
-        "tk.PhotoImage(",
-        "ttk.Combobox(",
-        "ttk.Entry(",
-        "ttk.Button(",
-        "tempfile.NamedTemporaryFile(",
+        "from matplotlib.widgets import Button, TextBox",
+        "TextBox(",
+        "fig._ra_sim_detector_label_edit_widgets",
+        "fig.canvas.start_event_loop(timeout=-1)",
+        'fig.canvas.mpl_connect("motion_notify_event", on_motion)',
     ):
         assert removed_token not in function_source
 
 
-def test_detector_region_label_editor_selects_labels_with_matplotlib_events() -> None:
+def test_detector_region_label_editor_selects_labels_with_tk_canvas_items() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     function_source = source[
         source.index("def show_detector_region_label_position_popup(") : source.index(
@@ -1355,19 +1354,18 @@ def test_detector_region_label_editor_selects_labels_with_matplotlib_events() ->
 
     for token in (
         "drawable_index_set = set(drawable_indices)",
-        "def label_index_from_event(event)",
-        "artist.contains(event)",
-        "_ra_sim_label_entry_index",
-        'selected["index"] = int(index)',
-        'fig.canvas.mpl_connect("button_press_event", on_press)',
-        'fig.canvas.mpl_connect("motion_notify_event", on_motion)',
-        'fig.canvas.mpl_connect("button_release_event", on_release)',
-        'fig.canvas.mpl_connect("key_press_event", on_key)',
+        "label_canvas_items: dict[int, int] = {}",
+        "def select_label(index: int) -> None:",
+        "canvas.itemconfigure(",
+        "canvas.coords(",
+        'canvas.tag_bind(item, "<ButtonPress-1>"',
+        'canvas.tag_bind(item, "<B1-Motion>"',
+        'canvas.tag_bind(item, "<ButtonRelease-1>"',
         "sync_controls()",
     ):
         assert token in function_source
-    assert "canvas.tag_bind(" not in function_source
-    assert "canvas.bind(" not in function_source
+    assert "artist.contains(event)" not in function_source
+    assert 'fig.canvas.mpl_connect("button_press_event", on_press)' not in function_source
 
 
 def test_detector_region_label_editor_tunes_pixel_locations_in_data_space() -> None:
@@ -1379,23 +1377,25 @@ def test_detector_region_label_editor_tunes_pixel_locations_in_data_space() -> N
     ]
 
     for token in (
-        "def set_label_position(",
-        "event.xdata",
-        "event.ydata",
+        "def data_to_canvas_xy(",
+        "def canvas_to_data_xy(",
+        "ax.transData.transform(",
+        "ax.transData.inverted().transform(",
+        "image_height -",
         "clamp_detector_label_position(",
         'edited[int(index)]["label_xy"]',
         "def set_selected_label_text(",
         "def step_font(",
-        "TextBox(label_box_ax,",
-        'Button(font_down_ax, "Font -")',
-        'Button(font_up_ax, "Font +")',
+        "label_text_var = tk.StringVar(",
+        'ttk.Button(control_frame, text="Font -"',
+        'ttk.Button(control_frame, text="Font +"',
     ):
         assert token in function_source
     assert "setup_detector_label_editor_blit(" not in source
     assert "redraw_detector_label_editor_blit(" not in source
 
 
-def test_detector_region_label_editor_drags_labels_on_existing_matplotlib_axes() -> None:
+def test_detector_region_label_editor_drags_labels_on_tk_canvas() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     function_source = source[
         source.index("def show_detector_region_label_position_popup(") : source.index(
@@ -1404,20 +1404,21 @@ def test_detector_region_label_editor_drags_labels_on_existing_matplotlib_axes()
     ]
 
     for token in (
-        "def on_press(event)",
-        "def on_motion(event)",
-        "def on_release(_event)",
+        "def on_label_press(event, index: int) -> None:",
+        "def on_label_motion(event) -> None:",
+        "def on_label_release(_event) -> None:",
         'selected["dragging"] = True',
         'selected["dragging"] = False',
-        'if event.inaxes is not ax',
-        "set_label_position(",
-        'float(event.xdata) + float(selected.get("drag_offset_x", 0.0))',
-        'float(event.ydata) + float(selected.get("drag_offset_y", 0.0))',
+        "canvas.canvasx(event.x)",
+        "canvas.canvasy(event.y)",
+        "set_label_canvas_position(",
+        'selected["drag_offset_x"]',
+        'selected["drag_offset_y"]',
     ):
         assert token in function_source
 
 
-def test_detector_region_label_editor_reuses_figure_event_loop_without_closing() -> None:
+def test_detector_region_label_editor_uses_tk_mainloop_without_matplotlib_event_loop() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     function_source = source[
         source.index("def show_detector_region_label_position_popup(") : source.index(
@@ -1426,14 +1427,16 @@ def test_detector_region_label_editor_reuses_figure_event_loop_without_closing()
     ]
 
     for token in (
-        "fig.canvas.start_event_loop(timeout=-1)",
-        "fig.canvas.stop_event_loop()",
+        "root = tk.Tk()",
+        "root.protocol(",
+        "root.mainloop()",
         "def finish_editor(",
-        "cleanup_editor_artifacts()",
-        "for connection_id in connection_ids:",
-        "fig.canvas.mpl_disconnect(connection_id)",
+        "root.destroy()",
+        "image_path.unlink()",
     ):
         assert token in function_source
+    assert "fig.canvas.start_event_loop(timeout=-1)" not in function_source
+    assert "fig.canvas.stop_event_loop()" not in function_source
     assert "plt.show(block=True)" not in function_source
     assert "plt.close(fig)" not in function_source
 
@@ -1441,96 +1444,37 @@ def test_detector_region_label_editor_reuses_figure_event_loop_without_closing()
 def test_detector_region_label_editor_removes_temporary_in_figure_artifacts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from matplotlib.backend_bases import KeyEvent, MouseEvent
-
-    namespace = _script_functions(
-        "detector_label_id",
-        "detector_label_fontsize",
-        "detector_label_xy",
-        "detector_label_settings_payload",
-        "apply_detector_label_settings",
-        "load_detector_label_settings",
-        "save_detector_label_settings",
-        "draw_detector_region_label_artists",
-        "clamp_detector_label_position",
-        "show_detector_region_label_position_popup",
-    )
-    namespace["detector_region_label_fontsize"] = 8.6
-    namespace["detector_region_xlim"] = (0.0, 100.0)
-    namespace["detector_region_ylim"] = (100.0, 0.0)
-    show_editor = namespace["show_detector_region_label_position_popup"]
-
-    fig, ax = plt.subplots(figsize=(3, 2))
-    ax.imshow(np.ones((100, 100), dtype=np.float64), origin="upper")
-    event_loop_timeouts: list[float] = []
-
-    def run_editor_events(timeout: float = -1) -> None:
-        event_loop_timeouts.append(timeout)
-        fig.canvas.draw()
-        start_x, start_y = ax.transData.transform((40.0, 50.0))
-        end_x, end_y = ax.transData.transform((60.0, 70.0))
-        fig.canvas.callbacks.process(
-            "button_press_event",
-            MouseEvent("button_press_event", fig.canvas, start_x, start_y, button=1),
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    function_source = source[
+        source.index("def show_detector_region_label_position_popup(") : source.index(
+            "\ndef edit_detector_region_label_positions("
         )
-        fig.canvas.callbacks.process(
-            "motion_notify_event",
-            MouseEvent("motion_notify_event", fig.canvas, end_x, end_y, button=1),
-        )
-        fig.canvas.callbacks.process(
-            "button_release_event",
-            MouseEvent("button_release_event", fig.canvas, end_x, end_y, button=1),
-        )
-        fig.canvas.callbacks.process(
-            "key_press_event", KeyEvent("key_press_event", fig.canvas, key="enter")
-        )
+    ]
 
-    monkeypatch.setattr(
-        fig.canvas,
-        "start_event_loop",
-        run_editor_events,
-        raising=False,
-    )
-    monkeypatch.setattr(fig.canvas, "stop_event_loop", lambda: None, raising=False)
-
-    try:
-        edited, accepted = show_editor(
-            fig,
-            ax,
-            [
-                    {
-                        "label_id": "m=7:+",
-                        "text": "m = 7 +",
-                        "label_xy": np.array([40.0, 50.0], dtype=np.float64),
-                        "fontsize": 9.0,
-                    }
-            ],
-        )
-    finally:
-        plt.close(fig)
-
-    assert accepted is True
-    assert event_loop_timeouts == [-1]
-    assert len(fig.axes) == 1
-    assert len(ax.texts) == 0
-    assert not hasattr(fig, "_ra_sim_detector_label_edit_widgets")
-    assert edited[0]["text"] == "m = 7 +"
-    np.testing.assert_allclose(edited[0]["label_xy"], np.array([60.0, 70.0]))
+    assert "finally:" in function_source
+    assert "image_path.unlink()" in function_source
+    assert "root.destroy()" in function_source
+    assert "_ra_sim_detector_label_edit_widgets" not in function_source
 
 
 def test_detector_region_label_editor_wires_before_final_save() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     detector_figure_start = source.index("rod_label_entries: list[dict[str, object]] = []")
-    editor_call = source.index(
+    unified_label_call = source.index(
         "apply_unified_qr_rod_region_editor_labels(", detector_figure_start
     )
+    editor_call = source.index("edit_detector_region_label_positions(", detector_figure_start)
+    draw_call = source.index("draw_detector_region_label_artists(", detector_figure_start)
     save_call = source.index(
         "detector_region_png, detector_region_pdf = save_manuscript_figure",
         detector_figure_start,
     )
     section = source[detector_figure_start:save_call]
 
-    assert editor_call < save_call
+    assert unified_label_call < editor_call < draw_call < save_call
+    assert "settings_path=detector_label_settings_path" in section
+    assert "backend_name=mpl.get_backend()" in section
+    assert "env=os.environ" in section
     assert "draw_detector_region_label_artists(" in section
     assert 'label_entry["label_xy"]' in section
     assert "used_label_positions" not in section
@@ -3645,7 +3589,7 @@ def test_parallel_script_uses_unified_qr_rod_region_editor_before_final_fit() ->
     assert "l_max" in source
 
 
-def test_parallel_script_unified_editor_replaces_late_detector_label_popup() -> None:
+def test_parallel_script_unified_editor_restores_late_detector_label_popup() -> None:
     if not PARALLEL_SCRIPT_PATH.exists():
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
@@ -3656,8 +3600,11 @@ def test_parallel_script_unified_editor_replaces_late_detector_label_popup() -> 
     )
     detector_save_section = source[detector_figure_start:save_call]
 
-    assert "edit_detector_region_label_positions(" not in detector_save_section
     assert "apply_unified_qr_rod_region_editor_labels(" in detector_save_section
+    assert "edit_detector_region_label_positions(" in detector_save_section
+    assert "settings_path=detector_label_settings_path" in detector_save_section
+    assert "backend_name=mpl.get_backend()" in detector_save_section
+    assert "env=os.environ" in detector_save_section
 
 
 def test_parallel_script_unified_editor_has_region_controls() -> None:
@@ -3677,9 +3624,15 @@ def test_parallel_script_unified_editor_has_region_controls() -> None:
 
     for token in (
         "from matplotlib.widgets import Button, Slider, TextBox",
-        'Slider(delta_qr_ax, "Delta Qr (+/- A^-1)"',
-        'TextBox(l_min_ax, "L Min"',
-        'TextBox(l_max_ax, "L Max"',
+        "delta_qr_slider = Slider(",
+        "delta_qr_ax,",
+        '"Delta Qr (+/- A^-1)"',
+        "l_min_box = TextBox(",
+        "l_min_ax,",
+        '"L Min"',
+        "l_max_box = TextBox(",
+        "l_max_ax,",
+        '"L Max"',
         "profile_update_callback",
         'region_control_state["rod_profile_table"]',
         "refresh_region_profile_table()",
@@ -3922,6 +3875,263 @@ def test_parallel_script_unified_editor_region_controls_update_preview(
     ]
     assert update_calls == [(0.02, 0.5, 3.0), (0.02, 0.5, 2.5)]
     assert preview_calls[-1][3] == [1.0, 2.0]
+
+
+def test_parallel_script_unified_editor_l_bounds_reject_invalid_profile_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    namespace = _script_functions(
+        "as_float",
+        "qr_rod_peak_edit_runtime_mode",
+        "show_qr_rod_peak_marker_popup",
+        "marker_table_with_specular_l_markers",
+        "qz_l_linear_coeff_from_marker_rows",
+        "marker_row_title",
+        "clean_marker_title",
+        "replace_qr_rod_marker_group_qz",
+        "positive_log_plot_values",
+        "apply_positive_log_y_axis",
+        "snap_qr_rod_markers_to_profile_peaks",
+        "l_tick_label",
+        "_safe_run_name",
+        "load_qr_rod_peak_edits",
+        "write_qr_rod_peak_edits",
+    )
+    show_editor = namespace["show_qr_rod_peak_marker_popup"]
+    region_state = {"delta_qr": 0.01, "l_min": 0.0, "l_max": 3.0}
+    update_calls: list[tuple[float, float, float]] = []
+
+    def refresh_profiles(delta_qr: float, l_min: float, l_max: float) -> pd.DataFrame:
+        update_calls.append((float(delta_qr), float(l_min), float(l_max)))
+        return pd.DataFrame(
+            {
+                "m": [np.nan],
+                "branch": ["+"],
+                "qz_center": [1.5],
+                "background_density": [10.0],
+            }
+        )
+
+    def fake_show(*_args, **_kwargs) -> None:
+        fig = plt.gcf()
+        for widget in list(getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets")):
+            widget_type = type(widget).__name__
+            label = getattr(getattr(widget, "label", None), "get_text", lambda: "")()
+            if widget_type == "TextBox" and label == "L Min":
+                widget.set_val("0.5")
+            elif widget_type == "TextBox" and label == "L Max":
+                widget.set_val("2.5")
+        plt.close(fig)
+
+    marker_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_marker": 1.0, "fit_l": 1.0, "display_l": 1.0},
+            {"m": 1, "branch": "+", "qz_marker": 2.0, "fit_l": 2.0, "display_l": 2.0},
+        ]
+    )
+    rod_profile_table = pd.DataFrame(
+        {
+            "m": [1, 1],
+            "branch": ["+", "+"],
+            "qz_center": [1.0, 2.0],
+            "background_density": [1.0, 2.0],
+        }
+    )
+
+    monkeypatch.setattr(plt, "show", fake_show)
+    _edited, accepted = show_editor(
+        marker_table,
+        rod_profile_table,
+        backend_name="TkAgg",
+        region_state=region_state,
+        profile_update_callback=refresh_profiles,
+    )
+
+    assert accepted is True
+    assert update_calls == [(0.01, 0.5, 3.0), (0.01, 0.5, 2.5)]
+    assert "profile_update_error" in region_state
+    refreshed = pd.DataFrame(region_state["rod_profile_table"])
+    assert refreshed["m"].tolist() == [1, 1]
+    assert refreshed["background_density"].tolist() == [1.0, 2.0]
+
+
+def test_parallel_script_unified_editor_l_bounds_keep_popup_on_redraw_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    namespace = _script_functions(
+        "as_float",
+        "qr_rod_peak_edit_runtime_mode",
+        "show_qr_rod_peak_marker_popup",
+        "marker_table_with_specular_l_markers",
+        "qz_l_linear_coeff_from_marker_rows",
+        "marker_row_title",
+        "clean_marker_title",
+        "replace_qr_rod_marker_group_qz",
+        "positive_log_plot_values",
+        "apply_positive_log_y_axis",
+        "snap_qr_rod_markers_to_profile_peaks",
+        "l_tick_label",
+        "_safe_run_name",
+        "load_qr_rod_peak_edits",
+        "write_qr_rod_peak_edits",
+    )
+    show_editor = namespace["show_qr_rod_peak_marker_popup"]
+    region_state = {"delta_qr": 0.01, "l_min": 0.0, "l_max": 3.0}
+    update_calls: list[tuple[float, float, float]] = []
+
+    def refresh_profiles(delta_qr: float, l_min: float, l_max: float) -> pd.DataFrame:
+        update_calls.append((float(delta_qr), float(l_min), float(l_max)))
+        return pd.DataFrame(
+            {
+                "m": [1, 1],
+                "branch": ["+", "+"],
+                "qz_center": [1.0, 2.0],
+                "background_density": [10.0, 20.0],
+            }
+        )
+
+    def fake_show(*_args, **_kwargs) -> None:
+        fig = plt.gcf()
+
+        def fail_draw_idle() -> None:
+            raise RuntimeError("draw failed")
+
+        fig.canvas.draw_idle = fail_draw_idle
+        for widget in list(getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets")):
+            widget_type = type(widget).__name__
+            label = getattr(getattr(widget, "label", None), "get_text", lambda: "")()
+            if widget_type == "TextBox" and label == "L Min":
+                widget.set_val("0.5")
+            elif widget_type == "TextBox" and label == "L Max":
+                widget.set_val("2.5")
+        plt.close(fig)
+
+    marker_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_marker": 1.0, "fit_l": 1.0, "display_l": 1.0},
+            {"m": 1, "branch": "+", "qz_marker": 2.0, "fit_l": 2.0, "display_l": 2.0},
+        ]
+    )
+    rod_profile_table = pd.DataFrame(
+        {
+            "m": [1, 1],
+            "branch": ["+", "+"],
+            "qz_center": [1.0, 2.0],
+            "background_density": [1.0, 2.0],
+        }
+    )
+
+    monkeypatch.setattr(plt, "show", fake_show)
+    _edited, accepted = show_editor(
+        marker_table,
+        rod_profile_table,
+        backend_name="TkAgg",
+        region_state=region_state,
+        profile_update_callback=refresh_profiles,
+    )
+
+    assert accepted is True
+    assert update_calls == [(0.01, 0.5, 3.0), (0.01, 0.5, 2.5)]
+    assert region_state["redraw_error"] == "draw failed"
+
+
+def test_parallel_script_unified_editor_l_bound_enter_does_not_accept_editor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from matplotlib.backend_bases import KeyEvent
+
+    namespace = _script_functions(
+        "as_float",
+        "qr_rod_peak_edit_runtime_mode",
+        "show_qr_rod_peak_marker_popup",
+        "marker_table_with_specular_l_markers",
+        "qz_l_linear_coeff_from_marker_rows",
+        "marker_row_title",
+        "clean_marker_title",
+        "replace_qr_rod_marker_group_qz",
+        "positive_log_plot_values",
+        "apply_positive_log_y_axis",
+        "snap_qr_rod_markers_to_profile_peaks",
+        "l_tick_label",
+        "_safe_run_name",
+        "load_qr_rod_peak_edits",
+        "write_qr_rod_peak_edits",
+    )
+    show_editor = namespace["show_qr_rod_peak_marker_popup"]
+    region_state = {"delta_qr": 0.01, "l_min": 0.0, "l_max": 3.0}
+    update_calls: list[tuple[float, float, float]] = []
+    close_calls_during_l_enter: list[str] = []
+
+    def refresh_profiles(delta_qr: float, l_min: float, l_max: float) -> pd.DataFrame:
+        update_calls.append((float(delta_qr), float(l_min), float(l_max)))
+        return pd.DataFrame(
+            {
+                "m": [1, 1],
+                "branch": ["+", "+"],
+                "qz_center": [1.0, 2.0],
+                "background_density": [10.0, 20.0],
+            }
+        )
+
+    real_close = plt.close
+    in_l_enter = {"label": ""}
+
+    def record_close(*args, **kwargs) -> None:
+        if in_l_enter["label"]:
+            close_calls_during_l_enter.append(in_l_enter["label"])
+        real_close(*args, **kwargs)
+
+    def fake_show(*_args, **_kwargs) -> None:
+        fig = plt.gcf()
+        boxes = {
+            getattr(getattr(widget, "label", None), "get_text", lambda: "")(): widget
+            for widget in list(getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets"))
+            if type(widget).__name__ == "TextBox"
+        }
+        for label, value in (("L Min", "0.5"), ("L Max", "2.5")):
+            box = boxes[label]
+            box.set_val(value)
+            box.begin_typing()
+            event = KeyEvent("key_press_event", fig.canvas, key="enter")
+            event.inaxes = box.ax
+            in_l_enter["label"] = label
+            try:
+                fig.canvas.callbacks.process("key_press_event", event)
+            finally:
+                in_l_enter["label"] = ""
+                box.stop_typing()
+        real_close(fig)
+
+    marker_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_marker": 1.0, "fit_l": 1.0, "display_l": 1.0},
+            {"m": 1, "branch": "+", "qz_marker": 2.0, "fit_l": 2.0, "display_l": 2.0},
+        ]
+    )
+    rod_profile_table = pd.DataFrame(
+        {
+            "m": [1, 1],
+            "branch": ["+", "+"],
+            "qz_center": [1.0, 2.0],
+            "background_density": [1.0, 2.0],
+        }
+    )
+
+    monkeypatch.setattr(plt, "close", record_close)
+    monkeypatch.setattr(plt, "show", fake_show)
+    _edited, accepted = show_editor(
+        marker_table,
+        rod_profile_table,
+        backend_name="TkAgg",
+        region_state=region_state,
+        profile_update_callback=refresh_profiles,
+    )
+
+    assert accepted is True
+    assert close_calls_during_l_enter == []
+    assert update_calls[-1] == (0.01, 0.5, 2.5)
+    assert region_state["l_min"] == pytest.approx(0.5)
+    assert region_state["l_max"] == pytest.approx(2.5)
 
 
 def test_parallel_script_unified_editor_delta_qr_refreshes_profile_table_on_release(

@@ -5,8 +5,9 @@ Owner: -
 Issue: none
 Priority: p1
 Last updated: 2026-05-12
-Status: implemented locally, Qr-rod editor startup fixed, detector companion
-preview/deferred Delta Qr validation passing
+Status: implemented locally, Qr-rod editor startup and L-bound callback crash
+fixed, detector label editing/import/export restored through a responsive Tk
+canvas popup, detector companion preview/deferred Delta Qr validation passing
 
 ## Problem
 
@@ -56,11 +57,11 @@ to make the Qr rod detector and integration figures source-consistent:
   stronger band fill, and expanded Delta-Qr boundary so the actual selected
   region remains visible over high-intensity detector pixels without making the
   centerline dominate the region.
-- The detector selected-region Qr-label editor now runs on the same Matplotlib
-  detector figure instead of a separate Tk static-image canvas. Labels are
-  selected and dragged directly in detector pixel coordinates, the active label
-  text and font size can be adjusted in-figure, and import/export still use the
-  existing detector-label JSON schema.
+- The detector selected-region Qr-label editor now runs as a Tk canvas popup
+  over a saved detector-figure snapshot instead of using Matplotlib text-artist
+  dragging. Labels are selected and dragged in detector pixel coordinates, the
+  active label text and font size can be adjusted in the popup, and
+  import/export still use the existing detector-label JSON schema.
 - Integrated Qr rod figure centers `HK=0`, labels its x-axis as `L`, labels the
   HK=0 row and left nonzero subplot axes with `Intensity (a.u.)`, aligns
   non-specular x ranges from `L=2`, and places the Data/Simulation legend in
@@ -198,6 +199,41 @@ Bug/error status:
   before the editor L-window setup calls `rod_profile_l_window_from_table(...)`.
   This resolves the observed PbI2 `NameError` before the marker editor can
   open.
+- The Qr-rod L-window textbox crash path is fixed by validating profile-refresh
+  tables before the popup replaces its last good profile table. If a refresh
+  triggered by `L Min` or `L Max` returns no drawable rows, invalid `m`,
+  invalid Qz, invalid density, or blank branch labels, the editor records
+  `profile_update_error`, keeps the previous drawable profile table, refreshes
+  the detector preview where possible, and remains open.
+- The L-window textbox redraw boundary is also guarded. Matplotlib widget
+  callbacks are dispatched through the backend event loop, so redraw exceptions
+  can otherwise be printed by Matplotlib as callback tracebacks while leaving
+  the operator with a broken-feeling popup. `L Min` / `L Max` redraw failures
+  are now recorded as `redraw_error` in the editor region state, and the popup
+  remains open for recovery.
+- The real non-headless failure was the editor's global Enter key shortcut
+  racing the Matplotlib `TextBox` submit path. Pressing Enter inside `L Min` or
+  `L Max` submitted the text field, then the figure-level key handler also
+  treated that same keypress as Accept and closed the popup. The key handler
+  now ignores active editor text boxes, including the L-bound controls, so the
+  field submit is owned by the TextBox and Accept remains explicit.
+- The detector selected-region label editor was accidentally bypassed by the
+  unified Qr-rod marker-editor flow. The final detector-region save path now
+  calls `edit_detector_region_label_positions(...)` before the last label draw
+  and save, passing the existing settings path, Matplotlib backend, and
+  environment so interactive backends still open the popup and headless/CI runs
+  still skip it.
+- The detector label editor popup then froze on click because the Matplotlib
+  text-artist drag path redrew the detector figure during label movement. The
+  editor now uses a Tk `Canvas` with independent text items over a temporary PNG
+  snapshot, so dragging updates the small canvas item and converts back through
+  the existing Matplotlib data transform only when coordinates change.
+- Gated callback diagnostics are available with
+  `RA_SIM_QR_ROD_EDITOR_DEBUG=1`. Set
+  `RA_SIM_QR_ROD_EDITOR_DEBUG_LOG=<path>` to append JSON-line phase records for
+  L-bound submits, rejected profile refreshes, accepted profile refreshes, and
+  redraw errors. These diagnostics are off by default and do not change fitting
+  inputs or artifact schemas.
 - Existing unrelated non-parallel notebook test failures remain out of scope.
 
 Feature status:
@@ -209,18 +245,18 @@ Feature status:
   the central `HK=0` / `00L` rod. This is a display-only change; Qr/Qz maps,
   Delta-Qr values, selected masks, integration, fitting, and cache identities
   are unchanged.
-- The detector selected-region label editor now supports in-figure picking and
+- The detector selected-region label editor now supports Tk-canvas picking and
   dragging for Qr-region labels. The helper signature and
   `ra_sim.detector_label_settings.v1` JSON payload are unchanged, and the
-  temporary editor controls/artists are removed before the final figure is
-  saved.
-- The unified Qr-rod editor now owns the operator-facing Qr-region adjustment
-  order for the parallel diagnostic: marker editing, Delta Qr, and L-window
-  changes happen in the same Matplotlib popup before the final joint Qz fit.
-  The older detector-label editor helper remains for schema compatibility, but
-  the final detector selected-region save path consumes unified-editor label
-  entries when present and otherwise draws the generated defaults without
-  opening a second popup.
+  temporary PNG/window are cleaned up before the final figure is saved.
+- The final detector selected-region save path now invokes that existing label
+  editor after Qr-rod region edits and before drawing the saved labels. This
+  restores the operator opportunity to drag/nudge labels on the actual detector
+  figure and to import/export the existing detector-label settings JSON.
+- The unified Qr-rod editor owns marker editing, Delta Qr, and L-window changes
+  before the final joint Qz fit. Detector label placement remains a separate
+  detector-figure step after that editor, using the existing label editor and
+  `ra_sim.detector_label_settings.v1` import/export interface.
 - The unified Qr-rod editor now also receives a detector companion figure in
   popup mode. This is display-only context for the operator and does not alter
   Qr/Qz maps, fit inputs, cache signatures, exported artifact schemas, or
@@ -342,10 +378,10 @@ Passing checks:
   central `HK=0` / `00L` rod uses the dedicated high-contrast style,
   same-width centerline without a halo, stronger Delta-Qr band styling,
   unchanged Delta-Qr mask-builder input, and expanded boundary mask.
-- Targeted detector label-editor coverage verifies Matplotlib in-figure
-  controls, label selection through canvas events, data-space dragging, event
-  loop use without closing the final figure, cleanup of temporary editor
-  artifacts, runtime-mode handling, settings round trip, and final-save wiring.
+- Targeted detector label-editor coverage verifies Tk canvas controls, complete
+  label event bindings, data-space coordinate conversion, Tk mainloop use
+  without Matplotlib event-loop blocking, cleanup of the temporary PNG/window,
+  runtime-mode handling, settings round trip, and final-save wiring.
 - Targeted Qr-rod marker edit coverage for per-rod marker replacement,
   marker-table cache-key hashing, headless/interactive mode resolution, JSON
   edit round trip including `marker_title`, final-label override behavior,
@@ -447,22 +483,72 @@ Passing checks:
 - Focused popup/editor deferred-integration closeout passed:
   `python -m pytest tests/test_background_peak_fits_notebook.py -k "unified_editor or detector_qr_preview or companion_figures" -ra`
   with `9 passed`.
+- Focused L-bound crash regression passed:
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "l_bounds_reject_invalid_profile_refresh or l_bounds_keep_popup_on_redraw_error or l_bound_enter_does_not_accept_editor or region_controls_update_preview or delta_qr_refreshes_profile_table_on_release or accept_flushes_pending_profile_refresh" -ra`
+  with `6 passed`.
+- Non-headless QtAgg editor repro passed by opening the real Matplotlib event
+  loop, scheduling `L Min=0.5` and `L Max=2.5` textbox submissions through a
+  GUI timer, refreshing profiles twice, and closing the popup accepted without
+  callback traceback. This used Matplotlib `3.10.3` with backend `qtagg`.
+- The non-headless QtAgg repro was rerun with TextBox Enter events for
+  `L Min=0.5`, `L Max=2.5`, `L Min=0.25`, and `L Max=2.75`. The popup stayed
+  open through each L-bound Enter keypress, accepted only through the Accept
+  button, and returned final state `l_min=0.25`, `l_max=2.75`.
+- Focused detector-label restoration coverage passed:
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "detector_region_label_editor or detector_region_labels or detector_region_label_settings or unified_editor or l_bound" -ra`
+  with `24 passed`.
+- Non-headless QtAgg detector-label editor validation passed by opening the
+  real Matplotlib event loop, dragging a label from `(40,50)` to `(60,70)`,
+  increasing font size, exporting detector-label settings, moving the label
+  again, importing the saved settings, and accepting. The editor returned
+  `text="m = 7 moved"`, `label_xy=(60,70)`, `fontsize=10`, and saved schema
+  `ra_sim.detector_label_settings.v1`.
+- Focused detector-label visibility regression passed:
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "detector_region_label_editor_shows_figure_before_event_loop" -ra`
+  with `1 passed`.
+- Focused detector-label/unified-editor regression coverage passed after the
+  visibility fix:
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "detector_region_label_editor or detector_region_labels or detector_region_label_settings or unified_editor or l_bound" -ra`
+  with `25 passed`.
+- Non-headless QtAgg detector-label visibility validation passed with backend
+  `qtagg`: the live window reported `visible=True`, printed
+  `detector label editor: popup open`, dragged a label from `(40,50)` to
+  `(60,70)`, exported/imported detector-label settings, and accepted with
+  schema `ra_sim.detector_label_settings.v1`.
 - Final local shipping-gate closeout for this slice passed the same focused
-  popup/editor regression command with `9 passed`, compiled the touched
+  popup/editor regression command with `12 passed`, compiled the touched
   diagnostic/test files, and passed
   `git diff --check -- scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py tests/test_background_peak_fits_notebook.py`.
-- Project check passed for this worktree after the detector companion-preview
-  closeout: `python -m ra_sim.dev check` reported `All checks passed!`,
-  `281 passed`, and no mypy issues.
+- Earlier project check passed for this worktree after the detector
+  companion-preview closeout: `python -m ra_sim.dev check` reported
+  `All checks passed!`, `281 passed`, and no mypy issues.
+- Project check was rerun after the L-bound callback fix:
+  `python -m ra_sim.dev check` reported `All checks passed!`, `281 passed`,
+  and no mypy issues.
+- Final detector-label restoration closeout passed:
+  `python -m compileall scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py tests/test_background_peak_fits_notebook.py`,
+  `git diff --check -- CHANGELOG.md docs/tracking/in-progress/background-peak-fit-detector-qr-rod-panel.md scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py tests/test_background_peak_fits_notebook.py`,
+  and `python -m ra_sim.dev check` with `All checks passed!`, `281 passed`,
+  and no mypy issues.
+- Visibility-fix closeout passed compileall for the touched diagnostic/test
+  files, scoped ruff on those files, scoped `git diff --check`, and the
+  focused detector-label/unified-editor regression command with `25 passed`.
+- Tk-canvas detector-label closeout passed:
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "detector_region_label_editor" -ra`
+  with `9 passed`; scoped ruff and compileall passed for the touched
+  diagnostic/test files; a real Tk smoke opened the popup, found the
+  `detector_label` canvas item, dragged it, accepted, and returned label
+  coordinates changed from `[40.0, 50.0]` to approximately `[59.481, 59.74]`.
+- `python -m ra_sim.dev check` was rerun after the Tk-canvas label-editor fix
+  and is currently blocked before tests by unrelated dirty work outside this
+  slice: `ra_sim/fitting/optimization.py` would be reformatted by
+  `ruff format --check`.
 - Runtime-safe PbI2 diagnostic script execution passed again with
   `RA_SIM_HEADLESS=1 RA_SIM_QR_ROD_PEAK_EDIT_MODE=skip`; it reached
   `Qr-rod region editor: mode=skip source=last_cached` and completed in the
   guarded runner without constructing the popup-only detector preview.
 - Focused whitespace check passed:
   `git diff --check`
-  The touched diagnostic/test files still contain older unrelated ruff-format
-  churn outside this slice, so this patch leaves those hunks untouched instead
-  of mixing a broad formatting cleanup into the PbI2 plotting fix.
 
 Known validation limits:
 
