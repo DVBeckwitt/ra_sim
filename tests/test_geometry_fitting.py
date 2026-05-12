@@ -266,6 +266,11 @@ def test_dynamic_point_only_projection_uses_hit_table_only_process_call(monkeypa
     measured = _locked_qr_fixed_source_entry(
         native_col=8.0,
         native_row=9.0,
+        source_table_index=0,
+        resolved_table_index=0,
+        source_row_index=0,
+        source_reflection_index=0,
+        best_sample_index=None,
         background_two_theta_deg=40.0,
         background_phi_deg=179.8,
         fit_space_anchor_override=True,
@@ -4242,6 +4247,30 @@ def _point_only_source_from_params(
     return 42.0 + 0.25 * center_delta + 2.0 * theta_delta, -179.7
 
 
+def _point_only_projector_payload(
+    two_theta: float,
+    phi: float,
+    *,
+    native_col: float = 12.0,
+    native_row: float = 13.0,
+) -> dict[str, object]:
+    return {
+        "two_theta_deg": np.asarray([two_theta], dtype=np.float64),
+        "phi_deg": np.asarray([phi], dtype=np.float64),
+        "native_cols": np.asarray([native_col], dtype=np.float64),
+        "native_rows": np.asarray([native_row], dtype=np.float64),
+        "fit_space_source": "dataset_fit_space_projector",
+        "fit_space_projector_kind": "exact_caked_bundle",
+        "fit_space_local_params_signature": "unit-test",
+        "cake_bundle_signature": "unit-test",
+        "input_frame": "native_detector",
+        "invalid_reason": None,
+        "native_frame_conversion_source": "",
+        "native_frame_conversion_count": 0,
+        "valid": True,
+    }
+
+
 def test_qr_fit_point_only_projection_uses_dynamic_sim_visual_caked_deg_and_skips_image_refinement(
     monkeypatch,
 ) -> None:
@@ -4259,21 +4288,7 @@ def test_qr_fit_point_only_projection_uses_dynamic_sim_visual_caked_deg_and_skip
         assert np.asarray(cols, dtype=float).tolist() == [12.0]
         assert np.asarray(rows, dtype=float).tolist() == [13.0]
         two_theta, phi = _point_only_source_from_params(local_params)
-        return {
-            "two_theta_deg": np.asarray([two_theta], dtype=np.float64),
-            "phi_deg": np.asarray([phi], dtype=np.float64),
-            "native_cols": np.asarray([12.0], dtype=np.float64),
-            "native_rows": np.asarray([13.0], dtype=np.float64),
-            "fit_space_source": "dataset_fit_space_projector",
-            "fit_space_projector_kind": "exact_caked_bundle",
-            "fit_space_local_params_signature": "unit-test",
-            "cake_bundle_signature": "unit-test",
-            "input_frame": "native_detector",
-            "invalid_reason": None,
-            "native_frame_conversion_source": "",
-            "native_frame_conversion_count": 0,
-            "valid": True,
-        }
+        return _point_only_projector_payload(two_theta, phi)
 
     def image_builder(*_args, **_kwargs):
         nonlocal image_builder_calls
@@ -4349,21 +4364,7 @@ def test_qr_fit_point_only_projection_prefers_current_hit_tables_over_source_row
         projector_calls += 1
         assert np.asarray(cols, dtype=float).tolist() == [21.0]
         assert np.asarray(rows, dtype=float).tolist() == [22.0]
-        return {
-            "two_theta_deg": np.asarray([61.0], dtype=np.float64),
-            "phi_deg": np.asarray([-11.0], dtype=np.float64),
-            "native_cols": np.asarray([21.0], dtype=np.float64),
-            "native_rows": np.asarray([22.0], dtype=np.float64),
-            "fit_space_source": "dataset_fit_space_projector",
-            "fit_space_projector_kind": "exact_caked_bundle",
-            "fit_space_local_params_signature": "unit-test",
-            "cake_bundle_signature": "unit-test",
-            "input_frame": "native_detector",
-            "invalid_reason": None,
-            "native_frame_conversion_source": "",
-            "native_frame_conversion_count": 0,
-            "valid": True,
-        }
+        return _point_only_projector_payload(61.0, -11.0, native_col=21.0, native_row=22.0)
 
     locked = _locked_qr_fixed_source_entry(
         source_table_index=0,
@@ -4400,6 +4401,183 @@ def test_qr_fit_point_only_projection_prefers_current_hit_tables_over_source_row
     assert prediction["sim_refined_caked_deg"] == pytest.approx([61.0, -11.0])
     assert prediction["point_only_detector_coordinate_source"] == "trial_hit_tables"
     assert prediction["point_only_projector_skipped"] is False
+
+
+def test_qr_fit_point_only_projection_falls_back_to_source_rows_after_hit_table_miss() -> None:
+    source_rows_builder_calls = 0
+    projector_calls = 0
+
+    def source_rows_builder(*, local_params=None):
+        nonlocal source_rows_builder_calls
+        source_rows_builder_calls += 1
+        two_theta, phi = _point_only_source_from_params(local_params)
+        return _locked_qr_source_rows_payload([_point_only_dynamic_qr_row(two_theta, phi)])
+
+    def projector(cols, rows, *, local_params=None, **_kwargs):
+        nonlocal projector_calls
+        projector_calls += 1
+        assert np.asarray(cols, dtype=float).tolist() == [12.0]
+        assert np.asarray(rows, dtype=float).tolist() == [13.0]
+        two_theta, phi = _point_only_source_from_params(local_params)
+        return _point_only_projector_payload(two_theta, phi)
+
+    locked = _locked_qr_fixed_source_entry()
+    prediction = opt._resolve_qr_fit_prediction_from_trial_params(
+        locked,
+        {"center_x": 4.0, "theta_initial": 0.5},
+        {
+            "dataset_ctx": _point_only_qr_dataset_ctx(source_rows_builder, projector),
+            "hit_tables": [
+                np.asarray([[1.0, 21.0, 22.0, 10.0, 999.0, 0.0, 0.0]], dtype=np.float64)
+            ],
+            "sim_buffer": opt._fit_hit_table_only_sim_buffer(),
+            "image_size": 30,
+            "fit_center": [15.0, 15.0],
+            "detector_distance": 0.1,
+            "pixel_size": 1.0,
+            "prediction_source_rows_cache": {},
+            "_qr_fit_point_only_projection": True,
+        },
+        locked,
+    )
+
+    expected = _point_only_source_from_params({"center_x": 4.0, "theta_initial": 0.5})
+    assert source_rows_builder_calls == 1
+    assert projector_calls == 1
+    assert prediction["available"] is True
+    assert prediction["resolution_reason"] == "locked_fit_qr_branch_key_resolved"
+    assert prediction["hit_table_resolution_reason"] == "locked_qr_hkl_branch_missing"
+    assert (
+        prediction["locked_qr_detector_point_source"] == "trial_source_rows_locked_representative"
+    )
+    assert prediction["source_rows_rebuilt_or_reused"] == "rebuilt_for_trial_params"
+    assert prediction["objective_cache_mode"] == "full_simulation"
+    assert prediction["sim_nominal_projection_input_px"] == pytest.approx([12.0, 13.0])
+    assert prediction["sim_nominal_caked_deg"] == pytest.approx(list(expected))
+    assert prediction["sim_refined_caked_deg"] == pytest.approx(list(expected))
+    assert prediction["point_only_detector_coordinate_source"] == "trial_source_rows"
+
+
+def test_qr_fit_point_only_projection_rejects_stale_hit_table_recovery_for_source_rows() -> None:
+    source_rows_builder_calls = 0
+
+    def source_rows_builder(*, local_params=None):
+        nonlocal source_rows_builder_calls
+        source_rows_builder_calls += 1
+        two_theta, phi = _point_only_source_from_params(local_params)
+        return _locked_qr_source_rows_payload([_point_only_dynamic_qr_row(two_theta, phi)])
+
+    def projector(_cols, _rows, *, local_params=None, **_kwargs):
+        two_theta, phi = _point_only_source_from_params(local_params)
+        return _point_only_projector_payload(two_theta, phi)
+
+    locked = _locked_qr_fixed_source_entry()
+    prediction = opt._resolve_qr_fit_prediction_from_trial_params(
+        locked,
+        {"center_x": 4.0, "theta_initial": 0.5},
+        {
+            "dataset_ctx": _point_only_qr_dataset_ctx(source_rows_builder, projector),
+            "hit_tables": [np.asarray([[1.0, 21.0, 22.0, 10.0, 2.0, 0.0, 0.0]], dtype=np.float64)],
+            "sim_buffer": opt._fit_hit_table_only_sim_buffer(),
+            "image_size": 30,
+            "fit_center": [15.0, 15.0],
+            "detector_distance": 0.1,
+            "pixel_size": 1.0,
+            "prediction_source_rows_cache": {},
+            "_qr_fit_point_only_projection": True,
+        },
+        locked,
+    )
+
+    expected = _point_only_source_from_params({"center_x": 4.0, "theta_initial": 0.5})
+    assert source_rows_builder_calls == 1
+    assert prediction["available"] is True
+    assert prediction["hit_table_resolution_reason"] == (
+        "provider_local_branch_recovered_stale_peak_index"
+    )
+    assert prediction["hit_table_resolution_rejected_for_fit_prediction"] is True
+    assert prediction["hit_table_resolution_rejected_for_point_only"] is True
+    assert (
+        prediction["locked_qr_detector_point_source"] == "trial_source_rows_locked_representative"
+    )
+    assert prediction["sim_nominal_projection_input_px"] == pytest.approx([12.0, 13.0])
+    assert prediction["sim_refined_caked_deg"] == pytest.approx(list(expected))
+    assert prediction["point_only_detector_coordinate_source"] == "trial_source_rows"
+
+
+def test_qr_fit_objective_incomplete_missing_pairs_include_source_row_diagnostics(
+    monkeypatch,
+) -> None:
+    def fake_process(*args, **_kwargs):
+        image_size = int(args[2])
+        return (
+            np.zeros((image_size, image_size), dtype=np.float64),
+            [np.asarray([[1.0, 21.0, 22.0, 10.0, 999.0, 0.0, 0.0]], dtype=np.float64)],
+            np.empty((0, 0, 0)),
+            np.empty(0),
+            np.empty(0),
+            [],
+        )
+
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        return _locked_qr_source_rows_payload([])
+
+    def projector(*_args, **_kwargs):
+        raise AssertionError("unresolved point must not be projected")
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+
+    measured_entries = [
+        _locked_qr_fixed_source_entry(
+            pair_id=f"pair-{idx}",
+            source_row_index=idx,
+            background_two_theta_deg=40.0,
+            background_phi_deg=179.8,
+            fit_space_anchor_override=True,
+            fit_space_anchor_source="manual_caked_click",
+        )
+        for idx in range(14)
+    ]
+    dataset_ctx = _point_only_qr_dataset_ctx(source_rows_builder, projector)
+    dataset_ctx.subset.measured_entries = measured_entries
+    local = _base_params(30, optics_mode=1)
+    local.update(
+        {
+            "center_x": 4.0,
+            "center_y": 15.0,
+            "center": [4.0, 15.0],
+            "theta_initial": 0.5,
+            "_qr_fit_point_only_projection": True,
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="qr_fit_objective_incomplete=yes") as excinfo:
+        opt._evaluate_geometry_fit_dataset_dynamic_point_matches(
+            local,
+            dataset_ctx,
+            image_size=30,
+            missing_pair_penalty_deg=5.0,
+            theta_value=0.5,
+            collect_diagnostics=True,
+        )
+
+    message = str(excinfo.value)
+    for expected_field in (
+        "'hit_table_resolution_reason': 'locked_qr_hkl_branch_missing'",
+        "'trial_source_rows_available': False",
+        "'trial_source_rows_count': 0",
+        "'trial_source_rows_signature': 'unit-test'",
+        "'trial_source_rows_source': 'unit_test'",
+        "'trial_source_rows_fit_qr_branch_key_candidate_count': 0",
+        "'trial_source_rows_q_group_hkl_slot_candidate_count': 0",
+        "'trial_source_rows_q_group_hkl_slot_proven_candidate_count': 0",
+        "'source_rows_rebuilt_or_reused': 'rebuilt_for_trial_params'",
+        "'objective_cache_mode': 'full_simulation'",
+        "'objective_cache_hit': False",
+        "'objective_cache_reject_reason': 'initial_evaluation'",
+    ):
+        assert expected_field in message
 
 
 def test_qr_fit_point_only_projection_prefers_current_projection_over_stale_visual_alias() -> None:

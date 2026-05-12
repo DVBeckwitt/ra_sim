@@ -5157,6 +5157,48 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             fields["resolution_subreason"] = str(resolution_payload.get("resolution_subreason"))
         return fields
 
+    qr_fit_missing_pair_trace_keys = (
+        "hit_table_resolution_reason",
+        "trial_source_rows_available",
+        "trial_source_rows_count",
+        "trial_source_rows_signature",
+        "trial_source_rows_source",
+        "trial_source_rows_fit_qr_branch_key_candidate_count",
+        "trial_source_rows_q_group_hkl_slot_candidate_count",
+        "trial_source_rows_q_group_hkl_slot_proven_candidate_count",
+        "source_rows_rebuilt_or_reused",
+        "objective_cache_mode",
+        "objective_cache_hit",
+        "objective_cache_reject_reason",
+    )
+
+    def _append_qr_fit_missing_pair(
+        idx: int,
+        diag: Mapping[str, object],
+        measured_entry: Mapping[str, object],
+        unavailable_reason: object,
+        fit_prediction_payload: object,
+    ) -> None:
+        if not _fixed_manual_qr_pair_requires_shared_resolver(measured_entry):
+            return
+        missing_pair_record = {
+            "pair_index": int(idx),
+            "pair_id": str(diag.get("pair_id") or f"{dataset_ctx.dataset_index}:{idx}"),
+            "q_group_key": _dynamic_reanchor_jsonable(measured_entry.get("q_group_key")),
+            "hkl": _dynamic_reanchor_jsonable(measured_entry.get("hkl")),
+            "source_branch_index": _nonnegative_index(measured_entry.get("source_branch_index")),
+            "source_table_index": _nonnegative_index(measured_entry.get("source_table_index")),
+            "source_row_index": _nonnegative_index(measured_entry.get("source_row_index")),
+            "unavailable_reason": str(unavailable_reason),
+        }
+        if isinstance(fit_prediction_payload, Mapping):
+            for key in qr_fit_missing_pair_trace_keys:
+                if key in fit_prediction_payload:
+                    missing_pair_record[key] = _dynamic_reanchor_jsonable(
+                        fit_prediction_payload.get(key)
+                    )
+        qr_fit_missing_pairs.append(missing_pair_record)
+
     def _new_dynamic_reanchor_event(
         idx: int,
         entry: Mapping[str, object],
@@ -5824,27 +5866,13 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         measured_two_theta = float(measured_fit_anchor[0])
         measured_phi = float(measured_fit_anchor[1])
         if sim_point is None:
-            if _fixed_manual_qr_pair_requires_shared_resolver(measured_entry):
-                qr_fit_missing_pairs.append(
-                    {
-                        "pair_index": int(idx),
-                        "pair_id": str(diag.get("pair_id") or f"{dataset_ctx.dataset_index}:{idx}"),
-                        "q_group_key": _dynamic_reanchor_jsonable(
-                            measured_entry.get("q_group_key")
-                        ),
-                        "hkl": _dynamic_reanchor_jsonable(measured_entry.get("hkl")),
-                        "source_branch_index": _nonnegative_index(
-                            measured_entry.get("source_branch_index")
-                        ),
-                        "source_table_index": _nonnegative_index(
-                            measured_entry.get("source_table_index")
-                        ),
-                        "source_row_index": _nonnegative_index(
-                            measured_entry.get("source_row_index")
-                        ),
-                        "unavailable_reason": str(sim_reason),
-                    }
-                )
+            _append_qr_fit_missing_pair(
+                idx,
+                diag,
+                measured_entry,
+                sim_reason,
+                fit_prediction,
+            )
             residual_components[idx, 0] = float(missing_pair_penalty_deg) * float(priority_weight)
             residual_components[idx, 1] = 0.0
             missing_pairs += 1
@@ -6245,27 +6273,13 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                 or fit_prediction.get("sim_refinement_status")
                 or "fit_prediction_unavailable"
             )
-            if _fixed_manual_qr_pair_requires_shared_resolver(measured_entry):
-                qr_fit_missing_pairs.append(
-                    {
-                        "pair_index": int(idx),
-                        "pair_id": str(diag.get("pair_id") or f"{dataset_ctx.dataset_index}:{idx}"),
-                        "q_group_key": _dynamic_reanchor_jsonable(
-                            measured_entry.get("q_group_key")
-                        ),
-                        "hkl": _dynamic_reanchor_jsonable(measured_entry.get("hkl")),
-                        "source_branch_index": _nonnegative_index(
-                            measured_entry.get("source_branch_index")
-                        ),
-                        "source_table_index": _nonnegative_index(
-                            measured_entry.get("source_table_index")
-                        ),
-                        "source_row_index": _nonnegative_index(
-                            measured_entry.get("source_row_index")
-                        ),
-                        "unavailable_reason": unavailable_reason,
-                    }
-                )
+            _append_qr_fit_missing_pair(
+                idx,
+                diag,
+                measured_entry,
+                unavailable_reason,
+                fit_prediction,
+            )
             residual_components[idx, 0] = float(missing_pair_penalty_deg) * float(priority_weight)
             residual_components[idx, 1] = 0.0
             missing_pairs += 1
@@ -18530,6 +18544,22 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 "trusted_full_reflection_local_index_map"
             ),
         )
+        if sim_point is not None:
+            hit_reason = str(hit_table_payload.get("resolution_reason") or "")
+            hit_point_source = str(hit_table_payload.get("resolved_detector_point_source") or "")
+            stale_hit_table_row = (
+                hit_reason == "provider_local_branch_recovered_stale_peak_index"
+                or hit_point_source == "provider_local_stale_hit_table_row"
+            )
+            if stale_hit_table_row:
+                hit_table_payload = dict(hit_table_payload)
+                hit_table_payload["hit_table_resolution_rejected_for_fit_prediction"] = True
+                if point_only_projection:
+                    hit_table_payload["hit_table_resolution_rejected_for_point_only"] = True
+                hit_table_payload["hit_table_resolution_rejection_reason"] = (
+                    "fit_prediction_requires_current_exact_hit_or_source_row"
+                )
+                sim_point = None
     elif point_only_projection:
         hit_table_payload["resolution_reason"] = "locked_hit_table_resolver_skipped_point_only"
     if sim_point is not None:
@@ -18564,9 +18594,6 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 "locked_qr_detector_point_source": "trial_hit_tables_locked_representative",
             }
         )
-    elif point_only_projection and hit_tables:
-        resolution_payload = dict(hit_table_payload)
-        resolution_payload["locked_qr_detector_point_source"] = "trial_hit_tables_unresolved"
     else:
         source_rows_payload = _trial_source_rows_payload()
         source_point, source_payload = _resolve_locked_qr_trial_detector_point_from_source_rows(
@@ -18578,9 +18605,24 @@ def _resolve_qr_fit_prediction_from_trial_params(
         resolution_payload["hit_table_resolution_reason"] = hit_table_payload.get(
             "resolution_reason"
         )
-        resolution_payload["locked_qr_detector_point_source"] = (
-            "trial_source_rows_locked_representative"
-        )
+        resolution_payload["hit_table_resolution_kind"] = hit_table_payload.get("resolution_kind")
+        for key in (
+            "hit_table_resolution_rejected_for_point_only",
+            "hit_table_resolution_rejected_for_fit_prediction",
+        ):
+            if key in hit_table_payload:
+                resolution_payload[key] = bool(hit_table_payload.get(key))
+        if "hit_table_resolution_rejection_reason" in hit_table_payload:
+            resolution_payload["hit_table_resolution_rejection_reason"] = hit_table_payload.get(
+                "hit_table_resolution_rejection_reason"
+            )
+        if source_point is not None:
+            point_source = "trial_source_rows_locked_representative"
+        elif hit_tables:
+            point_source = "trial_source_rows_unresolved_after_hit_table_miss"
+        else:
+            point_source = "trial_source_rows_unresolved"
+        resolution_payload["locked_qr_detector_point_source"] = point_source
     out.update(dict(resolution_payload))
     if sim_point is None:
         reason = str(resolution_payload.get("resolution_reason", "locked_branch_unavailable"))

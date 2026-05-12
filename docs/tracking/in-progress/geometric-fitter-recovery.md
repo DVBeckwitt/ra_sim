@@ -288,15 +288,39 @@ peak surface.
 builds current trial hit tables with image accumulation disabled, resolves locked
 Qr detector points from those hit tables first, and projects the current detector
 coordinates through the exact caked projector. The GUI source-row cache remains a
-fallback only when no hit table exists; if a current hit table exists but cannot
-resolve the locked row, the point fails closed rather than silently reusing stale
-visual aliases. Bug/error status: the known mismatch source was localized to the
-objective using stale caked aliases instead of the current detector point. Feature
-status: internal fitter behavior and diagnostics only; no new public API, config,
+fallback after hit-table miss or provider-local stale hit recovery; the fallback
+is rebuilt current trial source-row data and still projects through the exact
+caked projector. If source rows also cannot resolve the locked row, the point
+fails closed rather than silently reusing stale visual aliases. Bug/error status:
+the stale-alias objective source was localized and fixed. Feature status:
+internal fitter behavior and diagnostics only; no new public API, config,
 dependency, saved-state schema, or artifact schema. CI/automation status:
 focused geometry objective, overlay, solver-request, and worker-cache regression
 tests pass locally. Shipping status: normal bug-fix slice with git revert as the
 rollback path.
+
+2026-05-12 point-only source-row fallback closeout: the GUI `gamma,Gamma` fit
+failure `qr_fit_objective_incomplete=yes resolved_count=1 expected_count=36` is
+fixed for the Bi2Se3 visible-GUI reproduction. The resolver still prefers exact
+current hit-table points, but hit-table misses and stale provider-local hit rows
+now fall back to current trial source rows before the incomplete-objective guard
+runs. Missing-pair diagnostics record hit-table reason, source-row
+availability/count/signature/source, source-row candidate counts,
+`source_rows_rebuilt_or_reused`, and objective-cache status.
+
+Bug/error status: fixed for the partial-objective abort. The visible GUI run
+reached the solver with `qr_fit_expected_count` / `qr_fit_resolved_count` pairs
+of `36/36`, `21/21`, and `25/25`, component counts `72/72`, `42/42`, and
+`50/50`, empty missing-pair lists, and `matched=82`. The run still rejected the
+geometry solution on fit quality (`RMS residual 1239.15 px`, largest offset
+`2374.16 px`), which is a separate geometry/residual problem rather than source
+resolution failure. Feature status: bug fix and diagnostics only; no GUI
+control, CLI flag, public API, config key, dependency, saved-state schema, or
+artifact schema changed. CI/automation status: local focused pytest suites,
+Ruff, compile, visible-GUI smoke, and diff hygiene passed; no CI workflow was
+changed. Deprecation/migration status: no deprecated entrypoint, compatibility
+shim, or user migration. Shipping status: ready as a normal bug-fix slice;
+rollback is a normal git revert.
 
 Real full headless `fit-geometry` smoke is now run and still failing after a
 clean exact-caked request. The first divergence from passing ladder evidence is

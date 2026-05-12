@@ -678,9 +678,18 @@ For caked point-only Qr/Qz geometry fits, current trial hit tables are the
 simulated detector-coordinate source of truth. The objective then projects those
 detector coordinates through the exact detector-to-caked projector. Cached
 `sim_visual_caked_deg` aliases are no longer used as the objective point when a
-current hit-table row is available. If the current hit table cannot resolve a
-locked Qr source row, the point fails closed instead of falling back to stale GUI
-source rows during the objective.
+current hit-table row is available.
+
+If a current hit table cannot resolve the locked Qr source row, or only recovers
+a provider-local stale hit row, the objective now falls back to the current trial
+source-row builder and the same exact caked projector. This fallback is still
+dynamic trial data, not a stale visual/cached caked alias. If source rows also
+cannot resolve the locked branch, the point fails closed through
+`qr_fit_objective_incomplete`. Missing-pair diagnostics include hit-table
+resolution reason, source-row availability/count/signature/source, source-row
+candidate counts, `source_rows_rebuilt_or_reused`, and objective-cache status so
+future failures distinguish "source rows unavailable" from "source rows were not
+attempted."
 
 ## Weighted-event diffraction status
 
