@@ -4921,6 +4921,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
     residual_components = np.zeros((len(normalized_measured), 2), dtype=np.float64)
     diagnostics: List[Dict[str, object]] = []
     pixel_distances: List[float] = []
+    detector_pixel_reject_reasons: List[str] = []
     angular_distances: List[float] = []
     measured_two_theta_deg_values: List[float] = []
     measured_phi_deg_values: List[float] = []
@@ -6345,8 +6346,10 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             qr_fit_resolved_count += 1
         sim_two_theta = float(refined_caked[0])
         sim_phi = float(refined_caked[1])
-        sim_col = float(fit_prediction.get("sim_nominal_detector_px", [sim_col, sim_row])[0])
-        sim_row = float(fit_prediction.get("sim_nominal_detector_px", [sim_col, sim_row])[1])
+        sim_display_point = _finite_pair(fit_prediction.get("sim_nominal_detector_px"))
+        if sim_display_point is not None:
+            sim_col = float(sim_display_point[0])
+            sim_row = float(sim_display_point[1])
         if isinstance(fit_prediction.get("projection_meta"), Mapping):
             simulated_projection_meta = dict(fit_prediction.get("projection_meta") or {})
             simulated_diag_fields = _simulated_fit_space_diag_fields(
@@ -6370,18 +6373,68 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         residual_components[idx, 0] = float(weighted_delta_two_theta)
         residual_components[idx, 1] = float(weighted_delta_phi)
         matched_pair_count += 1
-        if measured_detector_anchor is not None:
-            pixel_dx = float(sim_col - float(measured_detector_anchor[0]))
-            pixel_dy = float(sim_row - float(measured_detector_anchor[1]))
+        observed_detector_frame = _detector_frame_from_measured_reason(detector_reason)
+        predicted_detector_point, predicted_detector_source = (
+            _fit_prediction_detector_point_for_frame(fit_prediction, observed_detector_frame)
+        )
+        observed_native_point, _observed_native_reason = _detector_anchor_from_entry(
+            measured_entry,
+            ("native_col", "native_row", "resolved_native_anchor"),
+            (
+                "background_detector_x",
+                "background_detector_y",
+                "resolved_background_detector_anchor",
+            ),
+            ("detector_x", "detector_y", "resolved_detector_anchor"),
+        )
+        observed_display_point, _observed_display_reason = _detector_anchor_from_entry(
+            measured_entry,
+            ("x", "y", "resolved_display_anchor"),
+        )
+        predicted_native_point, _predicted_native_source = _fit_prediction_detector_point_for_frame(
+            fit_prediction, "native_detector"
+        )
+        predicted_display_point, _predicted_display_source = (
+            _fit_prediction_detector_point_for_frame(fit_prediction, "display_detector")
+        )
+
+        def _point_distance(
+            first: Tuple[float, float] | None,
+            second: Tuple[float, float] | None,
+        ) -> float:
+            if first is None or second is None:
+                return float("nan")
+            return float(
+                math.hypot(
+                    float(first[0]) - float(second[0]),
+                    float(first[1]) - float(second[1]),
+                )
+            )
+
+        mixed_display_native_distance = _point_distance(
+            predicted_display_point,
+            observed_native_point,
+        )
+        native_native_distance = _point_distance(predicted_native_point, observed_native_point)
+        display_display_distance = _point_distance(predicted_display_point, observed_display_point)
+        if measured_detector_anchor is not None and predicted_detector_point is not None:
+            pixel_dx = float(predicted_detector_point[0] - float(measured_detector_anchor[0]))
+            pixel_dy = float(predicted_detector_point[1] - float(measured_detector_anchor[1]))
             pixel_distance = float(math.hypot(pixel_dx, pixel_dy))
+            acceptance_pixel_rejected_reason = ""
         else:
             pixel_dx = float("nan")
             pixel_dy = float("nan")
             pixel_distance = float("nan")
+            acceptance_pixel_rejected_reason = (
+                "coordinate_frame_mismatch_or_same_frame_prediction_missing"
+            )
         angular_distance = float(math.hypot(delta_two_theta, delta_phi))
         weighted_angular_distance = float(math.hypot(weighted_delta_two_theta, weighted_delta_phi))
         if np.isfinite(pixel_distance):
             pixel_distances.append(pixel_distance)
+        else:
+            detector_pixel_reject_reasons.append(acceptance_pixel_rejected_reason)
         angular_distances.append(angular_distance)
         measured_two_theta_deg_values.append(float(measured_two_theta))
         measured_phi_deg_values.append(float(measured_phi_wrapped))
@@ -6482,6 +6535,38 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                     "dx_px": float(pixel_dx),
                     "dy_px": float(pixel_dy),
                     "distance_px": float(pixel_distance),
+                    "acceptance_residual_source": "same_frame_detector_px_or_caked_deg",
+                    "acceptance_metric_space": "caked_deg",
+                    "acceptance_rms_input_units": "deg",
+                    "observed_detector_frame": observed_detector_frame,
+                    "observed_detector_px": (
+                        [float(measured_detector_anchor[0]), float(measured_detector_anchor[1])]
+                        if measured_detector_anchor is not None
+                        else None
+                    ),
+                    "predicted_detector_frame": (
+                        observed_detector_frame if predicted_detector_point is not None else None
+                    ),
+                    "predicted_detector_px": (
+                        [float(predicted_detector_point[0]), float(predicted_detector_point[1])]
+                        if predicted_detector_point is not None
+                        else None
+                    ),
+                    "predicted_detector_source": predicted_detector_source,
+                    "same_frame_detector_pixel_distance_px": float(pixel_distance),
+                    "same_frame_detector_pixel_rejected_reason": acceptance_pixel_rejected_reason,
+                    "mixed_display_prediction_vs_native_observed_px": float(
+                        mixed_display_native_distance
+                    ),
+                    "native_prediction_vs_native_observed_px": float(native_native_distance),
+                    "display_prediction_vs_display_observed_px": float(display_display_distance),
+                    "first_acceptance_metric_divergence": (
+                        "mixed_display_native_detector_px"
+                        if np.isfinite(mixed_display_native_distance)
+                        and np.isfinite(native_native_distance)
+                        and abs(mixed_display_native_distance - native_native_distance) > 1.0e-9
+                        else "none"
+                    ),
                     "manual_pair_id": str(
                         diag.get("pair_id") or f"{dataset_ctx.dataset_index}:{idx}"
                     ),
@@ -6509,6 +6594,11 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                     "delta_phi_deg": float(delta_phi),
                     "wrapped_delta_phi_deg": float(delta_phi),
                     "angular_distance_deg": float(angular_distance),
+                    "objective_residual_caked_deg": [
+                        float(delta_two_theta),
+                        float(delta_phi),
+                    ],
+                    "objective_residual_norm_deg": float(angular_distance),
                     "raw_angular_norm_deg": float(angular_distance),
                     "raw_angular_component_max_abs_deg": float(
                         max(abs(delta_two_theta), abs(delta_phi))
@@ -6728,10 +6818,33 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
     )
     summary.setdefault("raw_angular_rms_deg", summary.get("unweighted_peak_rms_deg"))
     summary.setdefault("raw_angular_max_deg", summary.get("unweighted_peak_max_deg"))
+    detector_pixel_metric_is_same_frame_complete = bool(
+        matched_pair_count > 0 and len(pixel_distances) == int(matched_pair_count)
+    )
     summary["detector_pixel_rms_px"] = summary.get("unweighted_peak_rms_px", float("nan"))
     summary["detector_pixel_max_px"] = summary.get("unweighted_peak_max_px", float("nan"))
     summary.setdefault("caked_pixel_rms_px", float("nan"))
     summary.setdefault("caked_pixel_max_px", float("nan"))
+    summary["objective_space"] = "caked_deg"
+    summary["objective_residual_units"] = "deg"
+    summary["acceptance_metric_space"] = "caked_deg"
+    summary["acceptance_rms_input_units"] = "deg"
+    summary["final_rms_deg"] = float(summary.get("raw_angular_rms_deg", np.nan))
+    summary["final_max_deg"] = float(summary.get("raw_angular_max_deg", np.nan))
+    summary["final_rms_px"] = (
+        float(summary.get("unweighted_peak_rms_px", np.nan))
+        if detector_pixel_metric_is_same_frame_complete
+        else float("nan")
+    )
+    summary["detector_pixel_metric_complete"] = bool(detector_pixel_metric_is_same_frame_complete)
+    summary["detector_pixel_metric_reject_reason"] = (
+        ""
+        if detector_pixel_metric_is_same_frame_complete
+        else "not_all_rows_have_same_frame_detector_predictions"
+    )
+    summary["detector_pixel_metric_reject_reasons"] = sorted(
+        {str(reason) for reason in detector_pixel_reject_reasons if str(reason).strip()}
+    )
     if measured_anchor_motion_px:
         motion_arr = np.asarray(measured_anchor_motion_px, dtype=float)
         motion_arr = motion_arr[np.isfinite(motion_arr)]
@@ -15805,6 +15918,76 @@ def _measured_detector_anchor(
     )
 
 
+def _detector_frame_from_measured_reason(reason: object) -> str:
+    """Return the detector coordinate frame implied by a measured-anchor reason."""
+
+    reason_text = str(reason or "").strip()
+    if reason_text in {
+        "resolved_native_anchor",
+        "resolved_background_detector_anchor",
+        "resolved_detector_anchor",
+    }:
+        return "native_detector"
+    if reason_text == "resolved_display_anchor":
+        return "display_detector"
+    return "unknown_detector_frame"
+
+
+def _finite_pair(value: object) -> Tuple[float, float] | None:
+    """Return one finite numeric pair from a sequence-like value."""
+
+    if isinstance(value, (list, tuple, np.ndarray)) and len(value) >= 2:
+        try:
+            x = float(value[0])
+            y = float(value[1])
+        except Exception:
+            return None
+        if np.isfinite(x) and np.isfinite(y):
+            return (float(x), float(y))
+    return None
+
+
+def _fit_prediction_detector_point_for_frame(
+    fit_prediction: Mapping[str, object],
+    frame: str,
+) -> Tuple[Tuple[float, float] | None, str]:
+    """Return the fitted prediction detector point that matches ``frame``."""
+
+    if frame == "native_detector":
+        for key in (
+            "sim_nominal_native_px",
+            "sim_nominal_detector_native_px",
+            "fit_prediction_detector_native_px",
+        ):
+            point = _finite_pair(fit_prediction.get(key))
+            if point is not None:
+                return point, key
+
+        projection_meta = fit_prediction.get("projection_meta")
+        if isinstance(projection_meta, Mapping):
+            native_cols = projection_meta.get("native_cols")
+            native_rows = projection_meta.get("native_rows")
+            try:
+                col = float(np.asarray(native_cols, dtype=float).reshape(-1)[0])
+                row = float(np.asarray(native_rows, dtype=float).reshape(-1)[0])
+            except Exception:
+                col = row = float("nan")
+            if np.isfinite(col) and np.isfinite(row):
+                return (float(col), float(row)), "projection_meta.native_cols/native_rows"
+
+    if frame == "display_detector":
+        for key in (
+            "sim_nominal_detector_display_px",
+            "resolved_detector_display_px",
+            "sim_nominal_detector_px",
+        ):
+            point = _finite_pair(fit_prediction.get(key))
+            if point is not None:
+                return point, key
+
+    return None, "missing_same_frame_detector_prediction"
+
+
 def _project_detector_points_to_fit_space(
     dataset_ctx: GeometryFitDatasetContext | None,
     cols: Sequence[float] | np.ndarray,
@@ -24710,6 +24893,9 @@ def fit_geometry_parameters(
         )
         return summary
 
+    def _weighted_rms_status_unit() -> str:
+        return "weighted_deg" if dynamic_point_geometry_fit else "px"
+
     def _emit_seed_status(
         status_label: str,
         seed_summary: Mapping[str, object] | None,
@@ -24721,11 +24907,12 @@ def fit_geometry_parameters(
         if isinstance(point_summary, Mapping):
             _emit_status(
                 "Geometry fit: {label} seed "
-                "cost={cost} weighted_rms={weighted_rms}px matched={matched} "
+                "cost={cost} weighted_rms={weighted_rms} {weighted_unit} matched={matched} "
                 "missing={missing} peak_rms={peak_rms}px peak_max={peak_max}px".format(
                     label=str(status_label),
                     cost=_status_float(summary.get("cost", np.nan), 6),
                     weighted_rms=_status_float(summary.get("weighted_rms_px", np.nan), 4),
+                    weighted_unit=_weighted_rms_status_unit(),
                     matched=int(point_summary.get("matched_pair_count", 0)),
                     missing=int(point_summary.get("missing_pair_count", 0)),
                     peak_rms=_status_float(
@@ -24740,10 +24927,12 @@ def fit_geometry_parameters(
             )
             return
         _emit_status(
-            "Geometry fit: {label} seed cost={cost} weighted_rms={weighted_rms}px".format(
+            "Geometry fit: {label} seed cost={cost} "
+            "weighted_rms={weighted_rms} {weighted_unit}".format(
                 label=str(status_label),
                 cost=_status_float(summary.get("cost", np.nan), 6),
                 weighted_rms=_status_float(summary.get("weighted_rms_px", np.nan), 4),
+                weighted_unit=_weighted_rms_status_unit(),
             )
         )
 
@@ -24996,7 +25185,7 @@ def fit_geometry_parameters(
             if status_label:
                 _emit_status(
                     "Geometry fit: {label} eval={eval} cost={cost} best_cost={best_cost} "
-                    "weighted_rms={weighted_rms}px".format(
+                    "weighted_rms={weighted_rms} {weighted_unit}".format(
                         label=str(status_label),
                         eval=int(eval_count),
                         cost=_status_float(current_cost, 6),
@@ -25005,6 +25194,7 @@ def fit_geometry_parameters(
                             6,
                         ),
                         weighted_rms=_status_float(current_weighted_rms, 4),
+                        weighted_unit=_weighted_rms_status_unit(),
                     )
                 )
             return residual_arr
@@ -25418,7 +25608,7 @@ def fit_geometry_parameters(
             if status_label:
                 _emit_status(
                     "Geometry fit: {label} eval={eval} cost={cost} best_cost={best_cost} "
-                    "weighted_rms={weighted_rms}px".format(
+                    "weighted_rms={weighted_rms} {weighted_unit}".format(
                         label=str(status_label),
                         eval=int(eval_count),
                         cost=_status_float(current_cost, 6),
@@ -25427,6 +25617,7 @@ def fit_geometry_parameters(
                             6,
                         ),
                         weighted_rms=_status_float(current_weighted_rms, 4),
+                        weighted_unit=_weighted_rms_status_unit(),
                     )
                 )
             return residual_arr
@@ -32073,8 +32264,20 @@ def fit_geometry_parameters(
     result_fun = np.asarray(result.fun, dtype=float)
     if result_fun.size:
         weighted_residual_rms = float(np.sqrt(np.mean(result_fun * result_fun)))
+    result.weighted_objective_rms = float(weighted_residual_rms)
     result.weighted_residual_rms_px = float(weighted_residual_rms)
-    result.rms_px = float(weighted_residual_rms)
+    if str(getattr(result, "final_metric_name", "") or "") == "dynamic_angular_point_match":
+        result.weighted_objective_rms_units = "weighted_deg"
+        result.final_metric_space = "caked_deg"
+        result.final_metric_units = "deg"
+        result.rms_deg = float("nan")
+        result.max_deg = float("nan")
+        result.rms_px = float("nan")
+    else:
+        result.weighted_objective_rms_units = "px"
+        result.final_metric_space = "detector_px" if point_match_mode else ""
+        result.final_metric_units = "px" if point_match_mode else ""
+        result.rms_px = float(weighted_residual_rms)
 
     if point_match_mode and getattr(result, "x", None) is not None:
         try:
@@ -32095,8 +32298,32 @@ def fit_geometry_parameters(
                 prediction_branch_source_switched_count
             )
             point_match_summary["final_metric_name"] = str(result.final_metric_name)
-            point_match_summary.setdefault("metric_name", str(result.final_metric_name))
-            point_match_summary.setdefault("metric_unit", "px")
+            point_match_summary["weighted_objective_rms"] = float(weighted_residual_rms)
+            point_match_summary["weighted_objective_rms_units"] = str(
+                getattr(result, "weighted_objective_rms_units", "px")
+            )
+            if str(result.final_metric_name) == "dynamic_angular_point_match":
+                result.final_metric_space = "caked_deg"
+                result.final_metric_units = "deg"
+                result.rms_deg = float(point_match_summary.get("raw_angular_rms_deg", np.nan))
+                result.max_deg = float(point_match_summary.get("raw_angular_max_deg", np.nan))
+                result.rms_px = float("nan")
+                point_match_summary["metric_name"] = "dynamic_angular_point_match"
+                point_match_summary["metric_unit"] = "deg"
+                point_match_summary["acceptance_metric_space"] = "caked_deg"
+                point_match_summary["acceptance_rms_input_units"] = "deg"
+                point_match_summary["final_rms_deg"] = float(result.rms_deg)
+                point_match_summary["final_max_deg"] = float(result.max_deg)
+                point_match_summary["final_rms_px"] = (
+                    float(point_match_summary.get("detector_pixel_rms_px", np.nan))
+                    if bool(point_match_summary.get("detector_pixel_metric_complete", False))
+                    else float("nan")
+                )
+            else:
+                result.final_metric_space = "detector_px" if point_match_mode else ""
+                result.final_metric_units = "px" if point_match_mode else ""
+                point_match_summary.setdefault("metric_name", str(result.final_metric_name))
+                point_match_summary.setdefault("metric_unit", "px")
             point_match_summary["single_ray_coarse_enabled"] = False
             point_match_summary["full_beam_polish_enabled"] = bool(
                 full_beam_polish_summary.get("enabled", False)
@@ -32215,7 +32442,14 @@ def fit_geometry_parameters(
                 peak_rms = float(point_match_summary.get("unweighted_peak_rms_px", np.nan))
             except Exception:
                 peak_rms = float("nan")
-            if np.isfinite(peak_rms):
+            detector_pixel_metric_complete = bool(
+                point_match_summary.get("detector_pixel_metric_complete", True)
+            )
+            if (
+                str(getattr(result, "final_metric_space", "") or "") == "detector_px"
+                and detector_pixel_metric_complete
+                and np.isfinite(peak_rms)
+            ):
                 result.rms_px = float(peak_rms)
         except Exception as exc:
             result.point_match_diagnostics = [
@@ -32229,7 +32463,12 @@ def fit_geometry_parameters(
                 "diagnostics_failed": True,
                 "error": str(exc),
             }
-            result.rms_px = float(weighted_residual_rms)
+            result.rms_px = (
+                float("nan")
+                if str(getattr(result, "final_metric_name", "") or "")
+                == "dynamic_angular_point_match"
+                else float(weighted_residual_rms)
+            )
 
     bound_threshold_fraction = 0.01
     bound_entries: List[Dict[str, object]] = []
@@ -32528,11 +32767,16 @@ def fit_geometry_parameters(
     debug_summary_result["final"] = {
         "cost": float(getattr(result, "cost", np.nan)),
         "robust_cost": float(getattr(result, "robust_cost", np.nan)),
+        "weighted_objective_rms": float(getattr(result, "weighted_objective_rms", np.nan)),
+        "weighted_objective_rms_units": str(getattr(result, "weighted_objective_rms_units", "")),
         "weighted_rms_px": float(weighted_residual_rms),
         "display_rms_px": float(getattr(result, "rms_px", np.nan)),
+        "display_rms_deg": float(getattr(result, "rms_deg", np.nan)),
         "seed_rms_px": float(full_beam_polish_summary.get("seed_rms_px", np.nan)),
         "final_full_beam_rms_px": float(getattr(result, "rms_px", np.nan)),
         "metric_name": str(getattr(result, "final_metric_name", "")),
+        "metric_space": str(getattr(result, "final_metric_space", "")),
+        "metric_units": str(getattr(result, "final_metric_units", "")),
     }
     if isinstance(getattr(result, "point_match_summary", None), Mapping):
         debug_summary_result["final_point_match_summary"] = copy.deepcopy(
@@ -32567,10 +32811,20 @@ def fit_geometry_parameters(
             matched_pair_count_text = ""
     metric_name_text = str(getattr(result, "final_metric_name", "") or "").strip()
     metric_part = f", metric={metric_name_text}" if metric_name_text else ""
+    metric_space_text = str(getattr(result, "final_metric_space", "") or "").strip()
+    if metric_space_text == "caked_deg":
+        completion_metric_text = f"rms={float(getattr(result, 'rms_deg', np.nan)):.4f}deg"
+        detector_rms = float("nan")
+        if isinstance(point_match_summary, Mapping):
+            detector_rms = float(point_match_summary.get("final_rms_px", np.nan))
+        if np.isfinite(detector_rms):
+            completion_metric_text += f", detector_rms={detector_rms:.4f}px"
+    else:
+        completion_metric_text = f"rms={float(getattr(result, 'rms_px', np.nan)):.4f}px"
     _emit_status(
         "Geometry fit: complete "
         f"(cost={float(getattr(result, 'cost', np.nan)):.6f}, "
-        f"rms={float(getattr(result, 'rms_px', np.nan)):.4f}px"
+        f"{completion_metric_text}"
         f"{metric_part}{matched_pair_count_text})"
     )
 

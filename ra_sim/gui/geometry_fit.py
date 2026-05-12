@@ -21796,6 +21796,45 @@ def _geometry_fit_metric_float(value: object, *, default: float = np.nan) -> flo
     return float(resolved)
 
 
+def geometry_fit_result_metric(result: object) -> dict[str, object]:
+    """Resolve the GUI acceptance/display metric for one geometry-fit result."""
+
+    summary = getattr(result, "point_match_summary", None)
+    if isinstance(summary, Mapping):
+        space = str(summary.get("acceptance_metric_space", "") or "")
+        if space == "caked_deg":
+            value = _geometry_fit_metric_float(
+                summary.get("final_rms_deg", summary.get("raw_angular_rms_deg", np.nan))
+            )
+            max_value = _geometry_fit_metric_float(
+                summary.get("final_max_deg", summary.get("raw_angular_max_deg", np.nan))
+            )
+            return {
+                "value": value,
+                "max_value": max_value,
+                "unit": "deg",
+                "space": "caked_deg",
+            }
+        if space == "detector_px":
+            value = _geometry_fit_metric_float(
+                summary.get("final_rms_px", summary.get("unweighted_peak_rms_px", np.nan))
+            )
+            max_value = _geometry_fit_metric_float(summary.get("unweighted_peak_max_px", np.nan))
+            return {
+                "value": value,
+                "max_value": max_value,
+                "unit": "px",
+                "space": "detector_px",
+            }
+
+    return {
+        "value": geometry_fit_result_rms(result),
+        "max_value": float("nan"),
+        "unit": "px",
+        "space": "legacy_detector_px",
+    }
+
+
 def _geometry_fit_debug_value_text(
     value: object,
     *,
@@ -22500,6 +22539,11 @@ def build_geometry_fit_rejection_reason_lines(
 
     reasons: list[str] = []
     point_match_summary = getattr(result, "point_match_summary", None)
+    metric = geometry_fit_result_metric(result)
+    metric_value = _geometry_fit_metric_float(metric.get("value", rms))
+    metric_max_value = _geometry_fit_metric_float(metric.get("max_value", np.nan))
+    metric_unit = str(metric.get("unit", "px") or "px")
+    metric_space = str(metric.get("space", "legacy_detector_px") or "legacy_detector_px")
     headless_caked_angular_acceptance = False
     if isinstance(point_match_summary, Mapping):
         try:
@@ -22555,12 +22599,20 @@ def build_geometry_fit_rejection_reason_lines(
     if not bool(getattr(result, "success", True)) and not headless_caked_angular_acceptance:
         reasons.append("Optimizer did not report success.")
 
-    if not np.isfinite(rms):
-        reasons.append("RMS residual is not finite.")
-    elif float(rms) > GEOMETRY_FIT_ACCEPT_MAX_RMS_PX and not headless_caked_angular_acceptance:
+    if not np.isfinite(metric_value):
+        if metric_space == "caked_deg":
+            reasons.append("Caked angular residual is not finite.")
+        else:
+            reasons.append("RMS residual is not finite.")
+    elif (
+        metric_space in {"detector_px", "legacy_detector_px"}
+        and metric_unit == "px"
+        and float(metric_value) > GEOMETRY_FIT_ACCEPT_MAX_RMS_PX
+        and not headless_caked_angular_acceptance
+    ):
         reasons.append(
             "RMS residual {rms:.2f} px exceeds the acceptance limit of {limit:.2f} px.".format(
-                rms=float(rms),
+                rms=float(metric_value),
                 limit=float(GEOMETRY_FIT_ACCEPT_MAX_RMS_PX),
             )
         )
@@ -22575,14 +22627,14 @@ def build_geometry_fit_rejection_reason_lines(
                 matched_pair_count = int(point_match_summary.get("matched_pair_count", 0))
             except Exception:
                 matched_pair_count = 0
-        max_offset = _geometry_fit_metric_float(
-            point_match_summary.get("unweighted_peak_max_px", np.nan)
-        )
+        max_offset = _geometry_fit_metric_float(metric_max_value)
 
     if has_matched_pair_count and matched_pair_count <= 0:
         reasons.append("No matched peak pairs were available for the fitted solution.")
     if (
         np.isfinite(max_offset)
+        and metric_space in {"detector_px", "legacy_detector_px"}
+        and metric_unit == "px"
         and float(max_offset) > GEOMETRY_FIT_ACCEPT_MAX_PEAK_OFFSET_PX
         and not headless_caked_angular_acceptance
     ):
@@ -22593,6 +22645,18 @@ def build_geometry_fit_rejection_reason_lines(
                 limit=float(GEOMETRY_FIT_ACCEPT_MAX_PEAK_OFFSET_PX),
             )
         )
+    if reasons and metric_space == "caked_deg" and np.isfinite(metric_value):
+        reasons.append(f"Caked angular residual = {float(metric_value):.6f} deg.")
+        detector_metric_complete = (
+            bool(point_match_summary.get("detector_pixel_metric_complete", False))
+            if isinstance(point_match_summary, Mapping)
+            else False
+        )
+        if not detector_metric_complete:
+            reasons.append(
+                "Detector-pixel acceptance was not applied because no complete "
+                "same-frame detector-pixel metric was available."
+            )
 
     identifiability_summary = getattr(result, "identifiability_summary", None)
     underconstrained = isinstance(identifiability_summary, Mapping) and bool(
@@ -22640,6 +22704,7 @@ def build_geometry_fit_result_lines(
     values: Sequence[object],
     *,
     rms: float,
+    unit: str = "px",
 ) -> list[str]:
     """Format fitted parameter values plus the RMS residual line."""
 
@@ -22650,7 +22715,7 @@ def build_geometry_fit_result_lines(
         except Exception:
             continue
         lines.append(f"{name} = {value:.6f}")
-    lines.append(f"RMS residual = {float(rms):.6f} px")
+    lines.append(f"RMS residual = {float(rms):.6f} {str(unit or 'px')}")
     return lines
 
 
@@ -23703,6 +23768,7 @@ def build_geometry_fit_summary_lines(
     values: Sequence[object],
     rms: float,
     save_path: object,
+    rms_unit: str = "px",
     result: object | None = None,
 ) -> list[str]:
     """Format the fit-summary section written to the geometry-fit log."""
@@ -23778,9 +23844,10 @@ def build_geometry_fit_summary_lines(
             var_names,
             values,
             rms=rms,
+            unit=rms_unit,
         )[:-1]
     )
-    lines.append(f"RMS residual = {float(rms):.6f} px")
+    lines.append(f"RMS residual = {float(rms):.6f} {str(rms_unit or 'px')}")
     lines.append(f"Matched peaks saved to: {save_path}")
     return lines
 
@@ -23798,6 +23865,7 @@ def build_geometry_fit_progress_text(
     save_path: object,
     log_path: object,
     frame_warning: str | None,
+    rms_unit: str = "px",
     frame_diag: Mapping[str, object] | None = None,
     result: object | None = None,
 ) -> str:
@@ -23813,11 +23881,12 @@ def build_geometry_fit_progress_text(
     weighted_rms = _geometry_fit_metric_float(getattr(result, "weighted_residual_rms_px", np.nan))
     metric_name = str(getattr(result, "final_metric_name", "") or "").strip()
     if metric_name == "dynamic_angular_point_match" and np.isfinite(weighted_rms):
-        base_summary_lines.append(f"Dynamic fit RMS = {float(weighted_rms):.2f} px")
+        weighted_unit = str(getattr(result, "weighted_objective_rms_units", "px") or "px")
+        base_summary_lines.append(f"Dynamic fit RMS = {float(weighted_rms):.2f} {weighted_unit}")
         if np.isfinite(float(rms)) and abs(float(rms) - float(weighted_rms)) > 1.0e-6:
-            base_summary_lines.append(f"Full-beam overlay RMS = {float(rms):.2f} px")
+            base_summary_lines.append(f"Acceptance RMS = {float(rms):.2f} {str(rms_unit or 'px')}")
     else:
-        base_summary_lines.append(f"RMS residual = {float(rms):.2f} px")
+        base_summary_lines.append(f"RMS residual = {float(rms):.2f} {str(rms_unit or 'px')}")
     base_summary_lines.append(
         "Orientation = {orientation}".format(
             orientation=str(
@@ -23874,6 +23943,7 @@ def build_geometry_fit_rejected_progress_text(
     joint_background_mode: bool,
     rms: float,
     rejection_reasons: Sequence[object],
+    rms_unit: str = "px",
 ) -> str:
     """Build the GUI status text for one rejected manual geometry fit."""
 
@@ -23883,7 +23953,7 @@ def build_geometry_fit_rejected_progress_text(
         if text:
             lines.append(text)
     if np.isfinite(rms):
-        lines.append(f"RMS residual = {float(rms):.2f} px")
+        lines.append(f"RMS residual = {float(rms):.2f} {str(rms_unit or 'px')}")
     lines.append(
         "Manual pairs: {points} points across {groups} groups".format(
             points=int(current_dataset.get("pair_count", 0) or 0),
@@ -23954,6 +24024,8 @@ def postprocess_geometry_fit_result(
         overlay_record_count=int(matched_overlay_record_count),
         result=result,
     )
+    result_metric = geometry_fit_result_metric(result)
+    rms_unit = str(result_metric.get("unit", "px") or "px")
 
     export_records = build_geometry_fit_export_records(point_match_diagnostics)
     save_path = Path(downloads_dir) / f"matched_peaks_{stamp}.npy"
@@ -23965,6 +24037,7 @@ def postprocess_geometry_fit_result(
         values=values,
         rms=rms,
         save_path=save_path,
+        rms_unit=rms_unit,
         result=result,
     )
     progress_text = build_geometry_fit_progress_text(
@@ -23974,6 +24047,7 @@ def postprocess_geometry_fit_result(
         var_names=var_names,
         values=values,
         rms=rms,
+        rms_unit=rms_unit,
         pixel_offsets=pixel_offsets,
         export_record_count=len(export_records),
         save_path=save_path,
@@ -24065,7 +24139,9 @@ def apply_runtime_geometry_fit_result(
         if callable(bindings.preview_fitted_params)
         else None
     )
-    rms = geometry_fit_result_rms(result)
+    result_metric = geometry_fit_result_metric(result)
+    rms = float(result_metric.get("value", geometry_fit_result_rms(result)))
+    rms_unit = str(result_metric.get("unit", "px") or "px")
     rejection_reasons = build_geometry_fit_rejection_reason_lines(
         result,
         rms=rms,
@@ -24082,6 +24158,7 @@ def apply_runtime_geometry_fit_result(
                 var_names,
                 result_values,
                 rms=rms,
+                unit=rms_unit,
             ),
         )
         point_match_summary_lines = build_geometry_fit_point_match_summary_lines(
@@ -24116,6 +24193,7 @@ def apply_runtime_geometry_fit_result(
                 joint_background_mode=joint_background_mode,
                 rms=rms,
                 rejection_reasons=rejection_reasons,
+                rms_unit=rms_unit,
             )
         )
         bindings.cmd_line(
@@ -24123,7 +24201,7 @@ def apply_runtime_geometry_fit_result(
             f"datasets={int(dataset_count)} "
             f"groups={int(current_dataset.get('group_count', 0) or 0)} "
             f"points={int(current_dataset.get('pair_count', 0) or 0)} "
-            f"rms={float(rms):.4f}px "
+            f"rms={float(rms):.4f}{rms_unit} "
             f"reason={rejection_reasons[0]}"
         )
         return GeometryFitRuntimeApplyResult(
@@ -24156,6 +24234,7 @@ def apply_runtime_geometry_fit_result(
             var_names,
             result_values,
             rms=rms,
+            unit=rms_unit,
         ),
     )
 
@@ -24218,7 +24297,7 @@ def apply_runtime_geometry_fit_result(
         f"datasets={int(dataset_count)} "
         f"groups={int(current_dataset.get('group_count', 0) or 0)} "
         f"points={int(current_dataset.get('pair_count', 0) or 0)} "
-        f"rms={float(rms):.4f}px"
+        f"rms={float(rms):.4f}{rms_unit}"
     )
 
     return GeometryFitRuntimeApplyResult(

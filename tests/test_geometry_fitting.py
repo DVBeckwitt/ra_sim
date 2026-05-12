@@ -4969,6 +4969,228 @@ def test_rung3_objective_uses_cached_caked_targets_and_dynamic_sim_sources(
     assert summary["optimizer_point_component_failure_count"] == 0
 
 
+def test_point_only_qr_acceptance_rejects_mixed_display_native_detector_distance(
+    monkeypatch,
+) -> None:
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        return (
+            np.zeros((image_size, image_size), dtype=np.float64),
+            [],
+            np.empty((0, 0, 0)),
+            np.empty(0),
+            np.empty(0),
+            [],
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+
+    observed_display = (1056.061, 1107.093)
+    observed_native = (1107.093, 1942.939)
+    predicted_display = (1045.871, 1109.525)
+    predicted_native = (1109.525, 1953.129)
+
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        row = _point_only_dynamic_qr_row(40.212, 39.904)
+        row.update(
+            {
+                "native_col": predicted_native[0],
+                "native_row": predicted_native[1],
+                "sim_col": predicted_display[0],
+                "sim_row": predicted_display[1],
+            }
+        )
+        return _locked_qr_source_rows_payload([row])
+
+    def projector(cols, rows, *, local_params=None, **_kwargs):
+        del local_params
+        assert np.asarray(cols, dtype=float).tolist() == pytest.approx([predicted_native[0]])
+        assert np.asarray(rows, dtype=float).tolist() == pytest.approx([predicted_native[1]])
+        return _point_only_projector_payload(
+            40.212,
+            39.904,
+            native_col=predicted_native[0],
+            native_row=predicted_native[1],
+        )
+
+    measured = _locked_qr_fixed_source_entry(
+        x=observed_display[0],
+        y=observed_display[1],
+        native_col=observed_native[0],
+        native_row=observed_native[1],
+        background_two_theta_deg=40.006,
+        background_phi_deg=39.050,
+        caked_x=40.006,
+        caked_y=39.050,
+        fit_space_anchor_override=True,
+        fit_space_anchor_source="manual_caked_click",
+    )
+    dataset_ctx = _point_only_qr_dataset_ctx(source_rows_builder, projector)
+    dataset_ctx.subset.measured_entries = [measured]
+    local = _base_params(2048, optics_mode=1)
+    local.update(
+        {
+            "center_x": 1024.0,
+            "center_y": 1024.0,
+            "center": [1024.0, 1024.0],
+            "_qr_fit_point_only_projection": True,
+        }
+    )
+
+    _residual, diagnostics, summary = opt._evaluate_geometry_fit_dataset_dynamic_point_matches(
+        local,
+        dataset_ctx,
+        image_size=2048,
+        missing_pair_penalty_deg=5.0,
+        theta_value=0.0,
+        collect_diagnostics=True,
+    )
+
+    native_native_distance = math.hypot(
+        predicted_native[0] - observed_native[0],
+        predicted_native[1] - observed_native[1],
+    )
+    display_native_distance = math.hypot(
+        predicted_display[0] - observed_native[0],
+        predicted_display[1] - observed_native[1],
+    )
+    assert native_native_distance == pytest.approx(10.476, abs=1.0e-3)
+    assert display_native_distance == pytest.approx(835.660, abs=1.0e-3)
+    assert len(diagnostics) == 1
+    diag = diagnostics[0]
+    assert diag["observed_detector_frame"] == "native_detector"
+    assert diag["same_frame_detector_pixel_distance_px"] == pytest.approx(
+        native_native_distance,
+        abs=1.0e-3,
+    )
+    assert diag["native_prediction_vs_native_observed_px"] == pytest.approx(
+        native_native_distance,
+        abs=1.0e-3,
+    )
+    assert diag["mixed_display_prediction_vs_native_observed_px"] == pytest.approx(
+        display_native_distance,
+        abs=1.0e-3,
+    )
+    assert summary["unweighted_peak_rms_px"] == pytest.approx(native_native_distance, abs=1.0e-3)
+    assert summary["acceptance_metric_space"] == "caked_deg"
+
+
+def _dynamic_point_only_fit_result_for_metric_tests(monkeypatch):
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        return (
+            np.zeros((image_size, image_size), dtype=np.float64),
+            [],
+            np.empty((0, 0, 0)),
+            np.empty(0),
+            np.empty(0),
+            [],
+        )
+
+    def fake_least_squares(residual_fn, x0, **_kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    def source_rows_builder(*, local_params=None):
+        two_theta, phi = _point_only_source_from_params(local_params)
+        return _locked_qr_source_rows_payload([_point_only_dynamic_qr_row(two_theta, phi)])
+
+    def projector(_cols, _rows, *, local_params=None, **_kwargs):
+        two_theta, phi = _point_only_source_from_params(local_params)
+        return _point_only_projector_payload(two_theta, phi)
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 30
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+    measured = _locked_qr_fixed_source_entry(
+        native_col=8.0,
+        native_row=9.0,
+        background_two_theta_deg=40.0,
+        background_phi_deg=179.8,
+        caked_x=40.0,
+        caked_y=179.8,
+        fit_space_anchor_override=True,
+        fit_space_anchor_source="manual_caked_click",
+    )
+    dataset_specs = [
+        {
+            "dataset_index": 0,
+            "label": "bg0",
+            "theta_initial": 0.0,
+            "measured_peaks": [measured],
+            "experimental_image": experimental_image,
+            "fit_space_projector": projector,
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "qr_fit_trial_source_rows_builder": source_rows_builder,
+            "qr_fit_trial_source_rows_builder_kind": "unit_test_dynamic_rows",
+            "sim_caked_image_builder": lambda *_args, **_kwargs: pytest.fail(
+                "point-only mode must not generate a caked image"
+            ),
+            "sim_caked_image_builder_kind": "must_not_call",
+        }
+    ]
+    return opt.fit_geometry_parameters(
+        np.array([[2.0, 0.0, 0.0]], dtype=np.float64),
+        np.array([1.0], dtype=np.float64),
+        image_size,
+        _base_params(image_size, optics_mode=1),
+        measured_peaks=[measured],
+        var_names=["theta_initial"],
+        experimental_image=experimental_image,
+        dataset_specs=dataset_specs,
+        refinement_config={
+            "solver": {
+                "manual_point_fit_mode": True,
+                "dynamic_point_geometry_fit": True,
+                "_qr_fit_point_only_projection": True,
+                "fixed_manual_prediction_preflight_guard": True,
+                "restarts": 0,
+                "weighted_matching": False,
+                "use_measurement_uncertainty": False,
+                "max_nfev": 1,
+            },
+            "single_ray": {"enabled": False},
+            "identifiability": {"enabled": False},
+            "full_beam_polish": {"enabled": False},
+            "image_refinement": {"enabled": False},
+        },
+    )
+
+
+def test_dynamic_angular_point_match_final_metric_uses_caked_deg_not_pixel_rms(
+    monkeypatch,
+) -> None:
+    result = _dynamic_point_only_fit_result_for_metric_tests(monkeypatch)
+
+    assert result.final_metric_name == "dynamic_angular_point_match"
+    assert result.final_metric_space == "caked_deg"
+    assert result.final_metric_units == "deg"
+    assert result.point_match_summary["acceptance_metric_space"] == "caked_deg"
+    assert result.point_match_summary["metric_unit"] == "deg"
+    assert math.isfinite(result.rms_deg)
+    assert not math.isfinite(result.rms_px)
+
+
+def test_final_summary_does_not_label_dynamic_objective_rms_as_px(monkeypatch) -> None:
+    result = _dynamic_point_only_fit_result_for_metric_tests(monkeypatch)
+
+    assert hasattr(result, "weighted_objective_rms")
+    assert result.weighted_objective_rms_units in {"deg", "weighted_deg"}
+    assert result.point_match_summary["weighted_objective_rms_units"] != "px"
+
+
 def test_rung3_objective_changes_dynamic_sim_source_when_trial_params_change(
     monkeypatch,
 ) -> None:

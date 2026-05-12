@@ -1347,6 +1347,38 @@ Manual caked fit fail-closed validation, 2026-04-23:
   format dirt in `ra_sim/fitting/optimization.py` and `tests/test_timing.py`.
   The full Rungs 0-6 ladder was not rerun in this final fail-closed pass.
 
+Dynamic Qr/Qz acceptance metric repair, 2026-05-12:
+
+- The dynamic Qr/Qz geometry-fit evaluator now chooses detector residuals by
+  explicit same-frame detector coordinates. Native measured anchors compare
+  only with native prediction points, display anchors compare only with display
+  prediction points, and mixed display-vs-native detector distances are logged
+  as diagnostics instead of driving acceptance.
+- Dynamic angular fits now report their final metric as caked degrees:
+  `acceptance_metric_space=caked_deg`, `acceptance_rms_input_units=deg`,
+  `final_rms_deg=<finite>`, and `final_rms_px=<finite only when every matched
+  row has a same-frame detector prediction>`.
+- GUI rejection/result text is unit-aware. The old mixed-frame rejection line
+  such as `RMS residual 1239.15 px exceeds ...` no longer applies to dynamic
+  caked-degree fits. If a dynamic result is rejected for another reason, the
+  GUI reports the caked angular residual and notes when detector-pixel
+  acceptance was unavailable because same-frame detector predictions were
+  incomplete.
+- Bug/error status: fixed for the 2026-05-12 Bi2Se3 GUI fit failure where the
+  objective path was coherent in caked degrees but the post-solve acceptance
+  path could manufacture a large mixed display/native detector-pixel RMS.
+- Feature status: no new GUI control, CLI flag, public API, config key,
+  saved-state schema, artifact schema, dependency, CI workflow, deprecation, or
+  migration.
+- Validation: `python -m pytest tests/test_geometry_fitting.py -k "point_only_projection or dynamic_angular_point_match" -q`,
+  `python -m pytest tests/test_manual_geometry_selection_helpers.py -k "no_partial_qr_objective_allowed" -q`,
+  and `python -m ra_sim.dev check` pass. A visible Bi2Se3 GUI harness run
+  completed the dynamic fit with
+  `Geometry fit: complete (... rms=88.3075deg, metric=dynamic_angular_point_match, matched=82)`;
+  the old mixed-frame `rms=1239.1529px` completion/rejection line is gone.
+- Shipping status: ready as a normal bug-fix slice. Rollback is a normal git
+  revert of the evaluator metric, GUI formatting, and focused tests.
+
 Do not use `run_geometry_fit_quality_baseline.py` as the first optimizer debug
 tool. Run it only after the ladder identifies a stable parameter set.
 
