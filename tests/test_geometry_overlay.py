@@ -721,6 +721,7 @@ def test_build_geometry_fit_overlay_records_prefers_rendered_caked_sim_over_disp
                 # This legacy field can be stale detector/display data. The
                 # rendered caked sim point is the source of truth when present.
                 "fit_prediction_detector_display_px": (9.2478, -1.2446),
+                "fit_prediction_caked_deg": (9.2478, -1.2446),
                 "sim_visual_caked_deg": (18.0, 4.0),
                 "sim_refined_caked_deg": (18.1, 4.1),
                 "simulated_x": 900.0,

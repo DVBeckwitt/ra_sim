@@ -254,6 +254,50 @@ required because the removed `runtime_context` fallback was internal and
 unsafe. Shipping status: ready as a normal diagnostic/hardening bug-fix slice;
 rollback is a normal git revert.
 
+2026-05-12 coordinate-lineage diagnostic update: rejected and accepted GUI
+geometry-fit runs now log a bounded `Coordinate lineage:` section when handoff
+audit rows exist. The section joins the cached/refined handoff point, the
+fit-dataset prediction, the first optimizer residual-eval snapshots, and the
+final point-match diagnostic by background/pair/q-group/HKL/branch/table/row/peak
+identity, with wrapped-phi deltas and a `first_divergence_stage` summary. The
+draw-time green `fit sim` visual-probe rows now carry the same identity fields,
+so GUI screenshots, visible simulation-image probes, cached caked coordinates,
+and actual optimizer residual inputs can be compared row-for-row.
+
+Bug/error status: diagnostic coverage improved for the still-observed mismatch
+where simulation rasters move but green `fit sim` markers or cached caked
+positions may not. This slice does not claim the fitter is fixed; it is designed
+to expose whether the divergence occurs in the handoff cache, residual evaluator,
+final point matcher, or overlay draw. Feature status: internal GUI diagnostics
+only; no public API, GUI control, CLI flag, config key, dependency, saved-state
+schema, or artifact schema. CI/automation status: focused helper, runtime apply,
+solver-request, and overlay probe tests pass locally. Deprecation/migration
+status: no user migration or compatibility shim. Shipping status: safe as a
+diagnostic-only slice; rollback is a normal git revert.
+
+Visible GUI repro validation, 2026-05-12: restored the saved `Bi2Se3` GUI state,
+enabled only `gamma` and `Gamma`, and ran the real `Fit Geometry (LSQ)` callback.
+The accepted diagnostic finding is that the optimizer residual snapshots agree
+with the fit-dataset prediction, while the rendered/refined simulation caked
+point can be 77-97 degrees away for the same Qr/HKL/source identity. That means
+the current failure is not just stale drawing; the objective path is using a
+prediction coordinate surface that disagrees with the actual rendered simulation
+peak surface.
+
+2026-05-12 point-only source fix: caked point-only Qr/Qz objective evaluation now
+builds current trial hit tables with image accumulation disabled, resolves locked
+Qr detector points from those hit tables first, and projects the current detector
+coordinates through the exact caked projector. The GUI source-row cache remains a
+fallback only when no hit table exists; if a current hit table exists but cannot
+resolve the locked row, the point fails closed rather than silently reusing stale
+visual aliases. Bug/error status: the known mismatch source was localized to the
+objective using stale caked aliases instead of the current detector point. Feature
+status: internal fitter behavior and diagnostics only; no new public API, config,
+dependency, saved-state schema, or artifact schema. CI/automation status:
+focused geometry objective, overlay, solver-request, and worker-cache regression
+tests pass locally. Shipping status: normal bug-fix slice with git revert as the
+rollback path.
+
 Real full headless `fit-geometry` smoke is now run and still failing after a
 clean exact-caked request. The first divergence from passing ladder evidence is
 not routing or pair identity but seed/start state: real headless fit uses the

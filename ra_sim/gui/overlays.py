@@ -488,10 +488,20 @@ def draw_geometry_fit_overlay(
             zorder=8,
         )
         if visual_probe_records is not None:
-            visual_probe_records.append(
+            identity_fields = (
+                "dataset_index",
+                "pair_id",
+                "q_group_key",
+                "hkl",
+                "source_branch_index",
+                "source_table_index",
+                "source_row_index",
+                "source_peak_index",
+            )
+            visual_probe_record = {field: entry.get(field) for field in identity_fields}
+            visual_probe_record.update(
                 {
                     "overlay_match_index": entry.get("overlay_match_index", idx),
-                    "hkl": entry.get("hkl"),
                     "display_mode": "caked" if show_caked_2d else "detector",
                     "record_point": (
                         float(final_sim_display[0]),
@@ -509,6 +519,7 @@ def draw_geometry_fit_overlay(
                     "fit_prediction_source": str(entry.get("fit_prediction_source", "")),
                 }
             )
+            visual_probe_records.append(visual_probe_record)
 
         residual_dist = math.hypot(
             final_sim_display[0] - final_bg_display[0],

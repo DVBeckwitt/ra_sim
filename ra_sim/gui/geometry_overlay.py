@@ -1760,10 +1760,10 @@ def build_geometry_fit_overlay_records(
             )
             final_sim_caked_payload = _first_point_with_source(
                 raw_entry,
-                "fit_prediction_caked_deg",
                 "sim_visual_caked_deg",
                 "predicted_refined_caked_deg",
                 "sim_refined_caked_deg",
+                "fit_prediction_caked_deg",
                 *fit_prediction_caked_fallbacks,
                 "predicted_caked_deg",
                 (

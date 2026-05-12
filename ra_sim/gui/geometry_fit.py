@@ -12328,7 +12328,10 @@ def build_geometry_manual_fit_dataset(
             if not isinstance(item, Mapping):
                 continue
             row = dict(item)
-            if str(row.get("row_origin", "") or "") != "manual_picker_saved_source_coverage":
+            current_dynamic_row = (
+                str(row.get("row_origin", "") or "") != "manual_picker_saved_source_coverage"
+            )
+            if current_dynamic_row:
                 row.setdefault("source_kind", "sim_visual_caked_deg")
                 row.setdefault("actual_source", "sim_visual_caked_deg")
                 row.setdefault("expected_source", "sim_visual_caked_deg")
@@ -12342,6 +12345,11 @@ def build_geometry_manual_fit_dataset(
             ) or _geometry_fit_point_list(row.get("sim_caked_display"))
             if caked_point is not None:
                 _geometry_fit_put_simulated_point_fields(row, caked_point, "caked_2theta_phi")
+                if current_dynamic_row:
+                    current_pair = (float(caked_point[0]), float(caked_point[1]))
+                    row["sim_visual_caked_deg"] = current_pair
+                    row["sim_visual_deg"] = current_pair
+                    row["sim_caked"] = current_pair
             marked.append(row)
         return marked
 
@@ -21462,6 +21470,18 @@ def build_geometry_fit_solver_request(
         aggregate_handoff_summary = dict(request_handoff_summary)
     if aggregate_handoff_summary:
         refinement_config["optimizer_request_handoff_summary"] = aggregate_handoff_summary
+    if not geometry_fit_runtime_allows_headless_caked_angular_acceptance(refinement_config):
+        optimizer_cfg_raw = refinement_config.get("optimizer")
+        solver_key = "optimizer" if isinstance(optimizer_cfg_raw, Mapping) else "solver"
+        solver_cfg_raw = (
+            optimizer_cfg_raw
+            if isinstance(optimizer_cfg_raw, Mapping)
+            else refinement_config.get("solver", {})
+        )
+        solver_cfg = dict(solver_cfg_raw) if isinstance(solver_cfg_raw, Mapping) else {}
+        solver_cfg.setdefault("objective_trace_enabled", True)
+        solver_cfg.setdefault("objective_trace_max_evals", 4)
+        refinement_config[solver_key] = solver_cfg
 
     return GeometryFitSolverRequest(
         miller=solver_inputs.miller,
@@ -23010,6 +23030,354 @@ def _geometry_fit_point_text(
     )
 
 
+GEOMETRY_FIT_COORD_LINEAGE_DIVERGENCE_TOL_DEG = 2.0
+
+
+def _geometry_fit_coordinate_lineage_caked_point(
+    entry: Mapping[str, object] | None,
+    *field_names: object,
+) -> tuple[tuple[float, float], str] | None:
+    if not isinstance(entry, Mapping):
+        return None
+    for raw_field in field_names:
+        if isinstance(raw_field, tuple) and len(raw_field) >= 2:
+            x_key = str(raw_field[0])
+            y_key = str(raw_field[1])
+            label = str(raw_field[2]) if len(raw_field) >= 3 else f"{x_key}/{y_key}"
+            point = _geometry_fit_point_list((entry.get(x_key), entry.get(y_key)))
+        else:
+            label = str(raw_field)
+            point = _geometry_fit_point_list(entry.get(label))
+        if point is None:
+            continue
+        return (float(point[0]), float(point[1])), label
+    return None
+
+
+def _geometry_fit_coordinate_lineage_key_value(value: object) -> object:
+    if isinstance(value, np.ndarray):
+        return _geometry_fit_coordinate_lineage_key_value(value.tolist())
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, (list, tuple)):
+        return tuple(_geometry_fit_coordinate_lineage_key_value(item) for item in value)
+    return value
+
+
+def _geometry_fit_coordinate_lineage_optional_int(
+    entry: Mapping[str, object],
+    *field_names: str,
+    default: object = None,
+    error_default: object = None,
+    fallback_to_raw: bool = True,
+) -> object:
+    raw_value: object = default
+    for field_name in field_names:
+        if field_name in entry:
+            raw_value = entry.get(field_name)
+            break
+    try:
+        return int(raw_value)
+    except Exception:
+        return raw_value if fallback_to_raw else error_default
+
+
+def _geometry_fit_coordinate_lineage_key(entry: Mapping[str, object]) -> tuple[object, ...]:
+    q_group_key = _geometry_fit_coordinate_lineage_key_value(
+        entry.get("q_group_key", entry.get("branch_group_key"))
+    )
+    hkl = _geometry_fit_normalize_hkl(entry.get("hkl", entry.get("normalized_hkl")))
+    pair_id = str(entry.get("pair_id", "") or "")
+    return (
+        _geometry_fit_coordinate_lineage_optional_int(
+            entry,
+            "dataset_index",
+            "background_index",
+            default=0,
+            error_default="?",
+            fallback_to_raw=False,
+        ),
+        pair_id,
+        repr(q_group_key),
+        repr(hkl),
+        _geometry_fit_coordinate_lineage_optional_int(entry, "source_branch_index"),
+        _geometry_fit_coordinate_lineage_optional_int(entry, "source_table_index"),
+        _geometry_fit_coordinate_lineage_optional_int(entry, "source_row_index"),
+        _geometry_fit_coordinate_lineage_optional_int(entry, "source_peak_index"),
+        _geometry_fit_coordinate_lineage_optional_int(
+            entry,
+            "pair_index",
+            "overlay_match_index",
+        ),
+    )
+
+
+def _geometry_fit_coordinate_lineage_fuzzy_key(
+    entry: Mapping[str, object],
+) -> tuple[object, ...]:
+    full_key = _geometry_fit_coordinate_lineage_key(entry)
+    return (
+        full_key[0],
+        full_key[2],
+        full_key[3],
+        full_key[4],
+        full_key[5],
+        full_key[6],
+        full_key[7],
+    )
+
+
+def _geometry_fit_coordinate_lineage_identity_key(
+    entry: Mapping[str, object],
+) -> tuple[object, ...]:
+    full_key = _geometry_fit_coordinate_lineage_key(entry)
+    return full_key[2:8]
+
+
+def _geometry_fit_coordinate_lineage_unique_key_map(
+    primary_by_key: Mapping[tuple[object, ...], Mapping[str, object]],
+    key_func: Callable[[Mapping[str, object]], tuple[object, ...]],
+) -> dict[tuple[object, ...], tuple[object, ...]]:
+    grouped: dict[tuple[object, ...], list[tuple[object, ...]]] = {}
+    for full_key, row in primary_by_key.items():
+        grouped.setdefault(key_func(row), []).append(full_key)
+    return {match_key: keys[0] for match_key, keys in grouped.items() if len(keys) == 1}
+
+
+def _geometry_fit_coordinate_lineage_key_text(key: tuple[object, ...]) -> str:
+    return (
+        "bg={bg} pair={pair} q_group={q_group} hkl={hkl} "
+        "branch={branch} table={table} row={row} peak={peak} overlay={overlay}"
+    ).format(
+        bg=key[0],
+        pair=key[1] or "<none>",
+        q_group=key[2],
+        hkl=key[3],
+        branch=key[4],
+        table=key[5],
+        row=key[6],
+        peak=key[7],
+        overlay=key[8],
+    )
+
+
+def _geometry_fit_coordinate_lineage_point_text(point: tuple[float, float]) -> str:
+    return f"({float(point[0]):.3f}, {float(point[1]):.3f})"
+
+
+def _geometry_fit_coordinate_lineage_stage_line(
+    *,
+    stage: str,
+    point: tuple[float, float] | None,
+    source: str,
+    previous_point: tuple[float, float] | None,
+) -> tuple[str, tuple[float, float] | None, float | None]:
+    if point is None:
+        return (
+            f"coord_lineage stage={stage} point=<none> source={source}",
+            previous_point,
+            None,
+        )
+    delta = _geometry_fit_audit_caked_delta_pair(point, previous_point)
+    delta_norm = _geometry_fit_audit_caked_delta_norm(point, previous_point)
+    point_text = _geometry_fit_coordinate_lineage_point_text(point)
+    if delta is None or delta_norm is None:
+        return (
+            f"coord_lineage stage={stage} point={point_text} source={source}",
+            point,
+            None,
+        )
+    return (
+        "coord_lineage stage={stage} point={point} delta={delta} "
+        "norm_deg={norm:.3f} source={source}".format(
+            stage=stage,
+            point=point_text,
+            delta=_geometry_fit_coordinate_lineage_point_text(delta),
+            norm=float(delta_norm),
+            source=source,
+        ),
+        point,
+        float(delta_norm),
+    )
+
+
+def build_geometry_fit_coordinate_lineage_lines(
+    *,
+    handoff_rows: Sequence[object] | None,
+    objective_trace: Sequence[object] | None = None,
+    point_match_diagnostics: Sequence[object] | None = None,
+    point_match_summary: Mapping[str, object] | None = None,
+    visual_probe_records: Sequence[object] | None = None,
+    max_records: int = 8,
+    divergence_tol_deg: float = GEOMETRY_FIT_COORD_LINEAGE_DIVERGENCE_TOL_DEG,
+) -> list[str]:
+    """Format GUI coordinate lineage from cached caked rows through fit/draw stages."""
+
+    raw_rows = [dict(row) for row in (handoff_rows or ()) if isinstance(row, Mapping)]
+    if not raw_rows:
+        return []
+    rows = raw_rows[: max(0, int(max_records))]
+    primary_by_key: dict[tuple[object, ...], dict[str, object]] = {
+        _geometry_fit_coordinate_lineage_key(row): row for row in rows
+    }
+    fuzzy_to_key = _geometry_fit_coordinate_lineage_unique_key_map(
+        primary_by_key,
+        _geometry_fit_coordinate_lineage_fuzzy_key,
+    )
+    identity_to_key = _geometry_fit_coordinate_lineage_unique_key_map(
+        primary_by_key,
+        _geometry_fit_coordinate_lineage_identity_key,
+    )
+
+    def _match_key(entry: Mapping[str, object]) -> tuple[object, ...] | None:
+        key = _geometry_fit_coordinate_lineage_key(entry)
+        if key in primary_by_key:
+            return key
+        fuzzy = _geometry_fit_coordinate_lineage_fuzzy_key(entry)
+        if fuzzy in fuzzy_to_key:
+            return fuzzy_to_key[fuzzy]
+        identity = _geometry_fit_coordinate_lineage_identity_key(entry)
+        if identity in identity_to_key:
+            return identity_to_key[identity]
+        return None
+
+    residual_stages: dict[tuple[object, ...], list[tuple[str, tuple[float, float], str]]] = {}
+    for trace in objective_trace or ():
+        if not isinstance(trace, Mapping):
+            continue
+        try:
+            eval_index = int(trace.get("eval_index", len(residual_stages) + 1))
+        except Exception:
+            eval_index = 0
+        for raw_point_row in trace.get("point_rows", ()) or ():
+            if not isinstance(raw_point_row, Mapping):
+                continue
+            point_payload = _geometry_fit_coordinate_lineage_caked_point(
+                raw_point_row,
+                "predicted_caked_deg",
+                (
+                    "simulated_two_theta_deg",
+                    "simulated_phi_deg",
+                    "simulated_two_theta_deg/simulated_phi_deg",
+                ),
+            )
+            if point_payload is None:
+                continue
+            key = _match_key(raw_point_row)
+            if key is None:
+                continue
+            residual_stages.setdefault(key, []).append(
+                (f"residual_eval[{eval_index}]", point_payload[0], point_payload[1])
+            )
+
+    final_rows: list[object] = list(point_match_diagnostics or ())
+    if isinstance(point_match_summary, Mapping):
+        for raw_dataset in point_match_summary.get("per_dataset", ()) or ():
+            if not isinstance(raw_dataset, Mapping):
+                continue
+            final_rows.extend(raw_dataset.get("_live_cache_records", ()) or ())
+
+    final_stages: dict[tuple[object, ...], tuple[tuple[float, float], str]] = {}
+    for raw_diag in final_rows:
+        if not isinstance(raw_diag, Mapping):
+            continue
+        point_payload = _geometry_fit_coordinate_lineage_caked_point(
+            raw_diag,
+            "predicted_caked_deg",
+            "fit_prediction_caked_deg",
+            (
+                "simulated_two_theta_deg",
+                "simulated_phi_deg",
+                "simulated_two_theta_deg/simulated_phi_deg",
+            ),
+            "sim_refined_caked_deg",
+        )
+        if point_payload is None:
+            continue
+        key = _match_key(raw_diag)
+        if key is not None:
+            final_stages.setdefault(key, point_payload)
+
+    visual_stages: dict[tuple[object, ...], list[tuple[str, tuple[float, float], str]]] = {}
+    for raw_probe in visual_probe_records or ():
+        if not isinstance(raw_probe, Mapping):
+            continue
+        key = _match_key(raw_probe)
+        if key is None:
+            continue
+        for stage_name, field_name in (
+            ("overlay_record", "record_point"),
+            ("drawn_artist", "artist_point"),
+            ("visible_image_peak", "image_peak_point"),
+        ):
+            point_payload = _geometry_fit_coordinate_lineage_caked_point(raw_probe, field_name)
+            if point_payload is not None:
+                visual_stages.setdefault(key, []).append(
+                    (stage_name, point_payload[0], point_payload[1])
+                )
+
+    lines: list[str] = []
+    for key, row in primary_by_key.items():
+        lines.append(f"coord_lineage key={_geometry_fit_coordinate_lineage_key_text(key)}")
+        previous_point: tuple[float, float] | None = None
+        first_divergence = "none"
+        max_delta = 0.0
+
+        stage_payloads: list[tuple[str, tuple[float, float] | None, str]] = []
+        for stage_name, field_names in (
+            ("sim_refined_caked", ("sim_refined_caked_deg", "sim_visual_caked_deg")),
+            ("fit_dataset_prediction", ("fit_prediction_caked_deg", "predicted_caked_deg")),
+        ):
+            point_payload = _geometry_fit_coordinate_lineage_caked_point(row, *field_names)
+            if point_payload is not None:
+                stage_payloads.append((stage_name, point_payload[0], point_payload[1]))
+        stage_payloads.extend(residual_stages.get(key, ()))
+        if key in final_stages:
+            final_point, final_source = final_stages[key]
+            stage_payloads.append(("final_point_match", final_point, final_source))
+        stage_payloads.extend(visual_stages.get(key, ()))
+
+        for stage_name, point, source in stage_payloads:
+            line, previous_point, delta_norm = _geometry_fit_coordinate_lineage_stage_line(
+                stage=str(stage_name),
+                point=point,
+                source=str(source),
+                previous_point=previous_point,
+            )
+            lines.append(line)
+            if delta_norm is not None and np.isfinite(float(delta_norm)):
+                max_delta = max(max_delta, float(delta_norm))
+                if first_divergence == "none" and float(delta_norm) > float(divergence_tol_deg):
+                    first_divergence = str(stage_name)
+        lines.append(
+            "coord_lineage summary first_divergence_stage={stage} max_delta_deg={delta:.3f}".format(
+                stage=first_divergence,
+                delta=float(max_delta),
+            )
+        )
+    return lines
+
+
+def build_geometry_fit_result_coordinate_lineage_lines(
+    *,
+    current_dataset: Mapping[str, object],
+    result: object,
+    visual_probe_records: Sequence[object] | None = None,
+) -> list[str]:
+    """Format coordinate lineage for one GUI geometry-fit result when audit rows exist."""
+
+    handoff_rows = current_dataset.get("fit_handoff_audit_rows")
+    if isinstance(handoff_rows, (str, bytes)) or not isinstance(handoff_rows, Sequence):
+        return []
+    return build_geometry_fit_coordinate_lineage_lines(
+        handoff_rows=handoff_rows,
+        objective_trace=getattr(result, "objective_trace", None),
+        point_match_diagnostics=getattr(result, "point_match_diagnostics", None),
+        point_match_summary=getattr(result, "point_match_summary", None),
+        visual_probe_records=visual_probe_records,
+    )
+
+
 def build_geometry_fit_point_match_failure_reason_lines(
     point_match_diagnostics: Sequence[object] | None,
     *,
@@ -23253,6 +23621,13 @@ def build_geometry_fit_visual_probe_lines(
         lines.append(
             "visual_probe "
             f"idx={overlay_index} HKL={hkl} "
+            f"dataset={entry.get('dataset_index', '<none>')} "
+            f"pair={entry.get('pair_id', '<none>') or '<none>'} "
+            f"q_group={entry.get('q_group_key', '<none>')} "
+            f"branch={entry.get('source_branch_index', '<none>')} "
+            f"table={entry.get('source_table_index', '<none>')} "
+            f"row={entry.get('source_row_index', '<none>')} "
+            f"peak={entry.get('source_peak_index', '<none>')} "
             f"mode={entry.get('display_mode', '')} status={entry.get('status', '')} "
             f"source={entry.get('record_source', '')} "
             f"record={_geometry_fit_probe_point_text(entry.get('record_point'))} "
@@ -23672,6 +24047,15 @@ def apply_runtime_geometry_fit_result(
         bindings.log_section(
             "Identifiability diagnostics:",
             identifiability_lines,
+        )
+    coordinate_lineage_lines = build_geometry_fit_result_coordinate_lineage_lines(
+        current_dataset=current_dataset,
+        result=result,
+    )
+    if coordinate_lineage_lines:
+        bindings.log_section(
+            "Coordinate lineage:",
+            coordinate_lineage_lines,
         )
 
     result_vector = getattr(result, "x", None)

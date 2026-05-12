@@ -4897,18 +4897,13 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         )
 
     qr_fit_point_only_projection = bool(local.get("_qr_fit_point_only_projection", False))
-    sim_buffer = _fit_hit_table_only_sim_buffer()
-    if qr_fit_point_only_projection:
-        hit_tables = ()
-        maxpos = []
-    else:
-        hit_tables, maxpos, sim_buffer = _run_fit_hit_table_simulation(
-            local,
-            fit_miller,
-            fit_intensities,
-            image_size,
-            theta_value,
-        )
+    hit_tables, maxpos, sim_buffer = _run_fit_hit_table_simulation(
+        local,
+        fit_miller,
+        fit_intensities,
+        image_size,
+        theta_value,
+    )
 
     def _overlay_index(entry: Dict[str, object], fallback: int) -> int:
         try:
@@ -5945,18 +5940,23 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         if point_only_sim_caked is not None:
             sim_two_theta_arr = np.asarray([point_only_sim_caked[0]], dtype=np.float64)
             sim_phi_arr = np.asarray([point_only_sim_caked[1]], dtype=np.float64)
-            simulated_projection_meta = {
-                "fit_space_source": "sim_visual_caked_deg",
-                "input_frame": "sim_visual_caked_deg",
-                "fit_space_projector_kind": "point_only_dynamic_source_row",
-                "cake_bundle_signature": None,
-                "native_frame_conversion_source": "",
-                "native_frame_conversion_count": 0,
-                "native_cols": np.asarray([sim_col], dtype=np.float64),
-                "native_rows": np.asarray([sim_row], dtype=np.float64),
-                "invalid_reason": None,
-                "point_only_projector_skipped": True,
-            }
+            if isinstance(fit_prediction, Mapping) and isinstance(
+                fit_prediction.get("projection_meta"), Mapping
+            ):
+                simulated_projection_meta = dict(fit_prediction.get("projection_meta") or {})
+            else:
+                simulated_projection_meta = {
+                    "fit_space_source": "sim_visual_caked_deg",
+                    "input_frame": "sim_visual_caked_deg",
+                    "fit_space_projector_kind": "point_only_dynamic_source_row",
+                    "cake_bundle_signature": None,
+                    "native_frame_conversion_source": "",
+                    "native_frame_conversion_count": 0,
+                    "native_cols": np.asarray([sim_col], dtype=np.float64),
+                    "native_rows": np.asarray([sim_row], dtype=np.float64),
+                    "invalid_reason": None,
+                    "point_only_projector_skipped": True,
+                }
         else:
             sim_two_theta_arr, sim_phi_arr, simulated_projection_meta = (
                 _project_detector_points_to_fit_space(
@@ -17662,6 +17662,38 @@ def _fit_qr_axis_order_match(
 def _fit_qr_current_dynamic_caked_anchor(
     entry: Mapping[str, object],
 ) -> Tuple[float, float] | None:
+    source_fields = _fit_qr_dynamic_anchor_source_fields(entry)
+    current_dynamic_row = (
+        str(source_fields.get("actual_source") or "") == "sim_visual_caked_deg"
+        and str(source_fields.get("source_kind") or "") == "sim_visual_caked_deg"
+        and str(source_fields.get("projection_frame") or source_fields.get("frame") or "")
+        == "caked_display"
+        and str(source_fields.get("units") or "deg") == "deg"
+        and str(source_fields.get("row_origin") or "") != "manual_picker_saved_source_coverage"
+        and source_fields.get("is_dynamic_trial_row") is not False
+    )
+    if current_dynamic_row:
+        for x_key, y_key in (
+            ("simulated_two_theta_deg", "simulated_phi_deg"),
+            ("two_theta_deg", "phi_deg"),
+            ("caked_x", "caked_y"),
+            ("raw_caked_x", "raw_caked_y"),
+        ):
+            point = _fit_qr_caked_pair_from_fields(entry, x_key, y_key)
+            if point is not None:
+                return point
+        for key in (
+            "sim_refined_caked_deg",
+            "sim_nominal_caked_deg",
+            "sim_caked_display",
+            "dynamic_baseline_anchor_caked_deg",
+            "sim_nominal_caked_deg_from_source_row_diagnostic",
+            "sim_visual_caked_deg",
+        ):
+            point = _fit_qr_caked_pair_from_entry(entry, key)
+            if point is not None:
+                return point
+
     for key in (
         "dynamic_baseline_anchor_caked_deg",
         "sim_nominal_caked_deg_from_source_row_diagnostic",
@@ -18490,7 +18522,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
     }
     sim_point: Optional[Tuple[float, float]] = None
     resolution_payload: Dict[str, object]
-    if hit_tables and not point_only_projection:
+    if hit_tables:
         sim_point, hit_table_payload = _resolve_locked_qr_trial_detector_point_from_hit_tables(
             locked_correspondence,
             hit_tables=hit_tables,
@@ -18532,6 +18564,9 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 "locked_qr_detector_point_source": "trial_hit_tables_locked_representative",
             }
         )
+    elif point_only_projection and hit_tables:
+        resolution_payload = dict(hit_table_payload)
+        resolution_payload["locked_qr_detector_point_source"] = "trial_hit_tables_unresolved"
     else:
         source_rows_payload = _trial_source_rows_payload()
         source_point, source_payload = _resolve_locked_qr_trial_detector_point_from_source_rows(
@@ -18567,104 +18602,6 @@ def _resolve_qr_fit_prediction_from_trial_params(
         or sim_row > float(image_size - 1)
     ):
         out.update({"available": False, "unavailable_reason": "off_detector"})
-        return out
-
-    if point_only_projection:
-        dynamic_source_anchor = _fit_qr_current_dynamic_caked_anchor(resolution_payload)
-        dynamic_source_anchor_used = bool(
-            dynamic_source_anchor is not None
-            and _fit_qr_entry_uses_current_dynamic_caked_row(resolution_payload)
-        )
-        if not dynamic_source_anchor_used or dynamic_source_anchor is None:
-            out.update(
-                {
-                    "available": False,
-                    "unavailable_reason": "point_only_dynamic_sim_visual_caked_deg_unavailable",
-                    "sim_refinement_status": "point_only_dynamic_source_unavailable",
-                    "sim_refinement_policy": "point_only_fail_closed",
-                }
-            )
-            return out
-        resolved_display = resolution_payload.get("resolved_detector_display_px")
-        if isinstance(resolved_display, (list, tuple, np.ndarray)) and len(resolved_display) >= 2:
-            try:
-                display_px = [float(resolved_display[0]), float(resolved_display[1])]
-            except Exception:
-                display_px = [float(sim_col), float(sim_row)]
-        else:
-            display_px = [float(sim_col), float(sim_row)]
-        input_frame = str(
-            resolution_payload.get("resolved_detector_point_input_frame") or "fit_detector"
-        )
-        out.update(
-            {
-                "sim_nominal_detector_px": list(display_px),
-                "sim_nominal_detector_display_px": list(display_px),
-                "sim_nominal_projection_input_px": [float(sim_col), float(sim_row)],
-                "sim_nominal_projection_input_frame": input_frame,
-                "sim_nominal_native_px": list(display_px),
-                "sim_nominal_caked_raw_deg": [
-                    float(dynamic_source_anchor[0]),
-                    float(dynamic_source_anchor[1]),
-                ],
-                "sim_nominal_projected_caked_deg": [
-                    float(dynamic_source_anchor[0]),
-                    float(dynamic_source_anchor[1]),
-                ],
-                "dynamic_baseline_anchor_coordinate_baseline_used": True,
-                "sim_nominal_caked_deg": [
-                    float(dynamic_source_anchor[0]),
-                    float(dynamic_source_anchor[1]),
-                ],
-                "sim_refined_caked_raw_deg": [
-                    float(dynamic_source_anchor[0]),
-                    float(dynamic_source_anchor[1]),
-                ],
-                "sim_refined_caked_deg": [
-                    float(dynamic_source_anchor[0]),
-                    float(dynamic_source_anchor[1]),
-                ],
-                "sim_refinement_delta_caked_deg": [0.0, 0.0],
-                "sim_refinement_delta_caked_norm_deg": 0.0,
-                "sim_refinement_status": "point_only_dynamic_sim_visual_caked_deg",
-                "sim_refinement_policy": "point_only_projection",
-                "sim_refinement_caked_image_source": "point_only_dynamic_source_row",
-                "sim_refinement_subpixel": "no",
-                "sim_refinement_subpixel_status": "none",
-                "sim_refinement_subpixel_method": "none",
-                "sim_refinement_bin_center_only": False,
-                "sim_refinement_peak_value": 0.0,
-                "sim_refinement_local_max_intensity": 0.0,
-                "sim_refinement_local_sum_intensity": 0.0,
-                "sim_refinement_local_nonzero_count": 0,
-                "point_only_projected_minus_dynamic_delta_two_theta_deg": 0.0,
-                "point_only_projected_minus_dynamic_delta_phi_deg_wrapped": 0.0,
-                "point_only_projected_dynamic_match": True,
-                "point_only_projector_skipped": True,
-                "objective_cache_mode": "point_only_projection",
-                "objective_cache_hit": False,
-                "objective_cache_reject_reason": None,
-                "objective_process_peaks_called": False,
-                "available": True,
-            }
-        )
-        for key in (
-            "dynamic_baseline_anchor_caked_deg",
-            "dynamic_baseline_anchor_source",
-            "dynamic_baseline_anchor_frame",
-            "dynamic_baseline_anchor_units",
-            "dynamic_baseline_anchor_actual_source",
-            "dynamic_baseline_anchor_source_kind",
-            "dynamic_baseline_anchor_projection_frame",
-            "dynamic_baseline_anchor_coordinate_provenance",
-            "dynamic_baseline_anchor_is_dynamic_trial_row",
-            "dynamic_baseline_anchor_row_origin",
-            "dynamic_baseline_anchor_q_group_key",
-            "dynamic_baseline_anchor_hkl",
-            "dynamic_baseline_anchor_physical_branch_slot",
-        ):
-            if key in resolution_payload:
-                out[key] = copy.deepcopy(resolution_payload.get(key))
         return out
 
     input_frame = str(
@@ -18735,7 +18672,19 @@ def _resolve_qr_fit_prediction_from_trial_params(
         else projected_nominal_caked
     )
     if point_only_projection:
-        if not dynamic_source_anchor_used or dynamic_source_anchor is None:
+        hit_table_detector_source = str(
+            resolution_payload.get("locked_qr_detector_point_source")
+            or resolution_payload.get("resolved_detector_point_source")
+            or ""
+        )
+        current_hit_table_detector_point = hit_table_detector_source in {
+            "trial_hit_tables_locked_representative",
+            "locked_hit_table_row",
+            "provider_local_stale_hit_table_row",
+        }
+        if not current_hit_table_detector_point and (
+            not dynamic_source_anchor_used or dynamic_source_anchor is None
+        ):
             out.update(
                 {
                     "available": False,
@@ -18745,40 +18694,50 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 }
             )
             return out
-        source_delta = (
-            float(projected_nominal_caked[0] - float(dynamic_source_anchor[0])),
-            float(
-                _wrap_phi_deg(float(projected_nominal_caked[1]) - float(dynamic_source_anchor[1]))
-            ),
-        )
+        if dynamic_source_anchor is not None:
+            source_delta = (
+                float(projected_nominal_caked[0] - float(dynamic_source_anchor[0])),
+                float(
+                    _wrap_phi_deg(
+                        float(projected_nominal_caked[1]) - float(dynamic_source_anchor[1])
+                    )
+                ),
+            )
+            dynamic_anchor_payload = [
+                float(dynamic_source_anchor[0]),
+                float(dynamic_source_anchor[1]),
+            ]
+        else:
+            source_delta = (0.0, 0.0)
+            dynamic_anchor_payload = [
+                float(projected_nominal_caked[0]),
+                float(projected_nominal_caked[1]),
+            ]
         out.update(
             {
-                "sim_nominal_caked_raw_deg": [
-                    float(dynamic_source_anchor[0]),
-                    float(dynamic_source_anchor[1]),
-                ],
+                "sim_nominal_caked_raw_deg": list(dynamic_anchor_payload),
                 "sim_nominal_projected_caked_deg": [
                     float(projected_nominal_caked[0]),
                     float(projected_nominal_caked[1]),
                 ],
-                "dynamic_baseline_anchor_coordinate_baseline_used": True,
+                "dynamic_baseline_anchor_coordinate_baseline_used": False,
                 "sim_nominal_caked_deg": [
-                    float(dynamic_source_anchor[0]),
-                    float(dynamic_source_anchor[1]),
+                    float(projected_nominal_caked[0]),
+                    float(projected_nominal_caked[1]),
                 ],
                 "sim_refined_caked_raw_deg": [
-                    float(dynamic_source_anchor[0]),
-                    float(dynamic_source_anchor[1]),
+                    float(projected_nominal_caked[0]),
+                    float(projected_nominal_caked[1]),
                 ],
                 "sim_refined_caked_deg": [
-                    float(dynamic_source_anchor[0]),
-                    float(dynamic_source_anchor[1]),
+                    float(projected_nominal_caked[0]),
+                    float(projected_nominal_caked[1]),
                 ],
                 "sim_refinement_delta_caked_deg": [0.0, 0.0],
                 "sim_refinement_delta_caked_norm_deg": 0.0,
-                "sim_refinement_status": "point_only_projected_dynamic_source",
+                "sim_refinement_status": "point_only_projected_detector_to_caked",
                 "sim_refinement_policy": "point_only_projection",
-                "sim_refinement_caked_image_source": "point_only_projection",
+                "sim_refinement_caked_image_source": "point_only_detector_projection",
                 "sim_refinement_subpixel": "no",
                 "sim_refinement_subpixel_status": "none",
                 "sim_refinement_subpixel_method": "none",
@@ -18792,6 +18751,10 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 "point_only_projected_dynamic_match": bool(
                     abs(source_delta[0]) <= 1.0e-6 and abs(source_delta[1]) <= 1.0e-6
                 ),
+                "point_only_detector_coordinate_source": (
+                    "trial_hit_tables" if current_hit_table_detector_point else "trial_source_rows"
+                ),
+                "point_only_projector_skipped": False,
                 "available": True,
             }
         )
@@ -22203,6 +22166,18 @@ def fit_geometry_parameters(
             predicted_source = _objective_trace_prediction_source(raw_entry)
             point_row = {
                 "row_index": int(row_index),
+                "dataset_index": _objective_trace_jsonable(
+                    raw_entry.get("dataset_index", raw_entry.get("background_index"))
+                ),
+                "background_index": _objective_trace_jsonable(raw_entry.get("background_index")),
+                "pair_id": _objective_trace_jsonable(raw_entry.get("pair_id")),
+                "pair_index": _objective_trace_jsonable(
+                    raw_entry.get("pair_index", raw_entry.get("overlay_match_index"))
+                ),
+                "match_input_index": _objective_trace_jsonable(raw_entry.get("match_input_index")),
+                "overlay_match_index": _objective_trace_jsonable(
+                    raw_entry.get("overlay_match_index")
+                ),
                 "q_group_key": _objective_trace_jsonable(raw_entry.get("q_group_key")),
                 "hkl": _objective_trace_jsonable(raw_entry.get("hkl")),
                 "source_table_index": _objective_trace_jsonable(
@@ -22564,6 +22539,12 @@ def fit_geometry_parameters(
         }
         objective_trace_records.append(record)
 
+    def _objective_trace_should_collect_point_diagnostics() -> bool:
+        return bool(
+            objective_trace_enabled
+            and len(objective_trace_records) < int(objective_trace_max_evals)
+        )
+
     def _collect_seed_debug_summary(x_trial: Sequence[float]) -> Dict[str, object]:
         x_arr = np.asarray(x_trial, dtype=float).reshape(-1)
         local = _apply_trial_params(x_arr)
@@ -22607,7 +22588,7 @@ def fit_geometry_parameters(
         local = _apply_trial_params(x)
         residual_arr, point_match_diagnostics, point_match_summary = point_match_evaluator(
             local,
-            collect_diagnostics=bool(objective_trace_enabled),
+            collect_diagnostics=_objective_trace_should_collect_point_diagnostics(),
         )
         last_live_update_payload = _point_match_live_payload(local, point_match_summary)
         prior_residual = _parameter_prior_residuals(x)

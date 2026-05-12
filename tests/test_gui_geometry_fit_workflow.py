@@ -30004,8 +30004,74 @@ def test_build_geometry_fit_solver_request_uses_prepared_run_payloads(
         {"dataset_index": 0, "theta_initial": 3.0},
         {"dataset_index": 1, "theta_initial": 4.0},
     ]
-    assert request.refinement_config == {"bounds": {"gamma": [0.0, 1.0]}}
+    assert request.refinement_config == {
+        "bounds": {"gamma": [0.0, 1.0]},
+        "solver": {
+            "objective_trace_enabled": True,
+            "objective_trace_max_evals": 4,
+        },
+    }
     assert request.runtime_safety_note is None
+
+
+def test_build_geometry_fit_solver_request_keeps_headless_trace_opt_in(
+    monkeypatch,
+) -> None:
+    prepared_run, postprocess_config = _make_prepared_run(joint_background_mode=False)
+    prepared_run = replace(
+        prepared_run,
+        geometry_runtime_cfg={
+            "bounds": {"gamma": [0.0, 1.0]},
+            geometry_fit.GEOMETRY_FIT_HEADLESS_RUNTIME_CONTEXT_FLAG: True,
+        },
+    )
+    monkeypatch.setattr(
+        geometry_fit,
+        "apply_geometry_fit_runtime_safety_overrides",
+        lambda cfg, **kwargs: (dict(cfg), None),
+    )
+
+    request = geometry_fit.build_geometry_fit_solver_request(
+        prepared_run=prepared_run,
+        var_names=["gamma"],
+        solver_inputs=postprocess_config.solver_inputs,
+    )
+
+    assert request.refinement_config == {
+        "bounds": {"gamma": [0.0, 1.0]},
+        geometry_fit.GEOMETRY_FIT_HEADLESS_RUNTIME_CONTEXT_FLAG: True,
+    }
+
+
+def test_build_geometry_fit_solver_request_enables_trace_on_effective_optimizer_config(
+    monkeypatch,
+) -> None:
+    prepared_run, postprocess_config = _make_prepared_run(joint_background_mode=False)
+    prepared_run = replace(
+        prepared_run,
+        geometry_runtime_cfg={
+            "optimizer": {"max_nfev": 60},
+            "solver": {"objective_trace_enabled": False},
+        },
+    )
+    monkeypatch.setattr(
+        geometry_fit,
+        "apply_geometry_fit_runtime_safety_overrides",
+        lambda cfg, **kwargs: (dict(cfg), None),
+    )
+
+    request = geometry_fit.build_geometry_fit_solver_request(
+        prepared_run=prepared_run,
+        var_names=["gamma"],
+        solver_inputs=postprocess_config.solver_inputs,
+    )
+
+    assert request.refinement_config["optimizer"] == {
+        "max_nfev": 60,
+        "objective_trace_enabled": True,
+        "objective_trace_max_evals": 4,
+    }
+    assert request.refinement_config["solver"] == {"objective_trace_enabled": False}
 
 
 def test_build_geometry_fit_solver_request_preserves_preflight_pair_identity_fields(
@@ -30418,6 +30484,8 @@ def test_solve_geometry_fit_request_forwards_status_callback_when_supported() ->
                 "bounds": {"gamma": [0.0, 1.0]},
                 "use_numba": False,
                 "solver": {
+                    "objective_trace_enabled": True,
+                    "objective_trace_max_evals": 4,
                     "parallel_mode": "auto",
                     "workers": "auto",
                     "worker_numba_threads": 0,
@@ -31364,7 +31432,14 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
         [
             {
                 "overlay_match_index": 3,
+                "dataset_index": 2,
+                "pair_id": "pair-3",
+                "q_group_key": ("q_group", "primary", 1, 10),
                 "hkl": (0, 0, 9),
+                "source_branch_index": 1,
+                "source_table_index": 160,
+                "source_row_index": 158,
+                "source_peak_index": 1,
                 "display_mode": "caked",
                 "status": "ok",
                 "record_source": "fit_prediction_caked_deg",
@@ -31382,6 +31457,87 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
     assert "visual_probe_artist_to_image_peak_max=5.000" in visual_probe_lines
     assert "visual_probe_warning=fit_sim_marker_image_mismatch" in visual_probe_lines
     assert any("artist_to_image_peak=5.000" in line for line in visual_probe_lines)
+    assert any(
+        "dataset=2" in line
+        and "q_group=('q_group', 'primary', 1, 10)" in line
+        and "branch=1 table=160 row=158 peak=1" in line
+        for line in visual_probe_lines
+    )
+
+    lineage_lines = geometry_fit.build_geometry_fit_coordinate_lineage_lines(
+        handoff_rows=[
+            {
+                "dataset_index": 2,
+                "pair_index": 4,
+                "q_group_key": ("q_group", "primary", 1, 10),
+                "hkl": (-1, 0, 10),
+                "source_branch_index": 1,
+                "source_table_index": 160,
+                "source_row_index": 158,
+                "source_peak_index": 1,
+                "sim_refined_caked_deg": (40.4, -40.2),
+                "fit_prediction_caked_deg": (40.4, -40.2),
+            }
+        ],
+        objective_trace=[
+            {
+                "eval_index": 1,
+                "source": "pixel_cost_fn",
+                "point_rows": [
+                    {
+                        "dataset_index": 2,
+                        "q_group_key": ["q_group", "primary", 1, 10],
+                        "hkl": (-1, 0, 10),
+                        "source_branch_index": 1,
+                        "source_table_index": 160,
+                        "source_row_index": 158,
+                        "source_peak_index": 1,
+                        "predicted_caked_deg": (40.4, -40.2),
+                    }
+                ],
+            }
+        ],
+        point_match_diagnostics=[
+            {
+                "dataset_index": 2,
+                "q_group_key": ["q_group", "primary", 1, 10],
+                "hkl": (-1, 0, 10),
+                "source_branch_index": 1,
+                "source_table_index": 160,
+                "source_row_index": 158,
+                "source_peak_index": 1,
+                "simulated_two_theta_deg": 40.4,
+                "simulated_phi_deg": -40.2,
+            }
+        ],
+        point_match_summary={
+            "per_dataset": [
+                {
+                    "dataset_index": 4,
+                    "_live_cache_records": [
+                        {
+                            "dataset_index": 4,
+                            "q_group_key": ["q_group", "primary", 1, 10],
+                            "hkl": (-1, 0, 10),
+                            "source_branch_index": 1,
+                            "source_table_index": 160,
+                            "source_row_index": 158,
+                            "source_peak_index": 1,
+                            "simulated_two_theta_deg": 40.4,
+                            "simulated_phi_deg": -40.2,
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+    assert any(line.startswith("coord_lineage key=") for line in lineage_lines)
+    assert any(
+        "stage=fit_dataset_prediction point=(40.400, -40.200)" in line for line in lineage_lines
+    )
+    assert any("stage=residual_eval[1] point=(40.400, -40.200)" in line for line in lineage_lines)
+    assert any("stage=final_point_match point=(40.400, -40.200)" in line for line in lineage_lines)
+    assert any("first_divergence_stage=none" in line for line in lineage_lines)
 
     summary_lines = geometry_fit.build_geometry_fit_summary_lines(
         current_dataset={
@@ -31413,6 +31569,90 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
         "RMS residual = 0.750000 px",
         "Matched peaks saved to: C:/tmp/matched.npy",
     ]
+
+
+def test_geometry_fit_coordinate_lineage_reports_phi_wrapped_divergence() -> None:
+    lineage_lines = geometry_fit.build_geometry_fit_coordinate_lineage_lines(
+        handoff_rows=[
+            {
+                "dataset_index": 0,
+                "pair_index": 0,
+                "hkl": (0, 0, 3),
+                "source_branch_index": 0,
+                "fit_prediction_caked_deg": (10.0, 179.5),
+            }
+        ],
+        objective_trace=[
+            {
+                "eval_index": 1,
+                "point_rows": [
+                    {
+                        "dataset_index": 0,
+                        "hkl": (0, 0, 3),
+                        "source_branch_index": 0,
+                        "predicted_caked_deg": (10.0, -179.5),
+                    }
+                ],
+            },
+            {
+                "eval_index": 2,
+                "point_rows": [
+                    {
+                        "dataset_index": 0,
+                        "hkl": (0, 0, 3),
+                        "source_branch_index": 0,
+                        "predicted_caked_deg": (14.0, -170.0),
+                    }
+                ],
+            },
+        ],
+    )
+
+    assert any(
+        "stage=residual_eval[1]" in line and "delta=(0.000, 1.000)" in line
+        for line in lineage_lines
+    )
+    assert any("first_divergence_stage=residual_eval[2]" in line for line in lineage_lines)
+
+
+def test_geometry_fit_coordinate_lineage_uses_final_live_cache_rows() -> None:
+    lineage_lines = geometry_fit.build_geometry_fit_coordinate_lineage_lines(
+        handoff_rows=[
+            {
+                "dataset_index": 0,
+                "q_group_key": ("q_group", "primary", 1, 10),
+                "hkl": (-1, 0, 10),
+                "source_branch_index": 1,
+                "source_table_index": 160,
+                "source_row_index": 158,
+                "source_peak_index": 1,
+                "sim_refined_caked_deg": (37.5, 36.75),
+                "fit_prediction_caked_deg": (40.4, -40.2),
+            }
+        ],
+        point_match_summary={
+            "per_dataset": [
+                {
+                    "dataset_index": 2,
+                    "_live_cache_records": [
+                        {
+                            "dataset_index": 2,
+                            "q_group_key": ["q_group", "primary", 1, 10],
+                            "hkl": [-1, 0, 10],
+                            "source_branch_index": 1,
+                            "source_table_index": 160,
+                            "source_row_index": 158,
+                            "source_peak_index": 1,
+                            "simulated_two_theta_deg": 40.395,
+                            "simulated_phi_deg": -40.25,
+                        }
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert any("stage=final_point_match point=(40.395, -40.250)" in line for line in lineage_lines)
 
 
 def test_geometry_fit_post_solver_helpers_build_runtime_params_offsets_and_status_text() -> None:
@@ -33899,6 +34139,117 @@ def test_apply_runtime_geometry_fit_result_rejects_absurd_manual_fit_before_upda
     ]
 
 
+def test_apply_runtime_geometry_fit_result_logs_coordinate_lineage_before_rejection() -> None:
+    events: list[object] = []
+
+    identity = {
+        "dataset_index": 2,
+        "pair_index": 4,
+        "q_group_key": ("q_group", "primary", 1, 10),
+        "hkl": (-1, 0, 10),
+        "source_branch_index": 1,
+        "source_table_index": 160,
+        "source_row_index": 158,
+        "source_peak_index": 1,
+    }
+
+    class _Result:
+        x = np.array([45.0], dtype=float)
+        rms_px = 1239.1529
+        success = True
+        status = 2
+        message = "ftol satisfied"
+        nfev = 13
+        cost = 7675.753026
+        robust_cost = 7675.753026
+        solver_loss = "linear"
+        solver_f_scale = 1.0
+        optimality = 0.007503
+        active_mask = [0]
+        restart_history = []
+        point_match_summary = {
+            "matched_pair_count": 1,
+            "unweighted_peak_max_px": 2374.16,
+        }
+        objective_trace = [
+            {
+                "eval_index": 1,
+                "point_rows": [
+                    {
+                        **identity,
+                        "predicted_caked_deg": (40.395, -40.196),
+                    }
+                ],
+            }
+        ]
+        point_match_diagnostics = [
+            {
+                **identity,
+                "simulated_two_theta_deg": 40.395,
+                "simulated_phi_deg": -40.196,
+            }
+        ]
+
+    outcome = geometry_fit.apply_runtime_geometry_fit_result(
+        result=_Result(),
+        var_names=["Gamma"],
+        current_dataset={
+            "initial_pairs_display": [{"pair": 1}],
+            "group_count": 14,
+            "pair_count": 25,
+            "fit_handoff_audit_rows": [
+                {
+                    **identity,
+                    "sim_refined_caked_deg": (37.507, 36.750),
+                    "fit_prediction_caked_deg": (40.395, -40.196),
+                }
+            ],
+        },
+        dataset_count=3,
+        joint_background_mode=True,
+        preserve_live_theta=False,
+        max_display_markers=120,
+        bindings=geometry_fit.GeometryFitRuntimeResultBindings(
+            log_section=lambda title, lines: events.append((title, list(lines))),
+            capture_undo_state=lambda: {"undo": True},
+            apply_result_values=lambda _names, _values: None,
+            sync_joint_background_theta=None,
+            refresh_status=lambda: None,
+            update_manual_pick_button_label=lambda: None,
+            build_profile_cache=lambda: {},
+            replace_profile_cache=lambda _cache: None,
+            push_undo_state=lambda _state: None,
+            request_preview_skip_once=lambda: None,
+            mark_last_simulation_dirty=lambda: None,
+            schedule_update=lambda: None,
+            build_fitted_params=lambda: {"theta_initial": 3.0},
+            postprocess_result=lambda _fitted_params, _rms: None,
+            draw_overlay_records=lambda _records, _marker_limit: None,
+            draw_initial_pairs_overlay=lambda _pairs, _marker_limit: None,
+            set_last_overlay_state=lambda _state: None,
+            save_export_records=lambda _save_path, _export_records: None,
+            set_progress_text=lambda _text: None,
+            cmd_line=lambda _text: None,
+        ),
+    )
+
+    assert outcome.accepted is False
+    titles = [event[0] for event in events if isinstance(event, tuple)]
+    assert titles.index("Coordinate lineage:") < titles.index("Fit rejected:")
+    lineage_sections = [lines for title, lines in events if title == "Coordinate lineage:"]
+    assert len(lineage_sections) == 1
+    assert any(
+        "stage=fit_dataset_prediction point=(40.395, -40.196)" in line
+        for line in lineage_sections[0]
+    )
+    assert any(
+        "stage=residual_eval[1] point=(40.395, -40.196)" in line for line in lineage_sections[0]
+    )
+    assert any(
+        "stage=final_point_match point=(40.395, -40.196)" in line for line in lineage_sections[0]
+    )
+
+
 def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
     tmp_path,
     monkeypatch,
@@ -34186,6 +34537,8 @@ def test_execute_runtime_geometry_fit_runs_solver_logs_and_applies_result(
                 },
                 "use_numba": False,
                 "solver": {
+                    "objective_trace_enabled": True,
+                    "objective_trace_max_evals": 4,
                     "parallel_mode": "auto",
                     "workers": "auto",
                     "worker_numba_threads": 0,
@@ -34887,7 +35240,7 @@ def _new4_coordinate_audit_schema_rows():
                 "dynamic_baseline_anchor_hkl": hkl,
                 "dynamic_baseline_anchor_physical_branch_slot": branch_slot,
                 "sim_refined_caked_deg": list(source),
-                "sim_refinement_status": "point_only_dynamic_sim_visual_caked_deg",
+                "sim_refinement_status": "point_only_projected_detector_to_caked",
             },
             objective_diag={
                 "manual_pair_id": f"pair-{index}",
@@ -34944,7 +35297,7 @@ def _new4_coordinate_audit_rows_with_source_offset(offset: tuple[float, float]):
                     "dynamic_baseline_anchor_hkl": hkl,
                     "dynamic_baseline_anchor_physical_branch_slot": branch_slot,
                     "sim_refined_caked_deg": list(source),
-                    "sim_refinement_status": "point_only_dynamic_sim_visual_caked_deg",
+                    "sim_refinement_status": "point_only_projected_detector_to_caked",
                 },
                 objective_diag={
                     "manual_pair_id": f"pair-{index}",

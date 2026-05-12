@@ -126,8 +126,15 @@ def test_draw_geometry_fit_overlay_captures_fit_sim_artist_point() -> None:
             ax,
             [
                 {
+                    "dataset_index": 2,
+                    "pair_id": "pair-4",
+                    "q_group_key": ("q_group", "primary", 1, 10),
                     "hkl": (1, 0, 1),
                     "overlay_match_index": 4,
+                    "source_branch_index": 1,
+                    "source_table_index": 160,
+                    "source_row_index": 158,
+                    "source_peak_index": 1,
                     "match_status": "matched",
                     "initial_sim_display": (8.0, 9.0),
                     "initial_bg_display": (8.5, 9.5),
@@ -144,7 +151,14 @@ def test_draw_geometry_fit_overlay_captures_fit_sim_artist_point() -> None:
 
         assert len(visual_probe_records) == 1
         assert visual_probe_records[0]["overlay_match_index"] == 4
+        assert visual_probe_records[0]["dataset_index"] == 2
+        assert visual_probe_records[0]["pair_id"] == "pair-4"
+        assert visual_probe_records[0]["q_group_key"] == ("q_group", "primary", 1, 10)
         assert visual_probe_records[0]["hkl"] == (1, 0, 1)
+        assert visual_probe_records[0]["source_branch_index"] == 1
+        assert visual_probe_records[0]["source_table_index"] == 160
+        assert visual_probe_records[0]["source_row_index"] == 158
+        assert visual_probe_records[0]["source_peak_index"] == 1
         assert visual_probe_records[0]["record_point"] == pytest.approx((11.0, 13.0))
         assert visual_probe_records[0]["artist_point"] == pytest.approx((11.0, 13.0))
         assert visual_probe_records[0]["record_source"] == "fit_prediction_detector_display_px"

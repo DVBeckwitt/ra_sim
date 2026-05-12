@@ -654,6 +654,34 @@ Validation:
   `497 passed`, manual identity `5 passed, 423 deselected`, workflow slice
   `26 passed, 2 skipped`
 
+## Geometry-fit coordinate lineage diagnostics
+
+GUI geometry-fit logs now include a bounded `Coordinate lineage:` section when
+fit handoff audit rows exist. Each `coord_lineage` group uses the same
+background, pair, q-group, HKL, branch, table, row, and peak identity fields
+across:
+
+- cached/refined simulation caked coordinates from the GUI handoff row
+- fit-dataset prediction caked coordinates used to build the objective
+- the first residual-evaluation snapshots from the optimizer
+- final point-match diagnostics
+- draw-time visual probe rows when available
+
+Phi deltas are wrapped before norm calculations, and the summary reports
+`first_divergence_stage` plus `max_delta_deg`. GUI solver requests opt into four
+objective-trace snapshots on the effective optimizer/solver config by default;
+true headless geometry-fit requests remain opt-in. Draw-time `visual_probe ...`
+rows now also print the same identity fields, so a green `fit sim` marker can be
+joined back to its cached and residual-eval coordinates.
+
+For caked point-only Qr/Qz geometry fits, current trial hit tables are the
+simulated detector-coordinate source of truth. The objective then projects those
+detector coordinates through the exact detector-to-caked projector. Cached
+`sim_visual_caked_deg` aliases are no longer used as the objective point when a
+current hit-table row is available. If the current hit table cannot resolve a
+locked Qr source row, the point fails closed instead of falling back to stale GUI
+source rows during the objective.
+
 ## Weighted-event diffraction status
 
 Current status:
