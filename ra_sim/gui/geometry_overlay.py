@@ -8,6 +8,89 @@ from typing import Callable, Mapping, Sequence
 import numpy as np
 
 
+def compute_holistic_sim_residual(
+    background_image: object,
+    simulation_image: object,
+    *,
+    mask: object | None = None,
+    scale_mode: str = "least_squares",
+) -> dict[str, object]:
+    """Return whole-image residual metrics for ``background - scale * sim``."""
+
+    background = np.asarray(background_image, dtype=np.float64)
+    simulation = np.asarray(simulation_image, dtype=np.float64)
+    if background.shape != simulation.shape:
+        raise ValueError("background_image and simulation_image must have the same shape")
+
+    valid = np.isfinite(background) & np.isfinite(simulation)
+    if mask is not None:
+        mask_arr = np.asarray(mask, dtype=bool)
+        if mask_arr.shape != background.shape:
+            raise ValueError("mask must have the same shape as background_image")
+        valid &= mask_arr
+
+    valid_count = int(np.count_nonzero(valid))
+    if valid_count == 0:
+        return {
+            "status": "no_valid_pixels",
+            "valid_px": 0,
+            "scale": float("nan"),
+            "rmse": float("nan"),
+            "mae": float("nan"),
+            "l1": float("nan"),
+        }
+
+    bg = background[valid]
+    sim = simulation[valid]
+    mode = str(scale_mode or "least_squares").strip().lower()
+    if mode in {"none", "fixed", "identity"}:
+        scale = 1.0
+    elif mode in {"least_squares", "lsq", "auto"}:
+        denom = float(np.dot(sim, sim))
+        scale = float(np.dot(bg, sim) / denom) if denom > 0.0 else 1.0
+    else:
+        raise ValueError(f"Unsupported holistic residual scale_mode {scale_mode!r}")
+
+    residual = bg - scale * sim
+    abs_residual = np.abs(residual)
+    return {
+        "status": "ok",
+        "valid_px": int(valid_count),
+        "scale": float(scale),
+        "rmse": float(np.sqrt(np.mean(residual * residual))),
+        "mae": float(np.mean(abs_residual)),
+        "l1": float(np.sum(abs_residual)),
+    }
+
+
+def compare_holistic_sim_residuals(
+    initial_metrics: Mapping[str, object] | None,
+    final_metrics: Mapping[str, object] | None,
+    *,
+    tolerance: float = 1.0e-9,
+) -> dict[str, object]:
+    """Compare initial/final whole-image residuals and flag worse final fits."""
+
+    initial = initial_metrics or {}
+    final = final_metrics or {}
+    try:
+        initial_rmse = float(initial.get("rmse", np.nan))
+        final_rmse = float(final.get("rmse", np.nan))
+    except Exception:
+        initial_rmse = float("nan")
+        final_rmse = float("nan")
+    delta = float(final_rmse - initial_rmse)
+    suspicious = bool(
+        np.isfinite(initial_rmse) and np.isfinite(final_rmse) and delta > float(tolerance)
+    )
+    return {
+        "holistic_residual_initial_rmse": initial_rmse,
+        "holistic_residual_final_rmse": final_rmse,
+        "holistic_residual_delta_rmse": delta,
+        "holistic_fit_suspicious": suspicious,
+    }
+
+
 def rotate_point_for_display(
     col: float,
     row: float,
@@ -1518,9 +1601,10 @@ def build_geometry_fit_overlay_records(
             final_sim_caked_payload = _first_point_with_source(
                 raw_entry,
                 "fit_prediction_caked_deg",
-                *fit_prediction_caked_fallbacks,
+                "sim_visual_caked_deg",
                 "predicted_refined_caked_deg",
                 "sim_refined_caked_deg",
+                *fit_prediction_caked_fallbacks,
                 "predicted_caked_deg",
                 (
                     "simulated_two_theta_deg",
@@ -1538,6 +1622,25 @@ def build_geometry_fit_overlay_records(
                     float(final_sim_caked_display[1]),
                 )
                 record["final_sim_caked_display_source"] = str(final_sim_caked_source)
+                render_caked_payload = _first_point_with_source(
+                    raw_entry,
+                    "sim_visual_caked_deg",
+                    "sim_refined_caked_deg",
+                    "fit_prediction_caked_deg",
+                )
+                if render_caked_payload is not None:
+                    render_caked = render_caked_payload[0]
+                    record["final_sim_render_caked_display"] = (
+                        float(render_caked[0]),
+                        float(render_caked[1]),
+                    )
+                    record["final_sim_render_caked_display_source"] = str(render_caked_payload[1])
+                    record["fit_sim_render_caked_delta"] = float(
+                        math.hypot(
+                            final_sim_caked_display[0] - render_caked[0],
+                            final_sim_caked_display[1] - render_caked[1],
+                        )
+                    )
             final_bg_caked_display = _first_overlay_entry_point(
                 raw_entry,
                 ("measured_two_theta_deg", "measured_phi_deg"),
@@ -1730,6 +1833,7 @@ def compute_geometry_overlay_frame_diagnostics(
 
     sim_frame_dists: list[float] = []
     bg_frame_dists: list[float] = []
+    fit_sim_render_caked_deltas: list[float] = []
     paired_records = 0
 
     for raw_entry in overlay_records or []:
@@ -1770,6 +1874,12 @@ def compute_geometry_overlay_frame_diagnostics(
             bg_frame_dists.append(
                 float(math.hypot(final_bg[0] - initial_bg[0], final_bg[1] - initial_bg[1]))
             )
+        try:
+            render_delta = float(raw_entry.get("fit_sim_render_caked_delta", np.nan))
+        except Exception:
+            render_delta = float("nan")
+        if np.isfinite(render_delta):
+            fit_sim_render_caked_deltas.append(float(abs(render_delta)))
 
     visual_stats = summarize_geometry_fit_overlay_visual_distances(
         overlay_records,
@@ -1794,14 +1904,36 @@ def compute_geometry_overlay_frame_diagnostics(
         "bg_display_p90_px": float(np.percentile(bg_frame_dists, 90.0))
         if bg_frame_dists
         else float("nan"),
+        "fit_sim_render_caked_delta_count": float(len(fit_sim_render_caked_deltas)),
+        "fit_sim_render_caked_delta_median": (
+            float(np.median(fit_sim_render_caked_deltas))
+            if fit_sim_render_caked_deltas
+            else float("nan")
+        ),
+        "fit_sim_render_caked_delta_max": (
+            float(np.max(fit_sim_render_caked_deltas))
+            if fit_sim_render_caked_deltas
+            else float("nan")
+        ),
         **visual_stats,
     }
 
     warning = ""
+    render_delta_max = float(stats["fit_sim_render_caked_delta_max"])
+    if (
+        fit_sim_render_caked_deltas
+        and np.isfinite(render_delta_max)
+        and render_delta_max > 1.0e-6
+    ):
+        warning = (
+            "Fit-sim overlay mismatch suspect: fitted marker caked positions differ from "
+            "the rendered simulation caked positions."
+        )
     sim_med = float(stats["sim_display_med_px"])
     bg_med = float(stats["bg_display_med_px"])
     if (
-        len(sim_frame_dists) >= 3
+        not warning
+        and len(sim_frame_dists) >= 3
         and np.isfinite(sim_med)
         and np.isfinite(bg_med)
         and sim_med - bg_med > 40.0

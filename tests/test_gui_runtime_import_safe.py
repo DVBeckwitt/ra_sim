@@ -576,6 +576,60 @@ print(
     }
 
 
+def test_runtime_session_geometry_fit_holistic_queue_flushes_after_redraw(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    background = np.asarray([[0.0, 10.0], [0.0, 0.0]], dtype=np.float64)
+    initial = np.asarray([[10.0, 0.0], [0.0, 0.0]], dtype=np.float64)
+    final = background.copy()
+    state = SimpleNamespace(
+        unscaled_image=initial.copy(),
+        last_caked_image_unscaled=initial.copy(),
+        last_caked_background_image_unscaled=background.copy(),
+        last_unscaled_image_signature=("detector", "initial"),
+        last_simulation_signature=("simulation", "initial"),
+        geometry_fit_pending_holistic_residual=None,
+    )
+    lines: list[str] = []
+
+    def _redraw() -> None:
+        state.unscaled_image = final.copy()
+        state.last_caked_image_unscaled = final.copy()
+        state.last_unscaled_image_signature = ("detector", "final")
+        state.last_simulation_signature = ("simulation", "final")
+
+    monkeypatch.setattr(runtime_session, "simulation_runtime_state", state, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_background_backend_for_comparison",
+        lambda: background.copy(),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "schedule_update", _redraw, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_cmd_line",
+        lambda text: lines.append(str(text)),
+        raising=False,
+    )
+
+    runtime_session._schedule_geometry_fit_update_with_holistic_residual()
+
+    pending = state.geometry_fit_pending_holistic_residual
+    assert isinstance(pending, dict)
+    assert "initial_simulation" not in pending["detector"]
+    assert "initial_metrics" in pending["detector"]
+
+    runtime_session._flush_pending_geometry_fit_holistic_residual()
+
+    assert state.geometry_fit_pending_holistic_residual is None
+    assert any("holistic detector:" in line for line in lines)
+    assert any("holistic caked:" in line for line in lines)
+    assert all("stale_final_sim=False" in line for line in lines)
+    assert all("suspicious=False" in line for line in lines)
+
+
 def test_shutdown_gui_clears_geometry_fit_workers_and_pending_tokens(
     monkeypatch,
 ) -> None:

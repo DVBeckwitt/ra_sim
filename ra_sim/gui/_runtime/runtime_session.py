@@ -312,7 +312,9 @@ from ra_sim.gui import fit2d_error_sound as gui_fit2d_error_sound
 from ra_sim.gui import views as gui_views
 from ra_sim.gui.geometry_overlay import (
     build_geometry_fit_overlay_records,
+    compare_holistic_sim_residuals,
     compute_geometry_overlay_frame_diagnostics,
+    compute_holistic_sim_residual,
 )
 from ra_sim.gui import overlays as gui_overlays
 from ra_sim.gui import peak_selection as gui_peak_selection
@@ -14182,6 +14184,159 @@ def _update_chi_square_display(force=False):
     chi_square_label.config(text=text)
 
 
+def _geometry_fit_holistic_image_snapshot(value: object) -> np.ndarray | None:
+    try:
+        arr = np.array(value, dtype=np.float64, copy=True)
+    except Exception:
+        return None
+    if arr.ndim != 2 or arr.size <= 0:
+        return None
+    return arr
+
+
+def _geometry_fit_holistic_snapshot_entry(
+    background: object,
+    simulation: object,
+) -> dict[str, object] | None:
+    background_arr = _geometry_fit_holistic_image_snapshot(background)
+    if background_arr is None:
+        return None
+    try:
+        simulation_arr = np.asarray(simulation, dtype=np.float64)
+    except Exception:
+        return None
+    if (
+        simulation_arr.ndim != 2
+        or simulation_arr.size <= 0
+        or background_arr.shape != simulation_arr.shape
+    ):
+        return None
+    try:
+        initial_metrics = compute_holistic_sim_residual(background_arr, simulation_arr)
+    except Exception:
+        return None
+    return {
+        "background": background_arr,
+        "initial_metrics": initial_metrics,
+    }
+
+
+def _queue_geometry_fit_holistic_residual_check() -> None:
+    """Capture current GUI images before the fitted simulation redraw runs."""
+
+    snapshot: dict[str, object] = {}
+    detector_entry = _geometry_fit_holistic_snapshot_entry(
+        _current_background_backend_for_comparison(),
+        getattr(simulation_runtime_state, "unscaled_image", None),
+    )
+    if detector_entry is not None:
+        snapshot["detector"] = detector_entry
+
+    caked_entry = _geometry_fit_holistic_snapshot_entry(
+        getattr(simulation_runtime_state, "last_caked_background_image_unscaled", None),
+        getattr(simulation_runtime_state, "last_caked_image_unscaled", None),
+    )
+    if caked_entry is not None:
+        snapshot["caked"] = caked_entry
+
+    if not snapshot:
+        return
+    snapshot["initial_unscaled_signature"] = getattr(
+        simulation_runtime_state,
+        "last_unscaled_image_signature",
+        None,
+    )
+    snapshot["initial_simulation_signature"] = getattr(
+        simulation_runtime_state,
+        "last_simulation_signature",
+        None,
+    )
+    simulation_runtime_state.geometry_fit_pending_holistic_residual = snapshot
+
+
+def _format_geometry_fit_holistic_line(
+    space: str,
+    comparison: Mapping[str, object],
+    *,
+    stale_final_simulation: bool,
+) -> str:
+    initial_rmse = float(comparison.get("holistic_residual_initial_rmse", np.nan))
+    final_rmse = float(comparison.get("holistic_residual_final_rmse", np.nan))
+    delta_rmse = float(comparison.get("holistic_residual_delta_rmse", np.nan))
+    suspicious = bool(comparison.get("holistic_fit_suspicious", False))
+    return (
+        f"holistic {space}: initial_rmse={initial_rmse:.6g}, "
+        f"final_rmse={final_rmse:.6g}, delta={delta_rmse:.6g}, "
+        f"suspicious={suspicious}, stale_final_sim={bool(stale_final_simulation)}"
+    )
+
+
+def _flush_pending_geometry_fit_holistic_residual() -> None:
+    pending = getattr(simulation_runtime_state, "geometry_fit_pending_holistic_residual", None)
+    if not isinstance(pending, dict):
+        return
+
+    lines: list[str] = []
+    for space in ("detector", "caked"):
+        entry = pending.get(space)
+        if not isinstance(entry, Mapping):
+            continue
+        background = entry.get("background")
+        initial_metrics = entry.get("initial_metrics")
+        if not isinstance(initial_metrics, Mapping):
+            lines.append(f"holistic {space}: skipped initial_metrics_unavailable")
+            continue
+        if space == "detector":
+            final_sim_source = getattr(simulation_runtime_state, "unscaled_image", None)
+            initial_signature = pending.get("initial_unscaled_signature")
+            final_signature = getattr(
+                simulation_runtime_state,
+                "last_unscaled_image_signature",
+                None,
+            )
+        else:
+            final_sim_source = getattr(simulation_runtime_state, "last_caked_image_unscaled", None)
+            initial_signature = pending.get("initial_simulation_signature")
+            final_signature = getattr(
+                simulation_runtime_state,
+                "last_simulation_signature",
+                None,
+            )
+        final_sim = _geometry_fit_holistic_image_snapshot(final_sim_source)
+        if final_sim is None:
+            lines.append(f"holistic {space}: skipped final_simulation_unavailable")
+            continue
+        stale_final_sim = bool(
+            initial_signature is not None
+            and final_signature is not None
+            and initial_signature == final_signature
+        )
+        try:
+            final_metrics = compute_holistic_sim_residual(background, final_sim)
+            comparison = compare_holistic_sim_residuals(initial_metrics, final_metrics)
+        except Exception as exc:
+            lines.append(f"holistic {space}: error={type(exc).__name__}:{exc}")
+            continue
+        lines.append(
+            _format_geometry_fit_holistic_line(
+                space,
+                comparison,
+                stale_final_simulation=stale_final_sim,
+            )
+        )
+
+    simulation_runtime_state.geometry_fit_pending_holistic_residual = None
+    if not lines:
+        return
+    for line in lines:
+        _geometry_fit_cmd_line(line)
+
+
+def _schedule_geometry_fit_update_with_holistic_residual() -> None:
+    _queue_geometry_fit_holistic_residual_check()
+    schedule_update()
+
+
 def _ensure_global_image_buffer_shape(source_image: object) -> np.ndarray:
     global global_image_buffer
 
@@ -20401,11 +20556,13 @@ def _refresh_settled_overlays() -> None:
         _clear_all_geometry_overlay_artists(redraw=False)
         _clear_analysis_peak_overlay_artists(redraw=False)
         _request_overlay_canvas_redraw(force=True)
+        _flush_pending_geometry_fit_holistic_residual()
         return
     if _current_geometry_fit_caked_roi_preview_enabled():
         _hide_geometry_fit_caked_roi_preview_aux_artists()
         _request_main_canvas_redraw(force_matplotlib=False)
         _request_overlay_canvas_redraw(force=True)
+        _flush_pending_geometry_fit_holistic_residual()
         return
     if not _geometry_overlays_enabled():
         gui_controllers.clear_geometry_preview_skip_once(geometry_preview_state)
@@ -20427,6 +20584,7 @@ def _refresh_settled_overlays() -> None:
         draw_initial_pairs_overlay=_draw_runtime_geometry_fit_initial_pairs_overlay,
     ):
         _render_current_geometry_manual_pairs(update_status=False)
+    _flush_pending_geometry_fit_holistic_residual()
 
 
 def _clear_deferred_overlays(*, clear_qr_overlay: bool = True) -> None:
@@ -46136,7 +46294,7 @@ def _initialize_runtime_controls_block_50() -> None:
             "request_preview_skip_once": (
                 lambda: gui_controllers.request_geometry_preview_skip_once(geometry_preview_state)
             ),
-            "schedule_update": schedule_update,
+            "schedule_update": _schedule_geometry_fit_update_with_holistic_residual,
             "draw_overlay_records": (
                 lambda records, marker_limit: _draw_geometry_fit_overlay(
                     records,

@@ -31344,6 +31344,22 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
         "bg_display_p90_px=5.600",
     ]
 
+    overlay_render_lines = geometry_fit.build_geometry_fit_overlay_diagnostic_lines(
+        {
+            "paired_records": 3,
+            "sim_display_med_px": 1.2,
+            "bg_display_med_px": 2.3,
+            "sim_display_p90_px": 4.5,
+            "bg_display_p90_px": 5.6,
+            "fit_sim_render_caked_delta_count": 3,
+            "fit_sim_render_caked_delta_median": 0.25,
+            "fit_sim_render_caked_delta_max": 0.5,
+        },
+        overlay_record_count=7,
+    )
+    assert "fit_sim_render_caked_delta_med=0.250" in overlay_render_lines
+    assert "fit_sim_render_caked_delta_max=0.500" in overlay_render_lines
+
     summary_lines = geometry_fit.build_geometry_fit_summary_lines(
         current_dataset={
             "group_count": 4,

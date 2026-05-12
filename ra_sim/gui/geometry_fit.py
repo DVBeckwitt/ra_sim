@@ -23174,6 +23174,24 @@ def build_geometry_fit_overlay_diagnostic_lines(
                 ),
             ]
         )
+    render_delta_count = _geometry_fit_metric_float(
+        diag.get("fit_sim_render_caked_delta_count", np.nan)
+    )
+    render_delta_med = _geometry_fit_metric_float(
+        diag.get("fit_sim_render_caked_delta_median", np.nan)
+    )
+    render_delta_max = _geometry_fit_metric_float(
+        diag.get("fit_sim_render_caked_delta_max", np.nan)
+    )
+    if render_delta_count > 0 and (
+        np.isfinite(render_delta_med) or np.isfinite(render_delta_max)
+    ):
+        lines.extend(
+            [
+                f"fit_sim_render_caked_delta_med={render_delta_med:.3f}",
+                f"fit_sim_render_caked_delta_max={render_delta_max:.3f}",
+            ]
+        )
     mode_label = _geometry_fit_selected_discrete_mode_label(result)
     if mode_label:
         lines.insert(1, f"solver_discrete_mode={mode_label}")

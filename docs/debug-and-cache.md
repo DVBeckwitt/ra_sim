@@ -46,6 +46,25 @@ Retention modes:
 - `auto`: retain when the active feature benefits from reuse
 - `always`: retain whenever built
 
+## Geometry-Fit Visual Residual Diagnostics
+
+GUI geometry fits now emit two visual-consistency diagnostics after the fitted
+simulation redraw settles:
+
+- overlay frame diagnostics report
+  `fit_sim_render_caked_delta_med` and `fit_sim_render_caked_delta_max`, which
+  compare each green `fit sim` marker against the caked point used by the
+  rendered fitted simulation image
+- geometry-fit logs report `holistic detector` and `holistic caked` residual
+  lines, comparing the full background image against the pre-fit and post-fit
+  simulation images with one least-squares intensity scale
+
+The holistic check is diagnostic only. It does not change the solver objective,
+fit parameters, saved-state schema, CLI flags, or cache retention policy. A
+positive residual delta or `suspicious=True` means the full-image agreement got
+worse even if the point objective improved, and should be treated as a prompt to
+inspect the visible GUI image and the fit log together.
+
 ## Background Peak-Fit Diagnostic Caches
 
 The parallel background peak-fit diagnostic script

@@ -3,12 +3,54 @@ import pytest
 from ra_sim.gui.geometry_overlay import (
     build_geometry_fit_overlay_records,
     compose_orientation_transforms,
+    compare_holistic_sim_residuals,
+    compute_holistic_sim_residual,
     compute_geometry_overlay_frame_diagnostics,
     inverse_transform_points_orientation,
     rotate_point_for_display,
     summarize_geometry_fit_overlay_visual_distances,
     transform_points_orientation,
 )
+
+
+def test_compute_holistic_sim_residual_prefers_aligned_simulation():
+    background = [
+        [0.0, 0.0, 0.0, 0.0],
+        [0.0, 4.0, 8.0, 0.0],
+        [0.0, 2.0, 6.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0],
+    ]
+    aligned_sim = [
+        [0.0, 0.0, 0.0, 0.0],
+        [0.0, 2.0, 4.0, 0.0],
+        [0.0, 1.0, 3.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0],
+    ]
+    shifted_sim = [
+        [0.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 2.0, 4.0],
+        [0.0, 0.0, 1.0, 3.0],
+        [0.0, 0.0, 0.0, 0.0],
+    ]
+
+    aligned = compute_holistic_sim_residual(background, aligned_sim)
+    shifted = compute_holistic_sim_residual(background, shifted_sim)
+
+    assert aligned["status"] == "ok"
+    assert shifted["status"] == "ok"
+    assert aligned["scale"] == pytest.approx(2.0)
+    assert aligned["rmse"] < shifted["rmse"]
+    assert aligned["mae"] < shifted["mae"]
+
+
+def test_compare_holistic_sim_residuals_flags_worse_fit():
+    initial = compute_holistic_sim_residual([[1.0, 2.0]], [[1.0, 2.0]])
+    final = compute_holistic_sim_residual([[1.0, 2.0]], [[2.0, 1.0]])
+
+    comparison = compare_holistic_sim_residuals(initial, final)
+
+    assert comparison["holistic_fit_suspicious"] is True
+    assert comparison["holistic_residual_delta_rmse"] > 0.0
 
 
 def test_build_geometry_fit_overlay_records_preserves_duplicate_hkls():
@@ -559,8 +601,6 @@ def test_build_geometry_fit_overlay_records_uses_fit_prediction_display_as_caked
                 "objective_cache_mode": "point_only_projection",
                 "fit_prediction_detector_display_px": (9.2478, -1.2446),
                 "fit_prediction_detector_native_px": (130.0, 140.0),
-                "predicted_refined_caked_deg": (99.0, -99.0),
-                "sim_refined_caked_deg": (9.2526, 0.0),
                 "simulated_x": 900.0,
                 "simulated_y": 901.0,
                 "simulated_two_theta_deg": 9.2526,
@@ -586,6 +626,54 @@ def test_build_geometry_fit_overlay_records_uses_fit_prediction_display_as_caked
 
     assert records[0]["final_sim_caked_display"] == pytest.approx((9.2478, -1.2446))
     assert records[0]["final_sim_caked_display_source"] == "fit_prediction_detector_display_px"
+
+
+def test_build_geometry_fit_overlay_records_prefers_rendered_caked_sim_over_display_alias():
+    records = build_geometry_fit_overlay_records(
+        [
+            {
+                "overlay_match_index": 0,
+                "hkl": (0, 0, 3),
+                "sim_display": (9.2, 0.0),
+                "bg_display": (9.1, -1.2),
+            }
+        ],
+        [
+            {
+                "match_status": "matched",
+                "overlay_match_index": 0,
+                "hkl": (0, 0, 3),
+                "objective_cache_mode": "point_only_projection",
+                # This legacy field can be stale detector/display data. The
+                # rendered caked sim point is the source of truth when present.
+                "fit_prediction_detector_display_px": (9.2478, -1.2446),
+                "sim_visual_caked_deg": (18.0, 4.0),
+                "sim_refined_caked_deg": (18.1, 4.1),
+                "simulated_x": 900.0,
+                "simulated_y": 901.0,
+                "measured_x": 12.0,
+                "measured_y": 22.0,
+                "measured_two_theta_deg": 9.1,
+                "measured_phi_deg": -1.2,
+                "distance_px": 2.0,
+            }
+        ],
+        native_shape=(1024, 1024),
+        orientation_choice={
+            "indexing_mode": "xy",
+            "k": 0,
+            "flip_x": False,
+            "flip_y": False,
+            "flip_order": "yx",
+        },
+        sim_display_rotate_k=0,
+        background_display_rotate_k=0,
+    )
+
+    assert records[0]["final_sim_caked_display"] == pytest.approx((18.0, 4.0))
+    assert records[0]["final_sim_caked_display_source"] == "sim_visual_caked_deg"
+    assert records[0]["final_sim_render_caked_display"] == pytest.approx((18.0, 4.0))
+    assert records[0]["fit_sim_render_caked_delta"] == pytest.approx(0.0)
 
 
 def test_build_geometry_fit_overlay_records_keeps_detector_display_out_of_caked_fallback():
@@ -737,3 +825,25 @@ def test_visual_distance_summary_uses_the_same_caked_points_as_overlay_drawing()
     assert caked_summary["initial_distance_median"] == pytest.approx(2**0.5)
     assert caked_summary["final_distance_median"] == pytest.approx(0.02**0.5)
     assert caked_summary["worsened_count"] == pytest.approx(0.0)
+
+
+def test_compute_geometry_overlay_frame_diagnostics_flags_fit_sim_render_mismatch():
+    records = [
+        {
+            "initial_sim_display": (float(idx), 0.0),
+            "initial_bg_display": (float(idx), 0.0),
+            "final_sim_display": (float(idx), 0.0),
+            "final_bg_display": (float(idx), 0.0),
+            "fit_sim_render_caked_delta": 2.0 + float(idx),
+        }
+        for idx in range(3)
+    ]
+
+    frame_diag, frame_warning = compute_geometry_overlay_frame_diagnostics(
+        records,
+    )
+
+    assert frame_diag["fit_sim_render_caked_delta_count"] == pytest.approx(3.0)
+    assert frame_diag["fit_sim_render_caked_delta_median"] == pytest.approx(3.0)
+    assert frame_diag["fit_sim_render_caked_delta_max"] == pytest.approx(4.0)
+    assert "rendered simulation caked positions" in frame_warning

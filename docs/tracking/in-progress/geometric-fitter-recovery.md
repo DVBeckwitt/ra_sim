@@ -192,6 +192,27 @@ check` are green; no CI workflow changed. Deprecation/migration status: no
 user migration or compatibility shim is required. Shipping status: ready as a
 normal bug fix with rollback by git revert.
 
+2026-05-12 holistic visual-residual closeout: the GUI fit path now queues a
+pre-redraw full-image residual baseline and flushes detector/caked holistic
+residual diagnostics after the fitted simulation redraw settles. The caked
+overlay builder also records the distance between each green `fit sim` marker
+and the rendered fitted caked simulation point, so stale overlay markers are
+visible in logs instead of only in screenshots. The follow-up review patch
+precomputes the initial residual metrics before redraw and keeps only the
+background image snapshot, avoiding retention of a second full detector
+simulation array while waiting for the final redraw.
+
+Bug/error status: fixed for the reported mismatch where the final simulation
+image moved with refined `gamma,Gamma` but the green `fit sim` circles could
+stay tied to stale caked sources. Feature status: internal GUI diagnostics and
+overlay-source correction only; no new GUI control, CLI flag, config key,
+saved-state schema, artifact schema, dependency, or public API. CI/automation
+status: focused overlay/runtime regressions and `python -m ra_sim.dev check`
+are the local quality gates; no CI workflow changed. Deprecation/migration
+status: no user migration, compatibility shim, or deprecated interface.
+Shipping status: ready as a normal bug-fix diagnostic slice; rollback is a git
+revert of the overlay/residual diagnostic patch.
+
 Real full headless `fit-geometry` smoke is now run and still failing after a
 clean exact-caked request. The first divergence from passing ladder evidence is
 not routing or pair identity but seed/start state: real headless fit uses the
