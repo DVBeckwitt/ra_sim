@@ -167,6 +167,31 @@ no public migration path; saved states and artifacts require no cleanup.
 Shipping status: safe as a normal bug-fix/refactor slice. Rollback is a normal
 git revert of the overlay/projector fix and follow-up resolver cleanup.
 
+2026-05-12 fit-sim marker source closeout: the final rendered caked simulation
+image was already moving with the refined `gamma,Gamma` parameters, but the
+green `fit sim` circles could still draw from stale legacy caked aliases rather
+than the current point-only fitted prediction. The overlay record builder now
+resolves current detector-display, detector-native, and caked fitted prediction
+sources before stale fallback aliases. It may use
+`fit_prediction_detector_display_px` as a caked `(2theta, phi)` point only when
+the objective metadata proves the row is caked, degree-based, or point-only; a
+normal detector-display pixel is not accepted as a caked angle.
+
+Bug/error status: fixed for the Bi2Se3 saved GUI caked point-only overlay where
+the visual green markers disagreed with the actual simulated spots. GUI runtime
+evidence was collected through real Tk/TkAgg drawing, not a headless plot:
+`fit_sim_overlay_current_tree_20260511_204233.json` reported `status == "ok"`,
+25/25 green markers sourced from `fit_prediction_detector_display_px`, maximum
+drawn-marker-to-record delta `0.0`, and maximum selected-point-to-fit-prediction
+delta `0.0`. Focused regressions cover current prediction precedence, the
+caked point-only fallback, and the negative guard that prevents detector pixels
+from being treated as caked angles. Feature status: no new GUI control, public
+API, CLI flag, config key, saved-state schema, or artifact schema.
+CI/automation status: local focused overlay suites and `python -m ra_sim.dev
+check` are green; no CI workflow changed. Deprecation/migration status: no
+user migration or compatibility shim is required. Shipping status: ready as a
+normal bug fix with rollback by git revert.
+
 Real full headless `fit-geometry` smoke is now run and still failing after a
 clean exact-caked request. The first divergence from passing ladder evidence is
 not routing or pair identity but seed/start state: real headless fit uses the

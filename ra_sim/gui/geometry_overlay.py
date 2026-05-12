@@ -1232,6 +1232,39 @@ def build_geometry_fit_overlay_records(
             return None
         return float(col), float(row)
 
+    def _first_point_with_source(
+        entry: Mapping[str, object],
+        *candidates: object,
+    ) -> tuple[tuple[float, float], str] | None:
+        for candidate in candidates:
+            if (
+                isinstance(candidate, tuple)
+                and len(candidate) == 3
+                and isinstance(candidate[0], str)
+                and isinstance(candidate[1], str)
+                and isinstance(candidate[2], str)
+            ):
+                point = _parse_point((entry.get(candidate[0]), entry.get(candidate[1])))
+                source = candidate[2]
+            else:
+                source = str(candidate)
+                point = _parse_point(entry.get(source))
+            if point is not None:
+                return point, source
+        return None
+
+    def _fit_prediction_display_is_caked_space(entry: Mapping[str, object]) -> bool:
+        objective_space = str(entry.get("objective_space", "") or "").strip().lower()
+        objective_units = str(entry.get("objective_units", "") or "").strip().lower()
+        cache_mode = str(entry.get("objective_cache_mode", "") or "").strip().lower()
+        projector_kind = str(entry.get("fit_space_projector_kind", "") or "").strip().lower()
+        return (
+            objective_space in {"caked", "caked_deg", "fit_space", "fit-space"}
+            or objective_units in {"deg", "degree", "degrees"}
+            or cache_mode == "point_only_projection"
+            or "caked" in projector_kind
+        )
+
     initial_by_index = {
         int(entry["overlay_match_index"]): entry
         for entry in normalize_initial_geometry_pairs_display(initial_pairs_display)
@@ -1378,7 +1411,7 @@ def build_geometry_fit_overlay_records(
 
         if status == "matched":
             try:
-                simulated_native = (
+                legacy_simulated_point = (
                     float(raw_entry.get("simulated_x", np.nan)),
                     float(raw_entry.get("simulated_y", np.nan)),
                 )
@@ -1388,10 +1421,38 @@ def build_geometry_fit_overlay_records(
                 )
             except Exception:
                 continue
+            final_sim_display_payload = _first_point_with_source(
+                raw_entry,
+                "fit_prediction_detector_display_px",
+                "predicted_detector_display_px",
+                "sim_refined_detector_display_px",
+                "sim_nominal_detector_display_px",
+                "sim_nominal_detector_px",
+            )
+            final_sim_native_payload = _first_point_with_source(
+                raw_entry,
+                "fit_prediction_detector_native_px",
+                "predicted_detector_native_px",
+                "sim_refined_detector_native_px",
+                "sim_nominal_native_px",
+                "sim_visual_detector_canonical_native_px",
+                ("simulated_native_col", "simulated_native_row", "simulated_native_col/row"),
+            )
+            if final_sim_native_payload is not None:
+                simulated_native = final_sim_native_payload[0]
+                final_sim_native_source = final_sim_native_payload[1]
+            else:
+                simulated_native = legacy_simulated_point
+                final_sim_native_source = "simulated_x/y"
             if not all(
-                np.isfinite(v) for v in (*simulated_native, *measured_fit_oriented)
+                np.isfinite(v)
+                for v in (*simulated_native, *measured_fit_oriented)
             ):
                 continue
+            if all(np.isfinite(v) for v in legacy_simulated_point):
+                final_sim_fit = legacy_simulated_point
+            else:
+                final_sim_fit = simulated_native
 
             measured_native = inverse_transform_points_orientation(
                 [measured_fit_oriented],
@@ -1399,12 +1460,17 @@ def build_geometry_fit_overlay_records(
                 orientation_choice,
             )[0]
 
-            final_sim_display = rotate_point_for_display(
-                float(simulated_native[0]),
-                float(simulated_native[1]),
-                native_frame_shape,
-                overlay_display_rotate_k,
-            )
+            if final_sim_display_payload is not None:
+                final_sim_display = final_sim_display_payload[0]
+                final_sim_display_source = final_sim_display_payload[1]
+            else:
+                final_sim_display = rotate_point_for_display(
+                    float(simulated_native[0]),
+                    float(simulated_native[1]),
+                    native_frame_shape,
+                    overlay_display_rotate_k,
+                )
+                final_sim_display_source = f"{final_sim_native_source}->display"
             final_bg_display = rotate_point_for_display(
                 float(measured_native[0]),
                 float(measured_native[1]),
@@ -1412,8 +1478,8 @@ def build_geometry_fit_overlay_records(
                 background_display_rotate_k,
             )
             record["final_sim_fit"] = (
-                float(simulated_native[0]),
-                float(simulated_native[1]),
+                float(final_sim_fit[0]),
+                float(final_sim_fit[1]),
             )
             record["final_bg_fit"] = (
                 float(measured_fit_oriented[0]),
@@ -1431,6 +1497,8 @@ def build_geometry_fit_overlay_records(
                 float(final_sim_display[0]),
                 float(final_sim_display[1]),
             )
+            record["final_sim_display_source"] = str(final_sim_display_source)
+            record["final_sim_native_source"] = str(final_sim_native_source)
             record["final_bg_display"] = (
                 float(final_bg_display[0]),
                 float(final_bg_display[1]),
@@ -1440,24 +1508,42 @@ def build_geometry_fit_overlay_records(
                     float(initial_bg_caked_display[0]),
                     float(initial_bg_caked_display[1]),
                 )
-            final_sim_caked_display = _first_overlay_entry_point(
+            # Caked point-only projection diagnostics historically reused the
+            # detector-display field for the current caked fit-space prediction.
+            fit_prediction_caked_fallbacks: tuple[object, ...] = (
+                ("fit_prediction_detector_display_px", "predicted_detector_display_px")
+                if _fit_prediction_display_is_caked_space(raw_entry)
+                else ()
+            )
+            final_sim_caked_payload = _first_point_with_source(
                 raw_entry,
-                ("simulated_two_theta_deg", "simulated_phi_deg"),
+                "fit_prediction_caked_deg",
+                *fit_prediction_caked_fallbacks,
+                "predicted_refined_caked_deg",
+                "sim_refined_caked_deg",
                 "predicted_caked_deg",
+                (
+                    "simulated_two_theta_deg",
+                    "simulated_phi_deg",
+                    "simulated_two_theta_deg/simulated_phi_deg",
+                ),
                 "manual_qr_fit_source_caked_deg",
                 "projected_caked_deg",
             )
+            if final_sim_caked_payload is not None:
+                final_sim_caked_display = final_sim_caked_payload[0]
+                final_sim_caked_source = final_sim_caked_payload[1]
+                record["final_sim_caked_display"] = (
+                    float(final_sim_caked_display[0]),
+                    float(final_sim_caked_display[1]),
+                )
+                record["final_sim_caked_display_source"] = str(final_sim_caked_source)
             final_bg_caked_display = _first_overlay_entry_point(
                 raw_entry,
                 ("measured_two_theta_deg", "measured_phi_deg"),
                 "observed_caked_deg",
                 "manual_qr_fit_target_caked_deg",
             )
-            if final_sim_caked_display is not None:
-                record["final_sim_caked_display"] = (
-                    float(final_sim_caked_display[0]),
-                    float(final_sim_caked_display[1]),
-                )
             if final_bg_caked_display is not None:
                 record["final_bg_caked_display"] = (
                     float(final_bg_caked_display[0]),
@@ -1472,8 +1558,8 @@ def build_geometry_fit_overlay_records(
             if not np.isfinite(distance_px):
                 distance_px = float(
                     math.hypot(
-                        simulated_native[0] - measured_fit_oriented[0],
-                        simulated_native[1] - measured_fit_oriented[1],
+                        final_sim_fit[0] - measured_fit_oriented[0],
+                        final_sim_fit[1] - measured_fit_oriented[1],
                     )
                 )
             record["overlay_distance_px"] = float(distance_px)

@@ -489,6 +489,146 @@ def test_build_geometry_fit_overlay_records_uses_fit_caked_angles_for_final_cake
     assert records[0]["final_bg_caked_display"] == pytest.approx((40.5, 12.5))
 
 
+def test_build_geometry_fit_overlay_records_prefers_fit_prediction_sim_points():
+    records = build_geometry_fit_overlay_records(
+        [
+            {
+                "overlay_match_index": 0,
+                "hkl": (0, 0, 9),
+                "sim_display": (10.0, 20.0),
+                "bg_display": (12.0, 22.0),
+            }
+        ],
+        [
+            {
+                "match_status": "matched",
+                "overlay_match_index": 0,
+                "hkl": (0, 0, 9),
+                # Legacy/stale solver-display fields should not define the
+                # green fit marker when fitted prediction fields are present.
+                "simulated_x": 900.0,
+                "simulated_y": 901.0,
+                "simulated_two_theta_deg": 99.0,
+                "simulated_phi_deg": -99.0,
+                "fit_prediction_detector_display_px": (30.0, 40.0),
+                "fit_prediction_detector_native_px": (130.0, 140.0),
+                "fit_prediction_caked_deg": (40.6, 12.4),
+                "measured_x": 12.0,
+                "measured_y": 22.0,
+                "measured_two_theta_deg": 40.5,
+                "measured_phi_deg": 12.5,
+                "distance_px": 2.0,
+            }
+        ],
+        native_shape=(1024, 1024),
+        orientation_choice={
+            "indexing_mode": "xy",
+            "k": 0,
+            "flip_x": False,
+            "flip_y": False,
+            "flip_order": "yx",
+        },
+        sim_display_rotate_k=0,
+        background_display_rotate_k=0,
+    )
+
+    assert records[0]["final_sim_display"] == pytest.approx((30.0, 40.0))
+    assert records[0]["final_sim_native"] == pytest.approx((130.0, 140.0))
+    assert records[0]["final_sim_caked_display"] == pytest.approx((40.6, 12.4))
+    assert records[0]["final_sim_display_source"] == "fit_prediction_detector_display_px"
+    assert records[0]["final_sim_caked_display_source"] == "fit_prediction_caked_deg"
+
+
+def test_build_geometry_fit_overlay_records_uses_fit_prediction_display_as_caked_fallback():
+    records = build_geometry_fit_overlay_records(
+        [
+            {
+                "overlay_match_index": 0,
+                "hkl": (0, 0, 3),
+                "sim_display": (9.2, 0.0),
+                "bg_display": (9.1, -1.2),
+            }
+        ],
+        [
+            {
+                "match_status": "matched",
+                "overlay_match_index": 0,
+                "hkl": (0, 0, 3),
+                # Caked fit progress records can carry the current fit-space
+                # prediction under this legacy detector-display field name.
+                "objective_cache_mode": "point_only_projection",
+                "fit_prediction_detector_display_px": (9.2478, -1.2446),
+                "fit_prediction_detector_native_px": (130.0, 140.0),
+                "predicted_refined_caked_deg": (99.0, -99.0),
+                "sim_refined_caked_deg": (9.2526, 0.0),
+                "simulated_x": 900.0,
+                "simulated_y": 901.0,
+                "simulated_two_theta_deg": 9.2526,
+                "simulated_phi_deg": 0.0,
+                "measured_x": 12.0,
+                "measured_y": 22.0,
+                "measured_two_theta_deg": 9.1,
+                "measured_phi_deg": -1.2,
+                "distance_px": 2.0,
+            }
+        ],
+        native_shape=(1024, 1024),
+        orientation_choice={
+            "indexing_mode": "xy",
+            "k": 0,
+            "flip_x": False,
+            "flip_y": False,
+            "flip_order": "yx",
+        },
+        sim_display_rotate_k=0,
+        background_display_rotate_k=0,
+    )
+
+    assert records[0]["final_sim_caked_display"] == pytest.approx((9.2478, -1.2446))
+    assert records[0]["final_sim_caked_display_source"] == "fit_prediction_detector_display_px"
+
+
+def test_build_geometry_fit_overlay_records_keeps_detector_display_out_of_caked_fallback():
+    records = build_geometry_fit_overlay_records(
+        [
+            {
+                "overlay_match_index": 0,
+                "hkl": (0, 0, 3),
+                "sim_display": (9.2, 0.0),
+                "bg_display": (9.1, -1.2),
+            }
+        ],
+        [
+            {
+                "match_status": "matched",
+                "overlay_match_index": 0,
+                "hkl": (0, 0, 3),
+                "fit_prediction_detector_display_px": (900.0, 901.0),
+                "fit_prediction_detector_native_px": (130.0, 140.0),
+                "sim_refined_caked_deg": (9.2526, 0.0),
+                "simulated_x": 130.0,
+                "simulated_y": 140.0,
+                "measured_x": 12.0,
+                "measured_y": 22.0,
+                "distance_px": 2.0,
+            }
+        ],
+        native_shape=(1024, 1024),
+        orientation_choice={
+            "indexing_mode": "xy",
+            "k": 0,
+            "flip_x": False,
+            "flip_y": False,
+            "flip_order": "yx",
+        },
+        sim_display_rotate_k=0,
+        background_display_rotate_k=0,
+    )
+
+    assert records[0]["final_sim_caked_display"] == pytest.approx((9.2526, 0.0))
+    assert records[0]["final_sim_caked_display_source"] == "sim_refined_caked_deg"
+
+
 def test_build_geometry_fit_overlay_records_keeps_unmatched_initial_pairs_visible():
     records = build_geometry_fit_overlay_records(
         [

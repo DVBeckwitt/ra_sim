@@ -117,6 +117,17 @@ migration required; the removed detector-tilt projection shim was internal.
 Shipping status: ready as a normal bug-fix/refactor commit with rollback by git
 revert.
 
+Fit-sim marker source follow-up:
+The rendered caked simulation image and green geometry-fit `fit sim` markers
+now use the same current fitted prediction for caked point-only progress rows.
+The overlay builder prefers current fit-prediction display/native/caked fields
+before stale legacy caked aliases and only treats
+`fit_prediction_detector_display_px` as caked when objective metadata proves the
+row is caked/degree/point-only. Real Tk/TkAgg validation for the Bi2Se3 saved
+state drew 25/25 green markers from `fit_prediction_detector_display_px` with
+zero drawn-marker-to-record delta. No public API, CLI flag, config key,
+saved-state schema, artifact schema, CI workflow, or migration path changed.
+
 Background peak fit detector Qr rod panel status note:
 The ignored parallel diagnostics notebook now treats the detector Qr-rod panel
 as a source-consistent geometry/overlay diagnostic. Cell 14 uses Qr-driven rod

@@ -468,6 +468,18 @@ explicit simulated fields such as `sim_refined_caked_deg`,
 `refined_sim_caked_x/y`, `simulated_two_theta_deg/simulated_phi_deg`, or
 `sim_caked_display`.
 
+Geometry-fit overlay records must keep the visible fitted-simulation marker
+source separate from stale legacy fit/cache aliases. In caked point-only rows,
+`fit_prediction_detector_display_px` may carry the current caked `(2theta,
+phi)` prediction when objective metadata says the row is caked, degree-based,
+or point-only. Only in that case may the GUI use that field as
+`final_sim_caked_display`; detector display pixels must not be promoted to
+caked angles without that metadata. Overlay diagnostics record
+`final_sim_display_source`, `final_sim_native_source`, and
+`final_sim_caked_display_source` so the drawn green `fit sim` marker source can
+be compared with cached/calculated distance fields and the rendered caked
+simulation image.
+
 Live caked visual-source ledger rows are disabled by default. Set
 `RA_SIM_LIVE_CAKED_TRACE=1` to print `[ra-sim] live_caked_visual_source` rows,
 and add `RA_SIM_LIVE_CAKED_TRACE_ALL=1` to include unchanged duplicate rows.
