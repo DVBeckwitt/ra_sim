@@ -1,4 +1,5 @@
 import pytest
+import numpy as np
 
 from ra_sim.gui.geometry_overlay import (
     build_geometry_fit_overlay_records,
@@ -6,7 +7,9 @@ from ra_sim.gui.geometry_overlay import (
     compare_holistic_sim_residuals,
     compute_holistic_sim_residual,
     compute_geometry_overlay_frame_diagnostics,
+    build_geometry_fit_visual_probe_records,
     inverse_transform_points_orientation,
+    probe_display_image_peak_near_point,
     rotate_point_for_display,
     summarize_geometry_fit_overlay_visual_distances,
     transform_points_orientation,
@@ -53,6 +56,69 @@ def test_compare_holistic_sim_residuals_flags_worse_fit():
     assert comparison["holistic_residual_delta_rmse"] > 0.0
 
 
+def test_probe_display_image_peak_near_point_finds_peak_in_display_coordinates():
+    image = np.zeros((7, 9), dtype=np.float64)
+    image[2, 6] = 12.0
+
+    probe = probe_display_image_peak_near_point(
+        image,
+        (6.2, 4.1),
+        extent=(-0.5, 8.5, 6.5, -0.5),
+        search_radius_px=3,
+    )
+
+    assert probe["status"] == "ok"
+    assert probe["image_peak_point"] == pytest.approx((6.0, 4.0))
+    assert probe["image_peak_index"] == (2, 6)
+    assert probe["peak_value"] == pytest.approx(12.0)
+    assert probe["point_to_image_peak_delta"] < 0.25
+
+
+def test_probe_display_image_peak_near_point_flags_shifted_marker():
+    image = np.zeros((8, 8), dtype=np.float64)
+    image[1, 1] = 1.0
+    image[4, 5] = 9.0
+
+    probe = probe_display_image_peak_near_point(
+        image,
+        (1.0, 1.0),
+        extent=(-0.5, 7.5, -0.5, 7.5),
+        search_radius_px=5,
+    )
+
+    assert probe["status"] == "ok"
+    assert probe["image_peak_point"] == pytest.approx((5.0, 4.0))
+    assert probe["point_to_image_peak_delta"] == pytest.approx(5.0)
+
+
+def test_build_geometry_fit_visual_probe_records_compares_artist_record_and_image_peak():
+    image = np.zeros((8, 8), dtype=np.float64)
+    image[4, 5] = 9.0
+    draw_records = [
+        {
+            "overlay_match_index": 2,
+            "hkl": (0, 0, 6),
+            "record_point": (1.0, 1.0),
+            "artist_point": (1.5, 1.0),
+            "record_source": "fit_prediction_caked_deg",
+        }
+    ]
+
+    probes = build_geometry_fit_visual_probe_records(
+        draw_records,
+        image,
+        extent=(-0.5, 7.5, -0.5, 7.5),
+        search_radius_px=6,
+    )
+
+    assert len(probes) == 1
+    assert probes[0]["status"] == "ok"
+    assert probes[0]["image_peak_point"] == pytest.approx((5.0, 4.0))
+    assert probes[0]["artist_to_record_delta"] == pytest.approx(0.5)
+    assert probes[0]["record_to_image_peak_delta"] == pytest.approx(5.0)
+    assert probes[0]["artist_to_image_peak_delta"] > 4.5
+
+
 def test_build_geometry_fit_overlay_records_preserves_duplicate_hkls():
     initial_pairs_display = [
         {
@@ -95,7 +161,13 @@ def test_build_geometry_fit_overlay_records_preserves_duplicate_hkls():
         initial_pairs_display,
         point_match_diagnostics,
         native_shape=(256, 256),
-        orientation_choice={"indexing_mode": "xy", "k": 0, "flip_x": False, "flip_y": False, "flip_order": "yx"},
+        orientation_choice={
+            "indexing_mode": "xy",
+            "k": 0,
+            "flip_x": False,
+            "flip_y": False,
+            "flip_order": "yx",
+        },
         sim_display_rotate_k=0,
         background_display_rotate_k=0,
     )
@@ -274,7 +346,13 @@ def test_build_geometry_fit_overlay_records_falls_back_to_initial_native_points(
             }
         ],
         native_shape=(256, 256),
-        orientation_choice={"indexing_mode": "xy", "k": 0, "flip_x": False, "flip_y": False, "flip_order": "yx"},
+        orientation_choice={
+            "indexing_mode": "xy",
+            "k": 0,
+            "flip_x": False,
+            "flip_y": False,
+            "flip_order": "yx",
+        },
         sim_display_rotate_k=0,
         background_display_rotate_k=0,
     )
@@ -434,13 +512,9 @@ def test_build_geometry_fit_overlay_records_reprojects_legacy_display_fallbacks(
 
     assert records[0]["initial_sim_native"] == pytest.approx(native_sim)
     assert records[0]["initial_bg_native"] == pytest.approx(native_bg)
-    assert records[0]["initial_sim_display"] == pytest.approx(
-        expected_overlay_sim_display
-    )
+    assert records[0]["initial_sim_display"] == pytest.approx(expected_overlay_sim_display)
     assert records[0]["initial_bg_display"] == pytest.approx(legacy_bg_display)
-    assert records[0]["final_sim_display"] == pytest.approx(
-        expected_overlay_sim_display
-    )
+    assert records[0]["final_sim_display"] == pytest.approx(expected_overlay_sim_display)
     assert records[0]["final_bg_display"] == pytest.approx(legacy_bg_display)
 
 

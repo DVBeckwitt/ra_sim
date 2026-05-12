@@ -312,6 +312,7 @@ from ra_sim.gui import fit2d_error_sound as gui_fit2d_error_sound
 from ra_sim.gui import views as gui_views
 from ra_sim.gui.geometry_overlay import (
     build_geometry_fit_overlay_records,
+    build_geometry_fit_visual_probe_records,
     compare_holistic_sim_residuals,
     compute_geometry_overlay_frame_diagnostics,
     compute_holistic_sim_residual,
@@ -3224,6 +3225,7 @@ def _draw_geometry_fit_overlay(
         _clear_all_geometry_overlay_artists(redraw=True)
         return
 
+    visual_probe_records: list[dict[str, object]] = []
     gui_overlays.draw_geometry_fit_overlay(
         ax,
         overlay_records,
@@ -3235,7 +3237,69 @@ def _draw_geometry_fit_overlay(
         native_detector_coords_to_caked_display_coords=(
             _native_detector_coords_to_caked_display_coords
         ),
+        visual_probe_records=visual_probe_records,
     )
+    _log_geometry_fit_visual_probe_records(visual_probe_records)
+
+
+def _current_geometry_fit_visual_probe_image_context() -> dict[str, object] | None:
+    image_artist = globals().get("image_display")
+    if image_artist is None:
+        return None
+    try:
+        visible = bool(image_artist.get_visible())
+    except Exception:
+        visible = True
+    if not visible:
+        return None
+    try:
+        image_array = np.asarray(image_artist.get_array(), dtype=np.float64)
+    except Exception:
+        return None
+    try:
+        extent_raw = image_artist.get_extent()
+        extent = tuple(float(value) for value in extent_raw)
+    except Exception:
+        extent = None
+    return {
+        "image": image_array,
+        "extent": extent,
+        "source": "image_display",
+    }
+
+
+def _log_geometry_fit_visual_probe_records(
+    visual_probe_records: Sequence[Mapping[str, object]] | None,
+) -> None:
+    draw_records = [
+        dict(entry) for entry in (visual_probe_records or ()) if isinstance(entry, Mapping)
+    ]
+    if not draw_records:
+        return
+    image_context = _current_geometry_fit_visual_probe_image_context()
+    if image_context is None:
+        probe_records = [
+            {
+                **entry,
+                "status": "image_unavailable",
+                "artist_to_record_delta": float("nan"),
+                "artist_to_image_peak_delta": float("nan"),
+                "record_to_image_peak_delta": float("nan"),
+            }
+            for entry in draw_records
+        ]
+    else:
+        probe_records = build_geometry_fit_visual_probe_records(
+            draw_records,
+            image_context.get("image"),
+            extent=image_context.get("extent"),
+        )
+    try:
+        simulation_runtime_state.geometry_fit_last_visual_probe_records = probe_records
+    except Exception:
+        pass
+    for line in gui_geometry_fit.build_geometry_fit_visual_probe_lines(probe_records):
+        _geometry_fit_cmd_line(line)
 
 
 def _draw_initial_geometry_pairs_overlay(

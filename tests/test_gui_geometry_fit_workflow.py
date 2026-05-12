@@ -31360,6 +31360,29 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
     assert "fit_sim_render_caked_delta_med=0.250" in overlay_render_lines
     assert "fit_sim_render_caked_delta_max=0.500" in overlay_render_lines
 
+    visual_probe_lines = geometry_fit.build_geometry_fit_visual_probe_lines(
+        [
+            {
+                "overlay_match_index": 3,
+                "hkl": (0, 0, 9),
+                "display_mode": "caked",
+                "status": "ok",
+                "record_source": "fit_prediction_caked_deg",
+                "record_point": (1.0, 1.0),
+                "artist_point": (1.0, 1.0),
+                "image_peak_point": (5.0, 4.0),
+                "artist_to_record_delta": 0.0,
+                "artist_to_image_peak_delta": 5.0,
+                "record_to_image_peak_delta": 5.0,
+                "image_peak_value": 9.0,
+            }
+        ],
+    )
+    assert "visual_probe_records=1" in visual_probe_lines
+    assert "visual_probe_artist_to_image_peak_max=5.000" in visual_probe_lines
+    assert "visual_probe_warning=fit_sim_marker_image_mismatch" in visual_probe_lines
+    assert any("artist_to_image_peak=5.000" in line for line in visual_probe_lines)
+
     summary_lines = geometry_fit.build_geometry_fit_summary_lines(
         current_dataset={
             "group_count": 4,
@@ -36040,7 +36063,7 @@ def test_headless_caked_angular_metric_acceptance_skips_pixel_thresholds() -> No
         success=False,
         early_stop_reason="Stopped after requested point-only residual evaluation cap.",
         point_match_summary={
-            "_headless_accept_caked_angular_metric_without_pixel_threshold": True,
+            geometry_fit.GEOMETRY_FIT_HEADLESS_CAKED_ANGULAR_ACCEPT_FLAG: True,
             "metric_unit": "deg",
             "manual_caked_residual_row_count": 7,
             "sim_visual_caked_source_row_count": 7,
@@ -36053,7 +36076,56 @@ def test_headless_caked_angular_metric_acceptance_skips_pixel_thresholds() -> No
         },
     )
 
-    assert geometry_fit.build_geometry_fit_rejection_reason_lines(result, rms=1200.0) == []
+    assert geometry_fit.build_geometry_fit_rejection_reason_lines(result, rms=1200.0)
+    assert (
+        geometry_fit.build_geometry_fit_rejection_reason_lines(
+            result,
+            rms=1200.0,
+            allow_headless_caked_angular_acceptance=True,
+        )
+        == []
+    )
+
+
+def test_gui_caked_angular_metric_still_enforces_detector_pixel_thresholds() -> None:
+    result = SimpleNamespace(
+        success=False,
+        early_stop_reason="Stopped after requested point-only residual evaluation cap.",
+        point_match_summary={
+            geometry_fit.GEOMETRY_FIT_HEADLESS_CAKED_ANGULAR_ACCEPT_FLAG: True,
+            "metric_unit": "deg",
+            "manual_caked_residual_row_count": 7,
+            "sim_visual_caked_source_row_count": 7,
+            "fixed_source_resolved_count": 7,
+            "matched_pair_count": 7,
+            "missing_pair_count": 0,
+            "fallback_entry_count": 0,
+            "fallback_row_count": 0,
+            "unweighted_peak_max_px": 2500.0,
+        },
+    )
+
+    reasons = geometry_fit.build_geometry_fit_rejection_reason_lines(
+        result,
+        rms=1200.0,
+        allow_headless_caked_angular_acceptance=False,
+    )
+
+    assert reasons == [
+        "Stopped after requested point-only residual evaluation cap.",
+        "Optimizer did not report success.",
+        "RMS residual 1200.00 px exceeds the acceptance limit of 100.00 px.",
+        "Largest matched-peak offset 2500.00 px exceeds the acceptance limit of 150.00 px.",
+    ]
+
+
+def test_runtime_context_string_does_not_enable_headless_angular_acceptance() -> None:
+    assert not geometry_fit.geometry_fit_runtime_allows_headless_caked_angular_acceptance(
+        {"runtime_context": "headless"}
+    )
+    assert geometry_fit.geometry_fit_runtime_allows_headless_caked_angular_acceptance(
+        {geometry_fit.GEOMETRY_FIT_HEADLESS_RUNTIME_CONTEXT_FLAG: True}
+    )
 
 
 def test_headless_geometry_fit_active_var_override_keeps_lean_seed_policy_by_default(

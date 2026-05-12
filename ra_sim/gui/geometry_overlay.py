@@ -8,6 +8,20 @@ from typing import Callable, Mapping, Sequence
 import numpy as np
 
 
+def _parse_optional_point(value: object) -> tuple[float, float] | None:
+    try:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+            return None
+        if len(value) < 2:
+            return None
+        point = (float(value[0]), float(value[1]))
+    except Exception:
+        return None
+    if not (math.isfinite(point[0]) and math.isfinite(point[1])):
+        return None
+    return point
+
+
 def compute_holistic_sim_residual(
     background_image: object,
     simulation_image: object,
@@ -89,6 +103,183 @@ def compare_holistic_sim_residuals(
         "holistic_residual_delta_rmse": delta,
         "holistic_fit_suspicious": suspicious,
     }
+
+
+def _default_image_extent_for_shape(shape: tuple[int, int]) -> tuple[float, float, float, float]:
+    rows, cols = int(shape[0]), int(shape[1])
+    return (-0.5, float(cols) - 0.5, -0.5, float(rows) - 0.5)
+
+
+def _pixel_index_to_display_point(
+    row_index: int,
+    col_index: int,
+    *,
+    shape: tuple[int, int],
+    extent: Sequence[object] | None,
+) -> tuple[float, float]:
+    rows, cols = int(shape[0]), int(shape[1])
+    left, right, bottom, top = (
+        tuple(float(value) for value in extent)
+        if extent is not None
+        else _default_image_extent_for_shape((rows, cols))
+    )
+    x_step = (right - left) / float(cols)
+    y_step = (top - bottom) / float(rows)
+    return (
+        float(left + (float(col_index) + 0.5) * x_step),
+        float(bottom + (float(row_index) + 0.5) * y_step),
+    )
+
+
+def _display_point_to_pixel_index(
+    point: tuple[float, float],
+    *,
+    shape: tuple[int, int],
+    extent: Sequence[object] | None,
+) -> tuple[float, float] | None:
+    rows, cols = int(shape[0]), int(shape[1])
+    left, right, bottom, top = (
+        tuple(float(value) for value in extent)
+        if extent is not None
+        else _default_image_extent_for_shape((rows, cols))
+    )
+    x_step = (right - left) / float(cols)
+    y_step = (top - bottom) / float(rows)
+    if x_step == 0.0 or y_step == 0.0:
+        return None
+    col_float = (float(point[0]) - left) / x_step - 0.5
+    row_float = (float(point[1]) - bottom) / y_step - 0.5
+    return (float(row_float), float(col_float))
+
+
+def probe_display_image_peak_near_point(
+    image: object,
+    point: Sequence[object] | None,
+    *,
+    extent: Sequence[object] | None = None,
+    search_radius_px: int = 8,
+) -> dict[str, object]:
+    """Find the strongest displayed-image pixel near one marker data point."""
+
+    marker = _parse_optional_point(point)
+    if marker is None:
+        return {"status": "point_unavailable"}
+    try:
+        image_arr = np.asarray(image, dtype=np.float64)
+    except Exception:
+        return {"status": "image_unavailable"}
+    if image_arr.ndim != 2 or image_arr.size <= 0:
+        return {"status": "image_unavailable"}
+    rows, cols = int(image_arr.shape[0]), int(image_arr.shape[1])
+    pixel_float = _display_point_to_pixel_index(
+        marker,
+        shape=(rows, cols),
+        extent=extent,
+    )
+    if pixel_float is None:
+        return {"status": "invalid_extent"}
+    center_row = int(round(pixel_float[0]))
+    center_col = int(round(pixel_float[1]))
+    radius = max(0, int(search_radius_px))
+    row_min = max(0, center_row - radius)
+    row_max = min(rows - 1, center_row + radius)
+    col_min = max(0, center_col - radius)
+    col_max = min(cols - 1, center_col + radius)
+    if row_min > row_max or col_min > col_max:
+        return {
+            "status": "point_outside_image",
+            "point_pixel_index": (float(pixel_float[0]), float(pixel_float[1])),
+        }
+    window = image_arr[row_min : row_max + 1, col_min : col_max + 1]
+    finite = np.isfinite(window)
+    if not bool(np.any(finite)):
+        return {"status": "no_finite_pixels"}
+    finite_values = np.where(finite, window, -np.inf)
+    flat_index = int(np.argmax(finite_values))
+    local_row, local_col = np.unravel_index(flat_index, finite_values.shape)
+    peak_row = int(row_min + int(local_row))
+    peak_col = int(col_min + int(local_col))
+    peak_point = _pixel_index_to_display_point(
+        peak_row,
+        peak_col,
+        shape=(rows, cols),
+        extent=extent,
+    )
+    delta = float(math.hypot(float(marker[0]) - peak_point[0], float(marker[1]) - peak_point[1]))
+    return {
+        "status": "ok",
+        "image_peak_point": peak_point,
+        "image_peak_index": (peak_row, peak_col),
+        "peak_value": float(image_arr[peak_row, peak_col]),
+        "point_to_image_peak_delta": delta,
+        "point_pixel_index": (float(pixel_float[0]), float(pixel_float[1])),
+        "search_radius_px": int(radius),
+        "search_window": (row_min, row_max, col_min, col_max),
+    }
+
+
+def _point_delta(
+    point_a: Sequence[object] | None,
+    point_b: Sequence[object] | None,
+) -> float:
+    parsed_a = _parse_optional_point(point_a)
+    parsed_b = _parse_optional_point(point_b)
+    if parsed_a is None or parsed_b is None:
+        return float("nan")
+    return float(math.hypot(parsed_a[0] - parsed_b[0], parsed_a[1] - parsed_b[1]))
+
+
+def build_geometry_fit_visual_probe_records(
+    draw_records: Sequence[Mapping[str, object]] | None,
+    image: object,
+    *,
+    extent: Sequence[object] | None = None,
+    search_radius_px: int = 8,
+) -> list[dict[str, object]]:
+    """Compare drawn fit markers against the visible simulation image peak."""
+
+    try:
+        image_arr = np.asarray(image, dtype=np.float64)
+    except Exception:
+        image_arr = None
+    image_shape = (
+        (int(image_arr.shape[0]), int(image_arr.shape[1]))
+        if isinstance(image_arr, np.ndarray) and image_arr.ndim == 2
+        else None
+    )
+    probes: list[dict[str, object]] = []
+    for entry in draw_records or ():
+        if not isinstance(entry, Mapping):
+            continue
+        record_point = _parse_optional_point(entry.get("record_point"))
+        artist_point = _parse_optional_point(entry.get("artist_point"))
+        probe_point = artist_point if artist_point is not None else record_point
+        peak_probe = probe_display_image_peak_near_point(
+            image_arr,
+            probe_point,
+            extent=extent,
+            search_radius_px=search_radius_px,
+        )
+        image_peak_point = _parse_optional_point(peak_probe.get("image_peak_point"))
+        output = dict(entry)
+        output.update(
+            {
+                "status": str(peak_probe.get("status", "unknown")),
+                "image_peak_point": image_peak_point,
+                "image_peak_index": peak_probe.get("image_peak_index"),
+                "image_peak_value": peak_probe.get("peak_value"),
+                "artist_to_record_delta": _point_delta(artist_point, record_point),
+                "artist_to_image_peak_delta": _point_delta(artist_point, image_peak_point),
+                "record_to_image_peak_delta": _point_delta(record_point, image_peak_point),
+                "image_extent": tuple(float(value) for value in extent)
+                if extent is not None
+                else None,
+                "image_shape": image_shape,
+                "search_radius_px": int(max(0, int(search_radius_px))),
+            }
+        )
+        probes.append(output)
+    return probes
 
 
 def rotate_point_for_display(
@@ -329,9 +520,7 @@ def transform_points_orientation(
         if mode == "yx":
             col_t, row_t = row_t, col_t
         col_t, row_t = flipper(col_t, row_t)
-        transformed.append(
-            rotate_point_for_display(col_t, row_t, (height, width), int(k))
-        )
+        transformed.append(rotate_point_for_display(col_t, row_t, (height, width), int(k)))
 
     return transformed
 
@@ -690,11 +879,7 @@ def apply_orientation_to_entries(
         return list(indexed)
 
     mode = (indexing_mode or "xy").lower()
-    oriented_shape = (
-        rotated_shape
-        if mode == "xy"
-        else (rotated_shape[1], rotated_shape[0])
-    )
+    oriented_shape = rotated_shape if mode == "xy" else (rotated_shape[1], rotated_shape[0])
 
     def _apply_pair(x_val: float, y_val: float) -> tuple[float, float]:
         return transform_points_orientation(
@@ -835,8 +1020,7 @@ def best_orientation_alignment(
             flip_order=str(candidate["flip_order"]),
         )
         deltas = [
-            math.hypot(sx - mx, sy - my)
-            for (sx, sy), (mx, my) in zip(sim_coords, transformed)
+            math.hypot(sx - mx, sy - my) for (sx, sy), (mx, my) in zip(sim_coords, transformed)
         ]
         if not deltas:
             continue
@@ -886,10 +1070,7 @@ def orientation_metrics(
         flip_y=flip_y,
         flip_order=flip_order,
     )
-    deltas = [
-        math.hypot(sx - mx, sy - my)
-        for (sx, sy), (mx, my) in zip(sim_coords, transformed)
-    ]
+    deltas = [math.hypot(sx - mx, sy - my) for (sx, sy), (mx, my) in zip(sim_coords, transformed)]
     if not deltas:
         return {
             "rms": float("nan"),
@@ -1039,12 +1220,8 @@ def aggregate_match_centers(
         sim_arr = np.asarray(aggregated[hkl_key]["sim"], dtype=float)
         meas_arr = np.asarray(aggregated[hkl_key]["meas"], dtype=float)
 
-        agg_sim_coords.append(
-            (float(sim_arr[:, 0].mean()), float(sim_arr[:, 1].mean()))
-        )
-        agg_meas_coords.append(
-            (float(meas_arr[:, 0].mean()), float(meas_arr[:, 1].mean()))
-        )
+        agg_sim_coords.append((float(sim_arr[:, 0].mean()), float(sim_arr[:, 1].mean())))
+        agg_meas_coords.append((float(meas_arr[:, 0].mean()), float(meas_arr[:, 1].mean())))
         agg_millers.append(hkl_key)
 
     return agg_sim_coords, agg_meas_coords, agg_millers
@@ -1056,13 +1233,7 @@ def normalize_hkl_key(
     """Return a rounded integer HKL tuple when *value* looks like one."""
 
     if isinstance(value, str):
-        parts = (
-            value.replace("(", "")
-            .replace(")", "")
-            .replace("[", "")
-            .replace("]", "")
-            .split(",")
-        )
+        parts = value.replace("(", "").replace(")", "").replace("[", "").replace("]", "").split(",")
         if len(parts) < 3:
             return None
         try:
@@ -1402,12 +1573,8 @@ def build_geometry_fit_overlay_records(
         initial_bg_native = _parse_point(initial_entry.get("bg_native"))
         initial_sim_display_raw = _parse_point(initial_entry.get("sim_display"))
         initial_bg_display_raw = _parse_point(initial_entry.get("bg_display"))
-        initial_sim_caked_display = _parse_point(
-            initial_entry.get("sim_caked_display")
-        )
-        initial_bg_caked_display = _parse_point(
-            initial_entry.get("bg_caked_display")
-        )
+        initial_sim_caked_display = _parse_point(initial_entry.get("sim_caked_display"))
+        initial_bg_caked_display = _parse_point(initial_entry.get("bg_caked_display"))
         # Legacy saved overlays may only have cached detector-view display
         # points. Recover native detector coordinates first so redraws can be
         # rebuilt in the current overlay frame instead of the stale snapshot
@@ -1419,9 +1586,7 @@ def build_geometry_fit_overlay_records(
                 native_frame_shape,
                 sim_display_rotate_k=sim_display_rotate_k,
             )
-            if np.isfinite(float(recovered_native[0])) and np.isfinite(
-                float(recovered_native[1])
-            ):
+            if np.isfinite(float(recovered_native[0])) and np.isfinite(float(recovered_native[1])):
                 initial_sim_native = (
                     float(recovered_native[0]),
                     float(recovered_native[1]),
@@ -1433,9 +1598,7 @@ def build_geometry_fit_overlay_records(
                 native_frame_shape,
                 -background_display_rotate_k,
             )
-            if np.isfinite(float(recovered_native[0])) and np.isfinite(
-                float(recovered_native[1])
-            ):
+            if np.isfinite(float(recovered_native[0])) and np.isfinite(float(recovered_native[1])):
                 initial_bg_native = (
                     float(recovered_native[0]),
                     float(recovered_native[1]),
@@ -1527,10 +1690,7 @@ def build_geometry_fit_overlay_records(
             else:
                 simulated_native = legacy_simulated_point
                 final_sim_native_source = "simulated_x/y"
-            if not all(
-                np.isfinite(v)
-                for v in (*simulated_native, *measured_fit_oriented)
-            ):
+            if not all(np.isfinite(v) for v in (*simulated_native, *measured_fit_oriented)):
                 continue
             if all(np.isfinite(v) for v in legacy_simulated_point):
                 final_sim_fit = legacy_simulated_point
@@ -1895,9 +2055,7 @@ def compute_geometry_overlay_frame_diagnostics(
         "sim_display_med_px": float(np.median(sim_frame_dists))
         if sim_frame_dists
         else float("nan"),
-        "bg_display_med_px": float(np.median(bg_frame_dists))
-        if bg_frame_dists
-        else float("nan"),
+        "bg_display_med_px": float(np.median(bg_frame_dists)) if bg_frame_dists else float("nan"),
         "sim_display_p90_px": float(np.percentile(sim_frame_dists, 90.0))
         if sim_frame_dists
         else float("nan"),
@@ -1920,11 +2078,7 @@ def compute_geometry_overlay_frame_diagnostics(
 
     warning = ""
     render_delta_max = float(stats["fit_sim_render_caked_delta_max"])
-    if (
-        fit_sim_render_caked_deltas
-        and np.isfinite(render_delta_max)
-        and render_delta_max > 1.0e-6
-    ):
+    if fit_sim_render_caked_deltas and np.isfinite(render_delta_max) and render_delta_max > 1.0e-6:
         warning = (
             "Fit-sim overlay mismatch suspect: fitted marker caked positions differ from "
             "the rendered simulation caked positions."

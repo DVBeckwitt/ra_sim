@@ -4256,6 +4256,7 @@ def run_headless_geometry_fit(
         if isinstance(prepared_run.geometry_runtime_cfg, Mapping)
         else {}
     )
+    headless_geometry_cfg[gui_geometry_fit.GEOMETRY_FIT_HEADLESS_RUNTIME_CONTEXT_FLAG] = True
     _apply_headless_geometry_fit_seed_policy(headless_geometry_cfg, resolved_seed_policy)
     budget_enabled, manual_caked_fixed_row_count = (
         _apply_headless_saved_manual_caked_budget(

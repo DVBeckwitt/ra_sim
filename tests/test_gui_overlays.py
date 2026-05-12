@@ -6,6 +6,7 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pytest
 
 from ra_sim.gui import geometry_fit, manual_geometry, overlays
 
@@ -13,7 +14,7 @@ from ra_sim.gui import geometry_fit, manual_geometry, overlays
 def test_clear_artists_removes_existing_plot_artists() -> None:
     fig, ax = plt.subplots()
     try:
-        line, = ax.plot([0.0, 1.0], [0.0, 1.0])
+        (line,) = ax.plot([0.0, 1.0], [0.0, 1.0])
         text = ax.text(0.5, 0.5, "marker")
         artists = [line, text]
         draws: list[str] = []
@@ -115,6 +116,42 @@ def test_draw_geometry_fit_overlay_labels_caked_view_distance_from_drawn_points(
         plt.close(fig)
 
 
+def test_draw_geometry_fit_overlay_captures_fit_sim_artist_point() -> None:
+    fig, ax = plt.subplots()
+    try:
+        geometry_pick_artists: list[object] = []
+        visual_probe_records: list[dict[str, object]] = []
+
+        overlays.draw_geometry_fit_overlay(
+            ax,
+            [
+                {
+                    "hkl": (1, 0, 1),
+                    "overlay_match_index": 4,
+                    "match_status": "matched",
+                    "initial_sim_display": (8.0, 9.0),
+                    "initial_bg_display": (8.5, 9.5),
+                    "final_sim_display": (11.0, 13.0),
+                    "final_sim_display_source": "fit_prediction_detector_display_px",
+                    "final_bg_display": (12.0, 14.0),
+                }
+            ],
+            geometry_pick_artists=geometry_pick_artists,
+            clear_geometry_pick_artists=lambda *, redraw=True: None,
+            draw_idle=lambda: None,
+            visual_probe_records=visual_probe_records,
+        )
+
+        assert len(visual_probe_records) == 1
+        assert visual_probe_records[0]["overlay_match_index"] == 4
+        assert visual_probe_records[0]["hkl"] == (1, 0, 1)
+        assert visual_probe_records[0]["record_point"] == pytest.approx((11.0, 13.0))
+        assert visual_probe_records[0]["artist_point"] == pytest.approx((11.0, 13.0))
+        assert visual_probe_records[0]["record_source"] == "fit_prediction_detector_display_px"
+    finally:
+        plt.close(fig)
+
+
 def test_draw_initial_geometry_pairs_overlay_links_sim_and_background_points() -> None:
     fig, ax = plt.subplots()
     try:
@@ -179,9 +216,7 @@ def test_draw_initial_geometry_pairs_overlay_can_hide_pair_connectors() -> None:
         )
 
         line_segments = [
-            line
-            for line in ax.lines
-            if len(line.get_xdata()) == 2 and len(line.get_ydata()) == 2
+            line for line in ax.lines if len(line.get_xdata()) == 2 and len(line.get_ydata()) == 2
         ]
         labels = [artist.get_text() for artist in ax.texts]
 
@@ -221,9 +256,7 @@ def test_draw_initial_geometry_pairs_overlay_draws_q_group_line_segments() -> No
         )
 
         line_segments = [
-            line
-            for line in ax.lines
-            if len(line.get_xdata()) == 2 and len(line.get_ydata()) == 2
+            line for line in ax.lines if len(line.get_xdata()) == 2 and len(line.get_ydata()) == 2
         ]
 
         assert len(line_segments) == 2
@@ -262,9 +295,7 @@ def test_draw_initial_geometry_pairs_overlay_uses_one_faint_q_group_label() -> N
 
         labels = [artist.get_text() for artist in ax.texts if artist.get_text()]
         q_group_labels = [label for label in labels if label.startswith("Qr set")]
-        label_artist = next(
-            artist for artist in ax.texts if artist.get_text().startswith("Qr set")
-        )
+        label_artist = next(artist for artist in ax.texts if artist.get_text().startswith("Qr set"))
 
         assert q_group_labels == ["Qr set 1/0"]
         assert all("(1, 1, 0)" not in label for label in labels)
@@ -305,9 +336,7 @@ def test_draw_initial_geometry_pairs_overlay_draws_shared_qz_axis_line_for_hk0()
         )
 
         line_segments = [
-            line
-            for line in ax.lines
-            if len(line.get_xdata()) == 2 and len(line.get_ydata()) == 2
+            line for line in ax.lines if len(line.get_xdata()) == 2 and len(line.get_ydata()) == 2
         ]
 
         assert len(line_segments) == 2
@@ -378,7 +407,9 @@ def test_draw_initial_geometry_pairs_overlay_uses_detector_reprojected_sim_point
         plt.close(fig)
 
 
-def test_draw_initial_geometry_pairs_overlay_prefers_raw_detector_truth_over_live_sim_alias() -> None:
+def test_draw_initial_geometry_pairs_overlay_prefers_raw_detector_truth_over_live_sim_alias() -> (
+    None
+):
     fig, ax = plt.subplots()
     try:
         geometry_pick_artists: list[object] = []
@@ -576,7 +607,9 @@ def test_draw_initial_geometry_pairs_overlay_prefers_saved_refined_native_detect
         plt.close(fig)
 
 
-def test_draw_initial_geometry_pairs_overlay_projects_raw_sim_image_detector_rows_into_background_frame() -> None:
+def test_draw_initial_geometry_pairs_overlay_projects_raw_sim_image_detector_rows_into_background_frame() -> (
+    None
+):
     callbacks = manual_geometry.make_runtime_geometry_manual_projection_callbacks(
         caked_view_enabled=lambda: False,
         last_caked_background_image_unscaled=lambda: np.zeros((5, 5), dtype=float),
@@ -658,10 +691,13 @@ def test_draw_initial_geometry_pairs_overlay_projects_raw_sim_image_detector_row
         assert background_point in marker_points
         assert (300.0, -200.0) not in marker_points
         assert (400.0, -500.0) not in marker_points
-        assert np.hypot(
-            float(expected_sim[0]) - background_point[0],
-            float(expected_sim[1]) - background_point[1],
-        ) < 1.0
+        assert (
+            np.hypot(
+                float(expected_sim[0]) - background_point[0],
+                float(expected_sim[1]) - background_point[1],
+            )
+            < 1.0
+        )
     finally:
         plt.close(fig)
 
@@ -1091,9 +1127,7 @@ def test_draw_live_geometry_preview_overlay_marks_excluded_matches() -> None:
             geometry_preview_artists=geometry_preview_artists,
             clear_geometry_preview_artists=_clear,
             draw_idle=lambda: draws.append("draw"),
-            normalize_hkl_key=(
-                lambda value: tuple(value) if isinstance(value, tuple) else None
-            ),
+            normalize_hkl_key=(lambda value: tuple(value) if isinstance(value, tuple) else None),
             live_preview_match_is_excluded=lambda entry: bool(entry.get("excluded")),
         )
 
@@ -1125,17 +1159,13 @@ def test_draw_live_geometry_preview_overlay_can_hide_pair_connectors() -> None:
             geometry_preview_artists=geometry_preview_artists,
             clear_geometry_preview_artists=_clear,
             draw_idle=lambda: None,
-            normalize_hkl_key=(
-                lambda value: tuple(value) if isinstance(value, tuple) else None
-            ),
+            normalize_hkl_key=(lambda value: tuple(value) if isinstance(value, tuple) else None),
             live_preview_match_is_excluded=lambda _entry: False,
             show_pair_connectors=False,
         )
 
         line_segments = [
-            line
-            for line in ax.lines
-            if len(line.get_xdata()) == 2 and len(line.get_ydata()) == 2
+            line for line in ax.lines if len(line.get_xdata()) == 2 and len(line.get_ydata()) == 2
         ]
         labels = [artist.get_text() for artist in ax.texts]
 
@@ -1148,7 +1178,7 @@ def test_draw_live_geometry_preview_overlay_can_hide_pair_connectors() -> None:
 def test_draw_qr_cylinder_overlay_paths_replaces_previous_lines() -> None:
     fig, ax = plt.subplots()
     try:
-        old_line, = ax.plot([0.0, 1.0], [1.0, 0.0])
+        (old_line,) = ax.plot([0.0, 1.0], [1.0, 0.0])
         qr_cylinder_overlay_artists: list[object] = [old_line]
         draws: list[str] = []
 

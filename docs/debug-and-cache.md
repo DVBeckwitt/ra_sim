@@ -48,22 +48,33 @@ Retention modes:
 
 ## Geometry-Fit Visual Residual Diagnostics
 
-GUI geometry fits now emit two visual-consistency diagnostics after the fitted
+GUI geometry fits now emit three visual-consistency diagnostics after the fitted
 simulation redraw settles:
 
 - overlay frame diagnostics report
   `fit_sim_render_caked_delta_med` and `fit_sim_render_caked_delta_max`, which
   compare each green `fit sim` marker against the caked point used by the
   rendered fitted simulation image
+- draw-time visual probes report `visual_probe_artist_to_image_peak_med` and
+  `visual_probe_artist_to_image_peak_max`, which compare the actual drawn green
+  marker artist coordinates against the strongest visible simulation-image
+  pixel in a small local search window
 - geometry-fit logs report `holistic detector` and `holistic caked` residual
   lines, comparing the full background image against the pre-fit and post-fit
   simulation images with one least-squares intensity scale
 
-The holistic check is diagnostic only. It does not change the solver objective,
-fit parameters, saved-state schema, CLI flags, or cache retention policy. A
-positive residual delta or `suspicious=True` means the full-image agreement got
-worse even if the point objective improved, and should be treated as a prompt to
-inspect the visible GUI image and the fit log together.
+These checks are diagnostic only. They do not change the solver objective, fit
+parameters, saved-state schema, CLI flags, or cache retention policy. A positive
+holistic residual delta or `suspicious=True` means the full-image agreement got
+worse even if the point objective improved. A
+`visual_probe_warning=fit_sim_marker_image_mismatch` line means the green marker
+artist and the rendered simulation image peak disagree in the visible GUI frame,
+so the fit log can catch the class of screenshot-only mismatch where cached
+numbers look plausible but the overlay is not moving with the image.
+
+The GUI acceptance gate remains detector-pixel strict even when caked angular
+diagnostics are present. The caked angular acceptance shortcut is reserved for
+true headless geometry-fit runs that set the private headless runtime flag.
 
 ## Background Peak-Fit Diagnostic Caches
 

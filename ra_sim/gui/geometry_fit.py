@@ -110,6 +110,10 @@ GEOMETRY_FIT_SAVED_MANUAL_CAKED_SEED_SEARCH = {
 GEOMETRY_FIT_SAVED_MANUAL_CAKED_DIRECT_MAX_NFEV = 29
 GEOMETRY_FIT_SAVED_MANUAL_CAKED_LADDER_MAX_NFEV = 60
 GEOMETRY_FIT_POINT_ONLY_PROJECTION_FLAG = "_qr_fit_point_only_projection"
+GEOMETRY_FIT_HEADLESS_RUNTIME_CONTEXT_FLAG = "_headless_geometry_fit_runtime"
+GEOMETRY_FIT_HEADLESS_CAKED_ANGULAR_ACCEPT_FLAG = (
+    "_headless_accept_caked_angular_metric_without_pixel_threshold"
+)
 
 
 def _geometry_fit_float64_vector(
@@ -17861,7 +17865,7 @@ def _apply_saved_manual_caked_geometry_fit_lean_runtime(
     solver["anisotropic_measurement_uncertainty"] = False
     solver["q_group_line_constraints"] = False
     solver["q_group_line_constraints_enabled"] = False
-    solver["_headless_accept_caked_angular_metric_without_pixel_threshold"] = True
+    solver[GEOMETRY_FIT_HEADLESS_CAKED_ANGULAR_ACCEPT_FLAG] = True
     solver["workers"] = solver.get("workers", "auto")
     solver["parallel_mode"] = "off"
     solver["worker_numba_threads"] = 0
@@ -22470,6 +22474,7 @@ def build_geometry_fit_rejection_reason_lines(
     result: object,
     *,
     rms: float,
+    allow_headless_caked_angular_acceptance: bool = False,
 ) -> list[str]:
     """Return human-readable rejection reasons for one geometry-fit result."""
 
@@ -22498,9 +22503,12 @@ def build_geometry_fit_rejection_reason_lines(
             fallback_entry_count = 0
             fallback_row_count = 0
         headless_caked_angular_acceptance = bool(
-            point_match_summary.get(
-                "_headless_accept_caked_angular_metric_without_pixel_threshold",
-                False,
+            allow_headless_caked_angular_acceptance
+            and bool(
+                point_match_summary.get(
+                    GEOMETRY_FIT_HEADLESS_CAKED_ANGULAR_ACCEPT_FLAG,
+                    False,
+                )
             )
             and str(point_match_summary.get("metric_unit", "") or "").strip().lower() == "deg"
             and manual_caked_rows > 0
@@ -22595,6 +22603,16 @@ def build_geometry_fit_rejection_reason_lines(
                 )
 
     return reasons
+
+
+def geometry_fit_runtime_allows_headless_caked_angular_acceptance(
+    runtime_cfg: Mapping[str, object] | None,
+) -> bool:
+    """Return whether this runtime may bypass detector-pixel acceptance for caked fits."""
+
+    if not isinstance(runtime_cfg, Mapping):
+        return False
+    return bool(runtime_cfg.get(GEOMETRY_FIT_HEADLESS_RUNTIME_CONTEXT_FLAG, False))
 
 
 def build_geometry_fit_result_lines(
@@ -23157,9 +23175,7 @@ def build_geometry_fit_overlay_diagnostic_lines(
         f"sim_display_p90_px={float(diag.get('sim_display_p90_px', np.nan)):.3f}",
         f"bg_display_p90_px={float(diag.get('bg_display_p90_px', np.nan)):.3f}",
     ]
-    visual_initial_med = _geometry_fit_metric_float(
-        diag.get("initial_distance_median", np.nan)
-    )
+    visual_initial_med = _geometry_fit_metric_float(diag.get("initial_distance_median", np.nan))
     visual_final_med = _geometry_fit_metric_float(diag.get("final_distance_median", np.nan))
     visual_delta_med = _geometry_fit_metric_float(diag.get("delta_distance_median", np.nan))
     if np.isfinite(visual_initial_med) or np.isfinite(visual_final_med):
@@ -23183,9 +23199,7 @@ def build_geometry_fit_overlay_diagnostic_lines(
     render_delta_max = _geometry_fit_metric_float(
         diag.get("fit_sim_render_caked_delta_max", np.nan)
     )
-    if render_delta_count > 0 and (
-        np.isfinite(render_delta_med) or np.isfinite(render_delta_max)
-    ):
+    if render_delta_count > 0 and (np.isfinite(render_delta_med) or np.isfinite(render_delta_max)):
         lines.extend(
             [
                 f"fit_sim_render_caked_delta_med={render_delta_med:.3f}",
@@ -23195,6 +23209,63 @@ def build_geometry_fit_overlay_diagnostic_lines(
     mode_label = _geometry_fit_selected_discrete_mode_label(result)
     if mode_label:
         lines.insert(1, f"solver_discrete_mode={mode_label}")
+    return lines
+
+
+def _geometry_fit_probe_point_text(point: object) -> str:
+    try:
+        if not isinstance(point, Sequence) or isinstance(point, (str, bytes)):
+            return "<none>"
+        return _geometry_fit_point_text(point[0], point[1])
+    except Exception:
+        return "<none>"
+
+
+def build_geometry_fit_visual_probe_lines(
+    visual_probe_records: Sequence[object] | None,
+    *,
+    max_records: int = 8,
+) -> list[str]:
+    """Format draw-time fit-sim marker/image diagnostics for fit logs."""
+
+    records = [entry for entry in (visual_probe_records or ()) if isinstance(entry, Mapping)]
+    if not records:
+        return []
+    artist_to_image = [
+        _geometry_fit_metric_float(entry.get("artist_to_image_peak_delta", np.nan))
+        for entry in records
+    ]
+    finite_artist_to_image = [
+        float(value) for value in artist_to_image if np.isfinite(float(value))
+    ]
+    max_delta = float(np.max(finite_artist_to_image)) if finite_artist_to_image else float("nan")
+    med_delta = float(np.median(finite_artist_to_image)) if finite_artist_to_image else float("nan")
+    lines = [
+        f"visual_probe_records={len(records)}",
+        f"visual_probe_artist_to_image_peak_med={med_delta:.3f}",
+        f"visual_probe_artist_to_image_peak_max={max_delta:.3f}",
+    ]
+    if np.isfinite(max_delta) and max_delta > 2.0:
+        lines.append("visual_probe_warning=fit_sim_marker_image_mismatch")
+    for entry in records[: max(0, int(max_records))]:
+        hkl = _geometry_fit_normalize_hkl(entry.get("hkl"))
+        overlay_index = _geometry_fit_overlay_match_index(entry)
+        lines.append(
+            "visual_probe "
+            f"idx={overlay_index} HKL={hkl} "
+            f"mode={entry.get('display_mode', '')} status={entry.get('status', '')} "
+            f"source={entry.get('record_source', '')} "
+            f"record={_geometry_fit_probe_point_text(entry.get('record_point'))} "
+            f"artist={_geometry_fit_probe_point_text(entry.get('artist_point'))} "
+            f"image_peak={_geometry_fit_probe_point_text(entry.get('image_peak_point'))} "
+            "artist_to_record={:.3f} artist_to_image_peak={:.3f} "
+            "record_to_image_peak={:.3f} peak_value={:.6g}".format(
+                _geometry_fit_metric_float(entry.get("artist_to_record_delta", np.nan)),
+                _geometry_fit_metric_float(entry.get("artist_to_image_peak_delta", np.nan)),
+                _geometry_fit_metric_float(entry.get("record_to_image_peak_delta", np.nan)),
+                _geometry_fit_metric_float(entry.get("image_peak_value", np.nan)),
+            )
+        )
     return lines
 
 
@@ -23393,9 +23464,7 @@ def build_geometry_fit_progress_text(
     )
     visual_distance_line = ""
     diag = frame_diag if isinstance(frame_diag, Mapping) else {}
-    initial_visual_med = _geometry_fit_metric_float(
-        diag.get("initial_distance_median", np.nan)
-    )
+    initial_visual_med = _geometry_fit_metric_float(diag.get("initial_distance_median", np.nan))
     final_visual_med = _geometry_fit_metric_float(diag.get("final_distance_median", np.nan))
     if np.isfinite(initial_visual_med) and np.isfinite(final_visual_med):
         delta_visual_med = float(final_visual_med - initial_visual_med)
@@ -23616,6 +23685,11 @@ def apply_runtime_geometry_fit_result(
     rejection_reasons = build_geometry_fit_rejection_reason_lines(
         result,
         rms=rms,
+        allow_headless_caked_angular_acceptance=(
+            geometry_fit_runtime_allows_headless_caked_angular_acceptance(
+                bindings.geometry_runtime_cfg
+            )
+        ),
     )
     if rejection_reasons:
         bindings.log_section(

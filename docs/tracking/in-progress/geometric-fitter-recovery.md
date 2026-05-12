@@ -213,6 +213,47 @@ status: no user migration, compatibility shim, or deprecated interface.
 Shipping status: ready as a normal bug-fix diagnostic slice; rollback is a git
 revert of the overlay/residual diagnostic patch.
 
+2026-05-12 visual-probe diagnostic update: the existing GUI overlay draw path
+now records the actual Matplotlib green `fit sim` marker artist coordinates and
+compares them with the strongest pixel in the currently visible simulation
+image artist. This targets the still-observed failure mode where the fitted
+simulation raster moves correctly but the green fit-sim circles remain tied to
+stale initial/cached positions, which the earlier cached-distance and holistic
+diagnostics could miss.
+
+Bug/error status: diagnostic coverage improved, not claimed as a final fitter
+fix. New log lines include `visual_probe_artist_to_image_peak_med`,
+`visual_probe_artist_to_image_peak_max`, per-marker `visual_probe ...` rows, and
+`visual_probe_warning=fit_sim_marker_image_mismatch` when the drawn marker is
+more than two display units from the nearest visible local image peak. Feature
+status: no GUI control, public API, CLI flag, config key, dependency,
+saved-state schema, or artifact schema. CI/automation status: focused pure
+geometry, overlay, runtime, and geometry-fit formatter tests cover the
+diagnostic path; full real-GUI reproduction remains the next validation step.
+Deprecation/migration status: no user migration or deprecated interface.
+Shipping status: safe as a diagnostic-only slice; rollback is a normal git
+revert of the visual-probe patch.
+
+2026-05-12 visual-probe review closeout: the GUI geometry-fit acceptance gate
+now fails closed by default. The saved-manual caked angular exception is only
+available when an actual headless entrypoint sets the private
+`_headless_geometry_fit_runtime` runtime flag; a config or saved-state
+`runtime_context=headless` string no longer enables the detector-pixel
+threshold bypass. Direct rejection-reason helpers also default to GUI-safe
+threshold enforcement, so future callers must opt in explicitly for true
+headless caked angular acceptance.
+
+Bug/error status: fixed for the review finding where GUI/runtime config could
+re-enable the headless caked angular acceptance path and hide absurd detector
+pixel residuals. Feature status: no public API, GUI control, CLI flag, config
+key, saved-state schema, artifact schema, dependency, or CI workflow change.
+CI/automation status: targeted acceptance-gate regression tests and Python
+compile checks pass locally; `python -m ra_sim.dev check` remains the release
+gate. Deprecation/migration status: no migration or compatibility shim is
+required because the removed `runtime_context` fallback was internal and
+unsafe. Shipping status: ready as a normal diagnostic/hardening bug-fix slice;
+rollback is a normal git revert.
+
 Real full headless `fit-geometry` smoke is now run and still failing after a
 clean exact-caked request. The first divergence from passing ladder evidence is
 not routing or pair identity but seed/start state: real headless fit uses the

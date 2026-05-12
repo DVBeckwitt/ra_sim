@@ -153,7 +153,7 @@ def _draw_initial_q_group_lines(
             segment = _fit_overlay_line_segment(points)
             if segment is None:
                 continue
-            line, = ax.plot(
+            (line,) = ax.plot(
                 [float(segment[0][0]), float(segment[1][0])],
                 [float(segment[0][1]), float(segment[1][1])],
                 color=color,
@@ -241,11 +241,7 @@ def _format_q_group_identity_label(entry: Mapping[str, object] | None) -> str:
     q_group_key = _normalize_q_group_key(
         entry.get("q_group_key") if isinstance(entry, Mapping) else None
     )
-    if (
-        isinstance(q_group_key, tuple)
-        and len(q_group_key) >= 4
-        and q_group_key[0] == "q_group"
-    ):
+    if isinstance(q_group_key, tuple) and len(q_group_key) >= 4 and q_group_key[0] == "q_group":
         label = f"Qr set {q_group_key[2]}/{q_group_key[3]}"
     return _format_pair_identity_label(entry, label)
 
@@ -263,6 +259,7 @@ def draw_geometry_fit_overlay(
         [float, float], tuple[float, float] | None
     ]
     | None = None,
+    visual_probe_records: list[dict[str, object]] | None = None,
 ) -> None:
     """Draw one fixed-background/fitted-simulation overlay record per match."""
 
@@ -280,7 +277,10 @@ def draw_geometry_fit_overlay(
             if caked_point is not None:
                 return caked_point
             native_point = _parse_point(entry.get(native_key))
-            if native_point is not None and native_detector_coords_to_caked_display_coords is not None:
+            if (
+                native_point is not None
+                and native_detector_coords_to_caked_display_coords is not None
+            ):
                 try:
                     projected = native_detector_coords_to_caked_display_coords(
                         float(native_point[0]),
@@ -301,8 +301,8 @@ def draw_geometry_fit_overlay(
         marker: str,
         *,
         zorder: int = 7,
-    ) -> None:
-        point, = ax.plot(
+    ) -> object:
+        (point,) = ax.plot(
             [float(col)],
             [float(row)],
             marker,
@@ -326,6 +326,20 @@ def draw_geometry_fit_overlay(
                 bbox=dict(facecolor="white", alpha=0.75, edgecolor="none", pad=1.0),
             )
             geometry_pick_artists.append(text)
+        return point
+
+    def _artist_point(marker_artist: object) -> tuple[float, float] | None:
+        try:
+            xdata = list(marker_artist.get_xdata())
+            ydata = list(marker_artist.get_ydata())
+        except Exception:
+            return None
+        if not xdata or not ydata:
+            return None
+        try:
+            return (float(xdata[0]), float(ydata[0]))
+        except Exception:
+            return None
 
     def _plot_arrow(
         start_xy: tuple[float, float],
@@ -353,9 +367,7 @@ def draw_geometry_fit_overlay(
                 alpha=alpha,
             ),
             bbox=(
-                dict(facecolor="white", alpha=0.85, edgecolor="none", pad=1.0)
-                if annotate
-                else None
+                dict(facecolor="white", alpha=0.85, edgecolor="none", pad=1.0) if annotate else None
             ),
             zorder=6,
         )
@@ -438,9 +450,7 @@ def draw_geometry_fit_overlay(
 
         status = str(entry.get("match_status", "matched")).strip().lower()
         matched = (
-            status == "matched"
-            and final_sim_display is not None
-            and final_bg_display is not None
+            status == "matched" and final_sim_display is not None and final_bg_display is not None
         )
         if not matched:
             if initial_sim_display is not None and initial_bg_display is not None:
@@ -451,10 +461,14 @@ def draw_geometry_fit_overlay(
                 )
             continue
 
-        sim_shift = math.hypot(
-            final_sim_display[0] - initial_sim_display[0],
-            final_sim_display[1] - initial_sim_display[1],
-        ) if initial_sim_display is not None else 0.0
+        sim_shift = (
+            math.hypot(
+                final_sim_display[0] - initial_sim_display[0],
+                final_sim_display[1] - initial_sim_display[1],
+            )
+            if initial_sim_display is not None
+            else 0.0
+        )
         if initial_sim_display is not None and sim_shift > 0.25:
             _plot_arrow(
                 initial_sim_display,
@@ -465,7 +479,7 @@ def draw_geometry_fit_overlay(
                 alpha=0.85,
             )
 
-        _plot_marker(
+        fit_sim_artist = _plot_marker(
             final_sim_display[0],
             final_sim_display[1],
             f"{label} fit sim",
@@ -473,6 +487,28 @@ def draw_geometry_fit_overlay(
             "o",
             zorder=8,
         )
+        if visual_probe_records is not None:
+            visual_probe_records.append(
+                {
+                    "overlay_match_index": entry.get("overlay_match_index", idx),
+                    "hkl": entry.get("hkl"),
+                    "display_mode": "caked" if show_caked_2d else "detector",
+                    "record_point": (
+                        float(final_sim_display[0]),
+                        float(final_sim_display[1]),
+                    ),
+                    "artist_point": _artist_point(fit_sim_artist),
+                    "record_source": str(
+                        entry.get(
+                            "final_sim_caked_display_source"
+                            if show_caked_2d
+                            else "final_sim_display_source",
+                            "",
+                        )
+                    ),
+                    "fit_prediction_source": str(entry.get("fit_prediction_source", "")),
+                }
+            )
 
         residual_dist = math.hypot(
             final_sim_display[0] - final_bg_display[0],
@@ -529,7 +565,7 @@ def draw_initial_geometry_pairs_overlay(
         q_group_label = _format_q_group_identity_label(entry) if q_group_key is not None else ""
 
         if sim_display is not None:
-            sim_pt, = ax.plot(
+            (sim_pt,) = ax.plot(
                 [float(sim_display[0])],
                 [float(sim_display[1])],
                 "s",
@@ -541,7 +577,7 @@ def draw_initial_geometry_pairs_overlay(
             )
             geometry_pick_artists.append(sim_pt)
         if bg_display is not None:
-            bg_pt, = ax.plot(
+            (bg_pt,) = ax.plot(
                 [float(bg_display[0])],
                 [float(bg_display[1])],
                 "^",
@@ -646,7 +682,7 @@ def draw_live_geometry_preview_overlay(
             f"{hkl_key} excluded" if excluded else f"{hkl_key}",
         )
 
-        sim_pt, = ax.plot(
+        (sim_pt,) = ax.plot(
             [float(sim_col)],
             [float(sim_row)],
             "s",
@@ -657,7 +693,7 @@ def draw_live_geometry_preview_overlay(
             zorder=5,
             alpha=line_alpha,
         )
-        bg_pt, = ax.plot(
+        (bg_pt,) = ax.plot(
             [float(bg_col)],
             [float(bg_row)],
             "^",
@@ -670,7 +706,7 @@ def draw_live_geometry_preview_overlay(
         )
         geometry_preview_artists.extend([sim_pt, bg_pt])
         if show_pair_connectors:
-            link, = ax.plot(
+            (link,) = ax.plot(
                 [float(sim_col), float(bg_col)],
                 [float(sim_row), float(bg_row)],
                 color=line_color,
@@ -725,7 +761,7 @@ def draw_qr_cylinder_overlay_paths(
     clear_qr_cylinder_overlay_artists(redraw=False)
     for path in paths:
         color = "#fff06a" if path.get("source") == "primary" else "#78d7ff"
-        line, = ax.plot(
+        (line,) = ax.plot(
             path["cols"],
             path["rows"],
             color=color,

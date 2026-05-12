@@ -630,6 +630,50 @@ def test_runtime_session_geometry_fit_holistic_queue_flushes_after_redraw(
     assert all("suspicious=False" in line for line in lines)
 
 
+def test_runtime_session_geometry_fit_visual_probe_logs_drawn_marker_to_image_delta(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    image = np.zeros((8, 8), dtype=np.float64)
+    image[4, 5] = 9.0
+    lines: list[str] = []
+
+    class _ImageArtist:
+        def get_array(self):
+            return image
+
+        def get_extent(self):
+            return (-0.5, 7.5, -0.5, 7.5)
+
+        def get_visible(self):
+            return True
+
+    monkeypatch.setattr(runtime_session, "image_display", _ImageArtist(), raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_cmd_line",
+        lambda text: lines.append(str(text)),
+        raising=False,
+    )
+
+    runtime_session._log_geometry_fit_visual_probe_records(
+        [
+            {
+                "overlay_match_index": 3,
+                "hkl": (0, 0, 9),
+                "display_mode": "caked",
+                "record_point": (1.0, 1.0),
+                "artist_point": (1.0, 1.0),
+                "record_source": "fit_prediction_caked_deg",
+            }
+        ],
+    )
+
+    assert any("visual_probe_records=1" in line for line in lines)
+    assert any("visual_probe_artist_to_image_peak_max=5.000" in line for line in lines)
+    assert any("idx=3 HKL=(0, 0, 9)" in line for line in lines)
+
+
 def test_shutdown_gui_clears_geometry_fit_workers_and_pending_tokens(
     monkeypatch,
 ) -> None:

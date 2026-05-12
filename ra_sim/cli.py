@@ -834,6 +834,12 @@ def run_headless_geometry_fit(
     fit_cfg = inst.get("fit", {})
     fit_geometry_cfg = fit_cfg.get("geometry", {}) if isinstance(fit_cfg, Mapping) else {}
     fit_geometry_cfg = dict(fit_geometry_cfg) if isinstance(fit_geometry_cfg, Mapping) else {}
+    headless_context_flag = getattr(
+        gui_geometry_fit,
+        "GEOMETRY_FIT_HEADLESS_RUNTIME_CONTEXT_FLAG",
+        "_headless_geometry_fit_runtime",
+    )
+    fit_geometry_cfg[str(headless_context_flag)] = True
     shared_headless = _load_shared_headless_geometry_fit()
     build_subtraction_config = getattr(
         shared_headless,
