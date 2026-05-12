@@ -80,6 +80,8 @@ GEOMETRY_FIT_PARAM_ORDER = [
 
 GEOMETRY_FIT_ACCEPT_MAX_RMS_PX = 100.0
 GEOMETRY_FIT_ACCEPT_MAX_PEAK_OFFSET_PX = 150.0
+GEOMETRY_FIT_ACCEPT_MAX_CAKED_RMS_DEG = 5.0
+GEOMETRY_FIT_ACCEPT_MAX_CAKED_OFFSET_DEG = 10.0
 GEOMETRY_FIT_LEGACY_REBIND_PIXEL_TIE_TOLERANCE_PX = 1.0e-6
 GEOMETRY_FIT_LEGACY_REBIND_CAKED_TIE_TOLERANCE = 1.0e-6
 GEOMETRY_FIT_EXACT_CAKE_AXIS_TOLERANCE = 1.0e-9
@@ -21727,12 +21729,27 @@ def build_geometry_fit_optimizer_diagnostics_lines(result: object) -> list[str]:
     optimizer_method = str(getattr(result, "optimizer_method", "") or "").strip()
     if optimizer_method:
         lines.append(f"optimizer_method={optimizer_method}")
-    weighted_rms = _geometry_fit_metric_float(getattr(result, "weighted_residual_rms_px", np.nan))
-    if np.isfinite(weighted_rms):
-        lines.append(f"weighted_residual_rms_px={weighted_rms:.6f}")
-    display_rms = geometry_fit_result_rms(result)
+    weighted_objective_rms = _geometry_fit_metric_float(
+        getattr(result, "weighted_objective_rms", np.nan)
+    )
+    weighted_objective_units = str(getattr(result, "weighted_objective_rms_units", "") or "")
+    final_metric_space = str(getattr(result, "final_metric_space", "") or "")
+    if np.isfinite(weighted_objective_rms) and (
+        final_metric_space == "caked_deg" or weighted_objective_units
+    ):
+        suffix = f" {weighted_objective_units}" if weighted_objective_units else ""
+        lines.append(f"weighted_objective_rms={weighted_objective_rms:.6f}{suffix}")
+    else:
+        weighted_rms = _geometry_fit_metric_float(
+            getattr(result, "weighted_residual_rms_px", np.nan)
+        )
+        if np.isfinite(weighted_rms):
+            lines.append(f"weighted_residual_rms_px={weighted_rms:.6f}")
+    display_metric = geometry_fit_result_metric(result)
+    display_rms = _geometry_fit_metric_float(display_metric.get("value", np.nan))
+    display_unit = str(display_metric.get("unit", "px") or "px")
     if np.isfinite(display_rms):
-        lines.append(f"display_rms_px={display_rms:.6f}")
+        lines.append(f"display_rms_{display_unit}={display_rms:.6f}")
     final_metric_name = str(getattr(result, "final_metric_name", "") or "").strip()
     if final_metric_name:
         lines.append(f"final_metric_name={final_metric_name}")
@@ -21826,6 +21843,14 @@ def geometry_fit_result_metric(result: object) -> dict[str, object]:
                 "unit": "px",
                 "space": "detector_px",
             }
+
+    if str(getattr(result, "final_metric_space", "") or "") == "caked_deg":
+        return {
+            "value": _geometry_fit_metric_float(getattr(result, "rms_deg", np.nan)),
+            "max_value": _geometry_fit_metric_float(getattr(result, "max_deg", np.nan)),
+            "unit": "deg",
+            "space": "caked_deg",
+        }
 
     return {
         "value": geometry_fit_result_rms(result),
@@ -22540,10 +22565,35 @@ def build_geometry_fit_rejection_reason_lines(
     reasons: list[str] = []
     point_match_summary = getattr(result, "point_match_summary", None)
     metric = geometry_fit_result_metric(result)
-    metric_value = _geometry_fit_metric_float(metric.get("value", rms))
+    metric_value = _geometry_fit_metric_float(metric.get("value", np.nan), default=float(rms))
     metric_max_value = _geometry_fit_metric_float(metric.get("max_value", np.nan))
     metric_unit = str(metric.get("unit", "px") or "px")
     metric_space = str(metric.get("space", "legacy_detector_px") or "legacy_detector_px")
+    if metric_space == "legacy_detector_px":
+        metric_value = _geometry_fit_metric_float(rms)
+        if isinstance(point_match_summary, Mapping):
+            metric_max_value = _geometry_fit_metric_float(
+                point_match_summary.get("unweighted_peak_max_px", metric_max_value)
+            )
+    detector_metric_complete = False
+    detector_rms_px = float("nan")
+    detector_max_px = float("nan")
+    if isinstance(point_match_summary, Mapping):
+        detector_metric_complete = bool(
+            point_match_summary.get("detector_pixel_metric_complete", False)
+        )
+        detector_rms_px = _geometry_fit_metric_float(
+            point_match_summary.get(
+                "final_rms_px",
+                point_match_summary.get("detector_pixel_rms_px", np.nan),
+            )
+        )
+        detector_max_px = _geometry_fit_metric_float(
+            point_match_summary.get(
+                "detector_pixel_max_px",
+                point_match_summary.get("unweighted_peak_max_px", np.nan),
+            )
+        )
     headless_caked_angular_acceptance = False
     if isinstance(point_match_summary, Mapping):
         try:
@@ -22604,18 +22654,34 @@ def build_geometry_fit_rejection_reason_lines(
             reasons.append("Caked angular residual is not finite.")
         else:
             reasons.append("RMS residual is not finite.")
-    elif (
-        metric_space in {"detector_px", "legacy_detector_px"}
-        and metric_unit == "px"
-        and float(metric_value) > GEOMETRY_FIT_ACCEPT_MAX_RMS_PX
-        and not headless_caked_angular_acceptance
-    ):
-        reasons.append(
-            "RMS residual {rms:.2f} px exceeds the acceptance limit of {limit:.2f} px.".format(
-                rms=float(metric_value),
-                limit=float(GEOMETRY_FIT_ACCEPT_MAX_RMS_PX),
+    elif metric_space == "caked_deg":
+        if float(metric_value) > GEOMETRY_FIT_ACCEPT_MAX_CAKED_RMS_DEG:
+            reasons.append(
+                "Caked angular residual {rms:.2f} deg exceeds the acceptance "
+                "limit of {limit:.2f} deg.".format(
+                    rms=float(metric_value),
+                    limit=float(GEOMETRY_FIT_ACCEPT_MAX_CAKED_RMS_DEG),
+                )
             )
-        )
+        if detector_metric_complete and not headless_caked_angular_acceptance:
+            if np.isfinite(detector_rms_px) and detector_rms_px > GEOMETRY_FIT_ACCEPT_MAX_RMS_PX:
+                reasons.append(
+                    "Same-frame detector RMS residual {rms:.2f} px exceeds the "
+                    "acceptance limit of {limit:.2f} px.".format(
+                        rms=float(detector_rms_px),
+                        limit=float(GEOMETRY_FIT_ACCEPT_MAX_RMS_PX),
+                    )
+                )
+    elif metric_space in {"detector_px", "legacy_detector_px"} and metric_unit == "px":
+        if float(metric_value) > GEOMETRY_FIT_ACCEPT_MAX_RMS_PX and (
+            not headless_caked_angular_acceptance
+        ):
+            reasons.append(
+                "RMS residual {rms:.2f} px exceeds the acceptance limit of {limit:.2f} px.".format(
+                    rms=float(metric_value),
+                    limit=float(GEOMETRY_FIT_ACCEPT_MAX_RMS_PX),
+                )
+            )
 
     matched_pair_count = 0
     has_matched_pair_count = False
@@ -22632,6 +22698,32 @@ def build_geometry_fit_rejection_reason_lines(
     if has_matched_pair_count and matched_pair_count <= 0:
         reasons.append("No matched peak pairs were available for the fitted solution.")
     if (
+        metric_space == "caked_deg"
+        and np.isfinite(max_offset)
+        and float(max_offset) > GEOMETRY_FIT_ACCEPT_MAX_CAKED_OFFSET_DEG
+    ):
+        reasons.append(
+            "Largest caked angular offset {offset:.2f} deg exceeds the acceptance "
+            "limit of {limit:.2f} deg.".format(
+                offset=float(max_offset),
+                limit=float(GEOMETRY_FIT_ACCEPT_MAX_CAKED_OFFSET_DEG),
+            )
+        )
+    if (
+        metric_space == "caked_deg"
+        and detector_metric_complete
+        and np.isfinite(detector_max_px)
+        and float(detector_max_px) > GEOMETRY_FIT_ACCEPT_MAX_PEAK_OFFSET_PX
+        and not headless_caked_angular_acceptance
+    ):
+        reasons.append(
+            "Largest same-frame detector offset {offset:.2f} px exceeds the acceptance "
+            "limit of {limit:.2f} px.".format(
+                offset=float(detector_max_px),
+                limit=float(GEOMETRY_FIT_ACCEPT_MAX_PEAK_OFFSET_PX),
+            )
+        )
+    if (
         np.isfinite(max_offset)
         and metric_space in {"detector_px", "legacy_detector_px"}
         and metric_unit == "px"
@@ -22647,11 +22739,6 @@ def build_geometry_fit_rejection_reason_lines(
         )
     if reasons and metric_space == "caked_deg" and np.isfinite(metric_value):
         reasons.append(f"Caked angular residual = {float(metric_value):.6f} deg.")
-        detector_metric_complete = (
-            bool(point_match_summary.get("detector_pixel_metric_complete", False))
-            if isinstance(point_match_summary, Mapping)
-            else False
-        )
         if not detector_metric_complete:
             reasons.append(
                 "Detector-pixel acceptance was not applied because no complete "
@@ -23878,8 +23965,13 @@ def build_geometry_fit_progress_text(
         except Exception:
             continue
         base_summary_lines.append(f"{name} = {value:.4f}")
-    weighted_rms = _geometry_fit_metric_float(getattr(result, "weighted_residual_rms_px", np.nan))
     metric_name = str(getattr(result, "final_metric_name", "") or "").strip()
+    weighted_source = (
+        "weighted_objective_rms"
+        if metric_name == "dynamic_angular_point_match"
+        else "weighted_residual_rms_px"
+    )
+    weighted_rms = _geometry_fit_metric_float(getattr(result, weighted_source, np.nan))
     if metric_name == "dynamic_angular_point_match" and np.isfinite(weighted_rms):
         weighted_unit = str(getattr(result, "weighted_objective_rms_units", "px") or "px")
         base_summary_lines.append(f"Dynamic fit RMS = {float(weighted_rms):.2f} {weighted_unit}")

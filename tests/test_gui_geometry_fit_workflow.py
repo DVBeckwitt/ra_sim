@@ -31330,6 +31330,31 @@ def test_geometry_fit_post_solver_helpers_format_diagnostics_and_summary() -> No
     assert "bound_hits=[Gamma]" in diagnostics
     assert diagnostics[-1] == "restart[0] cost=2.500000 success=False msg=retry"
 
+    dynamic_diagnostics = geometry_fit.build_geometry_fit_optimizer_diagnostics_lines(
+        SimpleNamespace(
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            cost=1.0,
+            robust_cost=1.0,
+            solver_loss="linear",
+            solver_f_scale=1.0,
+            optimality=0.0,
+            active_mask=[],
+            weighted_residual_rms_px=99.1533,
+            weighted_objective_rms=99.1533,
+            weighted_objective_rms_units="weighted_deg",
+            final_metric_name="dynamic_angular_point_match",
+            final_metric_space="caked_deg",
+            rms_deg=88.3075,
+            max_deg=120.0,
+        )
+    )
+    assert "weighted_objective_rms=99.153300 weighted_deg" in dynamic_diagnostics
+    assert all("weighted_residual_rms_px" not in line for line in dynamic_diagnostics)
+    assert "display_rms_deg=88.307500" in dynamic_diagnostics
+
     debug_lines = geometry_fit.build_geometry_fit_debug_lines(_Result())
     assert debug_lines[0] == "point_match_mode=True datasets=1 vars=gamma,a"
     assert any("seed_search prescore_top_k=2 n_global=3 n_jitter=1" in line for line in debug_lines)
@@ -36470,6 +36495,61 @@ def test_gui_caked_angular_metric_still_enforces_detector_pixel_thresholds() -> 
         "RMS residual 1200.00 px exceeds the acceptance limit of 100.00 px.",
         "Largest matched-peak offset 2500.00 px exceeds the acceptance limit of 150.00 px.",
     ]
+
+
+def test_gui_dynamic_caked_metric_rejects_large_angular_residual() -> None:
+    result = SimpleNamespace(
+        success=True,
+        point_match_summary={
+            "acceptance_metric_space": "caked_deg",
+            "metric_unit": "deg",
+            "final_rms_deg": 88.3075,
+            "final_max_deg": 120.0,
+            "matched_pair_count": 82,
+            "detector_pixel_metric_complete": False,
+        },
+    )
+
+    reasons = geometry_fit.build_geometry_fit_rejection_reason_lines(result, rms=88.3075)
+
+    assert (
+        "Caked angular residual 88.31 deg exceeds the acceptance limit of "
+        f"{geometry_fit.GEOMETRY_FIT_ACCEPT_MAX_CAKED_RMS_DEG:.2f} deg."
+    ) in reasons
+    assert (
+        "Largest caked angular offset 120.00 deg exceeds the acceptance limit of "
+        f"{geometry_fit.GEOMETRY_FIT_ACCEPT_MAX_CAKED_OFFSET_DEG:.2f} deg."
+    ) in reasons
+    assert (
+        "Detector-pixel acceptance was not applied because no complete "
+        "same-frame detector-pixel metric was available."
+    ) in reasons
+
+
+def test_gui_dynamic_caked_metric_enforces_same_frame_detector_thresholds() -> None:
+    result = SimpleNamespace(
+        success=True,
+        point_match_summary={
+            "acceptance_metric_space": "caked_deg",
+            "metric_unit": "deg",
+            "final_rms_deg": 0.75,
+            "final_max_deg": 1.25,
+            "matched_pair_count": 7,
+            "detector_pixel_metric_complete": True,
+            "final_rms_px": 120.0,
+            "detector_pixel_max_px": 175.0,
+        },
+    )
+
+    reasons = geometry_fit.build_geometry_fit_rejection_reason_lines(result, rms=0.75)
+
+    assert (
+        "Same-frame detector RMS residual 120.00 px exceeds the acceptance limit of 100.00 px."
+    ) in reasons
+    assert (
+        "Largest same-frame detector offset 175.00 px exceeds the acceptance limit of 150.00 px."
+    ) in reasons
+    assert all("mixed" not in reason.lower() for reason in reasons)
 
 
 def test_runtime_context_string_does_not_enable_headless_angular_acceptance() -> None:

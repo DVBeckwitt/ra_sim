@@ -1379,6 +1379,35 @@ Dynamic Qr/Qz acceptance metric repair, 2026-05-12:
 - Shipping status: ready as a normal bug-fix slice. Rollback is a normal git
   revert of the evaluator metric, GUI formatting, and focused tests.
 
+Dynamic Qr/Qz acceptance guard review closure, 2026-05-12:
+
+- Follow-up review found one correctness gap after the metric repair: dynamic
+  caked-degree fits no longer used mixed detector pixels, but the GUI rejection
+  path also lacked a caked-degree acceptance limit. That could let a finite but
+  physically bad angular fit pass.
+- The GUI now keeps acceptance fail-closed for dynamic caked fits. Caked angular
+  RMS is rejected above `5.00 deg`, largest caked angular offset is rejected
+  above `10.00 deg`, and complete same-frame detector-pixel summaries still
+  enforce the existing `100.00 px` RMS and `150.00 px` max-offset limits.
+- Optimizer diagnostics now label the dynamic solver objective as
+  `weighted_objective_rms=<value> weighted_deg` instead of reusing the legacy
+  `weighted_residual_rms_px` label.
+- The mixed display/native detector-distance diagnostics are only computed when
+  row diagnostics are requested; normal residual evaluation keeps the hot path
+  limited to the same-frame metric needed for summaries.
+- Bug/error status: fixed. The original mixed-frame false rejection remains
+  fixed, and the review-discovered accidental acceptance weakening is closed.
+- Feature status: no new GUI control, CLI flag, config key, saved-state schema,
+  artifact schema, dependency, CI workflow, deprecation, or migration.
+- Validation: `python -m pytest tests/test_gui_geometry_fit_workflow.py -k "caked_angular_metric or dynamic_caked_metric or optimizer_diagnostics" -q`,
+  `python -m pytest tests/test_geometry_fitting.py -k "point_only_projection or dynamic_angular_point_match" -q`,
+  and `python -m pytest tests/test_manual_geometry_selection_helpers.py -k "no_partial_qr_objective_allowed" -q`
+  pass. `python -m ra_sim.dev check` remains the release gate for the final
+  commit.
+- Shipping status: ready after the final quality gate passes. Rollback is a
+  normal git revert of the acceptance guard, diagnostic-label, and focused test
+  changes.
+
 Do not use `run_geometry_fit_quality_baseline.py` as the first optimizer debug
 tool. Run it only after the ladder identifies a stable parameter set.
 

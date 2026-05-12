@@ -6377,39 +6377,42 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         predicted_detector_point, predicted_detector_source = (
             _fit_prediction_detector_point_for_frame(fit_prediction, observed_detector_frame)
         )
-        observed_native_point, _observed_native_reason = _detector_anchor_from_entry(
-            measured_entry,
-            ("native_col", "native_row", "resolved_native_anchor"),
-            (
-                "background_detector_x",
-                "background_detector_y",
-                "resolved_background_detector_anchor",
-            ),
-            ("detector_x", "detector_y", "resolved_detector_anchor"),
-        )
-        observed_display_point, _observed_display_reason = _detector_anchor_from_entry(
-            measured_entry,
-            ("x", "y", "resolved_display_anchor"),
-        )
-        predicted_native_point, _predicted_native_source = _fit_prediction_detector_point_for_frame(
-            fit_prediction, "native_detector"
-        )
-        predicted_display_point, _predicted_display_source = (
-            _fit_prediction_detector_point_for_frame(fit_prediction, "display_detector")
-        )
-
-        mixed_display_native_distance = _detector_pair_distance(
-            predicted_display_point,
-            observed_native_point,
-        )
-        native_native_distance = _detector_pair_distance(
-            predicted_native_point,
-            observed_native_point,
-        )
-        display_display_distance = _detector_pair_distance(
-            predicted_display_point,
-            observed_display_point,
-        )
+        mixed_display_native_distance = float("nan")
+        native_native_distance = float("nan")
+        display_display_distance = float("nan")
+        if collect_diagnostics:
+            observed_native_point, _observed_native_reason = _detector_anchor_from_entry(
+                measured_entry,
+                ("native_col", "native_row", "resolved_native_anchor"),
+                (
+                    "background_detector_x",
+                    "background_detector_y",
+                    "resolved_background_detector_anchor",
+                ),
+                ("detector_x", "detector_y", "resolved_detector_anchor"),
+            )
+            observed_display_point, _observed_display_reason = _detector_anchor_from_entry(
+                measured_entry,
+                ("x", "y", "resolved_display_anchor"),
+            )
+            predicted_native_point, _predicted_native_source = (
+                _fit_prediction_detector_point_for_frame(fit_prediction, "native_detector")
+            )
+            predicted_display_point, _predicted_display_source = (
+                _fit_prediction_detector_point_for_frame(fit_prediction, "display_detector")
+            )
+            mixed_display_native_distance = _detector_pair_distance(
+                predicted_display_point,
+                observed_native_point,
+            )
+            native_native_distance = _detector_pair_distance(
+                predicted_native_point,
+                observed_native_point,
+            )
+            display_display_distance = _detector_pair_distance(
+                predicted_display_point,
+                observed_display_point,
+            )
         if measured_detector_anchor is not None and predicted_detector_point is not None:
             pixel_dx = float(predicted_detector_point[0] - float(measured_detector_anchor[0]))
             pixel_dy = float(predicted_detector_point[1] - float(measured_detector_anchor[1]))
