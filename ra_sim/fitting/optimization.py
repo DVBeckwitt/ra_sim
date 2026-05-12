@@ -6398,25 +6398,18 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             _fit_prediction_detector_point_for_frame(fit_prediction, "display_detector")
         )
 
-        def _point_distance(
-            first: Tuple[float, float] | None,
-            second: Tuple[float, float] | None,
-        ) -> float:
-            if first is None or second is None:
-                return float("nan")
-            return float(
-                math.hypot(
-                    float(first[0]) - float(second[0]),
-                    float(first[1]) - float(second[1]),
-                )
-            )
-
-        mixed_display_native_distance = _point_distance(
+        mixed_display_native_distance = _detector_pair_distance(
             predicted_display_point,
             observed_native_point,
         )
-        native_native_distance = _point_distance(predicted_native_point, observed_native_point)
-        display_display_distance = _point_distance(predicted_display_point, observed_display_point)
+        native_native_distance = _detector_pair_distance(
+            predicted_native_point,
+            observed_native_point,
+        )
+        display_display_distance = _detector_pair_distance(
+            predicted_display_point,
+            observed_display_point,
+        )
         if measured_detector_anchor is not None and predicted_detector_point is not None:
             pixel_dx = float(predicted_detector_point[0] - float(measured_detector_anchor[0]))
             pixel_dy = float(predicted_detector_point[1] - float(measured_detector_anchor[1]))
@@ -15945,6 +15938,22 @@ def _finite_pair(value: object) -> Tuple[float, float] | None:
         if np.isfinite(x) and np.isfinite(y):
             return (float(x), float(y))
     return None
+
+
+def _detector_pair_distance(
+    first: Tuple[float, float] | None,
+    second: Tuple[float, float] | None,
+) -> float:
+    """Return the detector-pixel distance between two finite pairs."""
+
+    if first is None or second is None:
+        return float("nan")
+    return float(
+        math.hypot(
+            float(first[0]) - float(second[0]),
+            float(first[1]) - float(second[1]),
+        )
+    )
 
 
 def _fit_prediction_detector_point_for_frame(
