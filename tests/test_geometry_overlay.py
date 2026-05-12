@@ -6,6 +6,7 @@ from ra_sim.gui.geometry_overlay import (
     compute_geometry_overlay_frame_diagnostics,
     inverse_transform_points_orientation,
     rotate_point_for_display,
+    summarize_geometry_fit_overlay_visual_distances,
     transform_points_orientation,
 )
 
@@ -444,6 +445,50 @@ def test_build_geometry_fit_overlay_records_preserves_caked_display_locks():
     assert records[0]["final_bg_caked_display"] == pytest.approx((13.0, 14.0))
 
 
+def test_build_geometry_fit_overlay_records_uses_fit_caked_angles_for_final_caked_markers():
+    records = build_geometry_fit_overlay_records(
+        [
+            {
+                "overlay_match_index": 0,
+                "hkl": (0, 0, 6),
+                "sim_caked_display": (40.0, 12.0),
+                "bg_caked_display": (40.5, 12.5),
+                "sim_native": (10.0, 20.0),
+                "bg_native": (12.0, 22.0),
+            }
+        ],
+        [
+            {
+                "match_status": "matched",
+                "overlay_match_index": 0,
+                "hkl": (0, 0, 6),
+                "simulated_x": 900.0,
+                "simulated_y": 901.0,
+                "measured_x": 12.0,
+                "measured_y": 22.0,
+                "simulated_two_theta_deg": 40.6,
+                "simulated_phi_deg": 12.4,
+                "measured_two_theta_deg": 40.5,
+                "measured_phi_deg": 12.5,
+                "distance_px": 2.0,
+            }
+        ],
+        native_shape=(1024, 1024),
+        orientation_choice={
+            "indexing_mode": "xy",
+            "k": 0,
+            "flip_x": False,
+            "flip_y": False,
+            "flip_order": "yx",
+        },
+        sim_display_rotate_k=0,
+        background_display_rotate_k=0,
+    )
+
+    assert records[0]["final_sim_caked_display"] == pytest.approx((40.6, 12.4))
+    assert records[0]["final_bg_caked_display"] == pytest.approx((40.5, 12.5))
+
+
 def test_build_geometry_fit_overlay_records_keeps_unmatched_initial_pairs_visible():
     records = build_geometry_fit_overlay_records(
         [
@@ -518,3 +563,37 @@ def test_compute_geometry_overlay_frame_diagnostics_projects_native_points_in_ca
     assert frame_diag["sim_display_med_px"] == pytest.approx(0.0)
     assert frame_diag["bg_display_med_px"] == pytest.approx(0.0)
     assert frame_warning == ""
+
+
+def test_visual_distance_summary_uses_the_same_caked_points_as_overlay_drawing():
+    records = [
+        {
+            "match_status": "matched",
+            "initial_sim_display": (900.0, 900.0),
+            "initial_bg_display": (910.0, 910.0),
+            "final_sim_display": (950.0, 950.0),
+            "final_bg_display": (10.0, 10.0),
+            "initial_sim_native": (1.0, 2.0),
+            "initial_bg_native": (3.0, 4.0),
+            "final_sim_native": (9.0, 9.0),
+            "final_bg_native": (10.0, 10.0),
+            "initial_sim_caked_display": (40.0, -10.0),
+            "initial_bg_caked_display": (41.0, -11.0),
+            "final_sim_caked_display": (40.7, -10.4),
+            "final_bg_caked_display": (40.6, -10.5),
+        }
+    ]
+
+    detector_summary = summarize_geometry_fit_overlay_visual_distances(records)
+    caked_summary = summarize_geometry_fit_overlay_visual_distances(
+        records,
+        show_caked_2d=True,
+        native_detector_coords_to_caked_display_coords=(
+            lambda col, row: (100.0 + float(col), 200.0 + float(row))
+        ),
+    )
+
+    assert detector_summary["final_distance_median"] > 1000.0
+    assert caked_summary["initial_distance_median"] == pytest.approx(2**0.5)
+    assert caked_summary["final_distance_median"] == pytest.approx(0.02**0.5)
+    assert caked_summary["worsened_count"] == pytest.approx(0.0)

@@ -782,234 +782,6 @@ def _geometry_fit_transform_driven_param_payload(
     }
 
 
-def _geometry_fit_detector_tilt_caked_angles(
-    detector_col: object,
-    detector_row: object,
-    params: Mapping[str, object] | None,
-    *,
-    pixel_size_m: object | None = None,
-) -> tuple[float, float] | None:
-    """Project one detector point to caked angles using gamma/Gamma detector tilt."""
-
-    if not isinstance(params, Mapping):
-        return None
-    try:
-        col = float(detector_col)
-        row = float(detector_row)
-        gamma_deg = float(params.get("gamma", 0.0))
-        Gamma_deg = float(params.get("Gamma", 0.0))
-    except Exception:
-        return None
-    if not (
-        np.isfinite(col) and np.isfinite(row) and np.isfinite(gamma_deg) and np.isfinite(Gamma_deg)
-    ):
-        return None
-    if abs(gamma_deg) <= 1.0e-12 and abs(Gamma_deg) <= 1.0e-12:
-        return None
-    center = _geometry_fit_center_from_params(params)
-    if center is None:
-        return None
-    try:
-        detector_distance = float(params.get("corto_detector", np.nan))
-    except Exception:
-        return None
-    if pixel_size_m is None:
-        pixel_size_value = _fit_space_pixel_size_provenance(params).get("value", np.nan)
-    else:
-        pixel_size_value = pixel_size_m
-    try:
-        pixel_size = float(pixel_size_value)
-    except Exception:
-        return None
-    if (
-        not np.isfinite(detector_distance)
-        or detector_distance <= 0.0
-        or not np.isfinite(pixel_size)
-        or pixel_size <= 0.0
-    ):
-        return None
-
-    center_row, center_col = center
-    x_det = (float(col) - float(center_col)) * float(pixel_size)
-    y_det = (float(row) - float(center_row)) * float(pixel_size)
-    gamma_rad = math.radians(float(gamma_deg))
-    Gamma_rad = math.radians(float(Gamma_deg))
-    cg = math.cos(gamma_rad)
-    sg = math.sin(gamma_rad)
-    cG = math.cos(Gamma_rad)
-    sG = math.sin(Gamma_rad)
-    r_x_det = np.array(
-        [
-            [1.0, 0.0, 0.0],
-            [0.0, cg, sg],
-            [0.0, -sg, cg],
-        ],
-        dtype=np.float64,
-    )
-    r_z_det = np.array(
-        [
-            [cG, sG, 0.0],
-            [-sG, cG, 0.0],
-            [0.0, 0.0, 1.0],
-        ],
-        dtype=np.float64,
-    )
-    n_detector = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-    n_det_rot = r_z_det @ (r_x_det @ n_detector)
-    norm = float(np.linalg.norm(n_det_rot))
-    if norm <= 0.0 or not np.isfinite(norm):
-        return None
-    n_det_rot = n_det_rot / norm
-    unit_x = np.array([1.0, 0.0, 0.0], dtype=np.float64)
-    e1_det = unit_x - float(np.dot(unit_x, n_det_rot)) * n_det_rot
-    e1_norm = float(np.linalg.norm(e1_det))
-    if e1_norm <= 1.0e-14 or not np.isfinite(e1_norm):
-        e1_det = unit_x
-    else:
-        e1_det = e1_det / e1_norm
-    e2_det = -np.cross(n_det_rot, e1_det)
-    e2_norm = float(np.linalg.norm(e2_det))
-    if e2_norm <= 1.0e-14 or not np.isfinite(e2_norm):
-        e2_det = np.array([0.0, 0.0, 1.0], dtype=np.float64)
-    else:
-        e2_det = e2_det / e2_norm
-
-    detector_point = (
-        np.array([0.0, float(detector_distance), 0.0], dtype=np.float64)
-        + float(x_det) * e1_det
-        + float(y_det) * e2_det
-    )
-    ray_norm = float(np.linalg.norm(detector_point))
-    if ray_norm <= 0.0 or not np.isfinite(ray_norm):
-        return None
-    u_f = detector_point / ray_norm
-    u_i = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-    cos_two_theta = float(np.clip(np.dot(u_f, u_i), -1.0, 1.0))
-    two_theta = math.degrees(math.acos(cos_two_theta))
-    transverse = u_f - cos_two_theta * u_i
-    transverse_norm = float(np.linalg.norm(transverse))
-    if transverse_norm <= 1.0e-14 or not np.isfinite(transverse_norm):
-        raw_phi = 135.0
-    else:
-        raw_phi = math.degrees(math.atan2(float(transverse[2]), float(transverse[0])))
-    phi = float(raw_phi_to_gui_phi(raw_phi))
-    if not (np.isfinite(two_theta) and np.isfinite(phi)):
-        return None
-    return float(two_theta), float(phi)
-
-
-def _apply_geometry_fit_detector_tilt_caked_projection(
-    rows: Sequence[Mapping[str, object]] | None,
-    params: Mapping[str, object] | None,
-    *,
-    pixel_size_m: object | None = None,
-) -> list[dict[str, object]]:
-    """Update caked row coordinates with detector-tilt-aware angular projection."""
-
-    projected_rows = [dict(row) for row in rows or () if isinstance(row, Mapping)]
-    if not projected_rows:
-        return []
-
-    def _finite_pair(
-        row: Mapping[str, object], x_key: str, y_key: str
-    ) -> tuple[float, float] | None:
-        try:
-            point = (float(row.get(x_key, np.nan)), float(row.get(y_key, np.nan)))
-        except Exception:
-            return None
-        if np.isfinite(point[0]) and np.isfinite(point[1]):
-            return float(point[0]), float(point[1])
-        return None
-
-    def _tuple_pair(row: Mapping[str, object], key: str) -> tuple[float, float] | None:
-        value = row.get(key)
-        if not isinstance(value, (list, tuple, np.ndarray)) or len(value) < 2:
-            return None
-        try:
-            point = (float(value[0]), float(value[1]))
-        except Exception:
-            return None
-        if np.isfinite(point[0]) and np.isfinite(point[1]):
-            return float(point[0]), float(point[1])
-        return None
-
-    updated: list[dict[str, object]] = []
-    for row in projected_rows:
-        detector_point = None
-        for tuple_key in (
-            "sim_refined_detector_native_px",
-            "geometry_detector_native_px",
-            "raw_detector_native_px",
-        ):
-            detector_point = _tuple_pair(row, tuple_key)
-            if detector_point is not None:
-                break
-        if detector_point is None:
-            for x_key, y_key in (
-                ("refined_sim_native_x", "refined_sim_native_y"),
-                ("native_col", "native_row"),
-                ("sim_native_x", "sim_native_y"),
-                ("detector_native_col", "detector_native_row"),
-                ("sim_detector_anchor_x", "sim_detector_anchor_y"),
-            ):
-                detector_point = _finite_pair(row, x_key, y_key)
-                if detector_point is not None:
-                    break
-        if detector_point is None:
-            for tuple_key in (
-                "sim_refined_detector_display_px",
-                "fit_prediction_detector_display_px",
-            ):
-                detector_point = _tuple_pair(row, tuple_key)
-                if detector_point is not None:
-                    break
-        if detector_point is None:
-            for x_key, y_key in (
-                ("refined_sim_x", "refined_sim_y"),
-                ("sim_col", "sim_row"),
-                ("display_col", "display_row"),
-                ("sim_col_raw", "sim_row_raw"),
-                ("simulated_detector_x", "simulated_detector_y"),
-            ):
-                detector_point = _finite_pair(row, x_key, y_key)
-                if detector_point is not None:
-                    break
-        if detector_point is None:
-            updated.append(row)
-            continue
-        caked_point = _geometry_fit_detector_tilt_caked_angles(
-            detector_point[0],
-            detector_point[1],
-            params,
-            pixel_size_m=pixel_size_m,
-        )
-        if caked_point is None:
-            updated.append(row)
-            continue
-        two_theta, phi = caked_point
-        for x_key, y_key in (
-            ("caked_x", "caked_y"),
-            ("raw_caked_x", "raw_caked_y"),
-            ("two_theta_deg", "phi_deg"),
-            ("simulated_two_theta_deg", "simulated_phi_deg"),
-            ("refined_sim_caked_x", "refined_sim_caked_y"),
-            ("sim_refined_caked_x", "sim_refined_caked_y"),
-        ):
-            row[x_key] = float(two_theta)
-            row[y_key] = float(phi)
-        for tuple_key in (
-            "dynamic_baseline_anchor_caked_deg",
-            "sim_nominal_caked_deg_from_source_row_diagnostic",
-            "sim_visual_caked_deg",
-            "sim_caked_display",
-            "saved_refined_sim_caked_anchor_deg",
-        ):
-            row[tuple_key] = [float(two_theta), float(phi)]
-        row["detector_tilt_caked_projection_applied"] = True
-        updated.append(row)
-    return updated
-
-
 def _geometry_fit_exact_caked_bundle_param_payload(
     params: Mapping[str, object] | None,
 ) -> dict[str, object]:
@@ -23385,6 +23157,23 @@ def build_geometry_fit_overlay_diagnostic_lines(
         f"sim_display_p90_px={float(diag.get('sim_display_p90_px', np.nan)):.3f}",
         f"bg_display_p90_px={float(diag.get('bg_display_p90_px', np.nan)):.3f}",
     ]
+    visual_initial_med = _geometry_fit_metric_float(
+        diag.get("initial_distance_median", np.nan)
+    )
+    visual_final_med = _geometry_fit_metric_float(diag.get("final_distance_median", np.nan))
+    visual_delta_med = _geometry_fit_metric_float(diag.get("delta_distance_median", np.nan))
+    if np.isfinite(visual_initial_med) or np.isfinite(visual_final_med):
+        lines.extend(
+            [
+                f"visual_initial_distance_med={visual_initial_med:.3f}",
+                f"visual_final_distance_med={visual_final_med:.3f}",
+                f"visual_delta_distance_med={visual_delta_med:.3f}",
+                "visual_improved={improved} visual_worsened={worsened}".format(
+                    improved=int(float(diag.get("improved_count", 0.0)) or 0),
+                    worsened=int(float(diag.get("worsened_count", 0.0)) or 0),
+                ),
+            ]
+        )
     mode_label = _geometry_fit_selected_discrete_mode_label(result)
     if mode_label:
         lines.insert(1, f"solver_discrete_mode={mode_label}")
@@ -23545,6 +23334,7 @@ def build_geometry_fit_progress_text(
     save_path: object,
     log_path: object,
     frame_warning: str | None,
+    frame_diag: Mapping[str, object] | None = None,
     result: object | None = None,
 ) -> str:
     """Build the final geometry-fit status text shown in the GUI."""
@@ -23583,6 +23373,20 @@ def build_geometry_fit_progress_text(
         "background points, green circles=fitted simulated peaks, dashed "
         "arrows=initial->fitted sim shifts."
     )
+    visual_distance_line = ""
+    diag = frame_diag if isinstance(frame_diag, Mapping) else {}
+    initial_visual_med = _geometry_fit_metric_float(
+        diag.get("initial_distance_median", np.nan)
+    )
+    final_visual_med = _geometry_fit_metric_float(diag.get("final_distance_median", np.nan))
+    if np.isfinite(initial_visual_med) and np.isfinite(final_visual_med):
+        delta_visual_med = float(final_visual_med - initial_visual_med)
+        visual_status = "improved" if delta_visual_med <= 0.0 else "worse"
+        visual_distance_line = (
+            "Visual overlay median distance: "
+            f"initial={initial_visual_med:.2f}, fitted={final_visual_med:.2f} "
+            f"({visual_status})"
+        )
     dist_report_lines = build_geometry_fit_pixel_offset_lines(pixel_offsets)
     dist_report = "\n".join(dist_report_lines)
     return (
@@ -23593,6 +23397,7 @@ def build_geometry_fit_progress_text(
         + (f" | joint backgrounds={int(dataset_count)}" if joint_background_mode else "")
         + "\n"
         + overlay_hint
+        + (f"\n{visual_distance_line}" if visual_distance_line else "")
         + (f"\n{frame_warning}" if frame_warning else "")
         + f"\nSaved {int(export_record_count)} peak records → {save_path}"
         + f"\nPixel offsets:\n{dist_report}"
@@ -23712,6 +23517,7 @@ def postprocess_geometry_fit_result(
         save_path=save_path,
         log_path=log_path,
         frame_warning=frame_warning,
+        frame_diag=frame_diag,
         result=result,
     )
     overlay_state = {

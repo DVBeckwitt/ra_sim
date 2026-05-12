@@ -274,13 +274,13 @@ def draw_geometry_fit_overlay(
         display_key: str,
         native_key: str,
     ) -> tuple[float, float] | None:
-        if show_caked_2d and native_detector_coords_to_caked_display_coords is not None:
+        if show_caked_2d:
             caked_display_key = display_key.replace("_display", "_caked_display")
             caked_point = _parse_point(entry.get(caked_display_key))
             if caked_point is not None:
                 return caked_point
             native_point = _parse_point(entry.get(native_key))
-            if native_point is not None:
+            if native_point is not None and native_detector_coords_to_caked_display_coords is not None:
                 try:
                     projected = native_detector_coords_to_caked_display_coords(
                         float(native_point[0]),
@@ -474,12 +474,11 @@ def draw_geometry_fit_overlay(
             zorder=8,
         )
 
-        residual_dist = float(entry.get("overlay_distance_px", np.nan))
-        if not np.isfinite(residual_dist):
-            residual_dist = math.hypot(
-                final_sim_display[0] - final_bg_display[0],
-                final_sim_display[1] - final_bg_display[1],
-            )
+        residual_dist = math.hypot(
+            final_sim_display[0] - final_bg_display[0],
+            final_sim_display[1] - final_bg_display[1],
+        )
+        residual_units = "deg" if show_caked_2d else "px"
         _plot_arrow(
             final_sim_display,
             final_bg_display,
@@ -487,7 +486,7 @@ def draw_geometry_fit_overlay(
             linestyle="-",
             lw=1.1,
             alpha=0.9,
-            annotate=f"|Δ|={residual_dist:.1f}px",
+            annotate=f"|Δ|={residual_dist:.1f}{residual_units}",
         )
 
     draw_idle()

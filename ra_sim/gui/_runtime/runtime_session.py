@@ -43514,14 +43514,6 @@ def _run_async_geometry_fit_worker_job(
                 background_index,
                 projection_callbacks.project_peaks_to_current_view(normalized_rows),
             )
-            if normalized_mode == "caked":
-                projected_rows = (
-                    gui_geometry_fit._apply_geometry_fit_detector_tilt_caked_projection(
-                        projected_rows,
-                        params_local,
-                        pixel_size_m=float(pixel_size_m),
-                    )
-                )
             return projected_rows
         except Exception:
             if normalized_mode == "q_space":

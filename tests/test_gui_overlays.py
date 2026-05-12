@@ -66,8 +66,51 @@ def test_draw_geometry_fit_overlay_renders_markers_labels_and_residual_arrow() -
 
         assert len(geometry_pick_artists) >= 5
         assert any("fit sim" in label for label in labels)
-        assert any("|Δ|=2.5px" in label for label in labels)
+        assert any("|Δ|=5.7px" in label for label in labels)
         assert draws == ["draw"]
+    finally:
+        plt.close(fig)
+
+
+def test_draw_geometry_fit_overlay_labels_caked_view_distance_from_drawn_points() -> None:
+    fig, ax = plt.subplots()
+    try:
+        geometry_pick_artists: list[object] = []
+        draws: list[str] = []
+
+        def _clear(*, redraw: bool = True) -> None:
+            overlays.clear_artists(
+                geometry_pick_artists,
+                draw_idle=lambda: draws.append("clear"),
+                redraw=redraw,
+            )
+
+        overlays.draw_geometry_fit_overlay(
+            ax,
+            [
+                {
+                    "hkl": (0, 0, 6),
+                    "initial_sim_display": (900.0, 900.0),
+                    "initial_bg_display": (910.0, 910.0),
+                    "final_sim_display": (950.0, 950.0),
+                    "final_bg_display": (10.0, 10.0),
+                    "initial_sim_caked_display": (40.0, -10.0),
+                    "initial_bg_caked_display": (41.0, -11.0),
+                    "final_sim_caked_display": (40.7, -10.4),
+                    "final_bg_caked_display": (40.6, -10.5),
+                    "overlay_distance_px": 1234.0,
+                }
+            ],
+            geometry_pick_artists=geometry_pick_artists,
+            clear_geometry_pick_artists=_clear,
+            draw_idle=lambda: draws.append("draw"),
+            show_caked_2d=True,
+        )
+
+        labels = [artist.get_text() for artist in ax.texts]
+
+        assert any("|Δ|=0.1deg" in label for label in labels)
+        assert not any("|Δ|=1234.0px" in label for label in labels)
     finally:
         plt.close(fig)
 

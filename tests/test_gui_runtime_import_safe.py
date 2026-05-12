@@ -18626,72 +18626,6 @@ def test_worker_dataset_cached_projected_rows_skip_second_caked_projection(
     assert observed_projected_rows[0]["_geometry_fit_worker_projection_background_index"] == 0
 
 
-def test_geometry_fit_detector_tilt_caked_projection_updates_trial_angles() -> None:
-    geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
-    params = {
-        "center": [1.0, 1.0],
-        "corto_detector": 0.5,
-        "pixel_size_m": 1.0e-4,
-        "gamma": 2.0,
-        "Gamma": -3.0,
-    }
-    rows = [
-        {
-            "sim_col": 10.0,
-            "sim_row": 20.0,
-            "caked_x": 99.0,
-            "caked_y": -99.0,
-            "dynamic_baseline_anchor_caked_deg": [99.0, -99.0],
-        }
-    ]
-
-    expected = geometry_fit._geometry_fit_detector_tilt_caked_angles(
-        10.0,
-        20.0,
-        params,
-        pixel_size_m=1.0e-4,
-    )
-    updated = geometry_fit._apply_geometry_fit_detector_tilt_caked_projection(
-        rows,
-        params,
-        pixel_size_m=1.0e-4,
-    )
-
-    assert expected is not None
-    assert updated[0]["detector_tilt_caked_projection_applied"] is True
-    assert updated[0]["caked_x"] == pytest.approx(expected[0])
-    assert updated[0]["caked_y"] == pytest.approx(expected[1])
-    assert updated[0]["simulated_two_theta_deg"] == pytest.approx(expected[0])
-    assert updated[0]["simulated_phi_deg"] == pytest.approx(expected[1])
-    assert updated[0]["dynamic_baseline_anchor_caked_deg"] == [
-        pytest.approx(expected[0]),
-        pytest.approx(expected[1]),
-    ]
-    assert rows[0]["caked_x"] == 99.0
-
-
-def test_geometry_fit_detector_tilt_caked_projection_leaves_zero_tilt_rows_unchanged() -> None:
-    geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
-    params = {
-        "center": [1.0, 1.0],
-        "corto_detector": 0.5,
-        "pixel_size_m": 1.0e-4,
-        "gamma": 0.0,
-        "Gamma": 0.0,
-    }
-    row = {"sim_col": 10.0, "sim_row": 20.0, "caked_x": 12.0, "caked_y": -4.0}
-
-    updated = geometry_fit._apply_geometry_fit_detector_tilt_caked_projection(
-        [row],
-        params,
-        pixel_size_m=1.0e-4,
-    )
-
-    assert updated == [row]
-    assert "detector_tilt_caked_projection_applied" not in updated[0]
-    assert updated[0] is not row
-
-
 def test_geometry_fit_progress_text_reports_dynamic_fit_rms_separately() -> None:
     geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
 
@@ -18882,11 +18816,6 @@ def test_worker_trial_source_rows_reproject_prebuilt_cache_in_caked_fit_space(
         runtime_session.gui_manual_geometry,
         "make_runtime_geometry_manual_projection_callbacks",
         lambda **kwargs: _ProjectionCallbacks(**kwargs),
-    )
-    monkeypatch.setattr(
-        runtime_session.gui_geometry_fit,
-        "_apply_geometry_fit_detector_tilt_caked_projection",
-        lambda rows, _params, **_kwargs: [dict(row) for row in rows or ()],
     )
     monkeypatch.setattr(
         runtime_session.gui_geometry_fit,

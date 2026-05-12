@@ -1111,6 +1111,83 @@ def normalize_initial_geometry_pairs_display(
     return normalized
 
 
+def _parse_overlay_point(value: object) -> tuple[float, float] | None:
+    if not isinstance(value, (list, tuple, np.ndarray)) or len(value) < 2:
+        return None
+    try:
+        col = float(value[0])
+        row = float(value[1])
+    except Exception:
+        return None
+    if not (np.isfinite(col) and np.isfinite(row)):
+        return None
+    return float(col), float(row)
+
+
+def _parse_overlay_entry_pair(
+    entry: Mapping[str, object],
+    x_key: str,
+    y_key: str,
+) -> tuple[float, float] | None:
+    try:
+        col = float(entry.get(x_key, np.nan))
+        row = float(entry.get(y_key, np.nan))
+    except Exception:
+        return None
+    if not (np.isfinite(col) and np.isfinite(row)):
+        return None
+    return float(col), float(row)
+
+
+def _first_overlay_entry_point(
+    entry: Mapping[str, object],
+    *candidates: object,
+) -> tuple[float, float] | None:
+    for candidate in candidates:
+        if (
+            isinstance(candidate, tuple)
+            and len(candidate) == 2
+            and isinstance(candidate[0], str)
+            and isinstance(candidate[1], str)
+        ):
+            point = _parse_overlay_entry_pair(entry, candidate[0], candidate[1])
+        else:
+            point = _parse_overlay_point(entry.get(str(candidate)))
+        if point is not None:
+            return point
+    return None
+
+
+def _resolve_overlay_display_point(
+    entry: Mapping[str, object],
+    *,
+    display_key: str,
+    native_key: str,
+    show_caked_2d: bool = False,
+    native_detector_coords_to_caked_display_coords: (
+        Callable[[float, float], tuple[float, float] | None] | None
+    ) = None,
+) -> tuple[float, float] | None:
+    if show_caked_2d:
+        caked_display_key = display_key.replace("_display", "_caked_display")
+        caked_point = _parse_overlay_point(entry.get(caked_display_key))
+        if caked_point is not None:
+            return caked_point
+        native_point = _parse_overlay_point(entry.get(native_key))
+        if native_point is not None and native_detector_coords_to_caked_display_coords is not None:
+            try:
+                projected = native_detector_coords_to_caked_display_coords(
+                    float(native_point[0]),
+                    float(native_point[1]),
+                )
+            except Exception:
+                projected = None
+            projected_point = _parse_overlay_point(projected)
+            if projected_point is not None:
+                return projected_point
+    return _parse_overlay_point(entry.get(display_key))
+
+
 def build_geometry_fit_overlay_records(
     initial_pairs_display: Sequence[dict[str, object]] | None,
     point_match_diagnostics: Sequence[dict[str, object]] | None,
@@ -1363,6 +1440,29 @@ def build_geometry_fit_overlay_records(
                     float(initial_bg_caked_display[0]),
                     float(initial_bg_caked_display[1]),
                 )
+            final_sim_caked_display = _first_overlay_entry_point(
+                raw_entry,
+                ("simulated_two_theta_deg", "simulated_phi_deg"),
+                "predicted_caked_deg",
+                "manual_qr_fit_source_caked_deg",
+                "projected_caked_deg",
+            )
+            final_bg_caked_display = _first_overlay_entry_point(
+                raw_entry,
+                ("measured_two_theta_deg", "measured_phi_deg"),
+                "observed_caked_deg",
+                "manual_qr_fit_target_caked_deg",
+            )
+            if final_sim_caked_display is not None:
+                record["final_sim_caked_display"] = (
+                    float(final_sim_caked_display[0]),
+                    float(final_sim_caked_display[1]),
+                )
+            if final_bg_caked_display is not None:
+                record["final_bg_caked_display"] = (
+                    float(final_bg_caked_display[0]),
+                    float(final_bg_caked_display[1]),
+                )
             record["simulated_frame"] = "sim_native"
             record["measured_frame"] = "fit_oriented"
             try:
@@ -1381,6 +1481,139 @@ def build_geometry_fit_overlay_records(
         records.append(record)
 
     return records
+
+
+def _overlay_distance_stats(distances: Sequence[float]) -> dict[str, float]:
+    values = np.asarray([float(value) for value in distances], dtype=np.float64)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return {
+            "count": 0.0,
+            "mean": float("nan"),
+            "median": float("nan"),
+            "p90": float("nan"),
+            "max": float("nan"),
+        }
+    return {
+        "count": float(values.size),
+        "mean": float(np.mean(values)),
+        "median": float(np.median(values)),
+        "p90": float(np.percentile(values, 90.0)),
+        "max": float(np.max(values)),
+    }
+
+
+def summarize_geometry_fit_overlay_visual_distances(
+    overlay_records: Sequence[dict[str, object]] | None,
+    *,
+    show_caked_2d: bool = False,
+    native_detector_coords_to_caked_display_coords: (
+        Callable[[float, float], tuple[float, float] | None] | None
+    ) = None,
+) -> dict[str, float]:
+    """Summarize visible sim-to-background distances from overlay records."""
+
+    initial_distances: list[float] = []
+    final_distances: list[float] = []
+    paired_delta_distances: list[float] = []
+    improved_count = 0
+    worsened_count = 0
+    unchanged_count = 0
+    paired_records = 0
+
+    for raw_entry in overlay_records or []:
+        if not isinstance(raw_entry, Mapping):
+            continue
+        status = str(raw_entry.get("match_status", "matched")).strip().lower()
+        initial_sim = _resolve_overlay_display_point(
+            raw_entry,
+            display_key="initial_sim_display",
+            native_key="initial_sim_native",
+            show_caked_2d=show_caked_2d,
+            native_detector_coords_to_caked_display_coords=(
+                native_detector_coords_to_caked_display_coords
+            ),
+        )
+        initial_bg = _resolve_overlay_display_point(
+            raw_entry,
+            display_key="initial_bg_display",
+            native_key="initial_bg_native",
+            show_caked_2d=show_caked_2d,
+            native_detector_coords_to_caked_display_coords=(
+                native_detector_coords_to_caked_display_coords
+            ),
+        )
+        final_sim = _resolve_overlay_display_point(
+            raw_entry,
+            display_key="final_sim_display",
+            native_key="final_sim_native",
+            show_caked_2d=show_caked_2d,
+            native_detector_coords_to_caked_display_coords=(
+                native_detector_coords_to_caked_display_coords
+            ),
+        )
+        final_bg = _resolve_overlay_display_point(
+            raw_entry,
+            display_key="final_bg_display",
+            native_key="final_bg_native",
+            show_caked_2d=show_caked_2d,
+            native_detector_coords_to_caked_display_coords=(
+                native_detector_coords_to_caked_display_coords
+            ),
+        )
+        if initial_sim is not None and initial_bg is not None:
+            initial_dist = float(
+                math.hypot(
+                    initial_sim[0] - initial_bg[0],
+                    initial_sim[1] - initial_bg[1],
+                )
+            )
+            initial_distances.append(initial_dist)
+        else:
+            initial_dist = float("nan")
+        if status == "matched" and final_sim is not None and final_bg is not None:
+            final_dist = float(
+                math.hypot(
+                    final_sim[0] - final_bg[0],
+                    final_sim[1] - final_bg[1],
+                )
+            )
+            final_distances.append(final_dist)
+        else:
+            final_dist = float("nan")
+        if np.isfinite(initial_dist) and np.isfinite(final_dist):
+            paired_records += 1
+            delta = float(final_dist - initial_dist)
+            paired_delta_distances.append(delta)
+            if delta < -1.0e-9:
+                improved_count += 1
+            elif delta > 1.0e-9:
+                worsened_count += 1
+            else:
+                unchanged_count += 1
+
+    initial_stats = _overlay_distance_stats(initial_distances)
+    final_stats = _overlay_distance_stats(final_distances)
+    delta_stats = _overlay_distance_stats(paired_delta_distances)
+    return {
+        "paired_visual_records": float(paired_records),
+        "initial_distance_count": float(initial_stats["count"]),
+        "initial_distance_mean": float(initial_stats["mean"]),
+        "initial_distance_median": float(initial_stats["median"]),
+        "initial_distance_p90": float(initial_stats["p90"]),
+        "initial_distance_max": float(initial_stats["max"]),
+        "final_distance_count": float(final_stats["count"]),
+        "final_distance_mean": float(final_stats["mean"]),
+        "final_distance_median": float(final_stats["median"]),
+        "final_distance_p90": float(final_stats["p90"]),
+        "final_distance_max": float(final_stats["max"]),
+        "delta_distance_mean": float(delta_stats["mean"]),
+        "delta_distance_median": float(delta_stats["median"]),
+        "delta_distance_p90": float(delta_stats["p90"]),
+        "improved_count": float(improved_count),
+        "worsened_count": float(worsened_count),
+        "unchanged_count": float(unchanged_count),
+    }
 
 
 def compute_geometry_overlay_frame_diagnostics(
@@ -1411,13 +1644,13 @@ def compute_geometry_overlay_frame_diagnostics(
         display_key: str,
         native_key: str,
     ) -> tuple[float, float] | None:
-        if show_caked_2d and native_detector_coords_to_caked_display_coords is not None:
+        if show_caked_2d:
             caked_display_key = display_key.replace("_display", "_caked_display")
             caked_point = _parse_point(entry.get(caked_display_key))
             if caked_point is not None:
                 return caked_point
             native_point = _parse_point(entry.get(native_key))
-            if native_point is not None:
+            if native_point is not None and native_detector_coords_to_caked_display_coords is not None:
                 try:
                     projected = native_detector_coords_to_caked_display_coords(
                         float(native_point[0]),
@@ -1472,6 +1705,14 @@ def compute_geometry_overlay_frame_diagnostics(
                 float(math.hypot(final_bg[0] - initial_bg[0], final_bg[1] - initial_bg[1]))
             )
 
+    visual_stats = summarize_geometry_fit_overlay_visual_distances(
+        overlay_records,
+        show_caked_2d=show_caked_2d,
+        native_detector_coords_to_caked_display_coords=(
+            native_detector_coords_to_caked_display_coords
+        ),
+    )
+
     stats: dict[str, float] = {
         "overlay_record_count": float(len(list(overlay_records or []))),
         "paired_records": float(paired_records),
@@ -1487,6 +1728,7 @@ def compute_geometry_overlay_frame_diagnostics(
         "bg_display_p90_px": float(np.percentile(bg_frame_dists, 90.0))
         if bg_frame_dists
         else float("nan"),
+        **visual_stats,
     }
 
     warning = ""
@@ -1502,6 +1744,19 @@ def compute_geometry_overlay_frame_diagnostics(
         warning = (
             "Frame mismatch suspect: fitted simulation overlay points do not land in the "
             "same display frame as the fixed background picks."
+        )
+    initial_visual_med = float(stats.get("initial_distance_median", np.nan))
+    final_visual_med = float(stats.get("final_distance_median", np.nan))
+    if (
+        not warning
+        and int(stats.get("paired_visual_records", 0.0)) >= 3
+        and np.isfinite(initial_visual_med)
+        and np.isfinite(final_visual_med)
+        and final_visual_med > initial_visual_med + max(5.0, 0.1 * initial_visual_med)
+    ):
+        warning = (
+            "Visual fit suspect: fitted simulation overlay points are farther from the "
+            "saved background picks than the starting simulation points."
         )
 
     return stats, warning
