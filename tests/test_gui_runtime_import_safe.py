@@ -26316,7 +26316,7 @@ def test_runtime_session_selected_qr_rod_profile_cache_semantics(
         "qz_edges": np.asarray([0.0, 1.0, 2.0], dtype=float),
         "radial_axis": np.asarray([10.0, 20.0], dtype=float),
         "azimuth_axis": np.asarray([-5.0, 5.0], dtype=float),
-        "caked_projection_signature": ("projection", 1),
+        "caked_projection_signature": ("projection", {"bundle": {"token": 1}}),
         "delta_qr": 0.1,
         "qz_min": 0.0,
         "qz_max": 2.0,
@@ -26365,7 +26365,10 @@ def test_runtime_session_selected_qr_rod_profile_cache_semantics(
         "rod-b",
     )
     changed_shared = dict(shared)
-    changed_shared["caked_projection_signature"] = ("projection", 2)
+    changed_shared["caked_projection_signature"] = (
+        "projection",
+        {"bundle": {"token": 2}},
+    )
     changed_projection = runtime_session._selected_qr_rod_caked_profile_from_shared_inputs(
         changed_shared,
         {},

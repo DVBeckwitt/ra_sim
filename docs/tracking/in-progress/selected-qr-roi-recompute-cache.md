@@ -1,6 +1,6 @@
 # Selected-Qr ROI Recompute Cache
 
-Status: implemented and partially validated on 2026-05-01.
+Status: implemented. Cache-crash follow-up fixed and validated on 2026-05-12.
 
 ## Problem
 
@@ -27,3 +27,37 @@ profile summing path did not reuse previous per-bin components.
 - `git diff --check` passed.
 - Full requested target set had one unrelated existing failure:
   `test_runtime_session_hkl_pick_builds_grouped_cache_from_stored_raw_peak_rows`.
+
+## 2026-05-12 Cache-Crash Follow-Up
+
+Bug/error status:
+
+- Fixed: restored GUI states can enable Selected-Qr rod ROI when the caked
+  projection signature contains nested projection-token dictionaries.
+- Root cause: the profile and component cache keys used the nested
+  `caked_projection_signature` directly, so `OrderedDict` lookup raised
+  `TypeError: unhashable type: 'dict'`.
+- Change: the selected-Qr profile and component cache signatures now digest
+  the caked projection signature with the existing timing-signature helper
+  before cache lookup.
+- Public interfaces: unchanged. No GUI control, saved-state field, CLI flag,
+  config key, artifact schema, dependency, CI pipeline, or migration path was
+  added.
+- Deprecation/migration: none. Existing saved Bi2Te3/Bi2S3-style states keep
+  the same state format; only the internal runtime cache key is normalized.
+- Shipping status: ready for local use after focused validation. Rollback is
+  the two-line cache-key digest change plus the matching regression-test update.
+
+Validation:
+
+- Reproduced the original failure in
+  `test_runtime_session_selected_qr_rod_profile_cache_semantics` before the
+  runtime change.
+- `python -m pytest tests/test_gui_runtime_import_safe.py::test_runtime_session_selected_qr_rod_profile_cache_semantics -ra`
+  passed.
+- `python -m pytest tests/test_gui_runtime_import_safe.py -k selected_qr_rod -ra`
+  passed: 39 selected-Qr tests.
+- `python -m pytest tests/test_gui_views.py tests/test_gui_state_io.py -ra`
+  passed: 78 GUI view/state tests.
+- `python -m ra_sim.dev check` passed: ruff format/check, ruff lint, fast
+  pytest tier, and mypy.
