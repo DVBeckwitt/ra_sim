@@ -5,7 +5,8 @@ Owner: -
 Issue: none
 Priority: p1
 Last updated: 2026-05-12
-Status: implemented locally, Qr-rod editor startup fixed, focused validation passing
+Status: implemented locally, Qr-rod editor startup fixed, detector companion
+preview/deferred Delta Qr validation passing
 
 ## Problem
 
@@ -84,10 +85,28 @@ to make the Qr rod detector and integration figures source-consistent:
   with integer x-axis ticks. Dragging/clicking still saves marker positions as
   Qz through the panel's Qz-to-L mapping.
 - The same Qr-rod editor now includes Delta Qr, `L Min`, and `L Max` controls.
-  Delta Qr changes refresh the integrated profile table drawn in every subplot
-  by reusing the existing detector Qr/Qz profile accumulator, and accepted
-  Delta Qr/L values are applied to the profile rows used by the final joint Qz
-  fit and cache key.
+  Delta Qr slider movement updates the detector companion preview immediately
+  and marks integrated profile rows dirty; the expensive detector Qr/Qz profile
+  accumulator is run once on slider release or accept. `L Min` and `L Max`
+  submissions still refresh the preview and profile table once immediately.
+  Accepted Delta Qr/L values are applied to the profile rows used by the final
+  joint Qz fit and cache key.
+- Popup-mode Qr-rod marker editing now opens a read-only detector companion
+  figure titled `Qr rod detector region preview` before the blocking marker
+  editor show call. The preview uses the current detector image, Qr/Qz maps,
+  selected Qr-rod Delta-Qr bands, and the central `HK=0` / `00L` band so marker
+  edits, Delta Qr, and L-window adjustments can be made while the detector
+  regions are visible.
+- The detector companion preview now refreshes its Qr-region overlays whenever
+  the unified editor's Delta Qr slider or `L Min` / `L Max` controls change.
+  The detector image remains static; only the existing overlay artists are
+  removed and redrawn with the current Delta Qr and marker-derived L window.
+- Delta Qr drag now updates only the companion detector overlays until the
+  slider is released or the editor is accepted. This keeps the high-frequency
+  UI path responsive while preserving final profile/fitting correctness.
+- The marker editor now explicitly calls `show(warn=False)` on companion
+  figures before entering the blocking Matplotlib event loop, so the detector
+  preview window is mapped as well as redrawn.
 - Each Qr-rod peak marker now has an editable final-figure title. Blank titles
   fall back to `L=<rounded display_l>`, and the editor `Label` text box sets
   the exact text used when the final Qr-rod figure is drawn.
@@ -202,6 +221,23 @@ Feature status:
   the final detector selected-region save path consumes unified-editor label
   entries when present and otherwise draws the generated defaults without
   opening a second popup.
+- The unified Qr-rod editor now also receives a detector companion figure in
+  popup mode. This is display-only context for the operator and does not alter
+  Qr/Qz maps, fit inputs, cache signatures, exported artifact schemas, or
+  headless/skip behavior.
+- The detector companion figure is now wired to the unified editor's existing
+  region-control refresh path. Delta Qr edits redraw the preview overlays using
+  the current marker table and defer profile reintegration until release or
+  accept; L-window text submissions perform one immediate profile refresh.
+  This is still display-only/workflow behavior and does not add a CLI/config/
+  saved-state surface.
+- The companion preview show path now explicitly maps the preview figure before
+  `plt.show(block=True)`, while the marker editor close event still closes the
+  companion window.
+- 2026-05-12 closeout: the final simplification pass only collapsed duplicate
+  detector-preview band rendering into a local helper. It did not add files,
+  dependencies, public interfaces, config keys, saved-state fields, artifact
+  fields, CI jobs, or deployment automation.
 - Qr-rod peak marker editing is implemented in the diagnostic `.py` with
   default `RA_SIM_QR_ROD_PEAK_EDIT_MODE=auto`; `popup` forces the editor, `skip`
   disables it for unattended runs, and optional JSON round trip is available through
@@ -388,6 +424,40 @@ Passing checks:
   the former `NameError` path is cleared without requiring a blocking popup.
 - Compile closeout passed for the touched diagnostic/test files:
   `python -m compileall -q scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py tests/test_background_peak_fits_notebook.py`.
+- Popup companion-preview regression coverage passed:
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "detector_qr_preview_is_passed or companion_figures_before_show" -ra`
+  with `2 passed`.
+- Live companion-preview refresh regression coverage passed:
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "region_controls_update_preview or detector_qr_preview_is_passed_to_unified_editor" -ra`
+  with `2 passed`.
+- Companion-window show regression coverage passed:
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "companion_figures_before_show or region_controls_update_preview or detector_qr_preview_is_passed_to_unified_editor" -ra`
+  with `3 passed`.
+- Delta Qr deferred-integration regression coverage passed:
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "region_controls_update_preview or delta_qr_refreshes_profile_table_on_release or accept_flushes_pending_profile_refresh" -ra`
+  with `3 passed`.
+- Compile closeout passed for the touched diagnostic/test files:
+  `python -m compileall scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py tests/test_background_peak_fits_notebook.py`.
+- Focused popup/editor regression coverage passed:
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "qr_rod_peak_editor or detector_qr_preview or companion_figures or unified_editor" -ra`
+  with `11 passed`.
+- Focused popup/editor live-preview closeout passed:
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "unified_editor or detector_qr_preview or companion_figures" -ra`
+  with `8 passed`.
+- Focused popup/editor deferred-integration closeout passed:
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "unified_editor or detector_qr_preview or companion_figures" -ra`
+  with `9 passed`.
+- Final local shipping-gate closeout for this slice passed the same focused
+  popup/editor regression command with `9 passed`, compiled the touched
+  diagnostic/test files, and passed
+  `git diff --check -- scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py tests/test_background_peak_fits_notebook.py`.
+- Project check passed for this worktree after the detector companion-preview
+  closeout: `python -m ra_sim.dev check` reported `All checks passed!`,
+  `281 passed`, and no mypy issues.
+- Runtime-safe PbI2 diagnostic script execution passed again with
+  `RA_SIM_HEADLESS=1 RA_SIM_QR_ROD_PEAK_EDIT_MODE=skip`; it reached
+  `Qr-rod region editor: mode=skip source=last_cached` and completed in the
+  guarded runner without constructing the popup-only detector preview.
 - Focused whitespace check passed:
   `git diff --check`
   The touched diagnostic/test files still contain older unrelated ruff-format
@@ -396,16 +466,13 @@ Passing checks:
 
 Known validation limits:
 
-- Full `tests/test_background_peak_fits_notebook.py` was rerun on 2026-05-11
-  after the unified Qr-rod editor slice. It still has four unrelated
-  notebook/script source-token expectation failures, with `130 passed`, `2
+- Full `tests/test_background_peak_fits_notebook.py` was rerun on 2026-05-12
+  after the detector companion-preview slice. It still has four unrelated
+  notebook/script source-token expectation failures, with `133 passed`, `2
   skipped`, and `4 failed`. The failures are
   the older missing `ROD_PROFILE_MAX_TWO_THETA_DEG = 60.0` and
   `"fit_model": "rotated_gaussian_plane"` notebook tokens plus the
   specular-region and sample-name override script-token expectations.
-- Current full project check is not green from this dirty worktree: focused
-  Qr-rod tests pass, but broad format/check gates still report unrelated
-  formatting drift outside this cleanup slice.
 - The 2026-05-10 Bi2Se3 weak-marker fix was validated with focused tests using
   embedded real-profile values, not a full real-sample script run.
 - The PbI2 headless diagnostic path has been rerun. The L3 star crop,

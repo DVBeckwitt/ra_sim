@@ -3684,10 +3684,75 @@ def test_parallel_script_unified_editor_has_region_controls() -> None:
         'region_control_state["rod_profile_table"]',
         "refresh_region_profile_table()",
         "fig._ra_sim_qr_rod_peak_edit_widgets",
+        'fig.canvas.mpl_connect("close_event", close_companion_figures)',
     ):
         assert token in function_source
     assert "region_state=region_control_state" in wrapper_source
     assert "profile_update_callback=profile_update_callback" in wrapper_source
+
+
+def test_parallel_script_qr_rod_peak_editor_draws_companion_figures_before_show(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    namespace = _script_functions(
+        "as_float",
+        "qr_rod_peak_edit_runtime_mode",
+        "show_qr_rod_peak_marker_popup",
+        "marker_table_with_specular_l_markers",
+        "qz_l_linear_coeff_from_marker_rows",
+        "marker_row_title",
+        "clean_marker_title",
+        "replace_qr_rod_marker_group_qz",
+        "positive_log_plot_values",
+        "apply_positive_log_y_axis",
+        "snap_qr_rod_markers_to_profile_peaks",
+        "l_tick_label",
+        "_safe_run_name",
+        "load_qr_rod_peak_edits",
+        "write_qr_rod_peak_edits",
+    )
+    show_editor = namespace["show_qr_rod_peak_marker_popup"]
+    calls: list[str] = []
+
+    class FakeCanvas:
+        def draw_idle(self) -> None:
+            calls.append("companion_draw")
+
+    class FakeFigure:
+        canvas = FakeCanvas()
+
+        def show(self, *, warn: bool = True) -> None:
+            calls.append(f"companion_show_warn={warn}")
+
+    def fake_show(*_args, **_kwargs) -> None:
+        calls.append("blocking_show")
+        plt.close(plt.gcf())
+
+    marker_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_marker": 1.0, "fit_l": 1.0, "display_l": 1.0},
+            {"m": 1, "branch": "+", "qz_marker": 2.0, "fit_l": 2.0, "display_l": 2.0},
+        ]
+    )
+    rod_profile_table = pd.DataFrame(
+        {
+            "m": [1, 1],
+            "branch": ["+", "+"],
+            "qz_center": [1.0, 2.0],
+            "background_density": [1.0, 2.0],
+        }
+    )
+
+    monkeypatch.setattr(plt, "show", fake_show)
+    _edited, accepted = show_editor(
+        marker_table,
+        rod_profile_table,
+        backend_name="TkAgg",
+        companion_figures=[FakeFigure()],
+    )
+
+    assert accepted is True
+    assert calls == ["companion_show_warn=False", "companion_draw", "blocking_show"]
 
 
 def test_parallel_script_unified_editor_region_controls_update_state(
@@ -3758,9 +3823,204 @@ def test_parallel_script_unified_editor_region_controls_update_state(
     } == {"delta_qr": 0.02, "l_min": 0.5, "l_max": 2.5}
 
 
-def test_parallel_script_unified_editor_delta_qr_refreshes_profile_table(
+def test_parallel_script_unified_editor_region_controls_update_preview(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    namespace = _script_functions(
+        "as_float",
+        "qr_rod_peak_edit_runtime_mode",
+        "show_qr_rod_peak_marker_popup",
+        "marker_table_with_specular_l_markers",
+        "qz_l_linear_coeff_from_marker_rows",
+        "marker_row_title",
+        "clean_marker_title",
+        "replace_qr_rod_marker_group_qz",
+        "positive_log_plot_values",
+        "apply_positive_log_y_axis",
+        "snap_qr_rod_markers_to_profile_peaks",
+        "l_tick_label",
+        "_safe_run_name",
+        "load_qr_rod_peak_edits",
+        "write_qr_rod_peak_edits",
+    )
+    show_editor = namespace["show_qr_rod_peak_marker_popup"]
+    region_state = {"delta_qr": 0.01, "l_min": 0.0, "l_max": 3.0}
+    preview_calls: list[tuple[float, float, float, list[float]]] = []
+    update_calls: list[tuple[float, float, float]] = []
+
+    def refresh_profiles(delta_qr: float, l_min: float, l_max: float) -> pd.DataFrame:
+        update_calls.append((float(delta_qr), float(l_min), float(l_max)))
+        return pd.DataFrame(
+            {
+                "m": [1, 1],
+                "branch": ["+", "+"],
+                "qz_center": [1.0, 2.0],
+                "background_density": [10.0, 20.0],
+            }
+        )
+
+    def update_preview(
+        *,
+        delta_qr: float,
+        l_min: float,
+        l_max: float,
+        marker_table: pd.DataFrame,
+    ) -> None:
+        preview_calls.append(
+            (
+                float(delta_qr),
+                float(l_min),
+                float(l_max),
+                pd.DataFrame(marker_table)["qz_marker"].tolist(),
+            )
+        )
+
+    def fake_show(*_args, **_kwargs) -> None:
+        fig = plt.gcf()
+        widgets = list(getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets"))
+        for widget in widgets:
+            widget_type = type(widget).__name__
+            label = getattr(getattr(widget, "label", None), "get_text", lambda: "")()
+            if widget_type == "Slider":
+                widget.set_val(0.02)
+            elif widget_type == "TextBox" and label == "L Min":
+                widget.set_val("0.5")
+            elif widget_type == "TextBox" and label == "L Max":
+                widget.set_val("2.5")
+        plt.close(fig)
+
+    marker_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_marker": 1.0, "fit_l": 1.0, "display_l": 1.0},
+            {"m": 1, "branch": "+", "qz_marker": 2.0, "fit_l": 2.0, "display_l": 2.0},
+        ]
+    )
+    rod_profile_table = pd.DataFrame(
+        {
+            "m": [1, 1, 1],
+            "branch": ["+", "+", "+"],
+            "qz_center": [0.5, 1.5, 2.5],
+            "background_density": [1.0, 2.0, 1.0],
+        }
+    )
+
+    monkeypatch.setattr(plt, "show", fake_show)
+    _edited, accepted = show_editor(
+        marker_table,
+        rod_profile_table,
+        backend_name="TkAgg",
+        region_state=region_state,
+        profile_update_callback=refresh_profiles,
+        region_preview_update_callback=update_preview,
+    )
+
+    assert accepted is True
+    assert [call[:3] for call in preview_calls] == [
+        (0.02, 0.0, 3.0),
+        (0.02, 0.5, 3.0),
+        (0.02, 0.5, 2.5),
+    ]
+    assert update_calls == [(0.02, 0.5, 3.0), (0.02, 0.5, 2.5)]
+    assert preview_calls[-1][3] == [1.0, 2.0]
+
+
+def test_parallel_script_unified_editor_delta_qr_refreshes_profile_table_on_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from matplotlib.backend_bases import MouseEvent
+
+    namespace = _script_functions(
+        "as_float",
+        "qr_rod_peak_edit_runtime_mode",
+        "show_qr_rod_peak_marker_popup",
+        "marker_table_with_specular_l_markers",
+        "qz_l_linear_coeff_from_marker_rows",
+        "marker_row_title",
+        "clean_marker_title",
+        "replace_qr_rod_marker_group_qz",
+        "positive_log_plot_values",
+        "apply_positive_log_y_axis",
+        "snap_qr_rod_markers_to_profile_peaks",
+        "l_tick_label",
+        "_safe_run_name",
+        "load_qr_rod_peak_edits",
+        "write_qr_rod_peak_edits",
+    )
+    show_editor = namespace["show_qr_rod_peak_marker_popup"]
+    region_state = {"delta_qr": 0.01, "l_min": 0.0, "l_max": 3.0}
+    update_calls: list[tuple[float, float, float]] = []
+    preview_calls: list[tuple[float, float, float]] = []
+
+    def refresh_profiles(delta_qr: float, l_min: float, l_max: float) -> pd.DataFrame:
+        update_calls.append((float(delta_qr), float(l_min), float(l_max)))
+        return pd.DataFrame(
+            {
+                "m": [1, 1],
+                "branch": ["+", "+"],
+                "qz_center": [1.0, 2.0],
+                "background_density": [10.0, 20.0],
+            }
+        )
+
+    def refresh_preview(
+        *,
+        delta_qr: float,
+        l_min: float,
+        l_max: float,
+        marker_table: pd.DataFrame,
+    ) -> None:
+        preview_calls.append((float(delta_qr), float(l_min), float(l_max)))
+
+    def fake_show(*_args, **_kwargs) -> None:
+        fig = plt.gcf()
+        for widget in list(getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets")):
+            if type(widget).__name__ == "Slider":
+                widget.set_val(0.02)
+                widget.set_val(0.03)
+        assert update_calls == []
+        fig.canvas.callbacks.process(
+            "button_release_event",
+            MouseEvent("button_release_event", fig.canvas, 0, 0, button=1),
+        )
+        plt.close(fig)
+
+    marker_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_marker": 1.0, "fit_l": 1.0, "display_l": 1.0},
+            {"m": 1, "branch": "+", "qz_marker": 2.0, "fit_l": 2.0, "display_l": 2.0},
+        ]
+    )
+    rod_profile_table = pd.DataFrame(
+        {
+            "m": [1, 1],
+            "branch": ["+", "+"],
+            "qz_center": [1.0, 2.0],
+            "background_density": [1.0, 2.0],
+        }
+    )
+
+    monkeypatch.setattr(plt, "show", fake_show)
+    _edited, accepted = show_editor(
+        marker_table,
+        rod_profile_table,
+        backend_name="TkAgg",
+        region_state=region_state,
+        profile_update_callback=refresh_profiles,
+        region_preview_update_callback=refresh_preview,
+    )
+
+    assert accepted is True
+    assert preview_calls == [(0.02, 0.0, 3.0), (0.03, 0.0, 3.0)]
+    assert update_calls == [(0.03, 0.0, 3.0)]
+    refreshed = pd.DataFrame(region_state["rod_profile_table"])
+    assert refreshed["background_density"].tolist() == [10.0, 20.0]
+
+
+def test_parallel_script_unified_editor_accept_flushes_pending_profile_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from matplotlib.backend_bases import KeyEvent
+
     namespace = _script_functions(
         "as_float",
         "qr_rod_peak_edit_runtime_mode",
@@ -3797,8 +4057,12 @@ def test_parallel_script_unified_editor_delta_qr_refreshes_profile_table(
         fig = plt.gcf()
         for widget in list(getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets")):
             if type(widget).__name__ == "Slider":
-                widget.set_val(0.02)
-        plt.close(fig)
+                widget.set_val(0.04)
+        assert update_calls == []
+        fig.canvas.callbacks.process(
+            "key_press_event",
+            KeyEvent("key_press_event", fig.canvas, key="enter"),
+        )
 
     marker_table = pd.DataFrame(
         [
@@ -3825,7 +4089,7 @@ def test_parallel_script_unified_editor_delta_qr_refreshes_profile_table(
     )
 
     assert accepted is True
-    assert update_calls == [(0.02, 0.0, 3.0)]
+    assert update_calls == [(0.04, 0.0, 3.0)]
     refreshed = pd.DataFrame(region_state["rod_profile_table"])
     assert refreshed["background_density"].tolist() == [10.0, 20.0]
 
@@ -3845,6 +4109,47 @@ def test_parallel_script_unified_editor_result_updates_final_profile_table() -> 
     assert "rod_profile_table_for_l_window(" in section
     assert "delta_qr_override=delta_qr_value" in source
     assert editor_call < cache_key_call < final_fit_call
+
+
+def test_parallel_script_detector_qr_preview_is_passed_to_unified_editor() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    helper_def = source.index("def build_qr_rod_detector_region_preview_figure(")
+    preview_setup = source.index("qr_rod_detector_region_preview_figures = []")
+    preview_create = source.index(
+        "build_qr_rod_detector_region_preview_figure(", preview_setup
+    )
+    editor_call = source.index("qr_rod_region_editor_result = edit_qr_rod_region_editor(")
+    final_detector_save = source.index(
+        "detector_region_png, detector_region_pdf = save_manuscript_figure"
+    )
+    editor_call_section = source[
+        editor_call : source.index(")\nmarker_table = pd.DataFrame", editor_call)
+    ]
+    preview_helper_section = source[helper_def:preview_setup]
+
+    assert helper_def < preview_setup < preview_create < editor_call < final_detector_save
+    assert "return preview_fig, update_preview" in preview_helper_section
+    assert "qr_rod_detector_region_preview_update_callback = None" in source[
+        preview_setup:editor_call
+    ]
+    assert (
+        "qr_rod_detector_region_preview_figure,\n"
+        "            qr_rod_detector_region_preview_update_callback,"
+    ) in source[preview_setup:editor_call]
+    assert "companion_figures=qr_rod_detector_region_preview_figures" in editor_call_section
+    assert (
+        "region_preview_update_callback=qr_rod_detector_region_preview_update_callback"
+        in editor_call_section
+    )
+    assert 'num="Qr rod detector region preview"' in source
+    assert "build_detector_selected_qr_rod_band_visual_payload(" in source[
+        helper_def:editor_call
+    ]
+    assert "preview_overlay_artists" in preview_helper_section
+    assert ".remove()" in preview_helper_section
+    assert "preview_fig.canvas.draw_idle()" in preview_helper_section
 
 
 def test_parallel_script_pre_editor_cache_is_checked_before_expensive_stages() -> None:
