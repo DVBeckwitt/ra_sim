@@ -5,7 +5,7 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-05-08
+Last updated: 2026-05-12
 
 ## Summary
 
@@ -143,6 +143,29 @@ status: targeted geometry/docs tests and `python -m ra_sim.dev check` pass.
 Deprecation/migration status: no deprecated entrypoint, migration, saved-state
 schema, config schema, or artifact schema change. Shipping status: docs-only
 handoff is ready; rollback is a normal git revert.
+
+2026-05-12 GUI gamma/Gamma overlay closeout: the saved-manual caked GUI path
+for Bi2Se3 and Bi2Te3 now fits only detector tilts `gamma` and `Gamma` through
+the same exact caked projector used by import/redraw, instead of a separate
+detector-tilt caked projection shim. Final overlay diagnostics compare the
+drawn fitted simulation markers against the saved background triangle picks in
+the active display frame, so the reported distance matches what the operator
+sees in the GUI. The follow-up review cleanup also shares the same caked/display
+point resolver between drawing, visual-distance summaries, and frame diagnostics
+instead of keeping a duplicate local parser in the diagnostic helper.
+
+Bug/error status: fixed for the visually wrong fitted-simulation overlay points
+in the Bi2Se3/Bi2Te3 saved GUI `gamma,Gamma` runs. Real GUI validation showed
+improved drawn overlay medians for both saved states, and the screenshots were
+kept as local validation artifacts only. Feature status: no new GUI control,
+CLI flag, public API, config key, dependency, saved-state schema, or artifact
+schema. CI/automation status: local quality gates are green for compile,
+focused overlay/runtime tests, full import-safe GUI runtime tests, and
+`python -m ra_sim.dev check`; no CI workflow changed. Deprecation/migration
+status: the removed detector-tilt projection shim was internal dead code with
+no public migration path; saved states and artifacts require no cleanup.
+Shipping status: safe as a normal bug-fix/refactor slice. Rollback is a normal
+git revert of the overlay/projector fix and follow-up resolver cleanup.
 
 Real full headless `fit-geometry` smoke is now run and still failing after a
 clean exact-caked request. The first divergence from passing ladder evidence is

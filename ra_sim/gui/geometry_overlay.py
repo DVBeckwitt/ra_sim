@@ -1626,41 +1626,21 @@ def compute_geometry_overlay_frame_diagnostics(
 ) -> tuple[dict[str, float], str]:
     """Summarize per-match display-frame agreement for the final overlay."""
 
-    def _parse_point(value: object) -> tuple[float, float] | None:
-        if not isinstance(value, (list, tuple, np.ndarray)) or len(value) < 2:
-            return None
-        try:
-            col = float(value[0])
-            row = float(value[1])
-        except Exception:
-            return None
-        if not (np.isfinite(col) and np.isfinite(row)):
-            return None
-        return float(col), float(row)
-
     def _resolve_display_point(
-        entry: dict[str, object],
+        entry: Mapping[str, object],
         *,
         display_key: str,
         native_key: str,
     ) -> tuple[float, float] | None:
-        if show_caked_2d:
-            caked_display_key = display_key.replace("_display", "_caked_display")
-            caked_point = _parse_point(entry.get(caked_display_key))
-            if caked_point is not None:
-                return caked_point
-            native_point = _parse_point(entry.get(native_key))
-            if native_point is not None and native_detector_coords_to_caked_display_coords is not None:
-                try:
-                    projected = native_detector_coords_to_caked_display_coords(
-                        float(native_point[0]),
-                        float(native_point[1]),
-                    )
-                except Exception:
-                    projected = None
-                if projected is not None:
-                    return _parse_point(projected)
-        return _parse_point(entry.get(display_key))
+        return _resolve_overlay_display_point(
+            entry,
+            display_key=display_key,
+            native_key=native_key,
+            show_caked_2d=show_caked_2d,
+            native_detector_coords_to_caked_display_coords=(
+                native_detector_coords_to_caked_display_coords
+            ),
+        )
 
     sim_frame_dists: list[float] = []
     bg_frame_dists: list[float] = []

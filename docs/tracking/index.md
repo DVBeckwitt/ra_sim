@@ -26,7 +26,7 @@ intensity contract, but remains downstream of green mosaic fitting.
 
 | Title | Type | Owner | Issue | Priority | Last updated | Path |
 | --- | --- | --- | --- | --- | --- | --- |
-| Geometric fitter recovery | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-23 | [geometric-fitter-recovery.md](in-progress/geometric-fitter-recovery.md) |
+| Geometric fitter recovery | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-05-12 | [geometric-fitter-recovery.md](in-progress/geometric-fitter-recovery.md) |
 | New4 geometric fitter recovery handoff | investigation | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-05-03 | [new4-geometric-fitter-recovery-handoff.md](in-progress/new4-geometric-fitter-recovery-handoff.md) |
 | Deterministic geometry runtime fix pass | bug | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-05-04 | [deterministic-geometry-runtime-fix-pass.md](in-progress/deterministic-geometry-runtime-fix-pass.md) |
 | Qr/Qz shape sensitivity | feature | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-22 | [q-group-shape-sensitivity.md](in-progress/q-group-shape-sensitivity.md) |
@@ -100,6 +100,22 @@ adds a deterministic caked-select -> detector -> clear/rearm -> detector-click
 identity proof. Full runtime import-safe and geometry-fit workflow suites pass
 locally; manual detector/caked GUI smoke remains pending before closing the
 tracking item.
+
+Geometric fitter GUI gamma/Gamma status note:
+The Bi2Se3/Bi2Te3 saved-manual caked GUI fit path now uses the same exact
+caked projector for `gamma,Gamma` detector-tilt fits that import/redraw uses,
+with no parallel detector-tilt projection shim. The final overlay diagnostics
+report the drawn fitted simulation marker distance to the saved background
+triangle picks in the active display frame, so the cached/status distance and
+GUI visual distance agree. Bug/error status: fixed and validated with real GUI
+Bi2Se3 and Bi2Te3 saved-state runs plus focused overlay/runtime tests. Feature
+status: no new control, CLI flag, public API, config key, dependency,
+saved-state schema, or artifact schema. CI/automation status: local compile,
+focused tests, full import-safe GUI runtime tests, and `python -m ra_sim.dev
+check` are green; no CI workflow changed. Migration/deprecation status: no user
+migration required; the removed detector-tilt projection shim was internal.
+Shipping status: ready as a normal bug-fix/refactor commit with rollback by git
+revert.
 
 Background peak fit detector Qr rod panel status note:
 The ignored parallel diagnostics notebook now treats the detector Qr-rod panel
