@@ -5322,6 +5322,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
     priority_weight_values: List[float] = []
     optimizer_point_residual_values: List[float] = []
     angular_residual_rows: List[Dict[str, object]] = []
+    qr_fit_surface_contracts: List[Dict[str, object]] = []
     matched_pair_count = 0
     missing_pairs = 0
     fixed_source_resolved_count = 0
@@ -6852,6 +6853,63 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         weighted_delta_phi_deg_values.append(float(weighted_delta_phi))
         priority_weight_values.append(float(priority_weight))
         pair_id = str(diag.get("pair_id") or f"{dataset_ctx.dataset_index}:{idx}")
+        gui_drawn_sim_caked = _fit_qr_caked_pair_from_entry(
+            fit_prediction,
+            "source_row_live_caked_deg",
+        )
+        if gui_drawn_sim_caked is None:
+            gui_drawn_sim_caked = _fit_qr_current_dynamic_caked_anchor(fit_prediction)
+        gui_drawn_source = (
+            str(
+                fit_prediction.get("source_row_live_caked_source")
+                or fit_prediction.get("dynamic_baseline_anchor_actual_source")
+                or fit_prediction.get("dynamic_baseline_anchor_source_kind")
+                or fit_prediction.get("dynamic_baseline_anchor_source")
+                or ""
+            ).strip()
+            or None
+        )
+        contract_row = {
+            **diag,
+            "pair_id": pair_id,
+            "manual_target_caked_deg": [float(measured_two_theta), float(measured_phi)],
+            "gui_drawn_sim_caked_deg": (
+                [float(gui_drawn_sim_caked[0]), float(gui_drawn_sim_caked[1])]
+                if gui_drawn_sim_caked is not None
+                else None
+            ),
+            "gui_drawn_sim_caked_source": gui_drawn_source,
+            "source_kind": fit_prediction.get("dynamic_baseline_anchor_source_kind"),
+            "actual_source": fit_prediction.get("dynamic_baseline_anchor_actual_source"),
+            "display_frame": fit_prediction.get("dynamic_baseline_anchor_projection_frame"),
+            "projection_frame": fit_prediction.get("dynamic_baseline_anchor_projection_frame"),
+            "objective_source_authority": fit_prediction.get("objective_source_authority"),
+            "optimizer_source_source": fit_prediction.get("optimizer_source_source"),
+            "source_authority_match": fit_prediction.get("source_authority_match"),
+        }
+        contract_prediction = {
+            **fit_prediction,
+            "objective_sim_caked_deg": [float(sim_two_theta), float(sim_phi)],
+            "optimizer_simulated_source_two_theta_phi": [
+                float(sim_two_theta),
+                float(sim_phi),
+            ],
+            "objective_residual_units": "deg",
+        }
+        contract_observed = {
+            "manual_target_caked_deg": [float(measured_two_theta), float(measured_phi)],
+            "optimizer_measured_anchor_two_theta_phi": [
+                float(measured_two_theta),
+                float(measured_phi),
+            ],
+        }
+        qr_fit_contract = _build_qr_fit_point_surface_contract(
+            row=contract_row,
+            prediction=contract_prediction,
+            observed=contract_observed,
+            objective_space="caked_deg",
+        )
+        qr_fit_surface_contracts.append(qr_fit_contract)
         angular_residual_rows.append(
             {
                 "dataset_index": int(dataset_ctx.dataset_index),
@@ -6888,6 +6946,11 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                 "objective_cache_hit": bool(fit_prediction.get("objective_cache_hit", False)),
                 "objective_cache_reject_reason": fit_prediction.get(
                     "objective_cache_reject_reason"
+                ),
+                "qr_fit_point_surface_contract": qr_fit_contract,
+                "source_authority_match": bool(qr_fit_contract.get("source_authority_match")),
+                "visual_objective_surface_match": bool(
+                    qr_fit_contract.get("visual_objective_surface_match")
                 ),
             }
         )
@@ -7197,6 +7260,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         "_live_cache_records": live_cache_records,
         "_angular_residual_rows": angular_residual_rows,
         "_candidate_source_rows": candidate_source_rows,
+        "_qr_fit_point_surface_contracts": qr_fit_surface_contracts,
         **_fit_space_provenance_summary(
             local,
             cached_anchor_count=fit_space_anchor_count_cached,
@@ -7215,6 +7279,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             exact_fit_space_projection_reason=exact_fit_space_projection_reason,
         ),
     }
+    summary.update(_summarize_qr_fit_point_surface_contracts(qr_fit_surface_contracts))
     if pixel_distances:
         pixel_dist_arr = np.asarray(pixel_distances, dtype=float)
         pixel_dist_arr = pixel_dist_arr[np.isfinite(pixel_dist_arr)]
@@ -18686,6 +18751,60 @@ def _build_qr_fit_point_surface_contract(
     }
 
 
+def _summarize_qr_fit_point_surface_contracts(
+    contracts: Sequence[Mapping[str, object]],
+) -> Dict[str, object]:
+    rows = [dict(row) for row in contracts if isinstance(row, Mapping)]
+    failure_rows = [
+        row for row in rows if str(row.get("qr_fit_contract_status", "") or "") != "pass"
+    ]
+    source_mismatch_rows = [row for row in rows if row.get("source_authority_match") is not True]
+    surface_mismatch_rows = [
+        row for row in rows if row.get("visual_objective_surface_match") is not True
+    ]
+    caked_display_rows = [
+        row for row in rows if str(row.get("source_row_surface_kind", "") or "") == "caked_display"
+    ]
+    reason_counts: Dict[str, int] = {}
+    for row in source_mismatch_rows:
+        reason = str(row.get("source_authority_mismatch_reason") or "source_authority_mismatch")
+        reason_counts[reason] = int(reason_counts.get(reason, 0)) + 1
+    norms: List[float] = []
+    for row in rows:
+        try:
+            value = float(row.get("visual_vs_objective_caked_norm_deg", np.nan))
+        except Exception:
+            value = float("nan")
+        if np.isfinite(value):
+            norms.append(float(value))
+    return {
+        "qr_fit_contract_status": "fail" if failure_rows else "pass",
+        "qr_fit_contract_failure_count": int(len(failure_rows)),
+        "qr_fit_contract_failure_pair_ids": [
+            str(row.get("pair_id")) for row in failure_rows if row.get("pair_id") is not None
+        ],
+        "source_authority_mismatch_count": int(len(source_mismatch_rows)),
+        "visual_objective_surface_mismatch_count": int(len(surface_mismatch_rows)),
+        "source_authority_mismatch_reasons_by_count": dict(reason_counts),
+        "source_authority_match_all_caked_display_rows": bool(
+            all(row.get("source_authority_match") is True for row in caked_display_rows)
+        ),
+        "visual_objective_surface_match_all_rows": bool(
+            all(row.get("visual_objective_surface_match") is True for row in rows)
+        ),
+        "max_visual_vs_objective_caked_norm_deg": (float(max(norms)) if norms else float("nan")),
+        "detector_projection_used_for_objective_count": int(
+            sum(1 for row in rows if bool(row.get("detector_projection_used_for_objective")))
+        ),
+        "caked_degrees_used_as_detector_px_count": int(
+            sum(1 for row in rows if bool(row.get("caked_degrees_used_as_detector_px")))
+        ),
+        "saved_sim_refined_caked_used_count": int(
+            sum(1 for row in rows if bool(row.get("saved_sim_refined_caked_used")))
+        ),
+    }
+
+
 def _fit_qr_visual_caked_anchor_payload(
     entry: Mapping[str, object],
 ) -> Dict[str, object]:
@@ -22504,6 +22623,12 @@ def fit_geometry_parameters(
             "dataset_count": int(len(dataset_contexts)),
             "measured_count": 0,
             "fixed_source_resolved_count": 0,
+            "qr_fit_expected_count": 0,
+            "qr_fit_resolved_count": 0,
+            "qr_fit_component_count": 0,
+            "qr_fit_expected_component_count": 0,
+            "qr_fit_objective_incomplete": False,
+            "qr_fit_missing_pairs": [],
             "fallback_entry_count": 0,
             "matched_pair_count": 0,
             "missing_pair_count": 0,
@@ -22853,6 +22978,7 @@ def fit_geometry_parameters(
         }
         live_cache_records: List[Dict[str, object]] = []
         merged_angular_residual_rows: List[Dict[str, object]] = []
+        merged_qr_fit_surface_contracts: List[Dict[str, object]] = []
         candidate_source_rows_by_dataset: Dict[int, List[Dict[str, object]]] = {}
         candidate_source_row_keys_by_dataset: Dict[int, Set[str]] = {}
 
@@ -22896,6 +23022,10 @@ def fit_geometry_parameters(
             for key in (
                 "measured_count",
                 "fixed_source_resolved_count",
+                "qr_fit_expected_count",
+                "qr_fit_resolved_count",
+                "qr_fit_component_count",
+                "qr_fit_expected_component_count",
                 "fallback_entry_count",
                 "matched_pair_count",
                 "missing_pair_count",
@@ -22929,6 +23059,16 @@ def fit_geometry_parameters(
                 summary.get("measured_anchor_reanchor_enabled", False)
                 or bool(summary_i.get("measured_anchor_reanchor_enabled", False))
             )
+            summary["qr_fit_objective_incomplete"] = bool(
+                summary.get("qr_fit_objective_incomplete", False)
+                or bool(summary_i.get("qr_fit_objective_incomplete", False))
+            )
+            missing_qr_pairs = summary.get("qr_fit_missing_pairs")
+            if not isinstance(missing_qr_pairs, list):
+                missing_qr_pairs = []
+                summary["qr_fit_missing_pairs"] = missing_qr_pairs
+            for item in summary_i.get("qr_fit_missing_pairs", ()) or ():
+                missing_qr_pairs.append(_dynamic_reanchor_jsonable(item))
             _merge_dynamic_reanchor_summary_fields(summary, summary_i)
             for record in summary_i.get("_live_cache_records", ()) or ():
                 if isinstance(record, Mapping):
@@ -22936,6 +23076,9 @@ def fit_geometry_parameters(
             for record in summary_i.get("_angular_residual_rows", ()) or ():
                 if isinstance(record, Mapping):
                     merged_angular_residual_rows.append(dict(record))
+            for record in summary_i.get("_qr_fit_point_surface_contracts", ()) or ():
+                if isinstance(record, Mapping):
+                    merged_qr_fit_surface_contracts.append(dict(record))
             dataset_index = int(summary_i.get("dataset_index", len(per_dataset_summaries) - 1))
             dataset_candidate_rows = candidate_source_rows_by_dataset.setdefault(dataset_index, [])
             dataset_candidate_keys = candidate_source_row_keys_by_dataset.setdefault(
@@ -22959,6 +23102,16 @@ def fit_geometry_parameters(
         )
         summary["per_dataset"] = per_dataset_summaries
         _merge_exact_fit_space_provenance_counts(summary, per_dataset_summaries)
+        summary.update(_summarize_qr_fit_point_surface_contracts(merged_qr_fit_surface_contracts))
+        summary["_qr_fit_point_surface_contracts"] = merged_qr_fit_surface_contracts
+        summary["qr_fit_objective_incomplete"] = bool(
+            int(summary.get("qr_fit_resolved_count", 0) or 0)
+            != int(summary.get("qr_fit_expected_count", 0) or 0)
+        )
+        summary["objective_space"] = "caked_deg"
+        summary["objective_residual_units"] = "deg"
+        summary["acceptance_metric_space"] = "caked_deg"
+        summary["acceptance_rms_input_units"] = "deg"
 
         for prefix, diag_key in (
             ("px", "distance_px"),

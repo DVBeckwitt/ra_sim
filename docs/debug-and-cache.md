@@ -733,6 +733,15 @@ Status as of 2026-05-13:
   regenerated New4 proof reports `qr_fit_contract_status="pass"`,
   `qr_fit_contract_failure_count=0`, `surface_mismatch_row_count=0`, and
   `source_authority_mismatch_row_count=0`.
+- full-fit status: headless dynamic QR fits now reuse the same contract payloads
+  in their point-match summary. The New4 `gamma,Gamma` reproduction reports
+  `qr_fit_expected_count=7`, `qr_fit_resolved_count=7`,
+  `qr_fit_missing_pairs=[]`, `qr_fit_contract_status="pass"`,
+  `source_authority_mismatch_count=0`,
+  `visual_objective_surface_mismatch_count=0`, and
+  `objective_param_sensitivity_status="sensitive"`. The fit remains correctly
+  rejected as `branch_source_pairing_mismatch`, with worst rows listed, rather
+  than as a source-surface mismatch.
 
 Run:
 

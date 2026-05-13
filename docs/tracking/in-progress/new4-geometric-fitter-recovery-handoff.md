@@ -9,6 +9,18 @@ Last updated: 2026-05-13
 
 ## Current status
 
+- 2026-05-13 full gamma/Gamma headless gate reproduced. The New4 fit now
+  exposes top-level QR contract fields in the public point-match summary:
+  `qr_fit_expected_count=7`, `qr_fit_resolved_count=7`,
+  `qr_fit_missing_pairs=[]`, `qr_fit_contract_status=pass`,
+  `source_authority_mismatch_count=0`,
+  `visual_objective_surface_mismatch_count=0`,
+  `source_authority_match_all_caked_display_rows=true`,
+  `visual_objective_surface_match_all_rows=true`, and
+  `objective_param_sensitivity_status=sensitive`. The fit still rejects, but
+  the failure is now meaningful and classified as
+  `branch_source_pairing_mismatch` with worst rows and
+  `recommended_next_fix=repair_locked_branch_identity`.
 - 2026-05-13 maintenance cleanup: single-step QR visual audit proof checks now
   use shared row-value and row-predicate helpers instead of repeated inline
   loops. Bug/error/feature status is unchanged: this is a behavior-preserving

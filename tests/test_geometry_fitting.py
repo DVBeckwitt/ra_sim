@@ -5028,6 +5028,14 @@ def test_dynamic_dataset_evaluator_records_angular_rows_without_diagnostics() ->
     assert len(rows) == 1
     assert rows[0]["wrapped_delta_phi_deg"] == pytest.approx(2.0)
     assert summary["worst_angular_residual_rows"][0]["pair_id"] == rows[0]["pair_id"]
+    assert rows[0]["qr_fit_point_surface_contract"]["source_authority_match"] is True
+    assert rows[0]["qr_fit_point_surface_contract"]["visual_objective_surface_match"] is True
+    assert summary["qr_fit_contract_status"] == "pass"
+    assert summary["qr_fit_contract_failure_count"] == 0
+    assert summary["source_authority_mismatch_count"] == 0
+    assert summary["visual_objective_surface_mismatch_count"] == 0
+    assert summary["source_authority_match_all_caked_display_rows"] is True
+    assert summary["visual_objective_surface_match_all_rows"] is True
 
 
 def test_dynamic_point_match_summary_merges_row_records_across_datasets(
@@ -5142,6 +5150,13 @@ def test_dynamic_point_match_summary_merges_row_records_across_datasets(
     summary = result.point_match_summary
     assert summary["raw_angular_row_count"] == 2
     assert summary["raw_angular_rms_deg"] == pytest.approx(math.sqrt((10.0**2 + 1.0**2) / 2.0))
+    assert summary["qr_fit_expected_count"] == 2
+    assert summary["qr_fit_resolved_count"] == 2
+    assert summary["qr_fit_missing_pairs"] == []
+    assert summary["qr_fit_objective_incomplete"] is False
+    assert summary["objective_space"] == "caked_deg"
+    assert summary["objective_residual_units"] == "deg"
+    assert summary["qr_fit_contract_status"] == "pass"
     assert summary["worst_angular_residual_rows"][0]["dataset_label"] == "bg0"
     assert "_angular_residual_rows" not in summary
     assert all("_angular_residual_rows" not in item for item in summary["per_dataset"])
