@@ -73,6 +73,9 @@ WEIGHTED_ANGULAR_METRIC_UNIT = "weighted_deg"
 RAW_ANGULAR_COMPONENT_BOUND_DEG = 180.0
 RAW_ANGULAR_VECTOR_NORM_BOUND_DEG = math.hypot(90.0, 180.0)
 QR_FIT_SURFACE_MATCH_TOL_DEG = 1.0e-6
+DYNAMIC_OBJECTIVE_SENSITIVITY_STEPS_DEG = (0.1, 0.25, 0.5, 1.0, 2.0, 5.0)
+DYNAMIC_OBJECTIVE_MIN_PREDICTION_DELTA_DEG = 1.0e-3
+DYNAMIC_OBJECTIVE_MIN_RESIDUAL_VECTOR_DELTA_DEG = 1.0e-3
 QR_FIT_LIVE_CAKED_SOURCES = frozenset(
     (
         "sim_visual_caked_deg",
@@ -23499,19 +23502,27 @@ def fit_geometry_parameters(
         base_x_arr = np.asarray(base_x, dtype=float).reshape(-1)
         active_names = [str(name) for name in var_names]
 
-        def _evaluate_x(x_values: np.ndarray) -> tuple[np.ndarray, float]:
+        def _evaluate_x(
+            x_values: np.ndarray,
+        ) -> tuple[np.ndarray, float, Dict[str, object], Dict[str, object]]:
             local_values = _apply_trial_params(np.asarray(x_values, dtype=float))
             residual_values, _diagnostics, _summary = evaluator(
                 local_values,
                 collect_diagnostics=False,
             )
             residual_arr = np.asarray(residual_values, dtype=float).reshape(-1)
-            return residual_arr, float(
-                _robust_cost(
-                    residual_arr,
-                    loss=solver_loss,
-                    f_scale=solver_f_scale,
-                )
+            summary = dict(_summary) if isinstance(_summary, Mapping) else {}
+            return (
+                residual_arr,
+                float(
+                    _robust_cost(
+                        residual_arr,
+                        loss=solver_loss,
+                        f_scale=solver_f_scale,
+                    )
+                ),
+                summary,
+                dict(local_values),
             )
 
         def _delta_stats(
@@ -23528,71 +23539,245 @@ def fit_geometry_parameters(
                 return float("nan"), float("nan")
             return float(np.max(np.abs(finite))), float(np.linalg.norm(finite))
 
+        def _max_finite(first: float, second: float) -> float:
+            values = [float(value) for value in (first, second) if np.isfinite(value)]
+            return float(max(values)) if values else float("nan")
+
+        def _predicted_caked_points(
+            summary: Mapping[str, object],
+        ) -> List[Tuple[float, float]]:
+            points: List[Tuple[float, float]] = []
+            for row in summary.get("_angular_residual_rows", ()) or ():
+                if not isinstance(row, Mapping):
+                    continue
+                point = _finite_pair(row.get("predicted_caked_deg"))
+                if point is not None:
+                    points.append(point)
+            return points
+
+        def _prediction_delta_norm(
+            trial_summary: Mapping[str, object],
+            base_points: Sequence[Tuple[float, float]],
+        ) -> float:
+            trial_points = _predicted_caked_points(trial_summary)
+            if not trial_points and not base_points:
+                return float("nan")
+            if len(trial_points) != len(base_points):
+                return float("inf")
+            return float(
+                max(
+                    math.hypot(
+                        float(trial_point[0] - base_point[0]),
+                        float(_wrap_phi_deg(float(trial_point[1] - base_point[1]))),
+                    )
+                    for trial_point, base_point in zip(trial_points, base_points)
+                )
+            )
+
+        def _summary_first_value(summary: Mapping[str, object], key: str) -> object:
+            if key in summary and summary.get(key) is not None:
+                return summary.get(key)
+            for collection_key in ("_angular_residual_rows", "_live_cache_records"):
+                for row in summary.get(collection_key, ()) or ():
+                    if isinstance(row, Mapping) and key in row and row.get(key) is not None:
+                        return row.get(key)
+            return None
+
+        def _probe_metadata(
+            summary: Mapping[str, object],
+            local_values: Mapping[str, object],
+        ) -> Dict[str, object]:
+            source_rows_state = str(
+                _summary_first_value(summary, "source_rows_rebuilt_or_reused") or ""
+            )
+            source_rows_signature = _summary_first_value(
+                summary,
+                "trial_source_rows_signature",
+            ) or _summary_first_value(summary, "source_rows_signature")
+            caked_projection_signature = _summary_first_value(
+                summary,
+                "caked_projection_signature",
+            )
+            fit_space_signature = _summary_first_value(
+                summary,
+                "fit_space_local_params_signature",
+            )
+            projection_signature = (
+                caked_projection_signature
+                or fit_space_signature
+                or _summary_first_value(summary, "projection_signature")
+            )
+            return {
+                "trial_params": {
+                    str(name): _dynamic_reanchor_jsonable(local_values.get(str(name)))
+                    for name in active_names
+                },
+                "trial_params_signature": _fit_prediction_trial_params_signature(local_values),
+                "source_rows_signature": source_rows_signature,
+                "source_rows_rebuilt_or_reused": source_rows_state or None,
+                "source_rows_rebuilt": source_rows_state.startswith("rebuilt"),
+                "projection_signature": projection_signature,
+                "fit_space_local_params_signature": (
+                    fit_space_signature or caked_projection_signature
+                ),
+                "objective_cache_hit": bool(
+                    _summary_first_value(summary, "objective_cache_hit") or False
+                ),
+                "objective_cache_reject_reason": _summary_first_value(
+                    summary,
+                    "objective_cache_reject_reason",
+                ),
+                "projector_called_with_trial_params": projection_signature is not None,
+            }
+
+        def _sensitivity_steps_for_var(name: str, value: float) -> Tuple[float, ...]:
+            if name in {"gamma", "Gamma", "theta_initial"} or name.startswith("theta_initial"):
+                return DYNAMIC_OBJECTIVE_SENSITIVITY_STEPS_DEG
+            return (float(max(abs(value) * 1.0e-6, 1.0e-6)),)
+
         try:
-            base_residual, base_cost = _evaluate_x(base_x_arr)
+            base_residual, base_cost, base_summary, base_local = _evaluate_x(base_x_arr)
         except Exception as exc:
             return {
                 "objective_param_sensitivity_by_var": [],
                 "objective_param_sensitivity_status": "not_evaluated",
                 "objective_param_sensitivity_error": str(exc),
             }
+        base_predicted_points = _predicted_caked_points(base_summary)
+        base_trial_signature = _fit_prediction_trial_params_signature(base_local)
 
         records: List[Dict[str, object]] = []
         for idx, name in enumerate(active_names):
             if idx >= base_x_arr.size:
                 continue
             value = float(base_x_arr[idx])
-            step = (
-                1.0e-3
-                if name in {"gamma", "Gamma", "theta_initial"} or name.startswith("theta_initial")
-                else max(abs(value) * 1.0e-6, 1.0e-6)
-            )
-            plus_x = base_x_arr.copy()
-            minus_x = base_x_arr.copy()
-            plus_x[idx] = float(value + step)
-            minus_x[idx] = float(value - step)
-            try:
-                plus_residual, plus_cost = _evaluate_x(plus_x)
-                plus_max, plus_l2 = _delta_stats(plus_residual, base_residual)
-            except Exception as exc:
-                plus_cost = float("nan")
-                plus_max = float("nan")
-                plus_l2 = float("nan")
-                plus_error = str(exc)
-            else:
-                plus_error = ""
-            try:
-                minus_residual, minus_cost = _evaluate_x(minus_x)
-                minus_max, minus_l2 = _delta_stats(minus_residual, base_residual)
-            except Exception as exc:
-                minus_cost = float("nan")
-                minus_max = float("nan")
-                minus_l2 = float("nan")
-                minus_error = str(exc)
-            else:
-                minus_error = ""
-            prediction_changed = bool(
-                (np.isfinite(plus_max) and plus_max > 1.0e-12)
-                or (np.isfinite(minus_max) and minus_max > 1.0e-12)
-                or (np.isfinite(plus_cost) and abs(float(plus_cost) - float(base_cost)) > 1.0e-12)
-                or (np.isfinite(minus_cost) and abs(float(minus_cost) - float(base_cost)) > 1.0e-12)
-            )
+            steps = _sensitivity_steps_for_var(name, value)
+            probe_records: List[Dict[str, object]] = []
+            direction_stats: Dict[str, Dict[str, object]] = {
+                "plus": {
+                    "cost": float("nan"),
+                    "max_abs": float("nan"),
+                    "l2": float("nan"),
+                    "error": "",
+                },
+                "minus": {
+                    "cost": float("nan"),
+                    "max_abs": float("nan"),
+                    "l2": float("nan"),
+                    "error": "",
+                },
+            }
+            max_prediction_delta = float("nan")
+            max_residual_delta = float("nan")
+            first_meaningful_step: float | None = None
+            cache_signature_changed = False
+            source_rows_rebuilt = False
+            projector_called_with_trial_params = False
+
+            for step in steps:
+                for direction, sign in (("plus", 1.0), ("minus", -1.0)):
+                    trial_x = base_x_arr.copy()
+                    requested_value = float(value + sign * float(step))
+                    if idx < lower_bounds.size and np.isfinite(lower_bounds[idx]):
+                        requested_value = max(float(lower_bounds[idx]), requested_value)
+                    if idx < upper_bounds.size and np.isfinite(upper_bounds[idx]):
+                        requested_value = min(float(upper_bounds[idx]), requested_value)
+                    trial_x[idx] = requested_value
+                    applied_step = float(trial_x[idx] - value)
+                    try:
+                        trial_residual, trial_cost, trial_summary, trial_local = _evaluate_x(
+                            trial_x
+                        )
+                        max_delta, l2_delta = _delta_stats(trial_residual, base_residual)
+                        prediction_delta = _prediction_delta_norm(
+                            trial_summary,
+                            base_predicted_points,
+                        )
+                        metadata = _probe_metadata(trial_summary, trial_local)
+                        error = ""
+                    except Exception as exc:
+                        trial_cost = float("nan")
+                        max_delta = float("nan")
+                        l2_delta = float("nan")
+                        prediction_delta = float("nan")
+                        metadata = {}
+                        error = str(exc)
+
+                    residual_meaningful = bool(
+                        np.isfinite(l2_delta)
+                        and l2_delta >= DYNAMIC_OBJECTIVE_MIN_RESIDUAL_VECTOR_DELTA_DEG
+                    )
+                    prediction_meaningful = bool(
+                        np.isfinite(prediction_delta)
+                        and prediction_delta >= DYNAMIC_OBJECTIVE_MIN_PREDICTION_DELTA_DEG
+                    )
+                    if (residual_meaningful or prediction_meaningful) and (
+                        first_meaningful_step is None
+                        or abs(float(step)) < abs(float(first_meaningful_step))
+                    ):
+                        first_meaningful_step = float(step)
+
+                    stats = direction_stats[direction]
+                    if not np.isfinite(float(stats["cost"])):
+                        stats["cost"] = float(trial_cost)
+                    stats["max_abs"] = _max_finite(float(stats["max_abs"]), max_delta)
+                    stats["l2"] = _max_finite(float(stats["l2"]), l2_delta)
+                    if error and not stats["error"]:
+                        stats["error"] = error
+
+                    max_prediction_delta = _max_finite(max_prediction_delta, prediction_delta)
+                    max_residual_delta = _max_finite(max_residual_delta, l2_delta)
+                    cache_signature_changed = (
+                        cache_signature_changed
+                        or str(metadata.get("trial_params_signature") or "") != base_trial_signature
+                    )
+                    source_rows_rebuilt = source_rows_rebuilt or bool(
+                        metadata.get("source_rows_rebuilt", False)
+                    )
+                    projector_called_with_trial_params = projector_called_with_trial_params or bool(
+                        metadata.get("projector_called_with_trial_params", False)
+                    )
+                    probe_record = {
+                        "step_deg": float(step),
+                        "direction": direction,
+                        "applied_step_deg": float(applied_step),
+                        "cost": float(trial_cost),
+                        "max_abs_residual_delta_deg": float(max_delta),
+                        "residual_vector_delta_deg": float(l2_delta),
+                        "prediction_caked_delta_from_base_deg": float(prediction_delta),
+                    }
+                    probe_record.update(metadata)
+                    if error:
+                        probe_record["error"] = error
+                    probe_records.append(probe_record)
+
+            prediction_changed = first_meaningful_step is not None
             record: Dict[str, object] = {
                 "var_name": str(name),
-                "step": float(step),
+                "step": float(steps[0]) if steps else float("nan"),
+                "steps_deg": [float(step) for step in steps],
+                "first_meaningful_step_deg": (
+                    float(first_meaningful_step) if first_meaningful_step is not None else None
+                ),
                 "base_cost": float(base_cost),
-                "plus_cost": float(plus_cost),
-                "minus_cost": float(minus_cost),
-                "max_abs_residual_delta_plus": float(plus_max),
-                "max_abs_residual_delta_minus": float(minus_max),
-                "l2_residual_delta_plus": float(plus_l2),
-                "l2_residual_delta_minus": float(minus_l2),
+                "plus_cost": float(direction_stats["plus"]["cost"]),
+                "minus_cost": float(direction_stats["minus"]["cost"]),
+                "max_abs_residual_delta_plus": float(direction_stats["plus"]["max_abs"]),
+                "max_abs_residual_delta_minus": float(direction_stats["minus"]["max_abs"]),
+                "l2_residual_delta_plus": float(direction_stats["plus"]["l2"]),
+                "l2_residual_delta_minus": float(direction_stats["minus"]["l2"]),
+                "max_prediction_delta_caked_deg": float(max_prediction_delta),
+                "max_residual_vector_delta_deg": float(max_residual_delta),
+                "cache_signature_changed": bool(cache_signature_changed),
+                "source_rows_rebuilt": bool(source_rows_rebuilt),
+                "projector_called_with_trial_params": bool(projector_called_with_trial_params),
+                "sensitive": bool(prediction_changed),
                 "prediction_changed": bool(prediction_changed),
+                "probes": probe_records,
             }
-            if plus_error:
-                record["plus_error"] = plus_error
-            if minus_error:
-                record["minus_error"] = minus_error
+            for direction in ("plus", "minus"):
+                if direction_stats[direction]["error"]:
+                    record[f"{direction}_error"] = direction_stats[direction]["error"]
             records.append(record)
 
         changed_count = sum(1 for record in records if bool(record.get("prediction_changed")))

@@ -749,6 +749,18 @@ Status as of 2026-05-13:
   launch impact. A later long New4 headless recheck was interrupted before
   completion, so generated recovery artifacts from that attempt are diagnostic
   scratch output only and are not versioned.
+- sensitivity status: dynamic caked QR fits now use a bounded angular
+  sensitivity ladder for `gamma`, `Gamma`, and `theta_initial`-style variables:
+  `0.1, 0.25, 0.5, 1, 2, 5` degrees. The diagnostic does not classify these
+  variables from sub-0.1-degree probes alone and records
+  `steps_deg`, `first_meaningful_step_deg`,
+  `max_prediction_delta_caked_deg`, `max_residual_vector_delta_deg`, and probe
+  metadata for trial params, source-row rebuild/cache state, and projection
+  signatures. This is additive diagnostic output; it does not change fit
+  thresholds or branch identity. Existing insensitive-objective rejection now
+  has to be supported by the ladder through 5 degrees, and cache-reuse states
+  such as `reused_for_same_params_signature` remain distinct from rebuilt source
+  rows.
 
 Run:
 

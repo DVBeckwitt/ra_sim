@@ -6289,7 +6289,9 @@ def _dynamic_point_only_sensitivity_result(
     monkeypatch,
     *,
     sensitive: bool,
+    minimum_sensitive_step_deg: float = 0.0,
     fail_on_insensitive_dynamic_objective: bool = False,
+    source_rows_builder_records: list[dict[str, object]] | None = None,
 ):
     def fake_process(*args, **kwargs):
         image_size = int(args[2])
@@ -6317,10 +6319,15 @@ def _dynamic_point_only_sensitivity_result(
 
     def predicted_from_params(local_params: Mapping[str, object] | None) -> tuple[float, float]:
         params = local_params if isinstance(local_params, Mapping) else {}
-        gamma = float(params.get("gamma", 0.0) or 0.0) if sensitive else 0.0
+        gamma = float(params.get("gamma", 0.0) or 0.0)
+        gamma = gamma if sensitive and abs(gamma) >= float(minimum_sensitive_step_deg) else 0.0
         return 41.0 + gamma, 0.0
 
     def source_rows_builder(*, local_params=None):
+        if source_rows_builder_records is not None:
+            source_rows_builder_records.append(
+                dict(local_params) if isinstance(local_params, Mapping) else {}
+            )
         two_theta, phi = predicted_from_params(local_params)
         return _locked_qr_source_rows_payload([_point_only_dynamic_qr_row(two_theta, phi)])
 
@@ -6506,11 +6513,12 @@ def test_rung3_objective_changes_dynamic_sim_source_when_trial_params_change(
     )
 
 
-def test_dynamic_objective_param_sensitivity_detects_insensitive_projector(
+def test_dynamic_objective_sensitivity_detects_real_threading_failure_at_five_degrees(
     monkeypatch,
 ) -> None:
     result = _dynamic_point_only_sensitivity_result(monkeypatch, sensitive=False)
     summary = result.point_match_summary
+    record = summary["objective_param_sensitivity_by_var"][0]
 
     assert result.success
     assert summary["objective_param_sensitivity_status"] == "all_fit_vars_insensitive"
@@ -6518,7 +6526,10 @@ def test_dynamic_objective_param_sensitivity_detects_insensitive_projector(
     assert summary["first_acceptance_metric_divergence"] == (
         "dynamic_objective_not_sensitive_to_fit_variables"
     )
-    assert summary["objective_param_sensitivity_by_var"][0]["prediction_changed"] is False
+    assert max(record["steps_deg"]) == pytest.approx(5.0)
+    assert record["first_meaningful_step_deg"] is None
+    assert record["sensitive"] is False
+    assert record["prediction_changed"] is False
 
 
 def test_dynamic_objective_param_sensitivity_can_fail_closed_when_configured(
@@ -6544,6 +6555,169 @@ def test_dynamic_objective_param_sensitivity_detects_sensitive_projector(
     assert summary["objective_param_sensitivity_status"] == "sensitive"
     assert summary["objective_param_sensitivity_by_var"][0]["var_name"] == "gamma"
     assert summary["objective_param_sensitivity_by_var"][0]["prediction_changed"] is True
+
+
+def test_dynamic_objective_sensitivity_ignores_sub_0p1_degree_false_negative(
+    monkeypatch,
+) -> None:
+    result = _dynamic_point_only_sensitivity_result(
+        monkeypatch,
+        sensitive=True,
+        minimum_sensitive_step_deg=2.0,
+    )
+    summary = result.point_match_summary
+    record = summary["objective_param_sensitivity_by_var"][0]
+
+    assert summary["objective_param_sensitivity_status"] == "sensitive"
+    assert record["sensitive"] is True
+    assert record["first_meaningful_step_deg"] == pytest.approx(2.0)
+    assert record["max_prediction_delta_caked_deg"] >= 2.0
+    assert record["max_residual_vector_delta_deg"] >= 2.0
+
+
+def test_dynamic_objective_sensitivity_caps_steps_at_five_degrees(
+    monkeypatch,
+) -> None:
+    result = _dynamic_point_only_sensitivity_result(monkeypatch, sensitive=True)
+    record = result.point_match_summary["objective_param_sensitivity_by_var"][0]
+
+    assert min(step for step in record["steps_deg"] if step > 0.0) >= 0.1
+    assert max(abs(step) for step in record["steps_deg"]) <= 5.0
+    assert max(abs(float(probe["step_deg"])) for probe in record["probes"]) <= 5.0
+    assert max(abs(float(probe["applied_step_deg"])) for probe in record["probes"]) <= 5.0
+
+
+def test_gamma_Gamma_trial_params_reach_source_rows_builder(monkeypatch) -> None:
+    source_rows_builder_records: list[dict[str, object]] = []
+
+    result = _dynamic_point_only_sensitivity_result(
+        monkeypatch,
+        sensitive=True,
+        source_rows_builder_records=source_rows_builder_records,
+    )
+
+    assert result.point_match_summary["objective_param_sensitivity_status"] == "sensitive"
+    seen_gamma = [
+        float(record.get("gamma", 0.0) or 0.0)
+        for record in source_rows_builder_records
+        if "gamma" in record
+    ]
+    assert seen_gamma
+    assert max(seen_gamma) - min(seen_gamma) >= 0.1
+
+
+def test_gamma_Gamma_trial_params_reach_exact_caked_projector() -> None:
+    projector_records: list[dict[str, object]] = []
+
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        row = _locked_qr_trial_source_row(
+            source_table_index=99,
+            source_row_index=24,
+            source_reflection_index=910,
+            branch_id="locked-branch",
+            best_sample_index=3,
+            mosaic_top_rank_key=("rank", 3),
+            selection_reason="manual_pick",
+            source_kind="detector_projection",
+            actual_source="detector_projection",
+            display_frame="detector_display",
+            coordinate_frame="simulation_native",
+            native_col=12.0,
+            native_row=13.0,
+            sim_native_x=12.0,
+            sim_native_y=13.0,
+        )
+        row["fit_qr_branch_key"] = _point_only_dynamic_qr_row(1.0, 2.0)["fit_qr_branch_key"]
+        return _locked_qr_source_rows_payload([row])
+
+    def projector(_cols, _rows, *, local_params=None, **_kwargs):
+        projector_records.append(dict(local_params) if isinstance(local_params, Mapping) else {})
+        capital_gamma = (
+            float(local_params.get("Gamma", 0.0) or 0.0)
+            if isinstance(local_params, Mapping)
+            else 0.0
+        )
+        return _point_only_projector_payload(40.0 + capital_gamma, 0.0)
+
+    prediction = opt._resolve_qr_fit_prediction_from_trial_params(
+        _locked_qr_fixed_source_entry(),
+        {"Gamma": 1.0, "_active_fit_param_names": ["Gamma"]},
+        {
+            "dataset_ctx": _point_only_qr_dataset_ctx(source_rows_builder, projector),
+            "hit_tables": (),
+            "sim_buffer": np.zeros((60, 60), dtype=np.float64),
+            "image_size": 60,
+            "fit_center": [30.0, 30.0],
+            "detector_distance": 0.1,
+            "pixel_size": 1.0,
+            "prediction_source_rows_cache": {},
+            "_qr_fit_point_only_projection": True,
+        },
+        _locked_qr_fixed_source_entry(),
+    )
+
+    assert prediction["available"] is True
+    assert projector_records
+    assert projector_records[-1]["Gamma"] == pytest.approx(1.0)
+    assert prediction["fit_prediction_caked_deg"] == pytest.approx([41.0, 0.0])
+
+
+def test_qr_prediction_cache_key_includes_gamma_Gamma_signature() -> None:
+    source_builder_params: list[dict[str, object]] = []
+
+    def source_rows_builder(*, local_params=None):
+        params = dict(local_params) if isinstance(local_params, Mapping) else {}
+        source_builder_params.append(params)
+        gamma = float(params.get("gamma", 0.0) or 0.0)
+        return _locked_qr_source_rows_payload([_point_only_dynamic_qr_row(40.0 + gamma, 0.0)])
+
+    def projector(_cols, _rows, *, local_params=None, **_kwargs):
+        params = local_params if isinstance(local_params, Mapping) else {}
+        gamma = float(params.get("gamma", 0.0) or 0.0)
+        return _point_only_projector_payload(40.0 + gamma, 0.0)
+
+    shared_source_rows_cache: dict[object, object] = {}
+    fit_context = {
+        "dataset_ctx": _point_only_qr_dataset_ctx(source_rows_builder, projector),
+        "hit_tables": (),
+        "sim_buffer": np.zeros((60, 60), dtype=np.float64),
+        "image_size": 60,
+        "fit_center": [30.0, 30.0],
+        "detector_distance": 0.1,
+        "pixel_size": 1.0,
+        "prediction_source_rows_cache": shared_source_rows_cache,
+        "_qr_fit_point_only_projection": True,
+    }
+
+    base_prediction = opt._resolve_qr_fit_prediction_from_trial_params(
+        _locked_qr_fixed_source_entry(),
+        {"gamma": 0.0, "Gamma": 0.0, "_active_fit_param_names": ["gamma", "Gamma"]},
+        fit_context,
+        _locked_qr_fixed_source_entry(),
+    )
+    repeat_base_prediction = opt._resolve_qr_fit_prediction_from_trial_params(
+        _locked_qr_fixed_source_entry(),
+        {"gamma": 0.0, "Gamma": 0.0, "_active_fit_param_names": ["gamma", "Gamma"]},
+        fit_context,
+        _locked_qr_fixed_source_entry(),
+    )
+    gamma_trial_prediction = opt._resolve_qr_fit_prediction_from_trial_params(
+        _locked_qr_fixed_source_entry(),
+        {"gamma": 1.0, "Gamma": 0.0, "_active_fit_param_names": ["gamma", "Gamma"]},
+        fit_context,
+        _locked_qr_fixed_source_entry(),
+    )
+
+    assert base_prediction["available"] is True
+    assert repeat_base_prediction["available"] is True
+    assert gamma_trial_prediction["available"] is True
+    assert repeat_base_prediction["source_rows_rebuilt_or_reused"] == (
+        "reused_for_same_params_signature"
+    )
+    assert gamma_trial_prediction["source_rows_rebuilt_or_reused"] == "rebuilt_for_trial_params"
+    assert [float(params["gamma"]) for params in source_builder_params] == [0.0, 1.0]
+    assert len(shared_source_rows_cache) == 2
 
 
 def test_worst_row_candidate_diagnostic_identifies_branch_swap_without_remapping() -> None:

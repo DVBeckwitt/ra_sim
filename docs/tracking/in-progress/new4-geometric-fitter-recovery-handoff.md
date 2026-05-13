@@ -9,6 +9,27 @@ Last updated: 2026-05-13
 
 ## Current status
 
+- 2026-05-13 sensitivity ladder slice completed. The dynamic caked QR objective
+  sensitivity diagnostic no longer classifies `gamma`/`Gamma` from a
+  sub-0.1-degree probe alone; angular fit variables are probed at
+  `0.1, 0.25, 0.5, 1, 2, 5` degrees and each variable records the first
+  meaningful step plus maximum predicted-caked and residual-vector deltas.
+  Bug/error status: this guards the reported `objective_param_insensitive`
+  failure mode from tiny finite differences. Feature status: additive
+  diagnostic fields only; no thresholds, branch identity, manual picks, GUI
+  state, config, or saved-state schema changed in this slice. Existing
+  fail-closed insensitive-objective rejection now requires the full ladder proof
+  instead of a tiny finite difference.
+  Additional propagation guards prove `gamma` reaches the source-row builder,
+  `Gamma` reaches the exact caked projector, and changed `gamma/Gamma`
+  signatures miss the shared prediction source-row cache instead of reusing base
+  rows. Review hardening fixed cache-reuse diagnostics so
+  `reused_for_same_params_signature` is not reported as rebuilt, and the
+  five-degree cap is asserted against emitted probes. Validation: the targeted
+  sensitivity/threading/cache slice passed (`9 passed`), the dynamic-source GUI
+  workflow target passed (`6 passed`), `tests/test_geometry_fitting.py` passed
+  (`255 passed`), and `python -m ra_sim.dev check` passed. Full New4
+  gamma/Gamma rerun and branch repair remain next steps.
 - 2026-05-13 maintenance cleanup: full-fit QR contract assembly now reuses the
   already-normalized manual and objective caked point payloads, and the contract
   helper resolves the GUI-drawn simulation source once before writing both

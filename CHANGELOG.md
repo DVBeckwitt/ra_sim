@@ -36,6 +36,12 @@
   - Updated `load_tilt_hint` to return converted simulation-space tilt/center/distance hints.
 
 - **Fitting and optimization**
+  - Changed the dynamic caked QR objective sensitivity diagnostic to probe
+    angular variables with a bounded `0.1` to `5` degree ladder and report the
+    first meaningful step plus caked-prediction and residual-vector deltas,
+    preventing `objective_param_insensitive` from being inferred from only a
+    sub-0.1-degree finite difference while keeping cache reuse distinct from
+    rebuilt source rows.
   - Added a popup-mode detector Qr-region companion preview beside the Qr-rod peak marker editor in the parallel background peak-fit diagnostic script, explicitly showing the companion window, refreshing detector overlays live during Delta Qr/L-window edits, and deferring expensive Delta Qr profile reintegration until slider release or accept.
   - Fixed the parallel Qr-rod marker editor so `L Min` / `L Max` submissions reject malformed profile-refresh tables, keep redraw errors inside the editor callback, and no longer let the global Enter shortcut close the popup while an L-bound text box is being edited.
   - Fixed PbI2 Qr-rod profile/editor defaults so `HK=0` uses `L_min=1.5` and `theta_i=40°`, nonzero HK rods use `0.5 <= L <= 3.0` with linear y axes, the detector companion preview uses the same HK-specific L bounds, and configured-hidden rows such as `HK=7` stay out of editor/support/final plots.
