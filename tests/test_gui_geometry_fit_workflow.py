@@ -36452,6 +36452,40 @@ def test_headless_geometry_fit_progress_sidecar_tracks_solve_phases(tmp_path) ->
     assert progress["output_state_path"].endswith("fit.json")
 
 
+def test_headless_progress_live_update_renames_caked_display_prediction_alias(
+    tmp_path,
+) -> None:
+    from ra_sim import headless_geometry_fit
+
+    progress_path = tmp_path / "fit.progress.json"
+    writer = headless_geometry_fit._HeadlessGeometryFitProgressWriter(progress_path)
+
+    writer.live_update(
+        {
+            "live_cache_records": [
+                {
+                    "pair_id": "bg0:pair0",
+                    "fit_prediction_detector_display_px": [9.2478, -1.2446],
+                    "simulated_detector_x": float("nan"),
+                    "simulated_detector_y": float("nan"),
+                    "simulated_two_theta_deg": 9.2526,
+                    "simulated_phi_deg": 0.0,
+                    "sim_nominal_caked_deg": [9.2526, 0.0],
+                }
+            ],
+        }
+    )
+
+    progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    record = progress["last_live_update"]["live_cache_records"][0]
+    assert record["fit_prediction_detector_display_px"] is None
+    assert record["fit_prediction_detector_display_px_unavailable_reason"] == (
+        "caked_degrees_not_detector_display_px"
+    )
+    assert record["fit_prediction_caked_deg"] == pytest.approx([9.2478, -1.2446])
+    assert record["fit_prediction_caked_deg_source"] == "fit_prediction_detector_display_px"
+
+
 def _write_fake_single_step_recovery_artifacts(output_root: Path, *, include_png: bool) -> None:
     from ra_sim import headless_geometry_fit
 
@@ -36542,8 +36576,11 @@ def test_headless_gamma_gamma_recovery_artifacts_write_rejected_required_pngs(
         final_params={"gamma": 1.5, "Gamma": 2.5},
     )
 
+    expected_state_hash = hashlib.sha256(state_path.read_bytes()).hexdigest()
     assert payload["geometry_fit_recovery_artifact_status"] == "pass"
     assert payload["geometry_fit_recovery_run_label"] == "Bi2Se3"
+    assert payload["input_state_path"] == state_path.resolve()
+    assert payload["input_state_sha256"] == expected_state_hash
     assert captured_single_step["report_label"] == "Bi2Se3"
     assert (output_dir / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_SINGLE_STEP_PNG).exists()
     assert (output_dir / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_PNG).exists()
@@ -36562,6 +36599,8 @@ def test_headless_gamma_gamma_recovery_artifacts_write_rejected_required_pngs(
     assert full_report["full_fit_success"] is False
     assert full_report["geometry_updated"] is False
     assert full_report["recovery_run_label"] == "Bi2Se3"
+    assert full_report["input_state_path"].endswith("bi2se3.json")
+    assert full_report["input_state_sha256"] == expected_state_hash
     assert full_report["plotted_row_identities"][0]["pair_id"] == "bg0:pair0"
     worst_report = json.loads(
         (output_dir / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_WORST_ROWS_JSON).read_text(
@@ -36573,6 +36612,8 @@ def test_headless_gamma_gamma_recovery_artifacts_write_rejected_required_pngs(
     writer = headless_geometry_fit._HeadlessGeometryFitProgressWriter(progress_path)
     writer.write("final_validation", **payload)
     progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert progress["input_state_path"].endswith("bi2se3.json")
+    assert progress["input_state_sha256"] == expected_state_hash
     assert progress["geometry_fit_recovery_artifacts"]["single_step_png"].endswith(
         headless_geometry_fit.GEOMETRY_FIT_RECOVERY_SINGLE_STEP_PNG
     )

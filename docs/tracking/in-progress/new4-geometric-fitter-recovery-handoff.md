@@ -9,6 +9,27 @@ Last updated: 2026-05-13
 
 ## Current status
 
+- 2026-05-13 Bi2Se3 recovery provenance/reporting cleanup completed. Headless
+  gamma/Gamma progress and recovery overlay JSON now record `input_state_path`
+  and `input_state_sha256`, so the artifact folder proves whether it used the
+  user-local `C:\Users\Kenpo\.local\share\ra_sim\Bi2Se3.json` state or another
+  saved state. Live-cache progress rows no longer leave caked `(2theta, phi)`
+  values under `fit_prediction_detector_display_px` for caked-display aliases:
+  the detector-display field is `null` with
+  `caked_degrees_not_detector_display_px`, and the same coordinate is reported
+  as `fit_prediction_caked_deg`. Bug/error status: reporting-only fix for the
+  misleading progress JSON field name; fitter acceptance, thresholds, manual
+  picks, GUI state, branch repair, and image generation behavior are unchanged.
+  Validation: focused recovery/progress artifact tests passed (`5 passed`),
+  focused QR contract/objective tests passed (`11 passed`), overlay legacy
+  compatibility tests passed (`2 passed`), `python -m ra_sim.dev check` passed,
+  and a full headless run from
+  `C:\Users\Kenpo\.local\share\ra_sim\Bi2Se3.json` completed with artifact
+  status `pass`. That run stayed fail-closed with `full_fit_success=false`,
+  `geometry_updated=false`, `qr_fit_resolved_count=82`,
+  `qr_fit_expected_count=82`, `objective_param_sensitivity_status=sensitive`,
+  `failure_classification=manual_outliers_or_physical_bad_fit`, and worst row
+  `bg1:pair15` / `hkl=[-2,0,5]` at `70.99 deg`.
 - 2026-05-13 headless recovery artifact wiring completed. Bi2Se3 headless
   `gamma,Gamma` fits now write `01_single_step_qr_coordinate_audit.{json,csv,png}`,
   `02_full_fit_initial_vs_final_qr_overlay.{json,png}`, and, on rejection,

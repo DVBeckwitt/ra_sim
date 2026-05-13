@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import copy
+import hashlib
 import importlib.util
 import json
 import math
@@ -1789,6 +1790,31 @@ _HEADLESS_GEOMETRY_FIT_PROGRESS_PHASES = frozenset(
         "output_state_write",
     }
 )
+_HEADLESS_CAKED_DEG_DETECTOR_DISPLAY_SOURCES = frozenset(
+    (
+        "fit_prediction_caked_deg",
+        "optimizer_simulated_source_two_theta_phi",
+        "dynamic_sim_visual_caked_deg_two_theta_phi",
+        "sim_visual_caked_deg",
+        "sim_caked",
+        "sim_caked_display",
+        "two_theta_deg/phi_deg",
+        "caked_x/y",
+    )
+)
+
+
+def _headless_geometry_fit_state_provenance(state_path: str | Path) -> dict[str, object]:
+    state_file = Path(state_path).expanduser().resolve()
+    try:
+        with state_file.open("rb") as stream:
+            state_hash = hashlib.file_digest(stream, "sha256").hexdigest()
+    except OSError:
+        state_hash = None
+    return {
+        "input_state_path": state_file,
+        "input_state_sha256": state_hash,
+    }
 
 
 def _headless_progress_jsonable(value: object) -> object:
@@ -1830,6 +1856,68 @@ def _headless_progress_float(value: object) -> float | None:
     if not math.isfinite(number):
         return None
     return float(number)
+
+
+def _headless_progress_pair(value: object) -> list[float] | None:
+    if not isinstance(value, (list, tuple)) or len(value) < 2:
+        return None
+    first = _headless_progress_float(value[0])
+    second = _headless_progress_float(value[1])
+    if first is None or second is None:
+        return None
+    return [float(first), float(second)]
+
+
+def _headless_live_record_display_alias_is_caked(record: Mapping[str, object]) -> bool:
+    if _headless_progress_pair(record.get("fit_prediction_detector_display_px")) is None:
+        return False
+    source = str(record.get("fit_prediction_detector_display_px_source") or "").strip()
+    if source in _HEADLESS_CAKED_DEG_DETECTOR_DISPLAY_SOURCES:
+        return True
+    if _headless_progress_pair(record.get("fit_prediction_detector_native_px")) is not None:
+        return False
+    simulated_detector_missing = (
+        _headless_progress_float(record.get("simulated_detector_x")) is None
+        or _headless_progress_float(record.get("simulated_detector_y")) is None
+    )
+    simulated_caked_present = _headless_progress_pair(
+        record.get("sim_nominal_caked_deg")
+    ) is not None or (
+        _headless_progress_float(record.get("simulated_two_theta_deg")) is not None
+        and _headless_progress_float(record.get("simulated_phi_deg")) is not None
+    )
+    return bool(simulated_detector_missing and simulated_caked_present)
+
+
+def _headless_sanitize_live_cache_record(record: object) -> object:
+    if not isinstance(record, Mapping):
+        return record
+    sanitized = dict(record)
+    if not _headless_live_record_display_alias_is_caked(sanitized):
+        return sanitized
+    alias = _headless_progress_pair(sanitized.get("fit_prediction_detector_display_px"))
+    sanitized["fit_prediction_detector_display_px"] = None
+    sanitized["fit_prediction_detector_display_px_unavailable_reason"] = (
+        "caked_degrees_not_detector_display_px"
+    )
+    if alias is not None and "fit_prediction_caked_deg" not in sanitized:
+        sanitized["fit_prediction_caked_deg"] = alias
+        sanitized["fit_prediction_caked_deg_source"] = "fit_prediction_detector_display_px"
+    return sanitized
+
+
+def _headless_progress_live_payload(value: object) -> object:
+    payload = _headless_progress_jsonable(value)
+    if not isinstance(payload, Mapping):
+        return payload
+    records = payload.get("live_cache_records")
+    if not isinstance(records, list):
+        return payload
+    updated = dict(payload)
+    updated["live_cache_records"] = [
+        _headless_sanitize_live_cache_record(record) for record in records
+    ]
+    return updated
 
 
 class _HeadlessGeometryFitProgressWriter:
@@ -1980,7 +2068,7 @@ class _HeadlessGeometryFitProgressWriter:
         summary = payload.get("point_match_summary")
         if isinstance(summary, Mapping):
             updates.update(self._merge_point_match_summary(summary))
-        updates["last_live_update"] = _headless_progress_jsonable(payload)
+        updates["last_live_update"] = _headless_progress_live_payload(payload)
         self.write("selected_solve", **updates)
 
     def write(self, phase: str, **updates: object) -> None:
@@ -2438,6 +2526,7 @@ def _write_headless_geometry_fit_recovery_artifacts(
         return {}
 
     state_file = Path(state_path).expanduser().resolve()
+    state_provenance = _headless_geometry_fit_state_provenance(state_file)
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     paths = _headless_geometry_fit_recovery_paths(output_path)
@@ -2465,6 +2554,8 @@ def _write_headless_geometry_fit_recovery_artifacts(
         "json_authoritative": True,
         "png_diagnostic_only": True,
         "recovery_run_label": report_label,
+        "input_state_path": state_provenance["input_state_path"],
+        "input_state_sha256": state_provenance["input_state_sha256"],
         "full_fit_success": bool(accepted),
         "geometry_updated": bool(accepted),
         "gamma_before": initial_params.get("gamma"),
@@ -2514,6 +2605,8 @@ def _write_headless_geometry_fit_recovery_artifacts(
         worst_report = {
             "json_authoritative": True,
             "png_diagnostic_only": True,
+            "input_state_path": state_provenance["input_state_path"],
+            "input_state_sha256": state_provenance["input_state_sha256"],
             "failure_classification": failure_classification,
             "row_count": int(len(worst_rows)),
             "rows": worst_rows,
@@ -2540,6 +2633,8 @@ def _write_headless_geometry_fit_recovery_artifacts(
     artifact_payload = {
         "geometry_fit_recovery_artifact_status": "pass",
         "geometry_fit_recovery_run_label": report_label,
+        "input_state_path": state_provenance["input_state_path"],
+        "input_state_sha256": state_provenance["input_state_sha256"],
         "geometry_fit_recovery_required_pngs": required_pngs,
         "geometry_fit_recovery_artifacts": artifact_paths,
         "single_step_status": single_step_report.get("status"),
@@ -2790,6 +2885,7 @@ def run_headless_geometry_fit(
     progress_writer.write(
         "preflight",
         state_path=Path(state_path),
+        **_headless_geometry_fit_state_provenance(state_path),
         downloads_dir=downloads_dir,
     )
     weighted_event_worker_count = None

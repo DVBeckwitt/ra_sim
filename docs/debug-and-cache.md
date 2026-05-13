@@ -98,11 +98,13 @@ must write:
 
 The progress JSON records the generated paths under
 `geometry_fit_recovery_artifacts` and mirrors the common paths at top level for
-operator inspection. Required PNGs are gate artifacts: the run fails if the
-single-step PNG or full-fit overlay PNG is missing, and a rejected fit also
-fails if the worst-row PNG is missing. This keeps a caked angular rejection such
-as `branch_source_pairing_mismatch` paired with visual evidence in the same
-folder as `bi2se3_gamma_gamma_fit.progress.json`.
+operator inspection. It also records `input_state_path` and
+`input_state_sha256` so the artifact folder proves which saved GUI state was
+used. Required PNGs are gate artifacts: the run fails if the single-step PNG or
+full-fit overlay PNG is missing, and a rejected fit also fails if the worst-row
+PNG is missing. This keeps a caked angular rejection such as
+`branch_source_pairing_mismatch` paired with visual evidence in the same folder
+as `bi2se3_gamma_gamma_fit.progress.json`.
 
 ## Background Peak-Fit Diagnostic Caches
 
@@ -542,11 +544,16 @@ explicit simulated fields such as `sim_refined_caked_deg`,
 `sim_caked_display`.
 
 Geometry-fit overlay records must keep the visible fitted-simulation marker
-source separate from stale legacy fit/cache aliases. In caked point-only rows,
-`fit_prediction_detector_display_px` may carry the current caked `(2theta,
-phi)` prediction when objective metadata says the row is caked, degree-based,
-or point-only. Only in that case may the GUI use that field as
-`final_sim_caked_display`; detector display pixels must not be promoted to
+source separate from stale legacy fit/cache aliases. Old caked point-only
+records may carry the current caked `(2theta, phi)` prediction under
+`fit_prediction_detector_display_px`; overlay replay may use that legacy alias
+as `final_sim_caked_display` only when objective metadata proves the row is
+caked, degree-based, or point-only. New live-cache progress records suppress
+that detector-display value for caked-display rows, set
+`fit_prediction_detector_display_px` to `null`, set
+`fit_prediction_detector_display_px_unavailable_reason` to
+`caked_degrees_not_detector_display_px`, and expose the coordinate as
+`fit_prediction_caked_deg`. Detector display pixels must not be promoted to
 caked angles without that metadata. Overlay diagnostics record
 `final_sim_display_source`, `final_sim_native_source`, and
 `final_sim_caked_display_source` so the drawn green `fit sim` marker source can
