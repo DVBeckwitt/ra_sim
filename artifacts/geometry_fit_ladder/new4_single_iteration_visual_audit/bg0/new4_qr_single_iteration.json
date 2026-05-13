@@ -10500,21 +10500,38 @@
     "invalid_reasons_by_count": {
       "mixed_display_native_detector_px": 10
     },
+    "max_visual_vs_objective_base_norm_deg": 177.46784803965923,
+    "max_visual_vs_objective_trial_norm_deg": 176.97626198655468,
     "original_sim_caked_matches_fit_prediction_caked_deg_all_rows": true,
     "plotted_row_count": 2,
     "plotted_row_count_gt_zero": true,
+    "proof_failure_reason": "visual_simulation_surface_differs_from_objective_surface",
+    "proof_status": "fail",
     "q_group_same_before_after_all_rows": true,
     "row_count": 7,
     "row_count_gt_zero": true,
     "saved_sim_refined_caked_used_false_for_all_rows": true,
-    "valid_plotted_fraction": 0.2857142857142857
+    "surface_mismatch_pair_ids": [
+      "bg0:pair0",
+      "bg0:pair1",
+      "bg0:pair2",
+      "bg0:pair3",
+      "bg0:pair4",
+      "bg0:pair5",
+      "bg0:pair6"
+    ],
+    "surface_mismatch_row_count": 7,
+    "surface_warning_row_count": 7,
+    "surface_warning_tolerance_deg": 0.05,
+    "valid_plotted_fraction": 0.2857142857142857,
+    "visual_objective_surface_match_all_rows": false
   },
   "clipped_delta_deg": {
     "Gamma": -3.2084715485207007,
     "gamma": -0.79447035164504
   },
-  "created_at_unix": 1778631383.0710757,
-  "csv_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4_single_iteration_visual_audit\\bg0\\new4_qr_single_iteration.csv",
+  "created_at_unix": 1778639470.1143157,
+  "csv_path": "artifacts/geometry_fit_ladder/new4_single_iteration_visual_audit/bg0/new4_qr_single_iteration.csv",
   "delta_Gamma_deg": -3.2084715485207007,
   "delta_gamma_deg": -0.79447035164504,
   "fd_step_deg": 0.05,
@@ -10622,12 +10639,16 @@
     ]
   ],
   "json_authoritative": true,
-  "json_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4_single_iteration_visual_audit\\bg0\\new4_qr_single_iteration.json",
+  "json_path": "artifacts/geometry_fit_ladder/new4_single_iteration_visual_audit/bg0/new4_qr_single_iteration.json",
   "max_angle_step_deg": 5.0,
+  "max_visual_vs_objective_base_norm_deg": 177.46784803965923,
+  "max_visual_vs_objective_trial_norm_deg": 176.97626198655468,
   "params_mode": "base",
   "plotted_row_count": 2,
   "png_diagnostic_only": true,
-  "png_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_ladder\\new4_single_iteration_visual_audit\\bg0\\new4_qr_single_iteration.png",
+  "png_path": "artifacts/geometry_fit_ladder/new4_single_iteration_visual_audit/bg0/new4_qr_single_iteration.png",
+  "proof_failure_reason": "visual_simulation_surface_differs_from_objective_surface",
+  "proof_status": "fail",
   "proposed_delta_deg": {
     "Gamma": -3.2084715485207007,
     "gamma": -0.79447035164504
@@ -10656,14 +10677,16 @@
       "delta_Gamma_deg": -3.2084715485207007,
       "delta_gamma_deg": -0.79447035164504,
       "detector_display_frame_valid": false,
+      "detector_display_invalid_reason": "mixed_display_native_detector_px",
       "detector_display_invalid_reasons": [
         "mixed_display_native_detector_px",
         "mixed_display_native_detector_px"
       ],
       "detector_native_frame_valid": true,
+      "detector_panel_proof_complete": false,
       "fit_prediction_caked_deg": [
-        9.25259605531369,
-        0.0
+        70.1785858855294,
+        -132.25
       ],
       "hkl": [
         0,
@@ -10672,29 +10695,63 @@
       ],
       "hkl_same_before_after": true,
       "identity_same_before_after": true,
+      "manual_detector_display_px": [
+        1455.246663897277,
+        1472.9363426415914
+      ],
+      "manual_detector_display_valid": true,
+      "manual_target_caked_deg": [
+        9.315993437026432,
+        -1.2169320075511507
+      ],
+      "objective_base_to_manual_delta_caked_deg": [
+        60.862592448502966,
+        -131.03306799244885
+      ],
+      "objective_base_to_manual_norm_deg": 144.47809545763778,
+      "objective_detector_display_available": true,
+      "objective_sim_base_caked_deg": [
+        70.1785858855294,
+        -132.25
+      ],
+      "objective_sim_detector_display_px": [
+        0.0,
+        2989.747403944686
+      ],
+      "objective_sim_detector_display_valid": true,
+      "objective_sim_trial_caked_deg": [
+        70.1785858855294,
+        -132.25
+      ],
+      "objective_surface_used_for_residual": true,
+      "objective_trial_to_manual_delta_caked_deg": [
+        60.862592448502966,
+        -131.03306799244885
+      ],
+      "objective_trial_to_manual_norm_deg": 144.47809545763778,
       "original_live_projected_detector_caked_deg": [
         70.1785858855294,
         -132.25
       ],
       "original_sim_caked_deg": [
-        9.25259605531369,
-        0.0
+        70.1785858855294,
+        -132.25
       ],
       "original_sim_caked_matches_fit_prediction_caked_deg": true,
       "original_sim_detector_display_px": [
-        9.25259605531369,
-        0.0
+        0.0,
+        2989.747403944686
       ],
       "original_sim_detector_native_px": [
         2989.747403944686,
         2999.0
       ],
-      "original_sim_source": "sim_visual_caked_deg",
+      "original_sim_source": "point_only_detector_projection",
       "original_to_background_delta_caked_deg": [
-        -0.06339738171274156,
-        1.2169320075511507
+        60.862592448502966,
+        -131.03306799244885
       ],
-      "original_to_background_norm_deg": 1.2185822660003325,
+      "original_to_background_norm_deg": 144.47809545763778,
       "pair_id": "bg0:pair0",
       "q_group_key": [
         "q_group",
@@ -10713,24 +10770,55 @@
         70.1785858855294,
         -132.25
       ],
+      "trial_objective_sim_detector_display_px": [
+        0.0,
+        2989.747403944686
+      ],
+      "trial_objective_sim_detector_display_valid": true,
       "trial_sim_caked_deg": [
-        9.25259605531369,
-        0.0
+        70.1785858855294,
+        -132.25
       ],
       "trial_sim_detector_display_px": [
-        9.25259605531369,
-        0.0
+        0.0,
+        2989.747403944686
       ],
       "trial_sim_detector_native_px": [
         2989.747403944686,
         2999.0
       ],
-      "trial_sim_source": "sim_visual_caked_deg",
+      "trial_sim_source": "point_only_detector_projection",
       "trial_to_background_delta_caked_deg": [
-        -0.06339738171274156,
-        1.2169320075511507
+        60.862592448502966,
+        -131.03306799244885
       ],
-      "trial_to_background_norm_deg": 1.2185822660003325
+      "trial_to_background_norm_deg": 144.47809545763778,
+      "visual_objective_base_surface_match": false,
+      "visual_objective_trial_surface_match": false,
+      "visual_sim_base_caked_deg": [
+        9.25259605531369,
+        0.0
+      ],
+      "visual_sim_detector_display_px": [
+        9.25259605531369,
+        0.0
+      ],
+      "visual_sim_detector_display_valid": false,
+      "visual_sim_trial_caked_deg": [
+        9.25259605531369,
+        0.0
+      ],
+      "visual_surface_used_for_residual": false,
+      "visual_vs_objective_base_delta_caked_deg": [
+        -60.92598983021571,
+        132.25
+      ],
+      "visual_vs_objective_base_norm_deg": 145.609198668187,
+      "visual_vs_objective_trial_delta_caked_deg": [
+        -60.92598983021571,
+        132.25
+      ],
+      "visual_vs_objective_trial_norm_deg": 145.609198668187
     },
     {
       "background_caked_deg": [
@@ -10752,11 +10840,13 @@
       "delta_Gamma_deg": -3.2084715485207007,
       "delta_gamma_deg": -0.79447035164504,
       "detector_display_frame_valid": true,
+      "detector_display_invalid_reason": null,
       "detector_display_invalid_reasons": [],
       "detector_native_frame_valid": true,
+      "detector_panel_proof_complete": true,
       "fit_prediction_caked_deg": [
-        35.3381587997551,
-        -18.25
+        29.33141455157448,
+        59.1675664257215
       ],
       "hkl": [
         -1,
@@ -10765,13 +10855,47 @@
       ],
       "hkl_same_before_after": true,
       "identity_same_before_after": true,
+      "manual_detector_display_px": [
+        1099.4480074178325,
+        1367.2678777680248
+      ],
+      "manual_detector_display_valid": true,
+      "manual_target_caked_deg": [
+        29.29165538323298,
+        57.079369517688804
+      ],
+      "objective_base_to_manual_delta_caked_deg": [
+        0.03975916834150084,
+        2.0881969080326996
+      ],
+      "objective_base_to_manual_norm_deg": 2.088575380058028,
+      "objective_detector_display_available": true,
+      "objective_sim_base_caked_deg": [
+        29.33141455157448,
+        59.1675664257215
+      ],
+      "objective_sim_detector_display_px": [
+        1619.6782176708423,
+        1091.1683276995225
+      ],
+      "objective_sim_detector_display_valid": true,
+      "objective_sim_trial_caked_deg": [
+        28.621315038153067,
+        59.14883404073515
+      ],
+      "objective_surface_used_for_residual": true,
+      "objective_trial_to_manual_delta_caked_deg": [
+        -0.6703403450799108,
+        2.0694645230463493
+      ],
+      "objective_trial_to_manual_norm_deg": 2.1753251688860926,
       "original_live_projected_detector_caked_deg": [
         29.33141455157448,
         59.1675664257215
       ],
       "original_sim_caked_deg": [
-        35.3381587997551,
-        -18.25
+        29.33141455157448,
+        59.1675664257215
       ],
       "original_sim_caked_matches_fit_prediction_caked_deg": true,
       "original_sim_detector_display_px": [
@@ -10782,12 +10906,12 @@
         1091.1683276995225,
         1379.3217823291577
       ],
-      "original_sim_source": "sim_visual_caked_deg",
+      "original_sim_source": "point_only_detector_projection",
       "original_to_background_delta_caked_deg": [
-        6.046503416522121,
-        -75.3293695176888
+        0.03975916834150084,
+        2.0881969080326996
       ],
-      "original_to_background_norm_deg": 75.57164888699013,
+      "original_to_background_norm_deg": 2.088575380058028,
       "pair_id": "bg0:pair1",
       "q_group_key": [
         "q_group",
@@ -10806,9 +10930,14 @@
         28.621315038153067,
         59.14883404073515
       ],
+      "trial_objective_sim_detector_display_px": [
+        1613.4290351580285,
+        1101.5254862176894
+      ],
+      "trial_objective_sim_detector_display_valid": true,
       "trial_sim_caked_deg": [
-        34.73275825275915,
-        -18.031103499684093
+        28.621315038153067,
+        59.14883404073515
       ],
       "trial_sim_detector_display_px": [
         1613.4290351580285,
@@ -10818,12 +10947,38 @@
         1101.5254862176894,
         1385.5709648419715
       ],
-      "trial_sim_source": "sim_visual_caked_deg",
+      "trial_sim_source": "point_only_detector_projection",
       "trial_to_background_delta_caked_deg": [
-        5.441102869526169,
-        -75.1104730173729
+        -0.6703403450799108,
+        2.0694645230463493
       ],
-      "trial_to_background_norm_deg": 75.30729551199052
+      "trial_to_background_norm_deg": 2.1753251688860926,
+      "visual_objective_base_surface_match": false,
+      "visual_objective_trial_surface_match": false,
+      "visual_sim_base_caked_deg": [
+        35.3381587997551,
+        -18.25
+      ],
+      "visual_sim_detector_display_px": [
+        1619.6782176708423,
+        1091.1683276995225
+      ],
+      "visual_sim_detector_display_valid": true,
+      "visual_sim_trial_caked_deg": [
+        34.73275825275915,
+        -18.031103499684093
+      ],
+      "visual_surface_used_for_residual": false,
+      "visual_vs_objective_base_delta_caked_deg": [
+        6.00674424818062,
+        -77.4175664257215
+      ],
+      "visual_vs_objective_base_norm_deg": 77.65024512352844,
+      "visual_vs_objective_trial_delta_caked_deg": [
+        6.11144321460608,
+        -77.17993754041925
+      ],
+      "visual_vs_objective_trial_norm_deg": 77.42152476481182
     },
     {
       "background_caked_deg": [
@@ -10845,11 +11000,13 @@
       "delta_Gamma_deg": -3.2084715485207007,
       "delta_gamma_deg": -0.79447035164504,
       "detector_display_frame_valid": true,
+      "detector_display_invalid_reason": null,
       "detector_display_invalid_reasons": [],
       "detector_native_frame_valid": true,
+      "detector_panel_proof_complete": true,
       "fit_prediction_caked_deg": [
-        20.28539186983084,
-        -139.7784058050912
+        29.37392619768742,
+        -57.25
       ],
       "hkl": [
         -1,
@@ -10858,13 +11015,47 @@
       ],
       "hkl_same_before_after": true,
       "identity_same_before_after": true,
+      "manual_detector_display_px": [
+        1821.9936837473379,
+        1374.6236621955957
+      ],
+      "manual_detector_display_valid": true,
+      "manual_target_caked_deg": [
+        29.861006834273667,
+        -59.073942507948104
+      ],
+      "objective_base_to_manual_delta_caked_deg": [
+        -0.4870806365862457,
+        1.823942507948118
+      ],
+      "objective_base_to_manual_norm_deg": 1.8878595866317316,
+      "objective_detector_display_available": true,
+      "objective_sim_base_caked_deg": [
+        29.37392619768742,
+        -57.25
+      ],
+      "objective_sim_detector_display_px": [
+        1631.156414302381,
+        1807.9419811829048
+      ],
+      "objective_sim_detector_display_valid": true,
+      "objective_sim_trial_caked_deg": [
+        29.954495493523087,
+        -57.25
+      ],
+      "objective_surface_used_for_residual": true,
+      "objective_trial_to_manual_delta_caked_deg": [
+        0.09348865924942018,
+        1.823942507948118
+      ],
+      "objective_trial_to_manual_norm_deg": 1.8263368806735314,
       "original_live_projected_detector_caked_deg": [
         29.37392619768742,
         -57.25
       ],
       "original_sim_caked_deg": [
-        20.28539186983084,
-        -139.7784058050912
+        29.37392619768742,
+        -57.25
       ],
       "original_sim_caked_matches_fit_prediction_caked_deg": true,
       "original_sim_detector_display_px": [
@@ -10875,12 +11066,12 @@
         1807.9419811829048,
         1367.843585697619
       ],
-      "original_sim_source": "sim_visual_caked_deg",
+      "original_sim_source": "point_only_detector_projection",
       "original_to_background_delta_caked_deg": [
-        -9.575614964442828,
-        -80.7044632971431
+        -0.4870806365862457,
+        1.823942507948118
       ],
-      "original_to_background_norm_deg": 81.27055308060343,
+      "original_to_background_norm_deg": 1.8878595866317316,
       "pair_id": "bg0:pair2",
       "q_group_key": [
         "q_group",
@@ -10899,9 +11090,14 @@
         29.954495493523087,
         -57.25
       ],
+      "trial_objective_sim_detector_display_px": [
+        1636.1069980696373,
+        1816.5999684229741
+      ],
+      "trial_objective_sim_detector_display_valid": true,
       "trial_sim_caked_deg": [
-        20.937900036454053,
-        -140.24514590528278
+        29.954495493523087,
+        -57.25
       ],
       "trial_sim_detector_display_px": [
         1636.1069980696373,
@@ -10911,12 +11107,38 @@
         1816.5999684229741,
         1362.8930019303627
       ],
-      "trial_sim_source": "sim_visual_caked_deg",
+      "trial_sim_source": "point_only_detector_projection",
       "trial_to_background_delta_caked_deg": [
-        -8.923106797819614,
-        -81.17120339733468
+        0.09348865924942018,
+        1.823942507948118
       ],
-      "trial_to_background_norm_deg": 81.66018672460143
+      "trial_to_background_norm_deg": 1.8263368806735314,
+      "visual_objective_base_surface_match": false,
+      "visual_objective_trial_surface_match": false,
+      "visual_sim_base_caked_deg": [
+        20.28539186983084,
+        -139.7784058050912
+      ],
+      "visual_sim_detector_display_px": [
+        1631.156414302381,
+        1807.9419811829048
+      ],
+      "visual_sim_detector_display_valid": true,
+      "visual_sim_trial_caked_deg": [
+        20.937900036454053,
+        -140.24514590528278
+      ],
+      "visual_surface_used_for_residual": false,
+      "visual_vs_objective_base_delta_caked_deg": [
+        -9.088534327856582,
+        -82.52840580509121
+      ],
+      "visual_vs_objective_base_norm_deg": 83.02734020163744,
+      "visual_vs_objective_trial_delta_caked_deg": [
+        -9.016595457069034,
+        -82.99514590528278
+      ],
+      "visual_vs_objective_trial_norm_deg": 83.48349080791732
     },
     {
       "background_caked_deg": [
@@ -10938,14 +11160,16 @@
       "delta_Gamma_deg": -3.2084715485207007,
       "delta_gamma_deg": -0.79447035164504,
       "detector_display_frame_valid": false,
+      "detector_display_invalid_reason": "mixed_display_native_detector_px",
       "detector_display_invalid_reasons": [
         "mixed_display_native_detector_px",
         "mixed_display_native_detector_px"
       ],
       "detector_native_frame_valid": true,
+      "detector_panel_proof_complete": false,
       "fit_prediction_caked_deg": [
-        40.24211533226425,
-        114.25
+        69.25095841576643,
+        -130.75
       ],
       "hkl": [
         -1,
@@ -10954,29 +11178,63 @@
       ],
       "hkl_same_before_after": true,
       "identity_same_before_after": true,
+      "manual_detector_display_px": [
+        1084.7218823668009,
+        1081.4190956439036
+      ],
+      "manual_detector_display_valid": true,
+      "manual_target_caked_deg": [
+        40.14250893640562,
+        35.566836371696525
+      ],
+      "objective_base_to_manual_delta_caked_deg": [
+        29.108449479360814,
+        -166.31683637169652
+      ],
+      "objective_base_to_manual_norm_deg": 168.84487523103027,
+      "objective_detector_display_available": true,
+      "objective_sim_base_caked_deg": [
+        69.25095841576643,
+        -130.75
+      ],
+      "objective_sim_detector_display_px": [
+        114.25,
+        2958.7578846677357
+      ],
+      "objective_sim_detector_display_valid": true,
+      "objective_sim_trial_caked_deg": [
+        69.25095841576643,
+        -130.75
+      ],
+      "objective_surface_used_for_residual": true,
+      "objective_trial_to_manual_delta_caked_deg": [
+        29.108449479360814,
+        -166.31683637169652
+      ],
+      "objective_trial_to_manual_norm_deg": 168.84487523103027,
       "original_live_projected_detector_caked_deg": [
         69.25095841576643,
         -130.75
       ],
       "original_sim_caked_deg": [
-        40.24211533226425,
-        114.25
+        69.25095841576643,
+        -130.75
       ],
       "original_sim_caked_matches_fit_prediction_caked_deg": true,
       "original_sim_detector_display_px": [
-        40.24211533226425,
-        114.25
+        114.25,
+        2958.7578846677357
       ],
       "original_sim_detector_native_px": [
         2958.7578846677357,
         2884.75
       ],
-      "original_sim_source": "sim_visual_caked_deg",
+      "original_sim_source": "point_only_detector_projection",
       "original_to_background_delta_caked_deg": [
-        0.09960639585862907,
-        78.68316362830348
+        29.108449479360814,
+        -166.31683637169652
       ],
-      "original_to_background_norm_deg": 78.68322667501934,
+      "original_to_background_norm_deg": 168.84487523103027,
       "pair_id": "bg0:pair3",
       "q_group_key": [
         "q_group",
@@ -10995,24 +11253,55 @@
         69.25095841576643,
         -130.75
       ],
+      "trial_objective_sim_detector_display_px": [
+        114.51971812757483,
+        2958.7578846677357
+      ],
+      "trial_objective_sim_detector_display_valid": true,
       "trial_sim_caked_deg": [
-        40.24211533226425,
-        114.51971812757468
+        69.25095841576643,
+        -130.75
       ],
       "trial_sim_detector_display_px": [
-        40.24211533226425,
-        114.51971812757468
+        114.51971812757483,
+        2958.7578846677357
       ],
       "trial_sim_detector_native_px": [
         2958.7578846677357,
         2884.480281872425
       ],
-      "trial_sim_source": "sim_visual_caked_deg",
+      "trial_sim_source": "point_only_detector_projection",
       "trial_to_background_delta_caked_deg": [
-        0.09960639585862907,
-        78.95288175587814
+        29.108449479360814,
+        -166.31683637169652
       ],
-      "trial_to_background_norm_deg": 78.95294458721455
+      "trial_to_background_norm_deg": 168.84487523103027,
+      "visual_objective_base_surface_match": false,
+      "visual_objective_trial_surface_match": false,
+      "visual_sim_base_caked_deg": [
+        40.24211533226425,
+        114.25
+      ],
+      "visual_sim_detector_display_px": [
+        40.24211533226425,
+        114.25
+      ],
+      "visual_sim_detector_display_valid": false,
+      "visual_sim_trial_caked_deg": [
+        40.24211533226425,
+        114.51971812757468
+      ],
+      "visual_surface_used_for_residual": false,
+      "visual_vs_objective_base_delta_caked_deg": [
+        -29.008843083502185,
+        -115.0
+      ],
+      "visual_vs_objective_base_norm_deg": 118.60233124624175,
+      "visual_vs_objective_trial_delta_caked_deg": [
+        -29.008843083502185,
+        -114.73028187242534
+      ],
+      "visual_vs_objective_trial_norm_deg": 118.34082370665426
     },
     {
       "background_caked_deg": [
@@ -11034,14 +11323,16 @@
       "delta_Gamma_deg": -3.2084715485207007,
       "delta_gamma_deg": -0.79447035164504,
       "detector_display_frame_valid": false,
+      "detector_display_invalid_reason": "mixed_display_native_detector_px",
       "detector_display_invalid_reasons": [
         "mixed_display_native_detector_px",
         "mixed_display_native_detector_px"
       ],
       "detector_native_frame_valid": true,
+      "detector_panel_proof_complete": false,
       "fit_prediction_caked_deg": [
-        40.24211533226425,
-        42.75
+        69.73511599051498,
+        -132.25
       ],
       "hkl": [
         -1,
@@ -11050,29 +11341,63 @@
       ],
       "hkl_same_before_after": true,
       "identity_same_before_after": true,
+      "manual_detector_display_px": [
+        1848.0465669515438,
+        1081.8154342999576
+      ],
+      "manual_detector_display_valid": true,
+      "manual_target_caked_deg": [
+        40.85301991187549,
+        -37.56585507558714
+      ],
+      "objective_base_to_manual_delta_caked_deg": [
+        28.882096078639492,
+        -94.68414492441286
+      ],
+      "objective_base_to_manual_norm_deg": 98.99122574229992,
+      "objective_detector_display_available": true,
+      "objective_sim_base_caked_deg": [
+        69.73511599051498,
+        -132.25
+      ],
+      "objective_sim_detector_display_px": [
+        42.75,
+        2958.7578846677357
+      ],
+      "objective_sim_detector_display_valid": true,
+      "objective_sim_trial_caked_deg": [
+        69.7437645528356,
+        -132.25
+      ],
+      "objective_surface_used_for_residual": true,
+      "objective_trial_to_manual_delta_caked_deg": [
+        28.890744640960108,
+        -94.68414492441286
+      ],
+      "objective_trial_to_manual_norm_deg": 98.99374942882193,
       "original_live_projected_detector_caked_deg": [
         69.73511599051498,
         -132.25
       ],
       "original_sim_caked_deg": [
-        40.24211533226425,
-        42.75
+        69.73511599051498,
+        -132.25
       ],
       "original_sim_caked_matches_fit_prediction_caked_deg": true,
       "original_sim_detector_display_px": [
-        40.24211533226425,
-        42.75
+        42.75,
+        2958.7578846677357
       ],
       "original_sim_detector_native_px": [
         2958.7578846677357,
         2956.25
       ],
-      "original_sim_source": "sim_visual_caked_deg",
+      "original_sim_source": "point_only_detector_projection",
       "original_to_background_delta_caked_deg": [
-        -0.610904579611244,
-        80.31585507558714
+        28.882096078639492,
+        -94.68414492441286
       ],
-      "original_to_background_norm_deg": 80.31817839647576,
+      "original_to_background_norm_deg": 98.99122574229992,
       "pair_id": "bg0:pair4",
       "q_group_key": [
         "q_group",
@@ -11091,24 +11416,55 @@
         69.7437645528356,
         -132.25
       ],
+      "trial_objective_sim_detector_display_px": [
+        42.25,
+        2958.7578846677357
+      ],
+      "trial_objective_sim_detector_display_valid": true,
       "trial_sim_caked_deg": [
-        40.24211533226425,
-        42.25
+        69.7437645528356,
+        -132.25
       ],
       "trial_sim_detector_display_px": [
-        40.24211533226425,
-        42.25
+        42.25,
+        2958.7578846677357
       ],
       "trial_sim_detector_native_px": [
         2958.7578846677357,
         2956.75
       ],
-      "trial_sim_source": "sim_visual_caked_deg",
+      "trial_sim_source": "point_only_detector_projection",
       "trial_to_background_delta_caked_deg": [
-        -0.610904579611244,
-        79.81585507558714
+        28.890744640960108,
+        -94.68414492441286
       ],
-      "trial_to_background_norm_deg": 79.8181929503075
+      "trial_to_background_norm_deg": 98.99374942882193,
+      "visual_objective_base_surface_match": false,
+      "visual_objective_trial_surface_match": false,
+      "visual_sim_base_caked_deg": [
+        40.24211533226425,
+        42.75
+      ],
+      "visual_sim_detector_display_px": [
+        40.24211533226425,
+        42.75
+      ],
+      "visual_sim_detector_display_valid": false,
+      "visual_sim_trial_caked_deg": [
+        40.24211533226425,
+        42.25
+      ],
+      "visual_surface_used_for_residual": false,
+      "visual_vs_objective_base_delta_caked_deg": [
+        -29.493000658250736,
+        175.0
+      ],
+      "visual_vs_objective_base_norm_deg": 177.46784803965923,
+      "visual_vs_objective_trial_delta_caked_deg": [
+        -29.501649220571352,
+        174.5
+      ],
+      "visual_vs_objective_trial_norm_deg": 176.97626198655468
     },
     {
       "background_caked_deg": [
@@ -11130,14 +11486,16 @@
       "delta_Gamma_deg": -3.2084715485207007,
       "delta_gamma_deg": -0.79447035164504,
       "detector_display_frame_valid": false,
+      "detector_display_invalid_reason": "mixed_display_native_detector_px",
       "detector_display_invalid_reasons": [
         "mixed_display_native_detector_px",
         "mixed_display_native_detector_px"
       ],
       "detector_native_frame_valid": true,
+      "detector_panel_proof_complete": false,
       "fit_prediction_caked_deg": [
-        57.4660806716561,
-        11.731359606813157
+        69.81830965763892,
+        -133.25
       ],
       "hkl": [
         -1,
@@ -11146,29 +11504,63 @@
       ],
       "hkl_same_before_after": true,
       "identity_same_before_after": true,
+      "manual_detector_display_px": [
+        1211.4533088564194,
+        434.57859171719974
+      ],
+      "manual_detector_display_valid": true,
+      "manual_target_caked_deg": [
+        57.69427286954033,
+        11.731359606813157
+      ],
+      "objective_base_to_manual_delta_caked_deg": [
+        12.124036788098593,
+        -144.98135960681316
+      ],
+      "objective_base_to_manual_norm_deg": 145.4874114880021,
+      "objective_detector_display_available": true,
+      "objective_sim_base_caked_deg": [
+        69.81830965763892,
+        -133.25
+      ],
+      "objective_sim_detector_display_px": [
+        11.731359606813385,
+        2941.533919328344
+      ],
+      "objective_sim_detector_display_valid": true,
+      "objective_sim_trial_caked_deg": [
+        69.81830965763892,
+        -133.25
+      ],
+      "objective_surface_used_for_residual": true,
+      "objective_trial_to_manual_delta_caked_deg": [
+        12.124036788098593,
+        -144.98135960681316
+      ],
+      "objective_trial_to_manual_norm_deg": 145.4874114880021,
       "original_live_projected_detector_caked_deg": [
         69.81830965763892,
         -133.25
       ],
       "original_sim_caked_deg": [
-        57.4660806716561,
-        11.731359606813157
+        69.81830965763892,
+        -133.25
       ],
       "original_sim_caked_matches_fit_prediction_caked_deg": true,
       "original_sim_detector_display_px": [
-        57.4660806716561,
-        11.731359606813157
+        11.731359606813385,
+        2941.533919328344
       ],
       "original_sim_detector_native_px": [
         2941.533919328344,
         2987.2686403931866
       ],
-      "original_sim_source": "sim_visual_caked_deg",
+      "original_sim_source": "point_only_detector_projection",
       "original_to_background_delta_caked_deg": [
-        -0.2281921978842263,
-        0.0
+        12.124036788098593,
+        -144.98135960681316
       ],
-      "original_to_background_norm_deg": 0.2281921978842263,
+      "original_to_background_norm_deg": 145.4874114880021,
       "pair_id": "bg0:pair5",
       "q_group_key": [
         "q_group",
@@ -11187,24 +11579,55 @@
         69.81830965763892,
         -133.25
       ],
+      "trial_objective_sim_detector_display_px": [
+        11.731359606813385,
+        2941.533919328344
+      ],
+      "trial_objective_sim_detector_display_valid": true,
       "trial_sim_caked_deg": [
-        57.4660806716561,
-        11.731359606813157
+        69.81830965763892,
+        -133.25
       ],
       "trial_sim_detector_display_px": [
-        57.4660806716561,
-        11.731359606813157
+        11.731359606813385,
+        2941.533919328344
       ],
       "trial_sim_detector_native_px": [
         2941.533919328344,
         2987.2686403931866
       ],
-      "trial_sim_source": "sim_visual_caked_deg",
+      "trial_sim_source": "point_only_detector_projection",
       "trial_to_background_delta_caked_deg": [
-        -0.2281921978842263,
-        0.0
+        12.124036788098593,
+        -144.98135960681316
       ],
-      "trial_to_background_norm_deg": 0.2281921978842263
+      "trial_to_background_norm_deg": 145.4874114880021,
+      "visual_objective_base_surface_match": false,
+      "visual_objective_trial_surface_match": false,
+      "visual_sim_base_caked_deg": [
+        57.4660806716561,
+        11.731359606813157
+      ],
+      "visual_sim_detector_display_px": [
+        57.4660806716561,
+        11.731359606813157
+      ],
+      "visual_sim_detector_display_valid": false,
+      "visual_sim_trial_caked_deg": [
+        57.4660806716561,
+        11.731359606813157
+      ],
+      "visual_surface_used_for_residual": false,
+      "visual_vs_objective_base_delta_caked_deg": [
+        -12.35222898598282,
+        144.98135960681316
+      ],
+      "visual_vs_objective_base_norm_deg": 145.50660532897547,
+      "visual_vs_objective_trial_delta_caked_deg": [
+        -12.35222898598282,
+        144.98135960681316
+      ],
+      "visual_vs_objective_trial_norm_deg": 145.50660532897547
     },
     {
       "background_caked_deg": [
@@ -11226,14 +11649,16 @@
       "delta_Gamma_deg": -3.2084715485207007,
       "delta_gamma_deg": -0.79447035164504,
       "detector_display_frame_valid": false,
+      "detector_display_invalid_reason": "mixed_display_native_detector_px",
       "detector_display_invalid_reasons": [
         "mixed_display_native_detector_px",
         "mixed_display_native_detector_px"
       ],
       "detector_native_frame_valid": true,
+      "detector_panel_proof_complete": false,
       "fit_prediction_caked_deg": [
-        57.4660806716561,
-        66.25
+        69.46502629340404,
+        -131.75
       ],
       "hkl": [
         -1,
@@ -11242,29 +11667,63 @@
       ],
       "hkl_same_before_after": true,
       "identity_same_before_after": true,
+      "manual_detector_display_px": [
+        1738.867290909798,
+        424.44309281907954
+      ],
+      "manual_detector_display_valid": true,
+      "manual_target_caked_deg": [
+        58.12173201702556,
+        -13.731087598395106
+      ],
+      "objective_base_to_manual_delta_caked_deg": [
+        11.34329427637848,
+        -118.0189124016049
+      ],
+      "objective_base_to_manual_norm_deg": 118.56278509506349,
+      "objective_detector_display_available": true,
+      "objective_sim_base_caked_deg": [
+        69.46502629340404,
+        -131.75
+      ],
+      "objective_sim_detector_display_px": [
+        66.25,
+        2941.533919328344
+      ],
+      "objective_sim_detector_display_valid": true,
+      "objective_sim_trial_caked_deg": [
+        69.46502629340404,
+        -131.75
+      ],
+      "objective_surface_used_for_residual": true,
+      "objective_trial_to_manual_delta_caked_deg": [
+        11.34329427637848,
+        -118.0189124016049
+      ],
+      "objective_trial_to_manual_norm_deg": 118.56278509506349,
       "original_live_projected_detector_caked_deg": [
         69.46502629340404,
         -131.75
       ],
       "original_sim_caked_deg": [
-        57.4660806716561,
-        66.25
+        69.46502629340404,
+        -131.75
       ],
       "original_sim_caked_matches_fit_prediction_caked_deg": true,
       "original_sim_detector_display_px": [
-        57.4660806716561,
-        66.25
+        66.25,
+        2941.533919328344
       ],
       "original_sim_detector_native_px": [
         2941.533919328344,
         2932.75
       ],
-      "original_sim_source": "sim_visual_caked_deg",
+      "original_sim_source": "point_only_detector_projection",
       "original_to_background_delta_caked_deg": [
-        -0.6556513453694564,
-        79.9810875983951
+        11.34329427637848,
+        -118.0189124016049
       ],
-      "original_to_background_norm_deg": 79.9837749303497,
+      "original_to_background_norm_deg": 118.56278509506349,
       "pair_id": "bg0:pair6",
       "q_group_key": [
         "q_group",
@@ -11283,32 +11742,75 @@
         69.46502629340404,
         -131.75
       ],
+      "trial_objective_sim_detector_display_px": [
+        65.75,
+        2941.533919328344
+      ],
+      "trial_objective_sim_detector_display_valid": true,
       "trial_sim_caked_deg": [
-        57.4660806716561,
-        65.75
+        69.46502629340404,
+        -131.75
       ],
       "trial_sim_detector_display_px": [
-        57.4660806716561,
-        65.75
+        65.75,
+        2941.533919328344
       ],
       "trial_sim_detector_native_px": [
         2941.533919328344,
         2933.25
       ],
-      "trial_sim_source": "sim_visual_caked_deg",
+      "trial_sim_source": "point_only_detector_projection",
       "trial_to_background_delta_caked_deg": [
-        -0.6556513453694564,
-        79.4810875983951
+        11.34329427637848,
+        -118.0189124016049
       ],
-      "trial_to_background_norm_deg": 79.48379183525684
+      "trial_to_background_norm_deg": 118.56278509506349,
+      "visual_objective_base_surface_match": false,
+      "visual_objective_trial_surface_match": false,
+      "visual_sim_base_caked_deg": [
+        57.4660806716561,
+        66.25
+      ],
+      "visual_sim_detector_display_px": [
+        57.4660806716561,
+        66.25
+      ],
+      "visual_sim_detector_display_valid": false,
+      "visual_sim_trial_caked_deg": [
+        57.4660806716561,
+        65.75
+      ],
+      "visual_surface_used_for_residual": false,
+      "visual_vs_objective_base_delta_caked_deg": [
+        -11.998945621747936,
+        -162.0
+      ],
+      "visual_vs_objective_base_norm_deg": 162.44375856287513,
+      "visual_vs_objective_trial_delta_caked_deg": [
+        -11.998945621747936,
+        -162.5
+      ],
+      "visual_vs_objective_trial_norm_deg": 162.9423968647622
     }
   ],
   "sensitive_to_gamma_Gamma": true,
   "single_step_detector_angle_audit": true,
   "single_step_status": "ok",
-  "state_path": "C:\\Users\\Kenpo\\OneDrive\\Documents\\GitHub\\PhD Work\\ra_sim\\artifacts\\geometry_fit_gui_states\\new4.json",
+  "state_path": "artifacts/geometry_fit_gui_states/new4.json",
   "state_sha256": "4b59f99ca88f7dfc8be91eb9325dff61dac282782afa15c5eb4e718a671de129",
-  "status": "pass",
+  "status": "fail",
+  "surface_mismatch_pair_ids": [
+    "bg0:pair0",
+    "bg0:pair1",
+    "bg0:pair2",
+    "bg0:pair3",
+    "bg0:pair4",
+    "bg0:pair5",
+    "bg0:pair6"
+  ],
+  "surface_mismatch_row_count": 7,
+  "surface_warning_row_count": 7,
+  "surface_warning_tolerance_deg": 0.05,
   "trial_objective_summary": {
     "_angular_residual_rows": [
       {
@@ -19144,5 +19646,6 @@
     "Gamma": -3.2084715485207007,
     "gamma": -0.79447035164504
   },
-  "valid_plotted_fraction": 0.2857142857142857
+  "valid_plotted_fraction": 0.2857142857142857,
+  "visual_objective_surface_match_all_rows": false
 }

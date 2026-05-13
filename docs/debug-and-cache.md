@@ -710,14 +710,19 @@ attempted."
 
 Status as of 2026-05-13:
 
-- feature status: debug-only dry run
-- bug/error status: resolved for stale saved `sim_refined_*` proof inputs,
-  provider-local stale-hit recovery when trial source rows are unavailable, and
-  legacy dynamic-objective tests that should not fail closed on zero sensitivity
+- feature status: debug-only proof mode
+- bug/error status: the visual audit no longer reports pass when the GUI
+  visual simulation surface differs from the optimizer residual surface; the
+  current New4 artifact is expected to fail proof mode until those sources are
+  aligned
+- follow-up status: the product source mismatch remains open; the canonical
+  dynamic QR simulation surface for the proof is
+  `optimizer_simulated_source_two_theta_phi`
 - migration status: no public API, config, saved-state, or artifact-schema
-  migration is required; the new mode is an additive debug-script flag
+  migration is required; the new mode and optional diagnostic override are
+  additive debug-script flags
 - shipping status: local artifact generation is complete, generated PNG/JSON/CSV
-  files remain local diagnostics unless a release explicitly versions them
+  files are diagnostic proof artifacts and this is not a production release
 
 Run:
 
@@ -744,6 +749,24 @@ before/after identity check. `saved_sim_refined_caked_used` is always false in
 this audit. Rows with inconsistent detector display/native conversion are
 counted in `invalid_detector_display_row_count` and excluded from the detector
 panel instead of being plotted on mixed coordinate frames.
+
+Proof mode is strict by default. `proof_status` is `pass` only when every
+plotted GUI visual simulation QR point and optimizer objective QR point share
+the same caked coordinate surface within `1e-6` degrees. When surfaces diverge,
+the JSON must report `proof_status="fail"` with
+`proof_failure_reason="visual_simulation_surface_differs_from_objective_surface"`.
+The caked panel plots objective base/trial simulation points as square/triangle
+markers, and plots divergent GUI visual points separately as diagnostic
+diamond/x markers. Use `--allow-visual-objective-surface-divergence` only for
+diagnostic artifacts; it marks the artifact `diagnostic_only` and is not a
+passing proof.
+
+Detector panel coordinates are display pixels only. Caked-degree sources such
+as `fit_prediction_caked_deg`, `optimizer_simulated_source_two_theta_phi`, and
+`dynamic_sim_visual_caked_deg_two_theta_phi` are rejected as detector display
+points. Objective detector display points remain valid only when they come from
+allowed detector-display fields such as `sim_nominal_detector_display_px` or
+`resolved_detector_display_px`.
 
 The expected gate for this slice is:
 

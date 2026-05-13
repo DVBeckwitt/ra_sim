@@ -35,7 +35,19 @@ SINGLE_STEP_PLOT_NAME = "new4_qr_single_iteration.png"
 SINGLE_STEP_CSV_NAME = "new4_qr_single_iteration.csv"
 EXACT_TOL_DEG = 1.0e-6
 DETECTOR_FRAME_TOL_PX = 1.0e-6
+SURFACE_MATCH_TOL_DEG = 1.0e-6
+SURFACE_WARNING_TOL_DEG = 0.05
 AUDIT_SCHEMA_VERSION = 1
+CAKED_DEG_DETECTOR_DISPLAY_SOURCES = {
+    "fit_prediction_caked_deg",
+    "optimizer_simulated_source_two_theta_phi",
+    "dynamic_sim_visual_caked_deg_two_theta_phi",
+}
+OBJECTIVE_DETECTOR_DISPLAY_KEYS = (
+    "objective_sim_detector_display_px",
+    "sim_nominal_detector_display_px",
+    "resolved_detector_display_px",
+)
 OBJECTIVE_AUDIT_REQUIRED_PAIR_FIELDS: tuple[str, ...] = (
     "pair_id",
     "q_group_key",
@@ -147,6 +159,14 @@ def _file_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _artifact_path_string(path: Path) -> str:
+    resolved = path.expanduser().resolve()
+    try:
+        return resolved.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return str(resolved)
 
 
 def _finite_pair(value: object) -> tuple[float, float] | None:
@@ -1725,6 +1745,47 @@ def _row_pair(row: Mapping[str, object], key: str) -> tuple[float, float] | None
     return _finite_pair(row.get(key))
 
 
+def _row_pair_any(row: Mapping[str, object], *keys: str) -> tuple[float, float] | None:
+    for key in keys:
+        point = _row_pair(row, key)
+        if point is not None:
+            return point
+    return None
+
+
+def _surface_match(
+    first: tuple[float, float] | None,
+    second: tuple[float, float] | None,
+) -> bool:
+    delta = _delta(first, second)
+    norm = delta.get("norm")
+    return bool(norm is not None and float(norm) <= SURFACE_MATCH_TOL_DEG)
+
+
+def _detector_display_source_is_caked(row: Mapping[str, object]) -> bool:
+    source = str(row.get("fit_prediction_detector_display_px_source") or "").strip().lower()
+    return source in CAKED_DEG_DETECTOR_DISPLAY_SOURCES
+
+
+def _row_detector_display_point(
+    row: Mapping[str, object],
+    *,
+    native_point: tuple[float, float] | None,
+    raw_display_point: tuple[float, float] | None,
+    dataset: Mapping[str, object],
+    require_raw_display: bool = False,
+    reject_caked_source: bool = True,
+) -> tuple[tuple[float, float] | None, bool, str | None]:
+    if reject_caked_source and _detector_display_source_is_caked(row):
+        return None, False, "caked_degrees_not_detector_display_px"
+    return _display_frame_point(
+        native_point=native_point,
+        raw_display_point=raw_display_point,
+        dataset=dataset,
+        require_raw_display=require_raw_display,
+    )
+
+
 def _single_step_audit_rows(
     request,
     before_rows: Sequence[Mapping[str, object]],
@@ -1738,10 +1799,18 @@ def _single_step_audit_rows(
     for before, after in zip(before_rows, after_rows):
         background_display_raw = _row_pair(before, "background_detector_display_px")
         background_native = _row_pair(before, "background_detector_native_px")
+        visual_display_raw = _row_pair(before, "fit_prediction_detector_display_px")
+        trial_visual_display_raw = _row_pair(after, "fit_prediction_detector_display_px")
         original_native = _row_pair(before, "fit_prediction_detector_native_px")
-        original_display_raw = _row_pair(before, "fit_prediction_detector_display_px")
+        objective_display_raw = _row_pair_any(
+            before,
+            *OBJECTIVE_DETECTOR_DISPLAY_KEYS,
+        )
         trial_native = _row_pair(after, "fit_prediction_detector_native_px")
-        trial_display_raw = _row_pair(after, "fit_prediction_detector_display_px")
+        trial_objective_display_raw = _row_pair_any(
+            after,
+            *OBJECTIVE_DETECTOR_DISPLAY_KEYS,
+        )
         background_display, background_display_valid, background_display_reason = (
             _display_frame_point(
                 native_point=background_native,
@@ -1750,32 +1819,70 @@ def _single_step_audit_rows(
                 require_raw_display=True,
             )
         )
-        original_display, original_display_valid, original_display_reason = _display_frame_point(
+        visual_display, visual_display_valid, visual_display_reason = _row_detector_display_point(
+            before,
             native_point=original_native,
-            raw_display_point=original_display_raw,
+            raw_display_point=visual_display_raw,
             dataset=dataset,
-            require_raw_display=False,
         )
-        trial_display, trial_display_valid, trial_display_reason = _display_frame_point(
-            native_point=trial_native,
-            raw_display_point=trial_display_raw,
-            dataset=dataset,
-            require_raw_display=False,
+        trial_visual_display, trial_visual_display_valid, trial_visual_display_reason = (
+            _row_detector_display_point(
+                after,
+                native_point=trial_native,
+                raw_display_point=trial_visual_display_raw,
+                dataset=dataset,
+            )
         )
-        background_caked = _row_pair(before, "optimizer_measured_anchor_two_theta_phi")
-        original_caked = _row_pair(before, "dynamic_sim_visual_caked_deg_two_theta_phi")
-        trial_caked = _row_pair(after, "dynamic_sim_visual_caked_deg_two_theta_phi")
-        live_projected_original_caked = _row_pair(
+        objective_display, objective_display_valid, objective_display_reason = (
+            _row_detector_display_point(
+                before,
+                native_point=original_native,
+                raw_display_point=objective_display_raw,
+                dataset=dataset,
+                reject_caked_source=False,
+            )
+        )
+        trial_objective_display, trial_objective_display_valid, trial_objective_display_reason = (
+            _row_detector_display_point(
+                after,
+                native_point=trial_native,
+                raw_display_point=trial_objective_display_raw,
+                dataset=dataset,
+                reject_caked_source=False,
+            )
+        )
+
+        manual_target_caked = _row_pair(before, "optimizer_measured_anchor_two_theta_phi")
+        visual_sim_base_caked = _row_pair(before, "dynamic_sim_visual_caked_deg_two_theta_phi")
+        objective_sim_base_caked = _row_pair_any(
             before,
             "optimizer_simulated_source_two_theta_phi",
+            "fit_prediction_caked_deg",
         )
-        live_projected_trial_caked = _row_pair(
+        visual_sim_trial_caked = _row_pair(after, "dynamic_sim_visual_caked_deg_two_theta_phi")
+        objective_sim_trial_caked = _row_pair_any(
             after,
             "optimizer_simulated_source_two_theta_phi",
+            "fit_prediction_caked_deg",
         )
-        fit_prediction_caked = original_caked
-        original_delta = _delta(original_caked, background_caked)
-        trial_delta = _delta(trial_caked, background_caked)
+        original_caked = objective_sim_base_caked
+        trial_caked = objective_sim_trial_caked
+        fit_prediction_caked = objective_sim_base_caked
+        original_delta = _delta(objective_sim_base_caked, manual_target_caked)
+        trial_delta = _delta(objective_sim_trial_caked, manual_target_caked)
+        visual_vs_objective_base_delta = _delta(visual_sim_base_caked, objective_sim_base_caked)
+        visual_vs_objective_trial_delta = _delta(
+            visual_sim_trial_caked,
+            objective_sim_trial_caked,
+        )
+        visual_objective_base_surface_match = _surface_match(
+            visual_sim_base_caked,
+            objective_sim_base_caked,
+        )
+        visual_objective_trial_surface_match = _surface_match(
+            visual_sim_trial_caked,
+            objective_sim_trial_caked,
+        )
         hkl_before = before.get("hkl", before.get("normalized_hkl"))
         hkl_after = after.get("hkl", after.get("normalized_hkl"))
         pair_same = bool(str(before.get("pair_id")) == str(after.get("pair_id")))
@@ -1786,18 +1893,24 @@ def _single_step_audit_rows(
             == _normal_identity(after.get("source_branch_index"))
         )
         caked_valid = bool(
-            background_caked is not None
-            and original_caked is not None
-            and trial_caked is not None
-            and _point_match(original_caked, fit_prediction_caked)
+            manual_target_caked is not None
+            and objective_sim_base_caked is not None
+            and objective_sim_trial_caked is not None
         )
         detector_valid = bool(
             background_display is not None
-            and original_display is not None
-            and trial_display is not None
+            and visual_display is not None
+            and trial_visual_display is not None
+            and objective_display is not None
+            and trial_objective_display is not None
             and background_display_valid
-            and original_display_valid
-            and trial_display_valid
+            and visual_display_valid
+            and trial_visual_display_valid
+            and objective_display_valid
+            and trial_objective_display_valid
+        )
+        objective_detector_display_available = bool(
+            objective_display is not None and trial_objective_display is not None
         )
         real_projector_used = bool(
             before.get("fit_space_projector_kind") == "exact_caked_bundle"
@@ -1810,6 +1923,17 @@ def _single_step_audit_rows(
             and original_native is not None
             and trial_native is not None
         )
+        detector_reasons = [
+            reason
+            for reason in (
+                background_display_reason,
+                visual_display_reason,
+                trial_visual_display_reason,
+                objective_display_reason,
+                trial_objective_display_reason,
+            )
+            if reason
+        ]
         out.append(
             {
                 "pair_id": before.get("pair_id"),
@@ -1819,23 +1943,62 @@ def _single_step_audit_rows(
                 "source_table_index": before.get("source_table_index"),
                 "source_row_index": before.get("source_row_index"),
                 "background_index": before.get("dataset_index", 0),
+                "manual_detector_display_px": _pair_list(background_display),
+                "manual_detector_display_valid": bool(
+                    background_display is not None and background_display_valid
+                ),
                 "background_detector_display_px": _pair_list(background_display),
                 "background_detector_native_px": _pair_list(background_native),
-                "background_caked_deg": _pair_list(background_caked),
+                "manual_target_caked_deg": _pair_list(manual_target_caked),
+                "background_caked_deg": _pair_list(manual_target_caked),
                 "background_caked_source": before.get("optimizer_measured_source"),
-                "original_sim_detector_display_px": _pair_list(original_display),
+                "visual_sim_detector_display_px": _pair_list(visual_display),
+                "visual_sim_detector_display_valid": bool(
+                    visual_display is not None and visual_display_valid
+                ),
+                "objective_sim_detector_display_px": _pair_list(objective_display),
+                "objective_sim_detector_display_valid": bool(
+                    objective_display is not None and objective_display_valid
+                ),
+                "trial_objective_sim_detector_display_px": _pair_list(trial_objective_display),
+                "trial_objective_sim_detector_display_valid": bool(
+                    trial_objective_display is not None and trial_objective_display_valid
+                ),
+                "original_sim_detector_display_px": _pair_list(objective_display),
                 "original_sim_detector_native_px": _pair_list(original_native),
                 "original_sim_caked_deg": _pair_list(original_caked),
-                "original_sim_source": before.get("dynamic_source_source"),
-                "original_live_projected_detector_caked_deg": _pair_list(
-                    live_projected_original_caked
-                ),
-                "trial_sim_detector_display_px": _pair_list(trial_display),
+                "original_sim_source": before.get("optimizer_source_source"),
+                "visual_sim_base_caked_deg": _pair_list(visual_sim_base_caked),
+                "objective_sim_base_caked_deg": _pair_list(objective_sim_base_caked),
+                "original_live_projected_detector_caked_deg": _pair_list(original_caked),
+                "trial_sim_detector_display_px": _pair_list(trial_objective_display),
                 "trial_sim_detector_native_px": _pair_list(trial_native),
                 "trial_sim_caked_deg": _pair_list(trial_caked),
-                "trial_sim_source": after.get("dynamic_source_source"),
-                "trial_live_projected_detector_caked_deg": _pair_list(live_projected_trial_caked),
+                "trial_sim_source": after.get("optimizer_source_source"),
+                "visual_sim_trial_caked_deg": _pair_list(visual_sim_trial_caked),
+                "objective_sim_trial_caked_deg": _pair_list(objective_sim_trial_caked),
+                "trial_live_projected_detector_caked_deg": _pair_list(trial_caked),
                 "fit_prediction_caked_deg": _pair_list(fit_prediction_caked),
+                "visual_vs_objective_base_delta_caked_deg": [
+                    visual_vs_objective_base_delta["delta_two_theta"],
+                    visual_vs_objective_base_delta["delta_phi_wrapped"],
+                ],
+                "visual_vs_objective_base_norm_deg": visual_vs_objective_base_delta["norm"],
+                "visual_vs_objective_trial_delta_caked_deg": [
+                    visual_vs_objective_trial_delta["delta_two_theta"],
+                    visual_vs_objective_trial_delta["delta_phi_wrapped"],
+                ],
+                "visual_vs_objective_trial_norm_deg": visual_vs_objective_trial_delta["norm"],
+                "objective_base_to_manual_delta_caked_deg": [
+                    original_delta["delta_two_theta"],
+                    original_delta["delta_phi_wrapped"],
+                ],
+                "objective_base_to_manual_norm_deg": original_delta["norm"],
+                "objective_trial_to_manual_delta_caked_deg": [
+                    trial_delta["delta_two_theta"],
+                    trial_delta["delta_phi_wrapped"],
+                ],
+                "objective_trial_to_manual_norm_deg": trial_delta["norm"],
                 "original_to_background_delta_caked_deg": [
                     original_delta["delta_two_theta"],
                     original_delta["delta_phi_wrapped"],
@@ -1856,20 +2019,21 @@ def _single_step_audit_rows(
                 "detector_display_frame_valid": detector_valid,
                 "detector_native_frame_valid": detector_native_valid,
                 "caked_frame_valid": caked_valid,
+                "objective_detector_display_available": objective_detector_display_available,
+                "detector_panel_proof_complete": detector_valid,
                 "real_caked_projector_used": real_projector_used,
                 "saved_sim_refined_caked_used": False,
+                "visual_objective_base_surface_match": visual_objective_base_surface_match,
+                "visual_objective_trial_surface_match": visual_objective_trial_surface_match,
+                "objective_surface_used_for_residual": True,
+                "visual_surface_used_for_residual": False,
                 "original_sim_caked_matches_fit_prediction_caked_deg": bool(
                     _point_match(original_caked, fit_prediction_caked)
                 ),
-                "detector_display_invalid_reasons": [
-                    reason
-                    for reason in (
-                        background_display_reason,
-                        original_display_reason,
-                        trial_display_reason,
-                    )
-                    if reason
-                ],
+                "detector_display_invalid_reason": detector_reasons[0]
+                if detector_reasons
+                else None,
+                "detector_display_invalid_reasons": detector_reasons,
             }
         )
     return out
@@ -1881,6 +2045,7 @@ def _single_step_checks(
     delta_gamma_deg: float,
     delta_Gamma_deg: float,
     max_angle_step_deg: float,
+    allow_visual_objective_surface_divergence: bool = False,
 ) -> dict[str, object]:
     plotted = [
         row
@@ -1908,6 +2073,44 @@ def _single_step_checks(
             )
     row_count = int(len(rows))
     plotted_count = int(len(plotted))
+    mismatch_rows = [
+        row
+        for row in rows
+        if not (
+            bool(row.get("visual_objective_base_surface_match"))
+            and bool(row.get("visual_objective_trial_surface_match"))
+        )
+    ]
+    warning_rows = [
+        row
+        for row in rows
+        if (
+            (_finite_float(row.get("visual_vs_objective_base_norm_deg")) or 0.0)
+            > SURFACE_WARNING_TOL_DEG
+            or (_finite_float(row.get("visual_vs_objective_trial_norm_deg")) or 0.0)
+            > SURFACE_WARNING_TOL_DEG
+        )
+    ]
+    base_norms = [
+        float(row.get("visual_vs_objective_base_norm_deg"))
+        for row in rows
+        if _finite_float(row.get("visual_vs_objective_base_norm_deg")) is not None
+    ]
+    trial_norms = [
+        float(row.get("visual_vs_objective_trial_norm_deg"))
+        for row in rows
+        if _finite_float(row.get("visual_vs_objective_trial_norm_deg")) is not None
+    ]
+    surface_match_all = bool(rows and not mismatch_rows)
+    if surface_match_all:
+        proof_status = "pass"
+        proof_failure_reason = None
+    elif allow_visual_objective_surface_divergence:
+        proof_status = "diagnostic_only"
+        proof_failure_reason = "visual_objective_divergence_allowed_by_flag"
+    else:
+        proof_status = "fail"
+        proof_failure_reason = "visual_simulation_surface_differs_from_objective_surface"
     return {
         "row_count_gt_zero": bool(row_count > 0),
         "plotted_row_count_gt_zero": bool(plotted_count > 0),
@@ -1950,6 +2153,17 @@ def _single_step_checks(
         "invalid_reasons_by_count": dict(invalid_reasons_by_count),
         "plotted_row_count": plotted_count,
         "row_count": row_count,
+        "visual_objective_surface_match_all_rows": surface_match_all,
+        "max_visual_vs_objective_base_norm_deg": max(base_norms) if base_norms else None,
+        "max_visual_vs_objective_trial_norm_deg": max(trial_norms) if trial_norms else None,
+        "surface_mismatch_row_count": int(len(mismatch_rows)),
+        "surface_mismatch_pair_ids": [
+            str(row.get("pair_id")) for row in mismatch_rows if row.get("pair_id") is not None
+        ],
+        "surface_warning_tolerance_deg": float(SURFACE_WARNING_TOL_DEG),
+        "surface_warning_row_count": int(len(warning_rows)),
+        "proof_status": proof_status,
+        "proof_failure_reason": proof_failure_reason,
     }
 
 
@@ -2092,11 +2306,14 @@ def _plot_single_step_rows(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    plotted = [
-        row
-        for row in rows
-        if bool(row.get("detector_display_frame_valid")) and bool(row.get("caked_frame_valid"))
-    ]
+    plotted = [row for row in rows if bool(row.get("caked_frame_valid"))]
+    visual_objective_diverged = any(
+        not (
+            bool(row.get("visual_objective_base_surface_match"))
+            and bool(row.get("visual_objective_trial_surface_match"))
+        )
+        for row in plotted
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     fig, (det_ax, caked_ax) = plt.subplots(1, 2, figsize=(15, 7))
 
@@ -2107,10 +2324,13 @@ def _plot_single_step_rows(
         label: str,
         marker: str,
         size: int,
+        valid_key: str | None = None,
     ) -> None:
         xs: list[float] = []
         ys: list[float] = []
         for row in plotted:
+            if valid_key is not None and not bool(row.get(valid_key)):
+                continue
             point = _finite_pair(row.get(key))
             if point is not None:
                 xs.append(point[0])
@@ -2124,6 +2344,7 @@ def _plot_single_step_rows(
         label="background/manual QR",
         marker="o",
         size=55,
+        valid_key="manual_detector_display_valid",
     )
     _scatter(
         det_ax,
@@ -2131,6 +2352,7 @@ def _plot_single_step_rows(
         label="original simulation QR",
         marker="s",
         size=55,
+        valid_key="objective_sim_detector_display_valid",
     )
     _scatter(
         det_ax,
@@ -2138,7 +2360,17 @@ def _plot_single_step_rows(
         label="one-step trial simulation QR",
         marker="^",
         size=65,
+        valid_key="trial_objective_sim_detector_display_valid",
     )
+    if visual_objective_diverged:
+        _scatter(
+            det_ax,
+            "visual_sim_detector_display_px",
+            label="GUI visual simulation QR",
+            marker="D",
+            size=42,
+            valid_key="visual_sim_detector_display_valid",
+        )
     _scatter(
         caked_ax,
         "background_caked_deg",
@@ -2160,6 +2392,21 @@ def _plot_single_step_rows(
         marker="^",
         size=65,
     )
+    if visual_objective_diverged:
+        _scatter(
+            caked_ax,
+            "visual_sim_base_caked_deg",
+            label="GUI visual simulation QR",
+            marker="D",
+            size=42,
+        )
+        _scatter(
+            caked_ax,
+            "visual_sim_trial_caked_deg",
+            label="GUI visual trial QR",
+            marker="x",
+            size=50,
+        )
     label_rows = sorted(
         plotted,
         key=lambda row: float(row.get("original_to_background_norm_deg") or 0.0),
@@ -2171,7 +2418,12 @@ def _plot_single_step_rows(
         det_after = _finite_pair(row.get("trial_sim_detector_display_px"))
         caked_before = _finite_pair(row.get("original_sim_caked_deg"))
         caked_after = _finite_pair(row.get("trial_sim_caked_deg"))
-        if det_before is not None and det_after is not None:
+        if (
+            det_before is not None
+            and det_after is not None
+            and bool(row.get("objective_sim_detector_display_valid"))
+            and bool(row.get("trial_objective_sim_detector_display_valid"))
+        ):
             det_ax.annotate(
                 "",
                 xy=det_after,
@@ -2192,6 +2444,17 @@ def _plot_single_step_rows(
             if caked_after is not None:
                 caked_ax.text(caked_after[0], caked_after[1], label, fontsize=7)
 
+    if visual_objective_diverged:
+        caked_ax.text(
+            0.02,
+            0.98,
+            "GUI visual sim and objective sim differ.\nProof status: fail.",
+            transform=caked_ax.transAxes,
+            va="top",
+            fontsize=8,
+            bbox={"facecolor": "white", "alpha": 0.9, "edgecolor": "0.7"},
+        )
+
     det_ax.set_xlabel("detector display x (px)")
     det_ax.set_ylabel("detector display y (px)")
     det_ax.set_title("Detector Display Space")
@@ -2209,9 +2472,10 @@ def _plot_single_step_rows(
         "\n".join(
             (
                 "Circle = background/manual QR",
-                "Square = original simulation QR",
-                "Triangle = one-step gamma/Gamma trial QR",
-                "Arrows = original sim -> one-step trial",
+                "Square = objective simulation QR",
+                "Triangle = one-step objective gamma/Gamma trial QR",
+                "Diamond/x = GUI visual simulation surface when divergent",
+                "Arrows = objective sim -> one-step objective trial",
                 "Detector panel units = display px",
                 "Caked panel units = deg",
             )
@@ -2241,6 +2505,7 @@ def run_coordinate_audit(
     single_step_detector_angle_audit: bool = False,
     max_angle_step_deg: float = 5.0,
     fd_step_deg: float = 0.05,
+    allow_visual_objective_surface_divergence: bool = False,
 ) -> dict[str, object]:
     if str(params_mode).strip().lower() != "base":
         raise ValueError("only --params base is supported")
@@ -2307,8 +2572,16 @@ def run_coordinate_audit(
             delta_gamma_deg=float(trial_payload.get("delta_gamma_deg", 0.0) or 0.0),
             delta_Gamma_deg=float(trial_payload.get("delta_Gamma_deg", 0.0) or 0.0),
             max_angle_step_deg=float(max_angle_step_deg),
+            allow_visual_objective_surface_divergence=bool(
+                allow_visual_objective_surface_divergence
+            ),
         )
         status = "pass" if _checks_pass(checks, perturb_applied=False) else "fail"
+        proof_status = str(checks.get("proof_status") or "")
+        if proof_status == "fail":
+            status = "fail"
+        elif proof_status == "diagnostic_only":
+            status = "diagnostic_only"
         report_path = output_root / SINGLE_STEP_REPORT_NAME
         plot_path = output_root / SINGLE_STEP_PLOT_NAME
         csv_path = output_root / SINGLE_STEP_CSV_NAME
@@ -2316,7 +2589,7 @@ def run_coordinate_audit(
         report = {
             "status": status,
             "checks": checks,
-            "state_path": str(state_path),
+            "state_path": _artifact_path_string(state_path),
             "state_sha256": state_hash,
             "background_index": int(background_index),
             "params_mode": "base",
@@ -2334,11 +2607,26 @@ def run_coordinate_audit(
             ),
             "valid_plotted_fraction": float(checks.get("valid_plotted_fraction", 0.0) or 0.0),
             "invalid_reasons_by_count": dict(checks.get("invalid_reasons_by_count", {}) or {}),
+            "visual_objective_surface_match_all_rows": bool(
+                checks.get("visual_objective_surface_match_all_rows", False)
+            ),
+            "max_visual_vs_objective_base_norm_deg": checks.get(
+                "max_visual_vs_objective_base_norm_deg"
+            ),
+            "max_visual_vs_objective_trial_norm_deg": checks.get(
+                "max_visual_vs_objective_trial_norm_deg"
+            ),
+            "surface_mismatch_row_count": int(checks.get("surface_mismatch_row_count", 0) or 0),
+            "surface_mismatch_pair_ids": list(checks.get("surface_mismatch_pair_ids", ()) or ()),
+            "surface_warning_tolerance_deg": checks.get("surface_warning_tolerance_deg"),
+            "surface_warning_row_count": int(checks.get("surface_warning_row_count", 0) or 0),
+            "proof_status": checks.get("proof_status"),
+            "proof_failure_reason": checks.get("proof_failure_reason"),
             "json_authoritative": True,
             "png_diagnostic_only": True,
-            "csv_path": str(csv_path),
-            "json_path": str(report_path),
-            "png_path": str(plot_path),
+            "csv_path": _artifact_path_string(csv_path),
+            "json_path": _artifact_path_string(report_path),
+            "png_path": _artifact_path_string(plot_path),
             "created_at_unix": time.time(),
             **trial_payload,
         }
@@ -2350,7 +2638,8 @@ def run_coordinate_audit(
             f"delta gamma={float(trial_payload.get('delta_gamma_deg', 0.0) or 0.0):.6g} "
             f"delta Gamma={float(trial_payload.get('delta_Gamma_deg', 0.0) or 0.0):.6g} "
             f"max angle step={float(max_angle_step_deg):.6g} deg "
-            f"rows={int(len(rows))} status={trial_payload.get('single_step_status')}"
+            f"rows={int(len(rows))} single-step={trial_payload.get('single_step_status')} "
+            f"proof={checks.get('proof_status')}"
         )
         _plot_single_step_rows(plot_path, rows, title=title)
         return report
@@ -2429,7 +2718,7 @@ def run_coordinate_audit(
     report = {
         "status": status,
         "checks": checks,
-        "state_path": str(state_path),
+        "state_path": _artifact_path_string(state_path),
         "background_index": int(background_index),
         "params_mode": "base",
         "audit_schema_version": int(AUDIT_SCHEMA_VERSION),
@@ -2450,8 +2739,8 @@ def run_coordinate_audit(
         "base_pairs": base_rows,
         "before_pairs": before_rows_for_report,
         "pairs": rows,
-        "json_path": str(report_path),
-        "png_path": str(plot_path),
+        "json_path": _artifact_path_string(report_path),
+        "png_path": _artifact_path_string(plot_path),
         "created_at_unix": time.time(),
     }
     if improvement_payload is not None:
@@ -2491,6 +2780,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--perturb-start", default=None)
     parser.add_argument("--active-vars", default=None)
     parser.add_argument("--single-step-detector-angle-audit", action="store_true")
+    parser.add_argument("--allow-visual-objective-surface-divergence", action="store_true")
     parser.add_argument("--max-angle-step-deg", type=float, default=5.0)
     parser.add_argument("--fd-step-deg", type=float, default=0.05)
     args = parser.parse_args(argv)
@@ -2510,6 +2800,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         single_step_detector_angle_audit=bool(args.single_step_detector_angle_audit),
         max_angle_step_deg=float(args.max_angle_step_deg),
         fd_step_deg=float(args.fd_step_deg),
+        allow_visual_objective_surface_divergence=bool(
+            args.allow_visual_objective_surface_divergence
+        ),
     )
     print(
         json.dumps(

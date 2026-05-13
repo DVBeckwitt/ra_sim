@@ -4550,6 +4550,169 @@ def test_single_step_qr_visual_audit_reports_invalid_detector_rows() -> None:
     assert checks["invalid_reasons_by_count"] == {"mixed_display_native_detector_px": 1}
 
 
+def _single_step_surface_row(
+    *,
+    visual_caked: tuple[float, float],
+    objective_caked: tuple[float, float],
+    manual_caked: tuple[float, float] = (29.29165538323298, 57.079369517688804),
+    detector_display_source: str = "sim_nominal_detector_display_px",
+) -> dict[str, object]:
+    return {
+        "pair_id": "pair-1",
+        "q_group_key": ["q_group", "primary", 1, 5],
+        "hkl": [1, 0, 10],
+        "source_branch_index": 0,
+        "source_table_index": 0,
+        "source_row_index": 3,
+        "dataset_index": 0,
+        "background_detector_display_px": (110.0, 120.0),
+        "background_detector_native_px": (10.0, 20.0),
+        "fit_prediction_detector_display_px": (112.0, 113.0),
+        "fit_prediction_detector_display_px_source": detector_display_source,
+        "fit_prediction_detector_native_px": (12.0, 13.0),
+        "optimizer_measured_anchor_two_theta_phi": manual_caked,
+        "optimizer_measured_source": "manual_caked_click",
+        "dynamic_sim_visual_caked_deg_two_theta_phi": visual_caked,
+        "optimizer_simulated_source_two_theta_phi": objective_caked,
+        "dynamic_source_source": "sim_visual_caked_deg",
+        "fit_space_projector_kind": "exact_caked_bundle",
+        "caked_projection_signature": "projection-token",
+    }
+
+
+def _single_step_surface_audit_rows(module, request, before, after):
+    return module._single_step_audit_rows(
+        request,
+        [before],
+        [after],
+        delta_by_name={"gamma": 0.0, "Gamma": 0.0},
+        single_step_status="ok",
+    )
+
+
+def test_single_step_qr_visual_audit_fails_when_visual_sim_and_objective_projection_diverge() -> (
+    None
+):
+    module = _load_new4_coordinate_audit_module()
+    request = _single_step_qr_request(source_display_offset=100.0)
+    before = _single_step_surface_row(
+        visual_caked=(35.3381587997551, -18.25),
+        objective_caked=(29.33141455157448, 59.1675664257215),
+    )
+    after = dict(before)
+    after.update(
+        {
+            "dynamic_sim_visual_caked_deg_two_theta_phi": (35.0, -18.0),
+            "optimizer_simulated_source_two_theta_phi": (29.4, 59.0),
+        }
+    )
+
+    rows = _single_step_surface_audit_rows(module, request, before, after)
+    row = rows[0]
+    report = module._single_step_checks(
+        rows,
+        delta_gamma_deg=0.0,
+        delta_Gamma_deg=0.0,
+        max_angle_step_deg=5.0,
+    )
+
+    assert row["visual_objective_base_surface_match"] is False
+    assert row["visual_vs_objective_base_norm_deg"] > 70.0
+    assert report["proof_status"] == "fail"
+    assert (
+        report["proof_failure_reason"] == "visual_simulation_surface_differs_from_objective_surface"
+    )
+
+
+def test_single_step_qr_visual_audit_uses_objective_surface_for_plotted_caked_points() -> None:
+    module = _load_new4_coordinate_audit_module()
+    request = _single_step_qr_request(source_display_offset=100.0)
+    before = _single_step_surface_row(
+        visual_caked=(35.3381587997551, -18.25),
+        objective_caked=(29.33141455157448, 59.1675664257215),
+    )
+    after = dict(before)
+    after.update(
+        {
+            "dynamic_sim_visual_caked_deg_two_theta_phi": (36.0, -17.0),
+            "optimizer_simulated_source_two_theta_phi": (29.5, 58.0),
+        }
+    )
+
+    plotted_row = _single_step_surface_audit_rows(module, request, before, after)[0]
+
+    assert plotted_row["original_sim_caked_deg"] == plotted_row["objective_sim_base_caked_deg"]
+    assert plotted_row["trial_sim_caked_deg"] == plotted_row["objective_sim_trial_caked_deg"]
+    assert plotted_row["original_sim_caked_deg"] != plotted_row["visual_sim_base_caked_deg"]
+
+
+def test_single_step_qr_visual_audit_does_not_treat_caked_deg_as_detector_display_px() -> None:
+    module = _load_new4_coordinate_audit_module()
+    request = _single_step_qr_request(source_display_offset=100.0)
+    before = _single_step_surface_row(
+        visual_caked=(29.33141455157448, 59.1675664257215),
+        objective_caked=(29.33141455157448, 59.1675664257215),
+        detector_display_source="fit_prediction_caked_deg",
+    )
+    before.update(
+        {
+            "fit_prediction_detector_display_px": (40.006, 39.050),
+            "fit_prediction_detector_native_px": None,
+        }
+    )
+    after = dict(before)
+
+    row = _single_step_surface_audit_rows(module, request, before, after)[0]
+
+    assert row["detector_display_frame_valid"] is False
+    assert row["detector_display_invalid_reason"] == "caked_degrees_not_detector_display_px"
+
+
+def test_single_step_qr_visual_audit_keeps_allowed_objective_detector_display() -> None:
+    module = _load_new4_coordinate_audit_module()
+    request = _single_step_qr_request(source_display_offset=100.0)
+    before = _single_step_surface_row(
+        visual_caked=(29.33141455157448, 59.1675664257215),
+        objective_caked=(29.33141455157448, 59.1675664257215),
+        detector_display_source="fit_prediction_caked_deg",
+    )
+    before["sim_nominal_detector_display_px"] = (112.0, 113.0)
+    after = dict(before)
+
+    row = _single_step_surface_audit_rows(module, request, before, after)[0]
+
+    assert row["visual_sim_detector_display_valid"] is False
+    assert row["objective_sim_detector_display_valid"] is True
+    assert row["objective_sim_detector_display_px"] == [112.0, 113.0]
+
+
+def test_single_step_qr_visual_audit_passes_when_visual_and_objective_surfaces_match() -> None:
+    module = _load_new4_coordinate_audit_module()
+    request = _single_step_qr_request(source_display_offset=100.0)
+    before = _single_step_surface_row(
+        visual_caked=(29.33141455157448, 59.1675664257215),
+        objective_caked=(29.33141455157448, 59.1675664257215),
+    )
+    after = dict(before)
+    after.update(
+        {
+            "dynamic_sim_visual_caked_deg_two_theta_phi": (29.5, 58.0),
+            "optimizer_simulated_source_two_theta_phi": (29.5, 58.0),
+        }
+    )
+
+    rows = _single_step_surface_audit_rows(module, request, before, after)
+    report = module._single_step_checks(
+        rows,
+        delta_gamma_deg=0.0,
+        delta_Gamma_deg=0.0,
+        max_angle_step_deg=5.0,
+    )
+
+    assert report["visual_objective_surface_match_all_rows"] is True
+    assert report["proof_status"] == "pass"
+
+
 def test_dynamic_angular_summary_reports_worst_rows() -> None:
     summary = opt._summarize_dynamic_angular_residual_rows(
         [
