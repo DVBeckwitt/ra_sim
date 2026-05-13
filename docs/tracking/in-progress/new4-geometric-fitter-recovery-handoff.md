@@ -17,23 +17,27 @@ Last updated: 2026-05-13
   calling the full geometry optimizer, updating GUI state, or accepting geometry.
 - Bug/error fixed: the proof no longer trusts stale saved `sim_refined_caked`
   fields for simulated QR points. Original and trial simulation caked points
-  come from the live dynamic projector, stale provider-local hit-table recovery
-  remains usable when trial source-row builders are unavailable, and generic
-  legacy dynamic-point tests no longer fail closed just because the sensitivity
-  diagnostic reports all fit variables insensitive.
+  come from the live caked objective surface. Caked-display QR source rows now
+  prefer live `sim_visual_caked_deg`/caked fields over point-only detector
+  reprojection, making the bad state
+  `objective_source_authority=sim_visual_caked_deg` plus
+  `optimizer_source_source=point_only_detector_projection` fail-closed instead
+  of masquerading as proof.
 - Feature/status: this is an additive debug-script interface and test-only
   fitting diagnostic. Public CLI commands, saved-state schema, config keys, and
   accepted geometry artifacts are unchanged. No deprecation or migration is
   required.
-- Validation status: `tests/test_geometry_fitting.py` passes (`236 passed`),
+- Validation status: `tests/test_geometry_fitting.py` passes (`244 passed`),
   `tests/test_gui_geometry_fit_workflow.py` passes (`634 passed, 2 skipped`),
   `tests/test_geometry_fit_manual_fit_space_classification.py` passes
   (`9 passed`), and `python -m ra_sim.dev check` passes. The full manual
   selection helper file was too slow for this local run, but the targeted manual
   QR helper slice passed. The generated New4 proof reports `status=pass`,
-  `row_count=7`, `plotted_row_count=2`,
-  `invalid_detector_display_row_count=5`,
-  `json_authoritative=true`, and `png_diagnostic_only=true`.
+  `proof_status=pass`, `row_count=7`, `plotted_row_count=0`,
+  `invalid_detector_display_row_count=7`,
+  `source_authority_match_all_caked_display_rows=true`,
+  `surface_mismatch_row_count=0`, `json_authoritative=true`, and
+  `png_diagnostic_only=true`.
 - Shipping/rollback status: the mode is opt-in, debug-only, and produces local
   artifacts under the requested output root. Rollback is limited to removing the
   debug flag path and its tests; no data migration or user-facing compatibility

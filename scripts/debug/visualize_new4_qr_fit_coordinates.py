@@ -676,6 +676,18 @@ def _build_objective_audit_pair_row(
     )
     background_display = _entry_background_detector_display(entry)
     background_native = _entry_background_detector_native(entry)
+    dynamic_source_label = _dynamic_source_label(prediction)
+    optimizer_source_label = _optimizer_source_label(prediction, source_delta)
+    source_authority_match = bool(
+        source_delta["within_exact_tolerance"]
+        and dynamic_source_label == "sim_visual_caked_deg"
+        and optimizer_source_label == "sim_visual_caked_deg"
+    )
+    caked_display_reprojected_as_detector = bool(
+        not source_authority_match
+        and dynamic_source_label == "sim_visual_caked_deg"
+        and optimizer_source_label == "point_only_detector_projection"
+    )
     row = {
         "pair_index": int(index),
         "pair_id": reprojection._pair_id(entry, index),
@@ -702,12 +714,12 @@ def _build_objective_audit_pair_row(
         ),
         "dynamic_source_two_theta_deg": (float(dynamic_source[0]) if dynamic_source else None),
         "dynamic_source_phi_deg": float(dynamic_source[1]) if dynamic_source else None,
-        "dynamic_source_source": _dynamic_source_label(prediction),
+        "dynamic_source_source": dynamic_source_label,
         "optimizer_source_two_theta_deg": (
             float(optimizer_source[0]) if optimizer_source else None
         ),
         "optimizer_source_phi_deg": float(optimizer_source[1]) if optimizer_source else None,
-        "optimizer_source_source": _optimizer_source_label(prediction, source_delta),
+        "optimizer_source_source": optimizer_source_label,
         "fit_prediction_caked_deg": _pair_list(fit_prediction_caked),
         "fit_prediction_caked_source": "predicted_caked_deg",
         "background_detector_display_px": _pair_list(background_display),
@@ -747,10 +759,16 @@ def _build_objective_audit_pair_row(
         "target_delta_vs_cached_phi_deg_wrapped": target_delta["delta_phi_wrapped"],
         "source_delta_vs_dynamic_two_theta_deg": source_delta["delta_two_theta"],
         "source_delta_vs_dynamic_phi_deg_wrapped": source_delta["delta_phi_wrapped"],
-        "source_authority_match": bool(
-            source_delta["within_exact_tolerance"]
-            and _dynamic_source_label(prediction) == "sim_visual_caked_deg"
-            and _optimizer_source_label(prediction, source_delta) == "sim_visual_caked_deg"
+        "source_authority_match": source_authority_match,
+        "surface_mismatch_class": (
+            "caked_display_row_reprojected_as_detector_point"
+            if caked_display_reprojected_as_detector
+            else None
+        ),
+        "recommended_next_fix": (
+            "prefer_live_sim_visual_caked_for_caked_objective"
+            if caked_display_reprojected_as_detector
+            else None
         ),
         "residual_arrow_start_two_theta_deg": float(cached[0]) if cached else None,
         "residual_arrow_start_phi_deg": float(cached[1]) if cached else None,
@@ -785,6 +803,13 @@ def _build_objective_audit_pair_row(
             detector_native_reprojection_delta["within_exact_tolerance"]
         ),
         "detector_native_reprojection_is_diagnostic": True,
+        "detector_native_reprojection_used_for_objective": False,
+        "point_only_detector_projection_used": bool(
+            prediction.get("point_only_detector_projection_used", False)
+        ),
+        "sim_nominal_detector_display_px_used_for_caked_projection": bool(
+            prediction.get("sim_nominal_detector_display_px_used_for_caked_projection", False)
+        ),
         "frame_match": bool(manual_frame == "caked_display" and dynamic_frame == "caked_display"),
         "unit_match": bool(dynamic_units in {"deg", "degree", "degrees"}),
         "branch_slot_match": _branch_slot_match(
@@ -1934,6 +1959,22 @@ def _single_step_audit_rows(
             )
             if reason
         ]
+        dynamic_source_label = before.get("dynamic_source_source")
+        optimizer_source_label = before.get("optimizer_source_source")
+        source_authority_match = before.get("source_authority_match")
+        if source_authority_match is None:
+            source_authority_match = bool(
+                dynamic_source_label == "sim_visual_caked_deg"
+                and (
+                    optimizer_source_label in {None, "sim_visual_caked_deg"}
+                    and visual_objective_base_surface_match
+                )
+            )
+        if optimizer_source_label is None and source_authority_match:
+            optimizer_source_label = "sim_visual_caked_deg"
+        objective_source_authority = before.get("objective_source_authority")
+        if objective_source_authority is None and dynamic_source_label == "sim_visual_caked_deg":
+            objective_source_authority = "sim_visual_caked_deg"
         out.append(
             {
                 "pair_id": before.get("pair_id"),
@@ -1967,7 +2008,25 @@ def _single_step_audit_rows(
                 "original_sim_detector_display_px": _pair_list(objective_display),
                 "original_sim_detector_native_px": _pair_list(original_native),
                 "original_sim_caked_deg": _pair_list(original_caked),
-                "original_sim_source": before.get("optimizer_source_source"),
+                "original_sim_source": optimizer_source_label,
+                "dynamic_source_source": before.get("dynamic_source_source"),
+                "optimizer_source_source": optimizer_source_label,
+                "objective_source_authority": objective_source_authority,
+                "source_authority_match": bool(source_authority_match),
+                "surface_mismatch_class": before.get("surface_mismatch_class"),
+                "recommended_next_fix": before.get("recommended_next_fix"),
+                "point_only_detector_projection_used": before.get(
+                    "point_only_detector_projection_used"
+                ),
+                "sim_nominal_detector_display_px_used_for_caked_projection": before.get(
+                    "sim_nominal_detector_display_px_used_for_caked_projection"
+                ),
+                "detector_native_reprojection_is_diagnostic": before.get(
+                    "detector_native_reprojection_is_diagnostic"
+                ),
+                "detector_native_reprojection_used_for_objective": before.get(
+                    "detector_native_reprojection_used_for_objective"
+                ),
                 "visual_sim_base_caked_deg": _pair_list(visual_sim_base_caked),
                 "objective_sim_base_caked_deg": _pair_list(objective_sim_base_caked),
                 "original_live_projected_detector_caked_deg": _pair_list(original_caked),
@@ -2091,6 +2150,15 @@ def _single_step_checks(
             > SURFACE_WARNING_TOL_DEG
         )
     ]
+    source_authority_rows = [
+        row
+        for row in rows
+        if row.get("objective_source_authority") == "sim_visual_caked_deg"
+        or row.get("dynamic_source_source") == "sim_visual_caked_deg"
+    ]
+    source_authority_mismatch_rows = [
+        row for row in source_authority_rows if row.get("source_authority_match") is not True
+    ]
     base_norms = [
         float(row.get("visual_vs_objective_base_norm_deg"))
         for row in rows
@@ -2123,6 +2191,24 @@ def _single_step_checks(
         "all_plotted_real_caked_projector_used": bool(
             plotted and all(bool(row.get("real_caked_projector_used")) for row in plotted)
         ),
+        "all_rows_caked_frame_valid": bool(
+            rows and all(bool(row.get("caked_frame_valid")) for row in rows)
+        ),
+        "objective_surface_used_for_residual_all_rows": bool(
+            rows and all(row.get("objective_surface_used_for_residual") is True for row in rows)
+        ),
+        "visual_surface_used_for_residual_false_all_rows": bool(
+            rows and all(row.get("visual_surface_used_for_residual") is False for row in rows)
+        ),
+        "source_authority_match_all_caked_display_rows": bool(
+            source_authority_rows and not source_authority_mismatch_rows
+        ),
+        "source_authority_mismatch_row_count": int(len(source_authority_mismatch_rows)),
+        "source_authority_mismatch_pair_ids": [
+            str(row.get("pair_id"))
+            for row in source_authority_mismatch_rows
+            if row.get("pair_id") is not None
+        ],
         "saved_sim_refined_caked_used_false_for_all_rows": bool(
             rows and all(row.get("saved_sim_refined_caked_used") is False for row in rows)
         ),
@@ -2168,7 +2254,15 @@ def _single_step_checks(
 
 
 def _checks_pass(checks: Mapping[str, object], *, perturb_applied: bool) -> bool:
+    detector_diagnostic_keys = {
+        "plotted_row_count_gt_zero",
+        "all_plotted_detector_display_frame_valid",
+        "all_plotted_caked_frame_valid",
+        "all_plotted_real_caked_projector_used",
+    }
     for key, value in checks.items():
+        if key in detector_diagnostic_keys:
+            continue
         if key == "source_moves_under_perturbation" and not perturb_applied:
             continue
         if key == "pixel_residual_path_used":
@@ -2620,6 +2714,15 @@ def run_coordinate_audit(
             "surface_mismatch_pair_ids": list(checks.get("surface_mismatch_pair_ids", ()) or ()),
             "surface_warning_tolerance_deg": checks.get("surface_warning_tolerance_deg"),
             "surface_warning_row_count": int(checks.get("surface_warning_row_count", 0) or 0),
+            "source_authority_match_all_caked_display_rows": bool(
+                checks.get("source_authority_match_all_caked_display_rows", False)
+            ),
+            "source_authority_mismatch_row_count": int(
+                checks.get("source_authority_mismatch_row_count", 0) or 0
+            ),
+            "source_authority_mismatch_pair_ids": list(
+                checks.get("source_authority_mismatch_pair_ids", ()) or ()
+            ),
             "proof_status": checks.get("proof_status"),
             "proof_failure_reason": checks.get("proof_failure_reason"),
             "json_authoritative": True,

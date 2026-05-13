@@ -5757,6 +5757,13 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                     nominal_row = float("nan")
                 if np.isfinite(nominal_col) and np.isfinite(nominal_row):
                     sim_point = (float(nominal_col), float(nominal_row))
+                elif qr_fit_point_only_projection and (
+                    _fit_qr_caked_pair_from_entry(fit_prediction, "sim_refined_caked_deg")
+                    is not None
+                    or _fit_qr_caked_pair_from_entry(fit_prediction, "sim_nominal_caked_deg")
+                    is not None
+                ):
+                    sim_point = (float("nan"), float("nan"))
                 else:
                     sim_point = None
                     sim_reason = "fit_prediction_nominal_detector_unavailable"
@@ -17659,6 +17666,16 @@ def _fit_qr_branch_key_for_match(entry: Mapping[str, object]) -> Tuple[object, .
 def _fit_qr_detector_point_payload_from_source_row(
     row: Mapping[str, object],
 ) -> Dict[str, object]:
+    if _source_row_is_caked_display_surface(row):
+        return {
+            "point": None,
+            "input_frame": None,
+            "point_source": "invalid_for_detector_space:caked_display",
+            "native_px": None,
+            "display_px": None,
+            "display_point_source": "invalid_for_detector_space:caked_display",
+        }
+
     def _tuple_point(key: str) -> Optional[Tuple[float, float]]:
         raw_point = row.get(key)
         if not isinstance(raw_point, (list, tuple, np.ndarray)) or len(raw_point) < 2:
@@ -17694,6 +17711,7 @@ def _fit_qr_detector_point_payload_from_source_row(
         for x_key, y_key in (
             ("refined_sim_x", "refined_sim_y"),
             ("sim_col", "sim_row"),
+            ("sim_detector_display_col", "sim_detector_display_row"),
             ("display_col", "display_row"),
             ("sim_col_raw", "sim_row_raw"),
         ):
@@ -18035,7 +18053,72 @@ def _resolve_locked_qr_trial_detector_point_from_source_rows(
             return None, payload
     else:
         candidate = candidates[0]
+    row = dict(candidate.get("row") or {})
+    point_payload = dict(candidate.get("point_payload") or {})
+    candidate_identity = dict(candidate.get("candidate_identity") or {})
     point = candidate.get("point")
+    live_caked_point, live_caked_source = _source_row_live_caked_point(row)
+    caked_display_surface = _source_row_is_caked_display_surface(row)
+    payload.update(
+        {
+            "source_row_is_caked_display_surface": bool(caked_display_surface),
+            "source_row_live_caked_deg": (
+                [float(live_caked_point[0]), float(live_caked_point[1])]
+                if live_caked_point is not None
+                else None
+            ),
+            "source_row_live_caked_source": live_caked_source or None,
+            "source_row_detector_projection_allowed": bool(
+                point is not None and not caked_display_surface
+            ),
+        }
+    )
+    if live_caked_point is not None:
+        payload.update(
+            {
+                "dynamic_baseline_anchor_caked_deg": [
+                    float(live_caked_point[0]),
+                    float(live_caked_point[1]),
+                ],
+                "dynamic_baseline_anchor_source": row.get(
+                    "actual_source",
+                    row.get("source_kind", live_caked_source),
+                ),
+                "dynamic_baseline_anchor_frame": row.get(
+                    "projection_frame",
+                    row.get("display_frame"),
+                ),
+                "dynamic_baseline_anchor_units": "deg",
+                "dynamic_baseline_anchor_actual_source": row.get(
+                    "actual_source",
+                    row.get("source_kind"),
+                ),
+                "dynamic_baseline_anchor_source_kind": row.get(
+                    "source_kind",
+                    row.get("actual_source"),
+                ),
+                "dynamic_baseline_anchor_projection_frame": row.get(
+                    "projection_frame",
+                    row.get("display_frame"),
+                ),
+                "dynamic_baseline_anchor_coordinate_provenance": row.get("coordinate_provenance"),
+                "dynamic_baseline_anchor_is_dynamic_trial_row": row.get("is_dynamic_trial_row"),
+                "dynamic_baseline_anchor_row_origin": row.get("row_origin"),
+                "dynamic_baseline_anchor_q_group_key": _dynamic_reanchor_jsonable(
+                    candidate_identity.get("q_group_key", row.get("q_group_key"))
+                ),
+                "dynamic_baseline_anchor_hkl": _dynamic_reanchor_jsonable(
+                    candidate_identity.get(
+                        "hkl",
+                        row.get("normalized_hkl", row.get("hkl")),
+                    )
+                ),
+                "dynamic_baseline_anchor_physical_branch_slot": row.get(
+                    "physical_branch_slot",
+                    candidate_identity.get("source_branch_index"),
+                ),
+            }
+        )
     if point is None:
         payload["resolution_reason"] = (
             "locked_fit_qr_branch_key_invalid_detector_point"
@@ -18043,9 +18126,6 @@ def _resolve_locked_qr_trial_detector_point_from_source_rows(
             else "locked_fit_qr_q_group_hkl_branch_slot_invalid_detector_point"
         )
         return None, payload
-    row = dict(candidate.get("row") or {})
-    point_payload = dict(candidate.get("point_payload") or {})
-    candidate_identity = dict(candidate.get("candidate_identity") or {})
     resolved_native_px = point_payload.get("native_px")
     if isinstance(resolved_native_px, (list, tuple, np.ndarray)) and len(resolved_native_px) >= 2:
         native_col = _safe_float(resolved_native_px[0], float("nan"))
@@ -18248,6 +18328,47 @@ def _fit_qr_first_caked_pair_payload(
         if point is not None:
             return {"point": point, "source": str(source)}
     return {"point": None, "source": None}
+
+
+def _source_row_live_caked_point(
+    row: Mapping[str, object],
+) -> Tuple[Tuple[float, float] | None, str]:
+    payload = _fit_qr_first_caked_pair_payload(
+        row,
+        tuple_keys=(
+            "sim_visual_caked_deg",
+            "sim_caked",
+            "sim_caked_display",
+        ),
+        field_pairs=(
+            ("two_theta_deg", "phi_deg", "two_theta_deg/phi_deg"),
+            ("caked_x", "caked_y", "caked_x/y"),
+        ),
+    )
+    point = payload.get("point")
+    source = str(payload.get("source") or "")
+    if isinstance(point, tuple) and len(point) >= 2:
+        return (float(point[0]), float(point[1])), source
+    return None, source
+
+
+def _source_row_is_caked_display_surface(row: Mapping[str, object]) -> bool:
+    for key in (
+        "source_kind",
+        "actual_source",
+        "expected_source",
+    ):
+        if str(row.get(key) or "").strip() == "sim_visual_caked_deg":
+            return True
+    for key in (
+        "display_frame",
+        "current_view_frame",
+        "projection_frame",
+        "manual_visual_frame",
+    ):
+        if str(row.get(key) or "").strip() == "caked_display":
+            return True
+    return False
 
 
 def _fit_qr_visual_caked_anchor_payload(
@@ -19318,8 +19439,75 @@ def _resolve_qr_fit_prediction_from_trial_params(
             for row in (source_rows_payload.get("rows", ()) or ())
             if isinstance(row, Mapping)
         ]
+    live_caked_point = _fit_qr_caked_pair_from_entry(
+        resolution_payload,
+        "source_row_live_caked_deg",
+    )
+    live_caked_source = str(resolution_payload.get("source_row_live_caked_source") or "").strip()
+    if (
+        point_only_projection
+        and bool(resolution_payload.get("source_row_is_caked_display_surface", False))
+        and _fit_qr_entry_uses_current_dynamic_caked_row(resolution_payload)
+        and live_caked_point is not None
+    ):
+        live_source = live_caked_source or "sim_visual_caked_deg"
+        live_payload = [float(live_caked_point[0]), float(live_caked_point[1])]
+        out.update(
+            {
+                "available": True,
+                "fit_prediction_caked_deg": list(live_payload),
+                "optimizer_simulated_source_two_theta_phi": list(live_payload),
+                "optimizer_source_source": live_source,
+                "objective_source_authority": "sim_visual_caked_deg",
+                "source_authority_match": True,
+                "sim_nominal_caked_raw_deg": list(live_payload),
+                "sim_nominal_caked_deg": list(live_payload),
+                "sim_refined_caked_raw_deg": list(live_payload),
+                "sim_refined_caked_deg": list(live_payload),
+                "sim_refinement_delta_caked_deg": [0.0, 0.0],
+                "sim_refinement_delta_caked_norm_deg": 0.0,
+                "sim_refinement_status": "live_sim_visual_caked",
+                "sim_refinement_policy": "live_caked_source",
+                "sim_refinement_caked_image_source": live_source,
+                "sim_refinement_subpixel": "no",
+                "sim_refinement_subpixel_status": "none",
+                "sim_refinement_subpixel_method": "none",
+                "sim_refinement_bin_center_only": False,
+                "sim_refinement_peak_value": 0.0,
+                "sim_refinement_local_max_intensity": 0.0,
+                "sim_refinement_local_sum_intensity": 0.0,
+                "sim_refinement_local_nonzero_count": 0,
+                "dynamic_baseline_anchor_coordinate_baseline_used": True,
+                "point_only_detector_projection_used": False,
+                "point_only_projector_skipped": True,
+                "point_only_detector_coordinate_source": "live_caked_source",
+                "sim_nominal_detector_display_px_used_for_caked_projection": False,
+                "fit_prediction_detector_display_px": None,
+                "fit_prediction_detector_display_px_source": (
+                    "invalid_for_detector_space:caked_display"
+                ),
+                "fit_prediction_detector_native_px": None,
+                "fit_prediction_detector_native_px_source": (
+                    "invalid_for_detector_space:caked_display"
+                ),
+                "resolved_detector_display_px": None,
+                "resolved_detector_native_px": None,
+                "detector_native_reprojection_is_diagnostic": True,
+                "detector_native_reprojection_used_for_objective": False,
+                "objective_residual_coordinate_space": "caked_deg",
+                "objective_residual_units": "deg",
+                "pixel_residual_used_for_objective": False,
+            }
+        )
+        return out
     if sim_point is None:
         reason = str(resolution_payload.get("resolution_reason", "locked_branch_unavailable"))
+        if point_only_projection and bool(
+            resolution_payload.get("source_row_is_caked_display_surface", False)
+        ):
+            reason = "point_only_dynamic_sim_visual_caked_deg_unavailable"
+            out["sim_refinement_status"] = "point_only_dynamic_source_unavailable"
+            out["sim_refinement_policy"] = "point_only_fail_closed"
         out.update({"available": False, "unavailable_reason": reason})
         return out
     try:
@@ -19418,8 +19606,12 @@ def _resolve_qr_fit_prediction_from_trial_params(
             "locked_hit_table_row",
             "provider_local_stale_hit_table_row",
         }
+        source_row_detector_projection_allowed = bool(
+            resolution_payload.get("source_row_detector_projection_allowed", False)
+        )
         if not current_hit_table_detector_point and (
-            not dynamic_source_anchor_used or dynamic_source_anchor is None
+            not source_row_detector_projection_allowed
+            and (not dynamic_source_anchor_used or dynamic_source_anchor is None)
         ):
             out.update(
                 {
@@ -19474,6 +19666,19 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 "sim_refinement_status": "point_only_projected_detector_to_caked",
                 "sim_refinement_policy": "point_only_projection",
                 "sim_refinement_caked_image_source": "point_only_detector_projection",
+                "fit_prediction_caked_deg": [
+                    float(projected_nominal_caked[0]),
+                    float(projected_nominal_caked[1]),
+                ],
+                "optimizer_simulated_source_two_theta_phi": [
+                    float(projected_nominal_caked[0]),
+                    float(projected_nominal_caked[1]),
+                ],
+                "optimizer_source_source": "point_only_detector_projection",
+                "objective_source_authority": "point_only_detector_projection",
+                "source_authority_match": bool(
+                    current_hit_table_detector_point or source_row_detector_projection_allowed
+                ),
                 "sim_refinement_subpixel": "no",
                 "sim_refinement_subpixel_status": "none",
                 "sim_refinement_subpixel_method": "none",
@@ -19490,6 +19695,13 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 "point_only_detector_coordinate_source": (
                     "trial_hit_tables" if current_hit_table_detector_point else "trial_source_rows"
                 ),
+                "point_only_detector_projection_used": True,
+                "sim_nominal_detector_display_px_used_for_caked_projection": True,
+                "detector_native_reprojection_is_diagnostic": False,
+                "detector_native_reprojection_used_for_objective": True,
+                "objective_residual_coordinate_space": "caked_deg",
+                "objective_residual_units": "deg",
+                "pixel_residual_used_for_objective": False,
                 "point_only_projector_skipped": False,
                 "available": True,
             }
@@ -30800,10 +31012,27 @@ def fit_geometry_parameters(
         )
 
     def _seed_trace_simulated_point(entry: Mapping[str, object]) -> object:
-        return _seed_trace_point_from_entry(
+        detector_point = _seed_trace_point_from_entry(
             entry,
             x_keys=("simulated_x", "sim_x", "source_x", "x_sim"),
             y_keys=("simulated_y", "sim_y", "source_y", "y_sim"),
+        )
+        if detector_point is not None:
+            return detector_point
+        for key in (
+            "manual_qr_fit_source_caked_deg",
+            "predicted_refined_caked_deg",
+            "predicted_nominal_caked_deg",
+            "optimizer_simulated_source_two_theta_phi",
+            "fit_prediction_caked_deg",
+        ):
+            point = _finite_pair(entry.get(key))
+            if point is not None:
+                return [float(point[0]), float(point[1])]
+        return _seed_trace_point_from_entry(
+            entry,
+            x_keys=("simulated_two_theta_deg", "projected_two_theta_deg"),
+            y_keys=("simulated_phi_deg", "projected_phi_deg"),
         )
 
     def _seed_trace_identity(entry: Mapping[str, object], pair_index: int) -> Dict[str, object]:

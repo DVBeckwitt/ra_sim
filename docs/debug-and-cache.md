@@ -711,13 +711,15 @@ attempted."
 Status as of 2026-05-13:
 
 - feature status: debug-only proof mode
-- bug/error status: the visual audit no longer reports pass when the GUI
-  visual simulation surface differs from the optimizer residual surface; the
-  current New4 artifact is expected to fail proof mode until those sources are
-  aligned
-- follow-up status: the product source mismatch remains open; the canonical
-  dynamic QR simulation surface for the proof is
-  `optimizer_simulated_source_two_theta_phi`
+- bug/error status: fixed for caked-display QR source rows being reprojected as
+  detector points. Valid caked-display rows now use the live
+  `sim_visual_caked_deg` surface for the caked objective, and the regenerated
+  New4 artifact reports `proof_status="pass"` with 7/7 source-authority matches.
+- follow-up status: visual/objective surface divergence remains fail-closed.
+  The artifact now records `source_authority_match_all_caked_display_rows`,
+  `source_authority_mismatch_row_count`, and per-row
+  `point_only_detector_projection_used` so future regressions cannot hide a
+  `point_only_detector_projection` objective behind a caked visual row.
 - migration status: no public API, config, saved-state, or artifact-schema
   migration is required; the new mode and optional diagnostic override are
   additive debug-script flags
@@ -750,9 +752,9 @@ this audit. Rows with inconsistent detector display/native conversion are
 counted in `invalid_detector_display_row_count` and excluded from the detector
 panel instead of being plotted on mixed coordinate frames.
 
-Proof mode is strict by default. `proof_status` is `pass` only when every
-plotted GUI visual simulation QR point and optimizer objective QR point share
-the same caked coordinate surface within `1e-6` degrees. When surfaces diverge,
+Proof mode is strict by default. `proof_status` is `pass` only when every GUI
+visual simulation QR point and optimizer objective QR point share the same
+caked coordinate surface within `1e-6` degrees. When surfaces diverge,
 the JSON must report `proof_status="fail"` with
 `proof_failure_reason="visual_simulation_surface_differs_from_objective_surface"`.
 The caked panel plots objective base/trial simulation points as square/triangle
@@ -767,6 +769,15 @@ as `fit_prediction_caked_deg`, `optimizer_simulated_source_two_theta_phi`, and
 points. Objective detector display points remain valid only when they come from
 allowed detector-display fields such as `sim_nominal_detector_display_px` or
 `resolved_detector_display_px`.
+
+For `metric=dynamic_angular_point_match` and `objective_space=caked_deg`,
+caked-display source rows prefer live caked coordinates in this order:
+`sim_visual_caked_deg`, `sim_caked`, `sim_caked_display`, `two_theta_deg` plus
+`phi_deg`, then `caked_x` plus `caked_y`. Detector projection remains allowed
+only for true detector-frame source rows. If a caked-display row ever reports
+`optimizer_source_source="point_only_detector_projection"`, the audit classifies
+it as `caked_display_row_reprojected_as_detector_point` and recommends
+`prefer_live_sim_visual_caked_for_caked_objective`.
 
 The expected gate for this slice is:
 

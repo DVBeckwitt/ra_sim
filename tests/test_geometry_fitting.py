@@ -4449,6 +4449,32 @@ def test_single_step_qr_visual_audit_preserves_locked_identity() -> None:
 def test_single_step_qr_visual_audit_rejects_mixed_detector_frames() -> None:
     module = _load_new4_coordinate_audit_module()
     request = _single_step_qr_request(source_display_offset=0.0)
+
+    def detector_source_rows_builder(*, local_params=None):
+        del local_params
+        row = _locked_qr_trial_source_row(
+            source_table_index=99,
+            source_row_index=24,
+            source_reflection_index=910,
+            branch_id="locked-branch",
+            best_sample_index=3,
+            mosaic_top_rank_key=("rank", 3),
+            selection_reason="manual_pick",
+            source_kind="detector_projection",
+            actual_source="detector_projection",
+            display_frame="detector_display",
+            coordinate_frame="simulation_native",
+            native_col=12.0,
+            native_row=13.0,
+            sim_detector_display_col=12.0,
+            sim_detector_display_row=13.0,
+        )
+        row["fit_qr_branch_key"] = _point_only_dynamic_qr_row(40.0, 20.0)[
+            "fit_qr_branch_key"
+        ]
+        return _locked_qr_source_rows_payload([row])
+
+    request.dataset_specs[0]["qr_fit_trial_source_rows_builder"] = detector_source_rows_builder
     request.dataset_specs[0]["native_detector_coords_to_detector_display_coords"] = (
         lambda col, row: (float(col) + 100.0, float(row) + 100.0)
     )
@@ -5028,25 +5054,190 @@ def test_qr_fit_point_only_projection_uses_dynamic_sim_visual_caked_deg_and_skip
     expected = _point_only_source_from_params({"center_x": 4.0, "theta_initial": 0.5})
     assert image_builder_calls == 0
     assert refinement_calls == 0
-    assert projector_calls == 1
+    assert projector_calls == 0
     assert prediction["available"] is True
     assert prediction["_qr_fit_point_only_projection"] is True
     assert (
         prediction["hit_table_resolution_reason"] == "locked_hit_table_resolver_skipped_point_only"
     )
-    assert prediction["sim_refinement_status"] == "point_only_projected_detector_to_caked"
-    assert prediction["sim_refinement_caked_image_source"] == "point_only_detector_projection"
-    assert prediction["point_only_projector_skipped"] is False
+    assert prediction["sim_refinement_status"] == "live_sim_visual_caked"
+    assert prediction["sim_refinement_caked_image_source"] == "sim_visual_caked_deg"
+    assert prediction["point_only_projector_skipped"] is True
     assert prediction["sim_nominal_caked_deg"] == pytest.approx(list(expected))
     assert prediction["sim_refined_caked_deg"] == pytest.approx(list(expected))
+    assert prediction["fit_prediction_caked_deg"] == pytest.approx(list(expected))
     assert prediction["dynamic_baseline_anchor_actual_source"] == "sim_visual_caked_deg"
-    assert prediction["point_only_projected_minus_dynamic_delta_two_theta_deg"] == pytest.approx(
-        0.0
+    assert prediction["point_only_detector_projection_used"] is False
+
+
+def test_qr_caked_objective_prefers_live_sim_visual_caked_over_point_only_detector_projection():
+    projector_calls = 0
+    live_caked = (40.212, 39.904)
+
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        row = _point_only_dynamic_qr_row(*live_caked)
+        row.update(
+            {
+                "source_kind": "sim_visual_caked_deg",
+                "display_frame": "caked_display",
+                "current_view_frame": "caked_display",
+                "sim_visual_caked_deg": list(live_caked),
+                "two_theta_deg": live_caked[0],
+                "phi_deg": live_caked[1],
+                "sim_nominal_detector_display_px": [40.212, 39.904],
+                "sim_nominal_native_px": [2958.0, 2884.0],
+                "native_col": 2958.0,
+                "native_row": 2884.0,
+            }
+        )
+        return _locked_qr_source_rows_payload([row])
+
+    def projector(cols, rows, *, local_params=None, **_kwargs):
+        nonlocal projector_calls
+        del cols, rows, local_params
+        projector_calls += 1
+        return _point_only_projector_payload(118.56, -120.0)
+
+    prediction = opt._resolve_qr_fit_prediction_from_trial_params(
+        _locked_qr_fixed_source_entry(
+            background_two_theta_deg=40.006,
+            background_phi_deg=39.050,
+        ),
+        {"center_x": 0.0},
+        {
+            "dataset_ctx": _point_only_qr_dataset_ctx(source_rows_builder, projector),
+            "hit_tables": (),
+            "sim_buffer": np.zeros((4000, 4000), dtype=np.float64),
+            "image_size": 4000,
+            "fit_center": [2000.0, 2000.0],
+            "detector_distance": 0.1,
+            "pixel_size": 1.0,
+            "prediction_source_rows_cache": {},
+            "_qr_fit_point_only_projection": True,
+        },
+        _locked_qr_fixed_source_entry(),
     )
-    assert prediction["point_only_projected_minus_dynamic_delta_phi_deg_wrapped"] == pytest.approx(
-        0.0
+
+    assert projector_calls == 0
+    assert prediction["fit_prediction_caked_deg"] == pytest.approx(list(live_caked))
+    assert prediction["optimizer_source_source"] == "sim_visual_caked_deg"
+    assert prediction["source_authority_match"] is True
+    assert prediction["optimizer_simulated_source_two_theta_phi"] == pytest.approx(
+        list(live_caked)
     )
-    assert prediction["point_only_projected_dynamic_match"] is True
+    assert prediction["sim_nominal_detector_display_px_used_for_caked_projection"] is False
+
+
+def test_qr_caked_objective_rejects_caked_display_values_as_detector_px():
+    live_caked = (40.212, 39.904)
+
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        row = _point_only_dynamic_qr_row(*live_caked)
+        row.update(
+            {
+                "display_frame": "caked_display",
+                "current_view_frame": "caked_display",
+                "display_col": 40.212,
+                "display_row": 39.904,
+                "sim_refined_detector_display_px": [40.212, 39.904],
+                "sim_nominal_detector_display_px": [40.212, 39.904],
+            }
+        )
+        return _locked_qr_source_rows_payload([row])
+
+    def projector(*_args, **_kwargs):
+        raise AssertionError("caked-display source rows must not be detector-projected")
+
+    prediction = opt._resolve_qr_fit_prediction_from_trial_params(
+        _locked_qr_fixed_source_entry(),
+        {"center_x": 0.0},
+        {
+            "dataset_ctx": _point_only_qr_dataset_ctx(source_rows_builder, projector),
+            "hit_tables": (),
+            "sim_buffer": np.zeros((60, 60), dtype=np.float64),
+            "image_size": 60,
+            "fit_center": [30.0, 30.0],
+            "detector_distance": 0.1,
+            "pixel_size": 1.0,
+            "prediction_source_rows_cache": {},
+            "_qr_fit_point_only_projection": True,
+        },
+        _locked_qr_fixed_source_entry(),
+    )
+    detector_display, detector_display_source = opt._fit_prediction_detector_point_for_frame(
+        prediction,
+        "display_detector",
+    )
+
+    assert prediction["available"] is True
+    assert prediction["fit_prediction_caked_deg"] == pytest.approx(list(live_caked))
+    assert detector_display is None
+    assert detector_display_source == "missing_same_frame_detector_prediction"
+    assert (
+        prediction["fit_prediction_detector_display_px_source"]
+        == "invalid_for_detector_space:caked_display"
+    )
+
+
+def test_qr_caked_objective_allows_point_only_projection_only_for_true_detector_frame():
+    projector_calls = 0
+
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        row = _locked_qr_trial_source_row(
+            source_table_index=99,
+            source_row_index=24,
+            source_reflection_index=910,
+            branch_id="locked-branch",
+            best_sample_index=3,
+            mosaic_top_rank_key=("rank", 3),
+            selection_reason="manual_pick",
+            source_kind="detector_projection",
+            actual_source="detector_projection",
+            display_frame="detector_display",
+            coordinate_frame="simulation_native",
+            native_col=12.0,
+            native_row=13.0,
+            sim_native_x=12.0,
+            sim_native_y=13.0,
+            sim_detector_display_col=112.0,
+            sim_detector_display_row=113.0,
+        )
+        row["fit_qr_branch_key"] = _point_only_dynamic_qr_row(1.0, 2.0)["fit_qr_branch_key"]
+        return _locked_qr_source_rows_payload([row])
+
+    def projector(cols, rows, *, local_params=None, **_kwargs):
+        nonlocal projector_calls
+        del local_params
+        projector_calls += 1
+        assert np.asarray(cols, dtype=float).tolist() == [12.0]
+        assert np.asarray(rows, dtype=float).tolist() == [13.0]
+        return _point_only_projector_payload(40.212, 39.904)
+
+    prediction = opt._resolve_qr_fit_prediction_from_trial_params(
+        _locked_qr_fixed_source_entry(),
+        {"center_x": 0.0},
+        {
+            "dataset_ctx": _point_only_qr_dataset_ctx(source_rows_builder, projector),
+            "hit_tables": (),
+            "sim_buffer": np.zeros((60, 60), dtype=np.float64),
+            "image_size": 60,
+            "fit_center": [30.0, 30.0],
+            "detector_distance": 0.1,
+            "pixel_size": 1.0,
+            "prediction_source_rows_cache": {},
+            "_qr_fit_point_only_projection": True,
+        },
+        _locked_qr_fixed_source_entry(),
+    )
+
+    assert projector_calls == 1
+    assert prediction["available"] is True
+    assert prediction["fit_prediction_caked_deg"] == pytest.approx([40.212, 39.904])
+    assert prediction["sim_refinement_caked_image_source"] == "point_only_detector_projection"
+    assert prediction["point_only_detector_projection_used"] is True
 
 
 def test_qr_fit_point_only_projection_prefers_current_hit_tables_over_source_rows() -> None:
@@ -5144,19 +5335,14 @@ def test_qr_fit_point_only_projection_falls_back_to_source_rows_after_hit_table_
 
     expected = _point_only_source_from_params({"center_x": 4.0, "theta_initial": 0.5})
     assert source_rows_builder_calls == 1
-    assert projector_calls == 1
+    assert projector_calls == 0
     assert prediction["available"] is True
-    assert prediction["resolution_reason"] == "locked_fit_qr_branch_key_resolved"
     assert prediction["hit_table_resolution_reason"] == "locked_qr_hkl_branch_missing"
-    assert (
-        prediction["locked_qr_detector_point_source"] == "trial_source_rows_locked_representative"
-    )
     assert prediction["source_rows_rebuilt_or_reused"] == "rebuilt_for_trial_params"
     assert prediction["objective_cache_mode"] == "full_simulation"
-    assert prediction["sim_nominal_projection_input_px"] == pytest.approx([12.0, 13.0])
     assert prediction["sim_nominal_caked_deg"] == pytest.approx(list(expected))
     assert prediction["sim_refined_caked_deg"] == pytest.approx(list(expected))
-    assert prediction["point_only_detector_coordinate_source"] == "trial_source_rows"
+    assert prediction["point_only_detector_coordinate_source"] == "live_caked_source"
 
 
 def test_qr_fit_point_only_projection_rejects_stale_hit_table_recovery_for_source_rows() -> None:
@@ -5198,12 +5384,8 @@ def test_qr_fit_point_only_projection_rejects_stale_hit_table_recovery_for_sourc
     )
     assert prediction["hit_table_resolution_rejected_for_fit_prediction"] is True
     assert prediction["hit_table_resolution_rejected_for_point_only"] is True
-    assert (
-        prediction["locked_qr_detector_point_source"] == "trial_source_rows_locked_representative"
-    )
-    assert prediction["sim_nominal_projection_input_px"] == pytest.approx([12.0, 13.0])
     assert prediction["sim_refined_caked_deg"] == pytest.approx(list(expected))
-    assert prediction["point_only_detector_coordinate_source"] == "trial_source_rows"
+    assert prediction["point_only_detector_coordinate_source"] == "live_caked_source"
 
 
 def test_qr_fit_point_only_projection_uses_stale_hit_table_when_source_rows_unavailable() -> None:
@@ -5328,10 +5510,11 @@ def test_qr_fit_objective_incomplete_missing_pairs_include_source_row_diagnostic
         assert expected_field in message
 
 
-def test_qr_fit_point_only_projection_prefers_current_projection_over_stale_visual_alias() -> None:
+def test_qr_caked_objective_prefers_sim_visual_caked_over_projected_alias() -> None:
     current = (55.0, -20.0)
     projected = (56.0, -19.0)
     stale = (42.0, -179.7)
+    projector_calls = 0
 
     def source_rows_builder(*, local_params=None):
         del local_params
@@ -5342,6 +5525,8 @@ def test_qr_fit_point_only_projection_prefers_current_projection_over_stale_visu
         return _locked_qr_source_rows_payload([row])
 
     def projector(*_args, **_kwargs):
+        nonlocal projector_calls
+        projector_calls += 1
         return {
             "two_theta_deg": np.asarray([projected[0]], dtype=np.float64),
             "phi_deg": np.asarray([projected[1]], dtype=np.float64),
@@ -5376,10 +5561,11 @@ def test_qr_fit_point_only_projection_prefers_current_projection_over_stale_visu
     )
 
     assert prediction["available"] is True
-    assert prediction["sim_nominal_caked_deg"] == pytest.approx(list(projected))
-    assert prediction["sim_refined_caked_deg"] == pytest.approx(list(projected))
-    assert prediction["dynamic_baseline_anchor_caked_deg"] == pytest.approx(list(current))
-    assert prediction["sim_nominal_caked_deg"] != pytest.approx(list(stale))
+    assert projector_calls == 0
+    assert prediction["sim_nominal_caked_deg"] == pytest.approx(list(stale))
+    assert prediction["sim_refined_caked_deg"] == pytest.approx(list(stale))
+    assert prediction["dynamic_baseline_anchor_caked_deg"] == pytest.approx(list(stale))
+    assert prediction["sim_nominal_caked_deg"] != pytest.approx(list(projected))
 
 
 def test_qr_fit_point_only_projection_rejects_stale_dynamic_source() -> None:
@@ -5437,7 +5623,23 @@ def test_qr_fit_point_only_projection_uses_detector_to_caked_projector_when_dyna
 
     def source_rows_builder(*, local_params=None):
         del local_params
-        return _locked_qr_source_rows_payload([_point_only_dynamic_qr_row(42.0, -179.7)])
+        row = _locked_qr_trial_source_row(
+            source_table_index=99,
+            source_row_index=24,
+            source_reflection_index=910,
+            branch_id="locked-branch",
+            best_sample_index=3,
+            mosaic_top_rank_key=("rank", 3),
+            selection_reason="manual_pick",
+            source_kind="detector_projection",
+            actual_source="detector_projection",
+            display_frame="detector_display",
+            coordinate_frame="simulation_native",
+            native_col=12.0,
+            native_row=13.0,
+        )
+        row["fit_qr_branch_key"] = _point_only_dynamic_qr_row(1.0, 2.0)["fit_qr_branch_key"]
+        return _locked_qr_source_rows_payload([row])
 
     def projector(*_args, **_kwargs):
         nonlocal projector_calls
@@ -5482,16 +5684,10 @@ def test_qr_fit_point_only_projection_uses_detector_to_caked_projector_when_dyna
     assert prediction["sim_nominal_caked_deg"] == pytest.approx([45.0, -170.0])
     assert prediction["sim_refined_caked_deg"] == pytest.approx([45.0, -170.0])
     assert prediction["point_only_projector_skipped"] is False
-    assert prediction["point_only_projected_dynamic_match"] is False
-    assert prediction["point_only_projected_minus_dynamic_delta_two_theta_deg"] == pytest.approx(
-        3.0
-    )
-    assert prediction["point_only_projected_minus_dynamic_delta_phi_deg_wrapped"] == pytest.approx(
-        9.7
-    )
+    assert prediction["point_only_detector_projection_used"] is True
 
 
-def test_fit_geometry_parameters_point_only_projection_skips_locked_refinement_preflight(
+def test_fit_geometry_parameters_point_only_caked_objective_skips_locked_refinement_preflight(
     monkeypatch,
 ) -> None:
     projector_calls = 0
@@ -5606,13 +5802,13 @@ def test_fit_geometry_parameters_point_only_projection_skips_locked_refinement_p
 
     assert result.success
     assert process_calls > 0
-    assert projector_calls > 0
+    assert projector_calls == 0
     assert result.geometry_fit_debug_summary["locked_mosaic_refinement_validation"] == (
         "skipped_point_only"
     )
-    assert result.point_match_diagnostics[0]["sim_refinement_status"] == (
-        "point_only_projected_detector_to_caked"
-    )
+    assert result.point_match_diagnostics[0]["sim_refinement_status"] == "live_sim_visual_caked"
+    assert result.point_match_diagnostics[0]["optimizer_source_source"] == "sim_visual_caked_deg"
+    assert result.point_match_diagnostics[0]["point_only_detector_projection_used"] is False
 
 
 def test_rung3_objective_uses_cached_caked_targets_and_dynamic_sim_sources(
@@ -5707,13 +5903,13 @@ def test_rung3_objective_uses_cached_caked_targets_and_dynamic_sim_sources(
         [expected_delta_theta, expected_delta_phi]
     )
     assert diag["metric_unit"] == "deg"
-    assert diag["simulated_fit_space_source"] == "dataset_fit_space_projector"
-    assert diag["simulated_detector_input_frame"] == "native_detector"
-    assert diag["sim_refinement_status"] == "point_only_projected_detector_to_caked"
+    assert diag["simulated_fit_space_source"] == "sim_visual_caked_deg"
+    assert diag["simulated_detector_input_frame"] == "sim_visual_caked_deg"
+    assert diag["sim_refinement_status"] == "live_sim_visual_caked"
     assert summary["manual_caked_residual_row_count"] == 1
     assert summary["cached_fit_space_anchor_row_count"] == 1
-    assert summary["dataset_fit_space_projector_row_count"] == 1
-    assert summary["sim_visual_caked_source_row_count"] == 0
+    assert summary["dataset_fit_space_projector_row_count"] == 0
+    assert summary["sim_visual_caked_source_row_count"] == 1
     assert summary["optimizer_point_component_failure_count"] == 0
 
 
@@ -5740,15 +5936,26 @@ def test_point_only_qr_acceptance_rejects_mixed_display_native_detector_distance
 
     def source_rows_builder(*, local_params=None):
         del local_params
-        row = _point_only_dynamic_qr_row(40.212, 39.904)
-        row.update(
-            {
-                "native_col": predicted_native[0],
-                "native_row": predicted_native[1],
-                "sim_col": predicted_display[0],
-                "sim_row": predicted_display[1],
-            }
+        row = _locked_qr_trial_source_row(
+            source_table_index=99,
+            source_row_index=24,
+            source_reflection_index=910,
+            branch_id="locked-branch",
+            best_sample_index=3,
+            mosaic_top_rank_key=("rank", 3),
+            selection_reason="manual_pick",
+            source_kind="detector_projection",
+            actual_source="detector_projection",
+            display_frame="detector_display",
+            coordinate_frame="simulation_native",
+            native_col=predicted_native[0],
+            native_row=predicted_native[1],
+            sim_detector_display_col=predicted_display[0],
+            sim_detector_display_row=predicted_display[1],
         )
+        row["fit_qr_branch_key"] = _point_only_dynamic_qr_row(40.212, 39.904)[
+            "fit_qr_branch_key"
+        ]
         return _locked_qr_source_rows_payload([row])
 
     def projector(cols, rows, *, local_params=None, **_kwargs):

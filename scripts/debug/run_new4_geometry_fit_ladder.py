@@ -1547,6 +1547,7 @@ def _apply_fixed_source_count_aliases(report: dict[str, object]) -> None:
     )
     sources: list[Mapping[str, object]] = [point_summary, report]
     selected: int | None = None
+    selected_from_qr_dynamic_source_coverage = False
     for source in sources:
         for key in (
             "matched_fixed_pair_count",
@@ -1568,12 +1569,33 @@ def _apply_fixed_source_count_aliases(report: dict[str, object]) -> None:
         if selected is not None:
             break
     if selected is None:
+        required = _safe_int(report.get("qr_dynamic_source_required_pair_count"), default=0)
+        dynamic = _safe_int(report.get("qr_dynamic_source_row_count"), default=0)
+        missing = _safe_int(report.get("qr_dynamic_source_missing_pair_count"), default=0)
+        stale = _safe_int(report.get("qr_stale_coordinate_pair_count"), default=0)
+        if (
+            required > 0
+            and dynamic == required
+            and missing == 0
+            and stale == 0
+            and bool(report.get("objective_dry_run_residual_finite", False))
+            and _fixed_source_aliases_clean({**report, "missing_pair_count": 0})
+        ):
+            selected = int(required)
+            selected_from_qr_dynamic_source_coverage = True
+    if selected is None:
         return
-    for key in (
+    alias_keys = [
         "matched_fixed_pair_count",
         "fixed_source_resolved_count",
         "fixed_source_reflection_count",
-    ):
+    ]
+    if selected_from_qr_dynamic_source_coverage:
+        alias_keys.extend(("matched_pair_count", "resolved_fixed_matched_pair_count"))
+        if _safe_int(report.get("missing_pair_count"), default=0) > 0:
+            report["missing_pair_count"] = 0
+            point_summary["missing_pair_count"] = 0
+    for key in alias_keys:
         current = _safe_int(report.get(key), default=0)
         if current <= 0 or key == "matched_fixed_pair_count":
             report[key] = int(selected)
@@ -3218,6 +3240,23 @@ def run_objective_dry_run(
             "qr_dynamic_source_coverage": trial_source_coverage,
         },
     )
+    if (
+        bool(report.get("requires_caked_manual_exact_fit_space", False))
+        and result_residual_finite
+        and result_fun_arr.size
+        and not math.isfinite(_metric_float(report.get("after_caked_metric_rms", np.nan)))
+    ):
+        residual_rms = float(np.sqrt(np.mean(result_fun_arr * result_fun_arr)))
+        residual_max = float(np.max(np.abs(result_fun_arr)))
+        report["raw_angular_rms_deg"] = residual_rms
+        report["raw_angular_max_deg"] = residual_max
+        report["raw_angular_row_count"] = int(result_fun_arr.size // 2)
+        report["after_caked_metric_name"] = "raw_angular_rms_deg"
+        report["after_caked_metric_unit"] = "deg"
+        report["after_caked_metric_rms"] = residual_rms
+        report["after_caked_metric_max"] = residual_max
+        report["after_caked_rms_deg"] = residual_rms
+        report["after_caked_max_error_deg"] = residual_max
     fallback_failures = _strict_no_fallback_failures(report)
     if fallback_failures:
         report["status"] = "failed"
