@@ -132,9 +132,13 @@ Current status as of 2026-05-12:
   through `BACKGROUND_IMAGE_SUBTRACTION_DISABLED_OVERRIDE=1`; fitted peak
   models remain written separately for diagnostics
 - final-fit cache keys include
-  `fit_signature=joint_qz_labeled_marker_fit_specular_theta_i0_l8_v8` so older
+  `fit_signature=joint_qz_labeled_marker_fit_specular_theta_i0_l8_v9` so older
   cached joint fits that could drop weak labeled markers, overfill the m=0
   low-L full profile, or predate the PbI2 sideband plot policy are recomputed
+- split Qr-rod marker editing loads imported edit JSON before the nonzero/HK=0
+  phase split, writes edit JSON only after the final HK=0/specular phase is
+  accepted, and records the active HK=0/specular L bounds in the final-fit cache
+  key so stale specular-window fits are not reused
 - final nonlinear Pearson-VII Qz refinement minimizes the existing
   intensity-weighted residual plus a bounded log-intensity residual, matching
   the log-scaled Qr-rod plot without changing marker-table, CSV, CLI, or

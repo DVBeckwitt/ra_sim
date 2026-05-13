@@ -9,7 +9,10 @@ Status: implemented locally, Qr-rod editor startup and L-bound callback crash
 fixed, detector label editing/import/export restored through a responsive Tk
 canvas popup, detector companion preview/deferred Delta Qr validation passing,
 PbI2 HK=0/nonzero L defaults aligned across editor/preview/final plots, legacy
-notebook consumers migrated to the maintained `.py` diagnostic
+notebook consumers migrated to the maintained `.py` diagnostic, HK=0 editor
+phase real-profile seeding restored, PbI2 compressed nonzero marker-L mapping
+guard added, PbI2 final HK=0 row restored, split editor persistence/cache
+guarded
 
 ## Problem
 
@@ -119,7 +122,7 @@ to make the Qr rod detector and integration figures source-consistent:
   of dropping them at the old 1% initial-amplitude gate, so labeled HK=0 peaks
   such as `006` remain included in the final fit.
 - Final Qr-rod fit cache keys now include
-  `fit_signature=joint_qz_labeled_marker_fit_specular_theta_i0_l8_v8`; old
+  `fit_signature=joint_qz_labeled_marker_fit_specular_theta_i0_l8_v9`; old
   cached fits without that signature are recomputed.
 - The guarded runner now accepts the generated `.py` diagnostic through the
   existing `--notebook` flag and sets the internal process guard needed for
@@ -170,6 +173,9 @@ to make the Qr rod detector and integration figures source-consistent:
   detector companion preview, and final profile figure use the same HK-specific
   L-bound helper, so the preview no longer shows the specular band with nonzero
   defaults.
+- Qr-rod marker editing now runs in explicit phases: nonzero HK rods first,
+  `HK=0`/`00L` second, and detector-label placement last. The accepted `HK=0`
+  phase state drives the detector specular band and `00L_region.png` mask.
 - Configured-hidden rods such as `HK=7` are skipped in the editor/support/final
   Qr-rod plots without changing the generated profile CSV tables.
 - The legacy `all_background_peak_fits.ipynb` diagnostic artifact is removed
@@ -180,6 +186,26 @@ to make the Qr rod detector and integration figures source-consistent:
   when `RA_SIM_HEADLESS` or CI mode is active.
 - PbI2 generated rods remain disabled by default and final profile rows still
   require complete detector support, so the unsupported `m=7` row is skipped.
+- The `HK=0` / `00L` marker-editor phase now receives the pre-editor specular
+  profile rows even after the nonzero-HK phase has replaced the active profile
+  table. If those real rows are unavailable, the popup still opens with
+  marker-only fallback rows and prints an explicit diagnostic.
+- L-bound profile refreshes now reject tables that have drawable rows only for
+  the wrong editor phase. This keeps the `HK=0` phase on its last valid
+  specular intensity curve when the callback returns only nonzero rows.
+- PbI2 nonzero marker-derived L mappings now require a minimum L-span relative
+  to their Qz span before they can drive the profile x-axis. Collapsed mappings
+  like the observed `m=4 -` branch fall back to the lattice/Qz L axis, matching
+  the behavior of branches whose markers do not carry usable L references.
+- PbI2 `HK=0` marker rows now honor the same active specular L window before
+  pre-editor integration. Stale below-window rows such as `L=1` are filtered
+  out, and active-lattice fallback markers are generated only through the
+  active HK=0 display maximum, so the final figure can include the `m=0`
+  integration row below the nonzero rods.
+- Split Qr-rod marker editing now imports saved edit JSON before launching the
+  nonzero and `HK=0` phases, keeps edit-file writes until the final specular
+  phase is accepted, carries the detector companion preview across both phases,
+  and records specular editor L bounds in final-fit cache identity.
 
 ## Status
 
@@ -222,6 +248,31 @@ Bug/error status:
   invalid Qz, invalid density, or blank branch labels, the editor records
   `profile_update_error`, keeps the previous drawable profile table, refreshes
   the detector preview where possible, and remains open.
+- The `HK=0` / `00L` profile-blanking path is fixed by treating nonzero-only
+  refresh output as invalid for the specular phase. The editor keeps the real
+  pre-editor HK=0 intensity rows instead of replacing them with unrelated
+  nonzero rows or marker-only dummy intensity.
+- The PbI2 `m=4 -` final-profile compression is fixed by rejecting
+  near-flat marker L mappings for nonzero PbI2 branches. The full detector
+  profile data remains in the CSV; only the plotted/profile-window L mapping is
+  corrected, and the mapping guard is recorded in the Qr-rod profile cache
+  policy signature.
+- The missing PbI2 final `m=0` integration row is fixed by removing stale
+  specular marker rows outside the active HK=0 L window before computing the
+  detector Qr/Qz specular profile. HK=0 marker rows are now seeded from the
+  same theta=40 specular detector Qz map used for integration, and the
+  pre-editor Qr-rod cache signature was advanced so stale cached marker tables
+  are not reused. If the PbI2 theta=40 `Qr=0 +/- DeltaQr` detector band has no
+  pixels in the active L window, the HK=0 profile falls back to the same
+  detector-space specular L-window strip so the final m=0 row is still drawn.
+- Partial edit-file overwrite is fixed. The nonzero phase no longer writes
+  `RA_SIM_QR_ROD_PEAK_EDITS` output by itself; final persistence happens only
+  after the HK=0/specular phase accepts the combined marker table.
+- Stale final-fit cache reuse across different HK=0/specular editor bounds is
+  fixed by adding the specular L min/max to the final Qr-rod fit cache policy.
+- Detector companion preview availability across the split editor is fixed by
+  showing it during the nonzero phase and keeping it alive until the final
+  specular phase closes.
 - The L-window textbox redraw boundary is also guarded. Matplotlib widget
   callbacks are dispatched through the backend event loop, so redraw exceptions
   can otherwise be printed by Matplotlib as callback tracebacks while leaving
@@ -317,7 +368,7 @@ Feature status:
   cache signature prevents reuse of stale final fits from the older component
   gate.
 - Bi2Se3 is now the default local state for the parallel diagnostic script.
-  The final Qz fit cache signature is `joint_qz_labeled_marker_fit_specular_theta_i0_l8_v8`
+  The final Qz fit cache signature is `joint_qz_labeled_marker_fit_specular_theta_i0_l8_v9`
   so cached fits from the older marker gate, baseline-sensitive weak-marker
   gate, pre-log-residual full-profile objective, and pre-PbI2 sideband plot
   policy are recomputed.
