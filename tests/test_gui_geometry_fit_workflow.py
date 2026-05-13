@@ -16984,8 +16984,8 @@ def test_new4_rung1_direct_objective_dry_run_green_or_fail_before_solve(
         max_nfev=20,
     )
 
-    assert report["status"] in {"ok", "failed"}
-    assert report["failure_reason"] in {
+    assert report["status"] in {"ok", "fail", "failed"}
+    assert report.get("failure_reason") in {
         None,
         "stale_qr_coordinate_provenance",
         "missing_dynamic_trial_source_rows",

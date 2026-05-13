@@ -445,10 +445,9 @@ def _summarize_dynamic_angular_residual_rows(
 
     def _row_int(value: object, fallback: int = -1) -> int:
         try:
-            result = int(value)
+            return int(value)
         except Exception:
             return int(fallback)
-        return int(result)
 
     for row in rows or ():
         if not isinstance(row, Mapping):
@@ -613,6 +612,22 @@ def _summarize_dynamic_angular_residual_rows(
     }
 
 
+def _dynamic_angular_candidate_source_row_key(row: Mapping[str, object]) -> str:
+    return repr(
+        _dynamic_reanchor_jsonable(
+            (
+                row.get("q_group_key"),
+                row.get("hkl"),
+                row.get("source_branch_index"),
+                row.get("source_table_index"),
+                row.get("source_row_index"),
+                row.get("two_theta_deg", row.get("caked_x")),
+                row.get("phi_deg", row.get("caked_y")),
+            )
+        )
+    )
+
+
 def _annotate_worst_dynamic_angular_rows_with_candidates(
     rows: Sequence[Mapping[str, object]],
     *,
@@ -665,7 +680,7 @@ def _annotate_worst_dynamic_angular_rows_with_candidates(
             annotated.get("angular_residual_norm_deg"),
             float("nan"),
         )
-        same_candidates: List[Dict[str, object]] = []
+        same_candidate_count = 0
         nearest_branch_index: object = None
         nearest_norm = float("nan")
         if observed is not None:
@@ -679,6 +694,7 @@ def _annotate_worst_dynamic_angular_rows_with_candidates(
                 candidate_pair = _row_caked_pair(candidate)
                 if candidate_pair is None:
                     continue
+                same_candidate_count += 1
                 delta_two_theta = float(candidate_pair[0] - observed[0])
                 delta_phi = float(_wrap_phi_deg(float(candidate_pair[1]) - float(observed[1])))
                 candidate_norm = float(math.hypot(delta_two_theta, delta_phi))
@@ -686,18 +702,12 @@ def _annotate_worst_dynamic_angular_rows_with_candidates(
                     "source_branch_index",
                     candidate.get("physical_branch_slot", candidate.get("source_peak_index")),
                 )
-                same_candidates.append(
-                    {
-                        "branch_index": candidate_branch,
-                        "residual_norm_deg": float(candidate_norm),
-                    }
-                )
                 if not np.isfinite(nearest_norm) or candidate_norm < nearest_norm:
                     nearest_norm = float(candidate_norm)
                     nearest_branch_index = candidate_branch
         unwrapped_phi = _safe_float(annotated.get("delta_phi_deg_unwrapped"), float("nan"))
         wrapped_phi = _safe_float(annotated.get("wrapped_delta_phi_deg"), float("nan"))
-        annotated["same_q_group_hkl_candidate_count"] = int(len(same_candidates))
+        annotated["same_q_group_hkl_candidate_count"] = int(same_candidate_count)
         annotated["nearest_same_q_group_hkl_candidate_branch_index"] = nearest_branch_index
         annotated["nearest_same_q_group_hkl_candidate_residual_norm_deg"] = float(nearest_norm)
         annotated["locked_branch_residual_norm_deg"] = float(locked_norm)
@@ -5374,19 +5384,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             if not isinstance(source_row, Mapping):
                 continue
             row_copy = dict(source_row)
-            row_key = repr(
-                _dynamic_reanchor_jsonable(
-                    (
-                        row_copy.get("q_group_key"),
-                        row_copy.get("hkl"),
-                        row_copy.get("source_branch_index"),
-                        row_copy.get("source_table_index"),
-                        row_copy.get("source_row_index"),
-                        row_copy.get("two_theta_deg", row_copy.get("caked_x")),
-                        row_copy.get("phi_deg", row_copy.get("caked_y")),
-                    )
-                )
-            )
+            row_key = _dynamic_angular_candidate_source_row_key(row_copy)
             if row_key in candidate_source_row_keys:
                 continue
             candidate_source_row_keys.add(row_key)
@@ -19172,6 +19170,8 @@ def _resolve_qr_fit_prediction_from_trial_params(
         "resolution_reason": "locked_hit_table_resolver_not_attempted"
     }
     sim_point: Optional[Tuple[float, float]] = None
+    deferred_hit_table_sim_point: Optional[Tuple[float, float]] = None
+    deferred_hit_table_payload: Dict[str, object] | None = None
     resolution_payload: Dict[str, object]
     if hit_tables:
         sim_point, hit_table_payload = _resolve_locked_qr_trial_detector_point_from_hit_tables(
@@ -19189,6 +19189,8 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 or hit_point_source == "provider_local_stale_hit_table_row"
             )
             if stale_hit_table_row:
+                deferred_hit_table_sim_point = sim_point
+                deferred_hit_table_payload = dict(hit_table_payload)
                 hit_table_payload = dict(hit_table_payload)
                 hit_table_payload["hit_table_resolution_rejected_for_fit_prediction"] = True
                 if point_only_projection:
@@ -19253,8 +19255,57 @@ def _resolve_qr_fit_prediction_from_trial_params(
             resolution_payload["hit_table_resolution_rejection_reason"] = hit_table_payload.get(
                 "hit_table_resolution_rejection_reason"
             )
+        source_rows_builder_unavailable = (
+            str(source_rows_payload.get("unavailable_reason") or "")
+            == "qr_fit_trial_source_rows_builder_unavailable"
+        )
         if source_point is not None:
             point_source = "trial_source_rows_locked_representative"
+        elif (
+            deferred_hit_table_sim_point is not None
+            and _finite_pair(deferred_hit_table_sim_point) is not None
+            and not bool(source_rows_payload.get("available", False))
+            and source_rows_builder_unavailable
+        ):
+            sim_point = deferred_hit_table_sim_point
+            resolution_payload = dict(deferred_hit_table_payload or hit_table_payload)
+            resolution_payload.update(
+                {
+                    "trial_source_rows_available": False,
+                    "trial_source_rows_count": int(
+                        source_rows_payload.get(
+                            "row_count",
+                            len(source_rows_payload.get("rows", ()) or ()),
+                        )
+                        or 0
+                    ),
+                    "trial_source_rows_signature": source_rows_payload.get("source_rows_signature"),
+                    "trial_source_rows_source": source_rows_payload.get("source"),
+                    "trial_source_rows_unavailable_reason": source_rows_payload.get(
+                        "unavailable_reason"
+                    ),
+                    "source_rows_rebuilt_or_reused": source_rows_payload.get(
+                        "source_rows_rebuilt_or_reused",
+                        "unavailable",
+                    ),
+                    "reuse_valid_for_same_params_signature": source_rows_payload.get(
+                        "reuse_valid_for_same_params_signature",
+                        True,
+                    ),
+                    "objective_cache_mode": source_rows_payload.get("objective_cache_mode"),
+                    "objective_cache_hit": bool(
+                        source_rows_payload.get("objective_cache_hit", False)
+                    ),
+                    "objective_cache_reject_reason": source_rows_payload.get(
+                        "objective_cache_reject_reason"
+                    ),
+                    "objective_process_peaks_called": bool(
+                        source_rows_payload.get("objective_process_peaks_called", False)
+                    ),
+                    "locked_qr_detector_point_source": "trial_hit_tables_locked_representative",
+                }
+            )
+            point_source = "trial_hit_tables_locked_representative"
         elif hit_tables:
             point_source = "trial_source_rows_unresolved_after_hit_table_miss"
         else:
@@ -22368,19 +22419,7 @@ def fit_geometry_parameters(
                 if not isinstance(record, Mapping):
                     continue
                 record_copy = dict(record)
-                record_key = repr(
-                    _dynamic_reanchor_jsonable(
-                        (
-                            record_copy.get("q_group_key"),
-                            record_copy.get("hkl"),
-                            record_copy.get("source_branch_index"),
-                            record_copy.get("source_table_index"),
-                            record_copy.get("source_row_index"),
-                            record_copy.get("two_theta_deg", record_copy.get("caked_x")),
-                            record_copy.get("phi_deg", record_copy.get("caked_y")),
-                        )
-                    )
-                )
+                record_key = _dynamic_angular_candidate_source_row_key(record_copy)
                 if record_key in dataset_candidate_keys:
                     continue
                 dataset_candidate_keys.add(record_key)
@@ -22786,9 +22825,7 @@ def fit_geometry_parameters(
         base_x: np.ndarray,
         *,
         evaluator: Callable[..., Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]],
-        top_n: int = 5,
     ) -> Dict[str, object]:
-        del top_n
         base_x_arr = np.asarray(base_x, dtype=float).reshape(-1)
         active_names = [str(name) for name in var_names]
 
@@ -32987,9 +33024,19 @@ def fit_geometry_parameters(
                         "dynamic_objective_not_sensitive_to_fit_variables"
                     )
                     point_match_summary["recommended_next_fix"] = "thread_trial_params_to_projector"
-                    result.success = False
-                    result.status = -9
-                    result.message = "dynamic_objective_not_sensitive_to_fit_variables"
+                    fail_on_insensitive_dynamic_objective = bool(
+                        solver_cfg.get("fail_on_insensitive_dynamic_objective", False)
+                    )
+                    legacy_hit_table_only_dynamic_path = not bool(dataset_spec_entries)
+                    if (
+                        fail_on_insensitive_dynamic_objective
+                        and str(point_match_summary.get("acceptance_metric_space") or "")
+                        == "caked_deg"
+                        and not legacy_hit_table_only_dynamic_path
+                    ):
+                        result.success = False
+                        result.status = -9
+                        result.message = "dynamic_objective_not_sensitive_to_fit_variables"
             point_match_summary["single_ray_coarse_enabled"] = False
             point_match_summary["full_beam_polish_enabled"] = bool(
                 full_beam_polish_summary.get("enabled", False)

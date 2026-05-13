@@ -702,6 +702,58 @@ candidate counts, `source_rows_rebuilt_or_reused`, and objective-cache status so
 future failures distinguish "source rows unavailable" from "source rows were not
 attempted."
 
+## New4 single-step QR coordinate visual audit
+
+Status as of 2026-05-13:
+
+- feature status: debug-only dry run
+- bug/error status: resolved for stale saved `sim_refined_*` proof inputs,
+  provider-local stale-hit recovery when trial source rows are unavailable, and
+  legacy dynamic-objective tests that should not fail closed on zero sensitivity
+- migration status: no public API, config, saved-state, or artifact-schema
+  migration is required; the new mode is an additive debug-script flag
+- shipping status: local artifact generation is complete, generated PNG/JSON/CSV
+  files remain local diagnostics unless a release explicitly versions them
+
+Run:
+
+```bash
+python scripts/debug/visualize_new4_qr_fit_coordinates.py \
+  --state artifacts/geometry_fit_gui_states/new4.json \
+  --background-index 0 \
+  --single-step-detector-angle-audit \
+  --active-vars gamma,Gamma \
+  --max-angle-step-deg 5 \
+  --fd-step-deg 0.05 \
+  --output-root artifacts/geometry_fit_ladder/new4_single_iteration_visual_audit/bg0
+```
+
+Outputs:
+
+- `new4_qr_single_iteration.json` is the authoritative row-level proof
+- `new4_qr_single_iteration.csv` mirrors the JSON row table for quick inspection
+- `new4_qr_single_iteration.png` is diagnostic visual evidence only
+
+The JSON records every row identity, detector display/native coordinate,
+caked coordinate, live-projector source, residual delta, validity flag, and
+before/after identity check. `saved_sim_refined_caked_used` is always false in
+this audit. Rows with inconsistent detector display/native conversion are
+counted in `invalid_detector_display_row_count` and excluded from the detector
+panel instead of being plotted on mixed coordinate frames.
+
+The expected gate for this slice is:
+
+```bash
+python -m pytest tests/test_geometry_fitting.py -q
+python -m pytest tests/test_gui_geometry_fit_workflow.py -q
+python -m pytest tests/test_geometry_fit_manual_fit_space_classification.py -q
+python -m ra_sim.dev check
+```
+
+The full manual-selection helper file is slow in local desktop runs; use the
+targeted manual QR helper slice first when validating this debug mode, then run
+the full file when time permits.
+
 ## Weighted-event diffraction status
 
 Current status:

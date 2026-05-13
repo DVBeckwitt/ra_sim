@@ -1,6 +1,9 @@
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Mapping
+import importlib.util
 import math
+from pathlib import Path
+from types import SimpleNamespace
 import threading
 
 import numpy as np
@@ -4271,6 +4274,282 @@ def _point_only_projector_payload(
     }
 
 
+def _load_new4_coordinate_audit_module():
+    module_path = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "debug"
+        / "visualize_new4_qr_fit_coordinates.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "visualize_new4_qr_fit_coordinates_for_unit_tests",
+        module_path,
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec is not None and spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def _single_step_qr_request(
+    *,
+    measured: dict[str, object] | None = None,
+    source_from_params=None,
+    native_to_display=None,
+    source_display_offset: float = 100.0,
+) -> SimpleNamespace:
+    image_size = 30
+    params = _base_params(image_size, optics_mode=1)
+    params.update(
+        {
+            "center_x": 15.0,
+            "center_y": 15.0,
+            "center": [15.0, 15.0],
+            "gamma": 0.0,
+            "Gamma": 0.0,
+        }
+    )
+    if source_from_params is None:
+        source_from_params = lambda local_params: (40.0, 20.0)
+    if native_to_display is None:
+        native_to_display = lambda col, row: (
+            float(col) + source_display_offset,
+            float(row) + source_display_offset,
+        )
+    measured_entry = measured or _locked_qr_fixed_source_entry(
+        native_col=10.0,
+        native_row=20.0,
+        background_detector_x=10.0,
+        background_detector_y=20.0,
+        bg_display=(110.0, 120.0),
+        background_two_theta_deg=0.0,
+        background_phi_deg=0.0,
+        caked_x=0.0,
+        caked_y=0.0,
+        fit_space_anchor_override=True,
+        fit_space_anchor_source="manual_caked_click",
+    )
+
+    def source_rows_builder(*, local_params=None):
+        two_theta, phi = source_from_params(local_params)
+        row = _point_only_dynamic_qr_row(two_theta, phi)
+        row.update(
+            {
+                "display_col": 12.0 + source_display_offset,
+                "display_row": 13.0 + source_display_offset,
+                "sim_refined_detector_display_px": (
+                    12.0 + source_display_offset,
+                    13.0 + source_display_offset,
+                ),
+            }
+        )
+        return _locked_qr_source_rows_payload([row])
+
+    def projector(cols, rows, *, local_params=None, **_kwargs):
+        del cols, rows
+        two_theta, phi = source_from_params(local_params)
+        return _point_only_projector_payload(two_theta, phi)
+
+    return SimpleNamespace(
+        miller=np.array([[2.0, 0.0, 0.0]], dtype=np.float64),
+        intensities=np.array([1.0], dtype=np.float64),
+        image_size=image_size,
+        params=params,
+        measured_peaks=[],
+        var_names=["gamma", "Gamma"],
+        candidate_param_names=["gamma", "Gamma"],
+        dataset_specs=[
+            {
+                "dataset_index": 0,
+                "label": "bg0",
+                "theta_initial": 0.0,
+                "measured_peaks": [measured_entry],
+                "experimental_image": np.zeros((image_size, image_size), dtype=np.float64),
+                "fit_space_projector": projector,
+                "fit_space_projector_kind": "exact_caked_bundle",
+                "qr_fit_trial_source_rows_builder": source_rows_builder,
+                "qr_fit_trial_source_rows_builder_kind": "unit_test_dynamic_rows",
+                "native_detector_coords_to_detector_display_coords": native_to_display,
+            }
+        ],
+        refinement_config={
+            "solver": {
+                "manual_point_fit_mode": True,
+                "dynamic_point_geometry_fit": True,
+                "_qr_fit_point_only_projection": True,
+                "weighted_matching": False,
+                "use_measurement_uncertainty": False,
+                "max_nfev": 1,
+            }
+        },
+        runtime_safety_note=None,
+    )
+
+
+def test_single_step_qr_visual_audit_does_not_call_full_optimizer(monkeypatch) -> None:
+    module = _load_new4_coordinate_audit_module()
+    request = _single_step_qr_request()
+
+    monkeypatch.setattr(
+        module.opt,
+        "fit_geometry_parameters",
+        lambda *_args, **_kwargs: pytest.fail("full optimizer must not run"),
+    )
+    monkeypatch.setattr(
+        module.gui_geometry_fit,
+        "solve_geometry_fit_request",
+        lambda *_args, **_kwargs: pytest.fail("solver wrapper must not run"),
+    )
+
+    result = module._single_step_detector_angle_trial(request, request.params)
+
+    assert result["rows"]
+    assert result["single_step_status"] in {"ok", "insensitive_to_gamma_Gamma"}
+
+
+def test_single_step_qr_visual_audit_bounds_gamma_Gamma_to_five_deg() -> None:
+    module = _load_new4_coordinate_audit_module()
+    request = _single_step_qr_request(
+        source_from_params=lambda local_params: (
+            100.0 + float(local_params.get("gamma", 0.0)),
+            100.0 + float(local_params.get("Gamma", 0.0)),
+        )
+    )
+
+    result = module._single_step_detector_angle_trial(
+        request,
+        request.params,
+        max_angle_step_deg=5.0,
+        fd_step_deg=0.05,
+    )
+
+    assert result["single_step_status"] == "ok"
+    assert abs(result["delta_gamma_deg"]) == pytest.approx(5.0)
+    assert abs(result["delta_Gamma_deg"]) == pytest.approx(5.0)
+
+
+def test_single_step_qr_visual_audit_preserves_locked_identity() -> None:
+    module = _load_new4_coordinate_audit_module()
+    request = _single_step_qr_request(
+        source_from_params=lambda local_params: (
+            10.0 + float(local_params.get("gamma", 0.0)),
+            20.0 + float(local_params.get("Gamma", 0.0)),
+        )
+    )
+
+    result = module._single_step_detector_angle_trial(request, request.params)
+
+    for row in result["rows"]:
+        assert row["identity_same_before_after"] is True
+        assert row["q_group_same_before_after"] is True
+        assert row["hkl_same_before_after"] is True
+        assert row["branch_same_before_after"] is True
+
+
+def test_single_step_qr_visual_audit_rejects_mixed_detector_frames() -> None:
+    module = _load_new4_coordinate_audit_module()
+    request = _single_step_qr_request(source_display_offset=0.0)
+    request.dataset_specs[0]["native_detector_coords_to_detector_display_coords"] = (
+        lambda col, row: (float(col) + 100.0, float(row) + 100.0)
+    )
+
+    result = module._single_step_detector_angle_trial(request, request.params)
+    row = result["rows"][0]
+
+    assert row["detector_display_frame_valid"] is False
+    assert "mixed_display_native_detector_px" in row["detector_display_invalid_reasons"]
+
+
+def test_single_step_qr_visual_audit_uses_live_projection_not_saved_sim_refined() -> None:
+    module = _load_new4_coordinate_audit_module()
+    request = _single_step_qr_request(
+        measured=_locked_qr_fixed_source_entry(
+            native_col=10.0,
+            native_row=20.0,
+            background_detector_x=10.0,
+            background_detector_y=20.0,
+            bg_display=(110.0, 120.0),
+            background_two_theta_deg=0.0,
+            background_phi_deg=0.0,
+            caked_x=0.0,
+            caked_y=0.0,
+            fit_space_anchor_override=True,
+            fit_space_anchor_source="manual_caked_click",
+            sim_refined_caked_deg=(999.0, 111.0),
+        ),
+        source_from_params=lambda local_params: (
+            40.0 + float(local_params.get("gamma", 0.0)),
+            30.0 + float(local_params.get("Gamma", 0.0)),
+        ),
+    )
+
+    result = module._single_step_detector_angle_trial(request, request.params)
+    row = result["rows"][0]
+
+    assert row["original_sim_caked_deg"] == pytest.approx([40.0, 30.0])
+    assert row["original_sim_caked_deg"] != pytest.approx([999.0, 111.0])
+    assert row["saved_sim_refined_caked_used"] is False
+
+
+def test_single_step_qr_visual_audit_fails_if_before_after_row_count_changes(
+    monkeypatch,
+) -> None:
+    module = _load_new4_coordinate_audit_module()
+    request = _single_step_qr_request()
+    calls = {"count": 0}
+
+    def _row(pair_id: str) -> dict[str, object]:
+        return {"pair_id": pair_id, "q_group_key": ["q"], "hkl": [2, 0, 0]}
+
+    def fake_evaluate_pair_bundle(_request, _params):
+        calls["count"] += 1
+        rows = [_row("a"), _row("b")]
+        if calls["count"] >= 6:
+            rows = [_row("a")]
+        return {
+            "residual_vector": np.zeros(2, dtype=np.float64),
+            "rows": rows,
+            "objective_summary": {},
+        }
+
+    monkeypatch.setattr(module, "_evaluate_pair_bundle", fake_evaluate_pair_bundle)
+
+    result = module._single_step_detector_angle_trial(request, request.params)
+
+    assert result["single_step_status"] == "row_count_changed_between_base_and_trial"
+    assert result["row_count_changed_between_base_and_trial"] is True
+    assert result["before_row_count"] == 2
+    assert result["after_row_count"] == 1
+    assert result["rows"] == []
+
+
+def test_single_step_qr_visual_audit_reports_invalid_detector_rows() -> None:
+    module = _load_new4_coordinate_audit_module()
+    rows = [
+        {
+            "detector_display_frame_valid": True,
+            "caked_frame_valid": True,
+            "detector_display_invalid_reasons": [],
+        },
+        {
+            "detector_display_frame_valid": False,
+            "caked_frame_valid": True,
+            "detector_display_invalid_reasons": ["mixed_display_native_detector_px"],
+        },
+    ]
+
+    checks = module._single_step_checks(
+        rows,
+        delta_gamma_deg=0.0,
+        delta_Gamma_deg=0.0,
+        max_angle_step_deg=5.0,
+    )
+
+    assert checks["invalid_detector_display_row_count"] == 1
+    assert checks["valid_plotted_fraction"] == pytest.approx(0.5)
+    assert checks["invalid_reasons_by_count"] == {"mixed_display_native_detector_px": 1}
+
+
 def test_dynamic_angular_summary_reports_worst_rows() -> None:
     summary = opt._summarize_dynamic_angular_residual_rows(
         [
@@ -4762,6 +5041,53 @@ def test_qr_fit_point_only_projection_rejects_stale_hit_table_recovery_for_sourc
     assert prediction["sim_nominal_projection_input_px"] == pytest.approx([12.0, 13.0])
     assert prediction["sim_refined_caked_deg"] == pytest.approx(list(expected))
     assert prediction["point_only_detector_coordinate_source"] == "trial_source_rows"
+
+
+def test_qr_fit_point_only_projection_uses_stale_hit_table_when_source_rows_unavailable() -> None:
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        raise AssertionError("unavailable source-row builder should not be called")
+
+    def projector(cols, rows, *, local_params=None, **_kwargs):
+        del local_params
+        assert np.asarray(cols, dtype=float).tolist() == [21.0]
+        assert np.asarray(rows, dtype=float).tolist() == [22.0]
+        return _point_only_projector_payload(61.0, -11.0, native_col=21.0, native_row=22.0)
+
+    dataset_ctx = _point_only_qr_dataset_ctx(source_rows_builder, projector)
+    dataset_ctx.qr_fit_trial_source_rows_builder = None
+    dataset_ctx.qr_fit_trial_source_rows_builder_kind = None
+    locked = _locked_qr_fixed_source_entry()
+
+    prediction = opt._resolve_qr_fit_prediction_from_trial_params(
+        locked,
+        {"center_x": 4.0, "theta_initial": 0.5},
+        {
+            "dataset_ctx": dataset_ctx,
+            "hit_tables": [np.asarray([[1.0, 21.0, 22.0, 10.0, 2.0, 0.0, 0.0]], dtype=np.float64)],
+            "sim_buffer": opt._fit_hit_table_only_sim_buffer(),
+            "image_size": 30,
+            "fit_center": [15.0, 15.0],
+            "detector_distance": 0.1,
+            "pixel_size": 1.0,
+            "prediction_source_rows_cache": {},
+            "_qr_fit_point_only_projection": True,
+        },
+        locked,
+    )
+
+    assert prediction["available"] is True
+    assert prediction["resolution_reason"] == ("provider_local_branch_recovered_stale_peak_index")
+    assert prediction["locked_qr_detector_point_source"] == (
+        "trial_hit_tables_locked_representative"
+    )
+    assert prediction["trial_source_rows_available"] is False
+    assert prediction["trial_source_rows_unavailable_reason"] == (
+        "qr_fit_trial_source_rows_builder_unavailable"
+    )
+    assert prediction["sim_nominal_projection_input_px"] == pytest.approx([21.0, 22.0])
+    assert prediction["sim_refined_caked_deg"] == pytest.approx([61.0, -11.0])
+    assert prediction["point_only_detector_coordinate_source"] == "trial_hit_tables"
 
 
 def test_qr_fit_objective_incomplete_missing_pairs_include_source_row_diagnostics(
@@ -5428,7 +5754,12 @@ def _dynamic_point_only_fit_result_for_metric_tests(monkeypatch):
     )
 
 
-def _dynamic_point_only_sensitivity_result(monkeypatch, *, sensitive: bool):
+def _dynamic_point_only_sensitivity_result(
+    monkeypatch,
+    *,
+    sensitive: bool,
+    fail_on_insensitive_dynamic_objective: bool = False,
+):
     def fake_process(*args, **kwargs):
         image_size = int(args[2])
         return (
@@ -5525,6 +5856,9 @@ def _dynamic_point_only_sensitivity_result(monkeypatch, *, sensitive: bool):
                 "weighted_matching": False,
                 "use_measurement_uncertainty": False,
                 "max_nfev": 1,
+                "fail_on_insensitive_dynamic_objective": bool(
+                    fail_on_insensitive_dynamic_objective
+                ),
             },
             "single_ray": {"enabled": False},
             "identifiability": {"enabled": False},
@@ -5647,12 +5981,27 @@ def test_dynamic_objective_param_sensitivity_detects_insensitive_projector(
     result = _dynamic_point_only_sensitivity_result(monkeypatch, sensitive=False)
     summary = result.point_match_summary
 
+    assert result.success
     assert summary["objective_param_sensitivity_status"] == "all_fit_vars_insensitive"
     assert summary["recommended_next_fix"] == "thread_trial_params_to_projector"
     assert summary["first_acceptance_metric_divergence"] == (
         "dynamic_objective_not_sensitive_to_fit_variables"
     )
     assert summary["objective_param_sensitivity_by_var"][0]["prediction_changed"] is False
+
+
+def test_dynamic_objective_param_sensitivity_can_fail_closed_when_configured(
+    monkeypatch,
+) -> None:
+    result = _dynamic_point_only_sensitivity_result(
+        monkeypatch,
+        sensitive=False,
+        fail_on_insensitive_dynamic_objective=True,
+    )
+
+    assert not result.success
+    assert result.status == -9
+    assert result.message == "dynamic_objective_not_sensitive_to_fit_variables"
 
 
 def test_dynamic_objective_param_sensitivity_detects_sensitive_projector(

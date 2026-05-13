@@ -5,10 +5,39 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-05-11
+Last updated: 2026-05-13
 
 ## Current status
 
+- 2026-05-13 single-step QR coordinate visual audit completed. The New4
+  coordinate visualizer now has a dry-run `--single-step-detector-angle-audit`
+  mode that evaluates base dynamic residuals, finite-differences only
+  `gamma,Gamma`, applies one clipped least-squares trial step, and writes
+  `new4_qr_single_iteration.json`, `.csv`, and one two-panel `.png` without
+  calling the full geometry optimizer, updating GUI state, or accepting geometry.
+- Bug/error fixed: the proof no longer trusts stale saved `sim_refined_caked`
+  fields for simulated QR points. Original and trial simulation caked points
+  come from the live dynamic projector, stale provider-local hit-table recovery
+  remains usable when trial source-row builders are unavailable, and generic
+  legacy dynamic-point tests no longer fail closed just because the sensitivity
+  diagnostic reports all fit variables insensitive.
+- Feature/status: this is an additive debug-script interface and test-only
+  fitting diagnostic. Public CLI commands, saved-state schema, config keys, and
+  accepted geometry artifacts are unchanged. No deprecation or migration is
+  required.
+- Validation status: `tests/test_geometry_fitting.py` passes (`236 passed`),
+  `tests/test_gui_geometry_fit_workflow.py` passes (`634 passed, 2 skipped`),
+  `tests/test_geometry_fit_manual_fit_space_classification.py` passes
+  (`9 passed`), and `python -m ra_sim.dev check` passes. The full manual
+  selection helper file was too slow for this local run, but the targeted manual
+  QR helper slice passed. The generated New4 proof reports `status=pass`,
+  `row_count=7`, `plotted_row_count=2`,
+  `invalid_detector_display_row_count=5`,
+  `json_authoritative=true`, and `png_diagnostic_only=true`.
+- Shipping/rollback status: the mode is opt-in, debug-only, and produces local
+  artifacts under the requested output root. Rollback is limited to removing the
+  debug flag path and its tests; no data migration or user-facing compatibility
+  cleanup is needed.
 - 2026-05-11 saved manual-pair geometry-fit handoff patch completed. Async
   geometry-fit jobs now build job-local live rows from per-background saved
   manual pairs before falling back to picker or Q-group caches, ignore warmed

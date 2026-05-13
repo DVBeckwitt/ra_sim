@@ -151,7 +151,7 @@ def test_detector_origin_pair_does_not_call_ensure_caked_view() -> None:
     assert result.prepared_run.geometry_runtime_cfg.get("projection_view_mode") != "caked"
 
 
-def test_auto_caked_detector_origin_two_tilt_fit_defaults_to_direct_runtime() -> None:
+def test_auto_caked_detector_origin_two_tilt_fit_defaults_to_ladder_runtime() -> None:
     calls: list[str] = []
 
     def _projector(cols, rows, **_kwargs):
@@ -175,9 +175,9 @@ def test_auto_caked_detector_origin_two_tilt_fit_defaults_to_direct_runtime() ->
     assert result.prepared_run is not None
     cfg = result.prepared_run.geometry_runtime_cfg
     assert cfg["projection_view_mode"] == "caked"
-    assert cfg["solver"]["max_nfev"] == 29
-    assert cfg["solver"]["seed_multistart"] is False
-    assert cfg["solver"]["seed_multistart_enabled"] is False
+    assert cfg["solver"]["max_nfev"] == 60
+    assert cfg["solver"]["seed_multistart"] is True
+    assert cfg["solver"]["seed_multistart_enabled"] is True
     assert cfg["solver"]["_qr_fit_point_only_projection"] is True
     assert cfg["solver"]["_headless_accept_caked_angular_metric_without_pixel_threshold"] is True
     assert cfg["bounds"]["gamma"] == [-90.0, 90.0]

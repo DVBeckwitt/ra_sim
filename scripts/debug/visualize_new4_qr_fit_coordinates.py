@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import csv
+import hashlib
 import json
 import math
 import sys
@@ -28,7 +30,11 @@ DEFAULT_STATE_PATH = REPO_ROOT / "artifacts" / "geometry_fit_gui_states" / "new4
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "artifacts" / "geometry_fit_ladder" / "new4_coordinate_audit"
 REPORT_NAME = "new4_qr_fit_coordinates.json"
 PLOT_NAME = "new4_qr_fit_coordinates.png"
+SINGLE_STEP_REPORT_NAME = "new4_qr_single_iteration.json"
+SINGLE_STEP_PLOT_NAME = "new4_qr_single_iteration.png"
+SINGLE_STEP_CSV_NAME = "new4_qr_single_iteration.csv"
 EXACT_TOL_DEG = 1.0e-6
+DETECTOR_FRAME_TOL_PX = 1.0e-6
 AUDIT_SCHEMA_VERSION = 1
 OBJECTIVE_AUDIT_REQUIRED_PAIR_FIELDS: tuple[str, ...] = (
     "pair_id",
@@ -111,6 +117,38 @@ def _write_json(path: Path, payload: Mapping[str, object]) -> None:
     )
 
 
+def _write_csv(path: Path, rows: Sequence[Mapping[str, object]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames: list[str] = []
+    for row in rows:
+        for key in row:
+            text = str(key)
+            if text not in fieldnames:
+                fieldnames.append(text)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    key: (
+                        json.dumps(_jsonable(value), sort_keys=True)
+                        if isinstance(value, (Mapping, list, tuple))
+                        else _jsonable(value)
+                    )
+                    for key, value in row.items()
+                }
+            )
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _finite_pair(value: object) -> tuple[float, float] | None:
     if not isinstance(value, (list, tuple, np.ndarray)) or len(value) < 2:
         return None
@@ -188,6 +226,10 @@ def _pair_list(value: tuple[float, float] | None) -> list[float] | None:
     return [float(value[0]), float(value[1])]
 
 
+def _entry_tuple_pair(entry: Mapping[str, object], key: str) -> tuple[float, float] | None:
+    return _finite_pair(entry.get(key))
+
+
 def _pair_from_fields(
     row: Mapping[str, object],
     theta_key: str,
@@ -243,6 +285,39 @@ def _nonnegative_index(value: object) -> int | None:
     except Exception:
         return None
     return out if out >= 0 else None
+
+
+def _entry_pair_from_fields(
+    entry: Mapping[str, object],
+    fields: Sequence[tuple[str, str]],
+) -> tuple[float, float] | None:
+    for x_key, y_key in fields:
+        point = _pair_from_fields(entry, x_key, y_key)
+        if point is not None:
+            return point
+    return None
+
+
+def _entry_background_detector_display(entry: Mapping[str, object]) -> tuple[float, float] | None:
+    return _entry_tuple_pair(entry, "bg_display") or _entry_pair_from_fields(
+        entry,
+        (
+            ("background_detector_display_x", "background_detector_display_y"),
+            ("display_col", "display_row"),
+            ("x", "y"),
+        ),
+    )
+
+
+def _entry_background_detector_native(entry: Mapping[str, object]) -> tuple[float, float] | None:
+    return _entry_tuple_pair(entry, "background_detector_native_px") or _entry_pair_from_fields(
+        entry,
+        (
+            ("native_col", "native_row"),
+            ("background_detector_x", "background_detector_y"),
+            ("detector_x", "detector_y"),
+        ),
+    )
 
 
 def _branch_slot_match(
@@ -552,12 +627,45 @@ def _build_objective_audit_pair_row(
         and bool(target_delta.get("within_exact_tolerance"))
         and bool(source_delta.get("within_exact_tolerance"))
     )
+    prediction_native, prediction_native_source = opt._fit_prediction_detector_point_for_frame(
+        prediction,
+        "native_detector",
+    )
+    prediction_display, prediction_display_source = opt._fit_prediction_detector_point_for_frame(
+        prediction,
+        "display_detector",
+    )
+    fit_prediction_caked = _finite_pair(
+        (objective_diag or {}).get("predicted_caked_deg")
+        if isinstance(objective_diag, Mapping)
+        else None
+    )
+    if fit_prediction_caked is None:
+        fit_prediction_caked = optimizer_source
+    source_table_index = entry.get(
+        "source_table_index",
+        prediction.get("resolved_source_table_index"),
+    )
+    source_row_index = entry.get(
+        "source_row_index",
+        prediction.get("resolved_source_row_index"),
+    )
+    source_branch_index = entry.get(
+        "source_branch_index",
+        prediction.get("resolved_physical_branch_slot", physical_branch_slot),
+    )
+    background_display = _entry_background_detector_display(entry)
+    background_native = _entry_background_detector_native(entry)
     row = {
         "pair_index": int(index),
         "pair_id": reprojection._pair_id(entry, index),
         "q_group_key": q_group_key,
+        "hkl": normalized_hkl,
         "normalized_hkl": normalized_hkl,
         "physical_branch_slot": physical_branch_slot,
+        "source_branch_index": source_branch_index,
+        "source_table_index": source_table_index,
+        "source_row_index": source_row_index,
         "fit_qr_branch_key": fit_qr_branch_key,
         "manual_visual_x": float(cached[0]) if cached else None,
         "manual_visual_y": float(cached[1]) if cached else None,
@@ -580,6 +688,17 @@ def _build_objective_audit_pair_row(
         ),
         "optimizer_source_phi_deg": float(optimizer_source[1]) if optimizer_source else None,
         "optimizer_source_source": _optimizer_source_label(prediction, source_delta),
+        "fit_prediction_caked_deg": _pair_list(fit_prediction_caked),
+        "fit_prediction_caked_source": "predicted_caked_deg",
+        "background_detector_display_px": _pair_list(background_display),
+        "background_detector_native_px": _pair_list(background_native),
+        "fit_prediction_detector_display_px": _pair_list(prediction_display),
+        "fit_prediction_detector_display_px_source": prediction_display_source,
+        "fit_prediction_detector_native_px": _pair_list(prediction_native),
+        "fit_prediction_detector_native_px_source": prediction_native_source,
+        "fit_space_projector_kind": prediction.get("fit_space_projector_kind"),
+        "caked_projection_signature": prediction.get("caked_projection_signature"),
+        "cake_bundle_signature": prediction.get("cake_bundle_signature"),
         "objective_source_authority": "sim_visual_caked_deg",
         "residual_two_theta_deg": residual_delta["delta_two_theta"],
         "residual_phi_deg_wrapped": residual_delta["delta_phi_wrapped"],
@@ -772,6 +891,36 @@ def _request_with_params(request, params: Mapping[str, object]):
     )
 
 
+def _request_with_dataset_display_context(request, dataset_infos: Sequence[object] | None):
+    specs = [dict(spec) for spec in (request.dataset_specs or ()) if isinstance(spec, Mapping)]
+    infos = [info for info in (dataset_infos or ()) if isinstance(info, Mapping)]
+    for index, spec in enumerate(specs):
+        info = infos[index] if index < len(infos) else {}
+        for key in (
+            "native_detector_coords_to_detector_display_coords",
+            "native_detector_coords_to_detector_display_coords_source",
+            "native_detector_coords_to_detector_display_coords_unavailable_reason",
+        ):
+            if key in info and key not in spec:
+                spec[key] = info[key]
+    return gui_geometry_fit.GeometryFitSolverRequest(
+        miller=request.miller,
+        intensities=request.intensities,
+        image_size=int(request.image_size),
+        params=dict(request.params),
+        measured_peaks=request.measured_peaks,
+        var_names=list(request.var_names),
+        candidate_param_names=(
+            list(request.candidate_param_names)
+            if request.candidate_param_names is not None
+            else None
+        ),
+        dataset_specs=specs,
+        refinement_config=dict(request.refinement_config),
+        runtime_safety_note=request.runtime_safety_note,
+    )
+
+
 def _solver_cfg(request) -> Mapping[str, object]:
     cfg = getattr(request, "refinement_config", {}) or {}
     if not isinstance(cfg, Mapping):
@@ -831,7 +980,7 @@ def _build_dataset_context(request, params: Mapping[str, object]):
     return contexts[0]
 
 
-def _evaluate_pairs(request, params: Mapping[str, object]) -> list[dict[str, object]]:
+def _evaluate_pair_bundle(request, params: Mapping[str, object]) -> dict[str, object]:
     local_params = _objective_local_params(request, params)
     dataset_ctx = _build_dataset_context(request, local_params)
     objective_residual, objective_diagnostics, objective_summary = (
@@ -946,7 +1095,18 @@ def _evaluate_pairs(request, params: Mapping[str, object]) -> list[dict[str, obj
             np.asarray(objective_residual, dtype=float).reshape(-1).size
         )
         rows.append(row)
-    return rows
+    return {
+        "rows": rows,
+        "residual_vector": objective_residual_vector,
+        "objective_summary": dict(objective_summary),
+        "local_params": local_params,
+        "dataset_ctx": dataset_ctx,
+    }
+
+
+def _evaluate_pairs(request, params: Mapping[str, object]) -> list[dict[str, object]]:
+    bundle = _evaluate_pair_bundle(request, params)
+    return [dict(row) for row in bundle["rows"]]  # type: ignore[index]
 
 
 def _pair_checks(rows: Sequence[Mapping[str, object]]) -> dict[str, object]:
@@ -1379,6 +1539,420 @@ def _fit_improvement_summary(
     }
 
 
+def _single_step_active_vars(active_vars: Sequence[str]) -> tuple[str, ...]:
+    names: list[str] = []
+    for raw in active_vars:
+        name = str(raw).strip()
+        if name and name not in names:
+            names.append(name)
+    if set(names) != {"gamma", "Gamma"} or len(names) != 2:
+        raise ValueError(
+            "--single-step-detector-angle-audit only supports --active-vars gamma,Gamma"
+        )
+    return tuple(names)
+
+
+def _params_with_delta(
+    params: Mapping[str, object],
+    deltas: Mapping[str, float],
+) -> dict[str, object]:
+    out = dict(params)
+    for name, delta in deltas.items():
+        base = _finite_float(out.get(str(name)))
+        out[str(name)] = float((base or 0.0) + float(delta))
+    return out
+
+
+def _single_step_detector_angle_trial(
+    request,
+    base_params: Mapping[str, object],
+    *,
+    active_vars: Sequence[str] = ("gamma", "Gamma"),
+    max_angle_step_deg: float = 5.0,
+    fd_step_deg: float = 0.05,
+) -> dict[str, object]:
+    names = _single_step_active_vars(active_vars)
+    max_step = abs(float(max_angle_step_deg))
+    fd_step = abs(float(fd_step_deg))
+    if not math.isfinite(max_step) or max_step <= 0.0:
+        raise ValueError("--max-angle-step-deg must be finite and positive")
+    if not math.isfinite(fd_step) or fd_step <= 0.0:
+        raise ValueError("--fd-step-deg must be finite and positive")
+
+    base_bundle = _evaluate_pair_bundle(request, base_params)
+    r0 = np.asarray(base_bundle["residual_vector"], dtype=np.float64).reshape(-1)
+    jacobian = np.full((r0.size, len(names)), np.nan, dtype=np.float64)
+    fd_records: list[dict[str, object]] = []
+    for column, name in enumerate(names):
+        plus_params = _params_with_delta(base_params, {name: fd_step})
+        minus_params = _params_with_delta(base_params, {name: -fd_step})
+        plus = np.asarray(
+            _evaluate_pair_bundle(request, plus_params)["residual_vector"],
+            dtype=np.float64,
+        ).reshape(-1)
+        minus = np.asarray(
+            _evaluate_pair_bundle(request, minus_params)["residual_vector"],
+            dtype=np.float64,
+        ).reshape(-1)
+        if plus.shape == r0.shape and minus.shape == r0.shape:
+            jacobian[:, column] = (plus - minus) / (2.0 * fd_step)
+        fd_records.append(
+            {
+                "var": name,
+                "fd_step_deg": float(fd_step),
+                "plus_residual_component_count": int(plus.size),
+                "minus_residual_component_count": int(minus.size),
+                "shape_matches_base": bool(plus.shape == r0.shape and minus.shape == r0.shape),
+            }
+        )
+
+    finite_jacobian = bool(jacobian.size and np.all(np.isfinite(jacobian)))
+    sensitive = bool(finite_jacobian and np.any(np.abs(jacobian) > 1.0e-12))
+    if sensitive and r0.size:
+        try:
+            proposed, *_ = np.linalg.lstsq(jacobian, -r0, rcond=None)
+        except np.linalg.LinAlgError:
+            proposed = np.zeros(len(names), dtype=np.float64)
+            sensitive = False
+    else:
+        proposed = np.zeros(len(names), dtype=np.float64)
+    if not np.all(np.isfinite(proposed)):
+        proposed = np.zeros(len(names), dtype=np.float64)
+        sensitive = False
+    clipped = np.clip(proposed, -max_step, max_step) if sensitive else np.zeros(len(names))
+    status = "ok" if sensitive else "insensitive_to_gamma_Gamma"
+    delta_by_name = {name: float(clipped[index]) for index, name in enumerate(names)}
+    trial_params = _params_with_delta(base_params, delta_by_name)
+    trial_bundle = _evaluate_pair_bundle(request, trial_params)
+    before_rows = list(base_bundle["rows"])  # type: ignore[arg-type]
+    after_rows = list(trial_bundle["rows"])  # type: ignore[arg-type]
+    row_count_changed = len(before_rows) != len(after_rows)
+    if row_count_changed:
+        status = "row_count_changed_between_base_and_trial"
+        rows: list[dict[str, object]] = []
+    else:
+        rows = _single_step_audit_rows(
+            request,
+            before_rows,
+            after_rows,
+            delta_by_name=delta_by_name,
+            single_step_status=status,
+        )
+    return {
+        "single_step_status": status,
+        "active_vars": list(names),
+        "max_angle_step_deg": float(max_step),
+        "fd_step_deg": float(fd_step),
+        "delta_gamma_deg": float(delta_by_name.get("gamma", 0.0)),
+        "delta_Gamma_deg": float(delta_by_name.get("Gamma", 0.0)),
+        "proposed_delta_deg": {name: float(proposed[index]) for index, name in enumerate(names)},
+        "clipped_delta_deg": dict(delta_by_name),
+        "finite_jacobian": bool(finite_jacobian),
+        "sensitive_to_gamma_Gamma": bool(sensitive),
+        "finite_difference_records": fd_records,
+        "base_residual_vector": _jsonable(r0),
+        "jacobian": _jsonable(jacobian),
+        "base_params": {name: base_params.get(name) for name in names},
+        "trial_params": {name: trial_params.get(name) for name in names},
+        "before_row_count": int(len(before_rows)),
+        "after_row_count": int(len(after_rows)),
+        "row_count_changed_between_base_and_trial": bool(row_count_changed),
+        "before_rows": before_rows,
+        "after_rows": after_rows,
+        "rows": rows,
+        "base_objective_summary": base_bundle["objective_summary"],
+        "trial_objective_summary": trial_bundle["objective_summary"],
+    }
+
+
+def _dataset_display_context(request) -> Mapping[str, object]:
+    specs = getattr(request, "dataset_specs", None) or ()
+    for spec in specs:
+        if isinstance(spec, Mapping):
+            return spec
+    return {}
+
+
+def _native_to_display(
+    native_point: tuple[float, float] | None,
+    dataset: Mapping[str, object],
+) -> tuple[tuple[float, float] | None, str | None]:
+    if native_point is None:
+        return None, "native_detector_px_missing"
+    callback = dataset.get("native_detector_coords_to_detector_display_coords")
+    if not callable(callback):
+        reason = str(
+            dataset.get("native_detector_coords_to_detector_display_coords_unavailable_reason")
+            or "native_to_display_converter_missing"
+        )
+        return None, reason
+    try:
+        display = callback(float(native_point[0]), float(native_point[1]))
+    except Exception as exc:
+        return None, f"native_to_display_converter_failed:{type(exc).__name__}"
+    point = _finite_pair(display)
+    if point is None:
+        return None, "native_to_display_converter_returned_invalid"
+    return point, None
+
+
+def _display_frame_point(
+    *,
+    native_point: tuple[float, float] | None,
+    raw_display_point: tuple[float, float] | None,
+    dataset: Mapping[str, object],
+    require_raw_display: bool,
+) -> tuple[tuple[float, float] | None, bool, str | None]:
+    converted, reason = _native_to_display(native_point, dataset)
+    if converted is None:
+        return raw_display_point, False, reason
+    if require_raw_display and raw_display_point is None:
+        return None, False, "saved_detector_display_px_missing"
+    if raw_display_point is not None:
+        mismatch = math.hypot(
+            float(converted[0]) - float(raw_display_point[0]),
+            float(converted[1]) - float(raw_display_point[1]),
+        )
+        if mismatch > DETECTOR_FRAME_TOL_PX:
+            return raw_display_point, False, "mixed_display_native_detector_px"
+    display_point = (
+        raw_display_point if require_raw_display and raw_display_point is not None else converted
+    )
+    return display_point, True, None
+
+
+def _row_pair(row: Mapping[str, object], key: str) -> tuple[float, float] | None:
+    return _finite_pair(row.get(key))
+
+
+def _single_step_audit_rows(
+    request,
+    before_rows: Sequence[Mapping[str, object]],
+    after_rows: Sequence[Mapping[str, object]],
+    *,
+    delta_by_name: Mapping[str, float],
+    single_step_status: str,
+) -> list[dict[str, object]]:
+    dataset = _dataset_display_context(request)
+    out: list[dict[str, object]] = []
+    for before, after in zip(before_rows, after_rows):
+        background_display_raw = _row_pair(before, "background_detector_display_px")
+        background_native = _row_pair(before, "background_detector_native_px")
+        original_native = _row_pair(before, "fit_prediction_detector_native_px")
+        original_display_raw = _row_pair(before, "fit_prediction_detector_display_px")
+        trial_native = _row_pair(after, "fit_prediction_detector_native_px")
+        trial_display_raw = _row_pair(after, "fit_prediction_detector_display_px")
+        background_display, background_display_valid, background_display_reason = (
+            _display_frame_point(
+                native_point=background_native,
+                raw_display_point=background_display_raw,
+                dataset=dataset,
+                require_raw_display=True,
+            )
+        )
+        original_display, original_display_valid, original_display_reason = _display_frame_point(
+            native_point=original_native,
+            raw_display_point=original_display_raw,
+            dataset=dataset,
+            require_raw_display=False,
+        )
+        trial_display, trial_display_valid, trial_display_reason = _display_frame_point(
+            native_point=trial_native,
+            raw_display_point=trial_display_raw,
+            dataset=dataset,
+            require_raw_display=False,
+        )
+        background_caked = _row_pair(before, "optimizer_measured_anchor_two_theta_phi")
+        original_caked = _row_pair(before, "dynamic_sim_visual_caked_deg_two_theta_phi")
+        trial_caked = _row_pair(after, "dynamic_sim_visual_caked_deg_two_theta_phi")
+        live_projected_original_caked = _row_pair(
+            before,
+            "optimizer_simulated_source_two_theta_phi",
+        )
+        live_projected_trial_caked = _row_pair(
+            after,
+            "optimizer_simulated_source_two_theta_phi",
+        )
+        fit_prediction_caked = original_caked
+        original_delta = _delta(original_caked, background_caked)
+        trial_delta = _delta(trial_caked, background_caked)
+        hkl_before = before.get("hkl", before.get("normalized_hkl"))
+        hkl_after = after.get("hkl", after.get("normalized_hkl"))
+        pair_same = bool(str(before.get("pair_id")) == str(after.get("pair_id")))
+        q_group_same = _identity_match(before.get("q_group_key"), after.get("q_group_key"))
+        hkl_same = bool(_normal_hkl(hkl_before) == _normal_hkl(hkl_after))
+        branch_same = bool(
+            _normal_identity(before.get("source_branch_index"))
+            == _normal_identity(after.get("source_branch_index"))
+        )
+        caked_valid = bool(
+            background_caked is not None
+            and original_caked is not None
+            and trial_caked is not None
+            and _point_match(original_caked, fit_prediction_caked)
+        )
+        detector_valid = bool(
+            background_display is not None
+            and original_display is not None
+            and trial_display is not None
+            and background_display_valid
+            and original_display_valid
+            and trial_display_valid
+        )
+        real_projector_used = bool(
+            before.get("fit_space_projector_kind") == "exact_caked_bundle"
+            and after.get("fit_space_projector_kind") == "exact_caked_bundle"
+            and before.get("caked_projection_signature") is not None
+            and after.get("caked_projection_signature") is not None
+        )
+        detector_native_valid = bool(
+            background_native is not None
+            and original_native is not None
+            and trial_native is not None
+        )
+        out.append(
+            {
+                "pair_id": before.get("pair_id"),
+                "q_group_key": before.get("q_group_key"),
+                "hkl": hkl_before,
+                "source_branch_index": before.get("source_branch_index"),
+                "source_table_index": before.get("source_table_index"),
+                "source_row_index": before.get("source_row_index"),
+                "background_index": before.get("dataset_index", 0),
+                "background_detector_display_px": _pair_list(background_display),
+                "background_detector_native_px": _pair_list(background_native),
+                "background_caked_deg": _pair_list(background_caked),
+                "background_caked_source": before.get("optimizer_measured_source"),
+                "original_sim_detector_display_px": _pair_list(original_display),
+                "original_sim_detector_native_px": _pair_list(original_native),
+                "original_sim_caked_deg": _pair_list(original_caked),
+                "original_sim_source": before.get("dynamic_source_source"),
+                "original_live_projected_detector_caked_deg": _pair_list(
+                    live_projected_original_caked
+                ),
+                "trial_sim_detector_display_px": _pair_list(trial_display),
+                "trial_sim_detector_native_px": _pair_list(trial_native),
+                "trial_sim_caked_deg": _pair_list(trial_caked),
+                "trial_sim_source": after.get("dynamic_source_source"),
+                "trial_live_projected_detector_caked_deg": _pair_list(live_projected_trial_caked),
+                "fit_prediction_caked_deg": _pair_list(fit_prediction_caked),
+                "original_to_background_delta_caked_deg": [
+                    original_delta["delta_two_theta"],
+                    original_delta["delta_phi_wrapped"],
+                ],
+                "trial_to_background_delta_caked_deg": [
+                    trial_delta["delta_two_theta"],
+                    trial_delta["delta_phi_wrapped"],
+                ],
+                "original_to_background_norm_deg": original_delta["norm"],
+                "trial_to_background_norm_deg": trial_delta["norm"],
+                "delta_gamma_deg": float(delta_by_name.get("gamma", 0.0)),
+                "delta_Gamma_deg": float(delta_by_name.get("Gamma", 0.0)),
+                "single_step_status": str(single_step_status),
+                "identity_same_before_after": pair_same,
+                "q_group_same_before_after": q_group_same,
+                "hkl_same_before_after": hkl_same,
+                "branch_same_before_after": branch_same,
+                "detector_display_frame_valid": detector_valid,
+                "detector_native_frame_valid": detector_native_valid,
+                "caked_frame_valid": caked_valid,
+                "real_caked_projector_used": real_projector_used,
+                "saved_sim_refined_caked_used": False,
+                "original_sim_caked_matches_fit_prediction_caked_deg": bool(
+                    _point_match(original_caked, fit_prediction_caked)
+                ),
+                "detector_display_invalid_reasons": [
+                    reason
+                    for reason in (
+                        background_display_reason,
+                        original_display_reason,
+                        trial_display_reason,
+                    )
+                    if reason
+                ],
+            }
+        )
+    return out
+
+
+def _single_step_checks(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    delta_gamma_deg: float,
+    delta_Gamma_deg: float,
+    max_angle_step_deg: float,
+) -> dict[str, object]:
+    plotted = [
+        row
+        for row in rows
+        if bool(row.get("detector_display_frame_valid")) and bool(row.get("caked_frame_valid"))
+    ]
+    invalid_detector_rows = [
+        row for row in rows if not bool(row.get("detector_display_frame_valid"))
+    ]
+    invalid_reasons_by_count: dict[str, int] = {}
+    for row in invalid_detector_rows:
+        reasons = row.get("detector_display_invalid_reasons", ()) or ()
+        if isinstance(reasons, (str, bytes)):
+            reasons = (str(reasons),)
+        for reason in reasons:
+            reason_text = str(reason or "").strip()
+            if not reason_text:
+                continue
+            invalid_reasons_by_count[reason_text] = (
+                int(invalid_reasons_by_count.get(reason_text, 0)) + 1
+            )
+        if not reasons:
+            invalid_reasons_by_count["detector_display_frame_invalid"] = (
+                int(invalid_reasons_by_count.get("detector_display_frame_invalid", 0)) + 1
+            )
+    row_count = int(len(rows))
+    plotted_count = int(len(plotted))
+    return {
+        "row_count_gt_zero": bool(row_count > 0),
+        "plotted_row_count_gt_zero": bool(plotted_count > 0),
+        "all_plotted_detector_display_frame_valid": bool(
+            plotted and all(bool(row.get("detector_display_frame_valid")) for row in plotted)
+        ),
+        "all_plotted_caked_frame_valid": bool(
+            plotted and all(bool(row.get("caked_frame_valid")) for row in plotted)
+        ),
+        "all_plotted_real_caked_projector_used": bool(
+            plotted and all(bool(row.get("real_caked_projector_used")) for row in plotted)
+        ),
+        "saved_sim_refined_caked_used_false_for_all_rows": bool(
+            rows and all(row.get("saved_sim_refined_caked_used") is False for row in rows)
+        ),
+        "delta_gamma_bounded": bool(abs(float(delta_gamma_deg)) <= float(max_angle_step_deg)),
+        "delta_Gamma_bounded": bool(abs(float(delta_Gamma_deg)) <= float(max_angle_step_deg)),
+        "identity_same_before_after_all_rows": bool(
+            rows and all(bool(row.get("identity_same_before_after")) for row in rows)
+        ),
+        "q_group_same_before_after_all_rows": bool(
+            rows and all(bool(row.get("q_group_same_before_after")) for row in rows)
+        ),
+        "hkl_same_before_after_all_rows": bool(
+            rows and all(bool(row.get("hkl_same_before_after")) for row in rows)
+        ),
+        "branch_same_before_after_all_rows": bool(
+            rows and all(bool(row.get("branch_same_before_after")) for row in rows)
+        ),
+        "original_sim_caked_matches_fit_prediction_caked_deg_all_rows": bool(
+            rows
+            and all(
+                bool(row.get("original_sim_caked_matches_fit_prediction_caked_deg")) for row in rows
+            )
+        ),
+        "invalid_detector_display_row_count": int(len(invalid_detector_rows)),
+        "valid_plotted_fraction": (
+            float(plotted_count) / float(row_count) if row_count > 0 else 0.0
+        ),
+        "invalid_reasons_by_count": dict(invalid_reasons_by_count),
+        "plotted_row_count": plotted_count,
+        "row_count": row_count,
+    }
+
+
 def _checks_pass(checks: Mapping[str, object], *, perturb_applied: bool) -> bool:
     for key, value in checks.items():
         if key == "source_moves_under_perturbation" and not perturb_applied:
@@ -1507,6 +2081,149 @@ def _plot_improvement_rows(
     plt.close(fig)
 
 
+def _plot_single_step_rows(
+    path: Path,
+    rows: Sequence[Mapping[str, object]],
+    *,
+    title: str,
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    plotted = [
+        row
+        for row in rows
+        if bool(row.get("detector_display_frame_valid")) and bool(row.get("caked_frame_valid"))
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig, (det_ax, caked_ax) = plt.subplots(1, 2, figsize=(15, 7))
+
+    def _scatter(
+        ax,
+        key: str,
+        *,
+        label: str,
+        marker: str,
+        size: int,
+    ) -> None:
+        xs: list[float] = []
+        ys: list[float] = []
+        for row in plotted:
+            point = _finite_pair(row.get(key))
+            if point is not None:
+                xs.append(point[0])
+                ys.append(point[1])
+        if xs:
+            ax.scatter(xs, ys, label=label, marker=marker, s=size)
+
+    _scatter(
+        det_ax,
+        "background_detector_display_px",
+        label="background/manual QR",
+        marker="o",
+        size=55,
+    )
+    _scatter(
+        det_ax,
+        "original_sim_detector_display_px",
+        label="original simulation QR",
+        marker="s",
+        size=55,
+    )
+    _scatter(
+        det_ax,
+        "trial_sim_detector_display_px",
+        label="one-step trial simulation QR",
+        marker="^",
+        size=65,
+    )
+    _scatter(
+        caked_ax,
+        "background_caked_deg",
+        label="background/manual QR",
+        marker="o",
+        size=55,
+    )
+    _scatter(
+        caked_ax,
+        "original_sim_caked_deg",
+        label="original simulation QR",
+        marker="s",
+        size=55,
+    )
+    _scatter(
+        caked_ax,
+        "trial_sim_caked_deg",
+        label="one-step trial simulation QR",
+        marker="^",
+        size=65,
+    )
+    label_rows = sorted(
+        plotted,
+        key=lambda row: float(row.get("original_to_background_norm_deg") or 0.0),
+        reverse=True,
+    )[:3]
+    label_ids = {str(row.get("pair_id")) for row in label_rows}
+    for row in plotted:
+        det_before = _finite_pair(row.get("original_sim_detector_display_px"))
+        det_after = _finite_pair(row.get("trial_sim_detector_display_px"))
+        caked_before = _finite_pair(row.get("original_sim_caked_deg"))
+        caked_after = _finite_pair(row.get("trial_sim_caked_deg"))
+        if det_before is not None and det_after is not None:
+            det_ax.annotate(
+                "",
+                xy=det_after,
+                xytext=det_before,
+                arrowprops={"arrowstyle": "->", "linewidth": 0.8, "alpha": 0.55},
+            )
+        if caked_before is not None and caked_after is not None:
+            caked_ax.annotate(
+                "",
+                xy=caked_after,
+                xytext=caked_before,
+                arrowprops={"arrowstyle": "->", "linewidth": 0.8, "alpha": 0.55},
+            )
+        if str(row.get("pair_id")) in label_ids:
+            label = f"{row.get('pair_id')}\n{row.get('hkl')}"
+            if det_after is not None:
+                det_ax.text(det_after[0], det_after[1], label, fontsize=7)
+            if caked_after is not None:
+                caked_ax.text(caked_after[0], caked_after[1], label, fontsize=7)
+
+    det_ax.set_xlabel("detector display x (px)")
+    det_ax.set_ylabel("detector display y (px)")
+    det_ax.set_title("Detector Display Space")
+    det_ax.grid(True, alpha=0.25)
+    det_ax.legend(loc="best", fontsize=8)
+    caked_ax.set_xlabel("two theta (deg)")
+    caked_ax.set_ylabel("phi (deg)")
+    caked_ax.set_title("Caked Space")
+    caked_ax.grid(True, alpha=0.25)
+    caked_ax.legend(loc="best", fontsize=8)
+    fig.suptitle(title, fontsize=11)
+    fig.text(
+        0.02,
+        0.02,
+        "\n".join(
+            (
+                "Circle = background/manual QR",
+                "Square = original simulation QR",
+                "Triangle = one-step gamma/Gamma trial QR",
+                "Arrows = original sim -> one-step trial",
+                "Detector panel units = display px",
+                "Caked panel units = deg",
+            )
+        ),
+        fontsize=8,
+        bbox={"facecolor": "white", "alpha": 0.85, "edgecolor": "0.7"},
+    )
+    fig.tight_layout(rect=(0.0, 0.08, 1.0, 0.94))
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
 def run_coordinate_audit(
     *,
     state_path: Path,
@@ -1521,6 +2238,9 @@ def run_coordinate_audit(
     fit_improvement_audit: bool = False,
     perturb_start: str | None = None,
     active_vars: str | Sequence[str] | None = None,
+    single_step_detector_angle_audit: bool = False,
+    max_angle_step_deg: float = 5.0,
+    fd_step_deg: float = 0.05,
 ) -> dict[str, object]:
     if str(params_mode).strip().lower() != "base":
         raise ValueError("only --params base is supported")
@@ -1531,11 +2251,29 @@ def run_coordinate_audit(
         step_param=step_param,
         step_size=step_size,
     )
-    active_names = (
-        _parse_active_vars(active_vars)
-        if active_vars is None or isinstance(active_vars, str)
-        else [str(name) for name in active_vars]
-    )
+    if single_step_detector_angle_audit:
+        if effective_perturb or fit_improvement_audit or perturb_start:
+            raise ValueError(
+                "--single-step-detector-angle-audit cannot be combined with solve/perturb modes"
+            )
+        if step_param is not None or step_size is not None:
+            raise ValueError("--single-step-detector-angle-audit uses finite differences only")
+        active_names = (
+            ["gamma", "Gamma"]
+            if active_vars is None
+            else (
+                _parse_active_vars(active_vars)
+                if isinstance(active_vars, str)
+                else [str(name) for name in active_vars]
+            )
+        )
+        active_names = list(_single_step_active_vars(active_names))
+    else:
+        active_names = (
+            _parse_active_vars(active_vars)
+            if active_vars is None or isinstance(active_vars, str)
+            else [str(name) for name in active_vars]
+        )
     provider_report = preflight._run_point_provider_report_only(state_path, int(background_index))
     context = ladder._capture_solver_context(state_path, int(background_index))
     request = ladder.build_solver_request(
@@ -1549,6 +2287,73 @@ def run_coordinate_audit(
     )
     base_params = dict(getattr(request, "params", {}) or {})
     base_params.update(dict(prepared_params or {}))
+    if single_step_detector_angle_audit:
+        request = _request_with_dataset_display_context(
+            request,
+            getattr(prepared_run, "dataset_infos", None) if prepared_run is not None else None,
+        )
+        trial_payload = _single_step_detector_angle_trial(
+            request,
+            base_params,
+            active_vars=active_names,
+            max_angle_step_deg=float(max_angle_step_deg),
+            fd_step_deg=float(fd_step_deg),
+        )
+        rows = [
+            dict(row) for row in trial_payload.get("rows", ()) or () if isinstance(row, Mapping)
+        ]
+        checks = _single_step_checks(
+            rows,
+            delta_gamma_deg=float(trial_payload.get("delta_gamma_deg", 0.0) or 0.0),
+            delta_Gamma_deg=float(trial_payload.get("delta_Gamma_deg", 0.0) or 0.0),
+            max_angle_step_deg=float(max_angle_step_deg),
+        )
+        status = "pass" if _checks_pass(checks, perturb_applied=False) else "fail"
+        report_path = output_root / SINGLE_STEP_REPORT_NAME
+        plot_path = output_root / SINGLE_STEP_PLOT_NAME
+        csv_path = output_root / SINGLE_STEP_CSV_NAME
+        state_hash = _file_sha256(state_path)
+        report = {
+            "status": status,
+            "checks": checks,
+            "state_path": str(state_path),
+            "state_sha256": state_hash,
+            "background_index": int(background_index),
+            "params_mode": "base",
+            "audit_schema_version": int(AUDIT_SCHEMA_VERSION),
+            "audit_mode": "single_step_detector_angle_audit",
+            "single_step_detector_angle_audit": True,
+            "active_vars": [str(name) for name in active_names],
+            "max_angle_step_deg": float(max_angle_step_deg),
+            "fd_step_deg": float(fd_step_deg),
+            "provider_pair_count": reprojection._provider_pair_count(provider_report),
+            "row_count": int(len(rows)),
+            "plotted_row_count": int(checks.get("plotted_row_count", 0) or 0),
+            "invalid_detector_display_row_count": int(
+                checks.get("invalid_detector_display_row_count", 0) or 0
+            ),
+            "valid_plotted_fraction": float(checks.get("valid_plotted_fraction", 0.0) or 0.0),
+            "invalid_reasons_by_count": dict(checks.get("invalid_reasons_by_count", {}) or {}),
+            "json_authoritative": True,
+            "png_diagnostic_only": True,
+            "csv_path": str(csv_path),
+            "json_path": str(report_path),
+            "png_path": str(plot_path),
+            "created_at_unix": time.time(),
+            **trial_payload,
+        }
+        _write_json(report_path, report)
+        _write_csv(csv_path, rows)
+        title = (
+            f"New4 QR single-step audit bg={int(background_index)} "
+            f"state={state_hash[:12]} active vars=gamma,Gamma "
+            f"delta gamma={float(trial_payload.get('delta_gamma_deg', 0.0) or 0.0):.6g} "
+            f"delta Gamma={float(trial_payload.get('delta_Gamma_deg', 0.0) or 0.0):.6g} "
+            f"max angle step={float(max_angle_step_deg):.6g} deg "
+            f"rows={int(len(rows))} status={trial_payload.get('single_step_status')}"
+        )
+        _plot_single_step_rows(plot_path, rows, title=title)
+        return report
     base_rows = _evaluate_pairs(request, base_params)
     improvement_payload: dict[str, object] | None = None
     solver_result_summary: dict[str, object] = {}
@@ -1685,6 +2490,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--fit-improvement-audit", action="store_true")
     parser.add_argument("--perturb-start", default=None)
     parser.add_argument("--active-vars", default=None)
+    parser.add_argument("--single-step-detector-angle-audit", action="store_true")
+    parser.add_argument("--max-angle-step-deg", type=float, default=5.0)
+    parser.add_argument("--fd-step-deg", type=float, default=0.05)
     args = parser.parse_args(argv)
     report = run_coordinate_audit(
         state_path=Path(args.state),
@@ -1699,6 +2507,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         fit_improvement_audit=bool(args.fit_improvement_audit),
         perturb_start=args.perturb_start,
         active_vars=args.active_vars,
+        single_step_detector_angle_audit=bool(args.single_step_detector_angle_audit),
+        max_angle_step_deg=float(args.max_angle_step_deg),
+        fd_step_deg=float(args.fd_step_deg),
     )
     print(
         json.dumps(
@@ -1707,6 +2518,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "status": report["status"],
                     "json_path": report["json_path"],
                     "png_path": report["png_path"],
+                    "csv_path": report.get("csv_path"),
                 }
             ),
             sort_keys=True,
