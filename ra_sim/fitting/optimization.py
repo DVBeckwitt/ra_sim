@@ -72,6 +72,28 @@ WEIGHTED_ANGULAR_METRIC_NAME = "weighted_angular_rms_weighted_deg"
 WEIGHTED_ANGULAR_METRIC_UNIT = "weighted_deg"
 RAW_ANGULAR_COMPONENT_BOUND_DEG = 180.0
 RAW_ANGULAR_VECTOR_NORM_BOUND_DEG = math.hypot(90.0, 180.0)
+QR_FIT_SURFACE_MATCH_TOL_DEG = 1.0e-6
+QR_FIT_LIVE_CAKED_SOURCES = frozenset(
+    (
+        "sim_visual_caked_deg",
+        "sim_caked",
+        "sim_caked_display",
+        "two_theta_deg/phi_deg",
+        "caked_x/y",
+    )
+)
+QR_FIT_CAKED_DEG_DETECTOR_DISPLAY_SOURCES = frozenset(
+    (
+        "fit_prediction_caked_deg",
+        "optimizer_simulated_source_two_theta_phi",
+        "dynamic_sim_visual_caked_deg_two_theta_phi",
+        "sim_visual_caked_deg",
+        "sim_caked",
+        "sim_caked_display",
+        "two_theta_deg/phi_deg",
+        "caked_x/y",
+    )
+)
 
 process_peaks_parallel = getattr(
     _runtime,
@@ -18369,6 +18391,299 @@ def _source_row_is_caked_display_surface(row: Mapping[str, object]) -> bool:
         if str(row.get(key) or "").strip() == "caked_display":
             return True
     return False
+
+
+def _source_row_surface_kind(row: Mapping[str, object]) -> str:
+    if _source_row_is_caked_display_surface(row):
+        return "caked_display"
+    for key in (
+        "display_frame",
+        "current_view_frame",
+        "projection_frame",
+        "manual_visual_frame",
+    ):
+        frame = str(row.get(key) or "").strip()
+        if frame in {"detector_display", "display_detector"}:
+            return "detector_display"
+        if frame in {"native_detector", "simulation_native"}:
+            return "native_detector"
+    coordinate_frame = str(row.get("coordinate_frame") or "").strip()
+    if coordinate_frame in {"native_detector", "simulation_native"}:
+        return "native_detector"
+    if coordinate_frame in {"detector_display", "display_detector"}:
+        return "detector_display"
+    return "unknown"
+
+
+def _first_mapping_value(
+    key: str,
+    *mappings: Mapping[str, object],
+) -> object:
+    for mapping in mappings:
+        if key in mapping and mapping.get(key) is not None:
+            return mapping.get(key)
+    return None
+
+
+def _first_mapping_pair(
+    keys: Sequence[str],
+    *mappings: Mapping[str, object],
+) -> Tuple[float, float] | None:
+    for mapping in mappings:
+        for key in keys:
+            point = _finite_pair(mapping.get(key))
+            if point is not None:
+                return point
+    return None
+
+
+def _jsonable_pair(point: Tuple[float, float] | None) -> List[float] | None:
+    if point is None:
+        return None
+    return [float(point[0]), float(point[1])]
+
+
+def _caked_surface_delta_norm(
+    first: Tuple[float, float] | None,
+    second: Tuple[float, float] | None,
+) -> Tuple[List[float] | None, float | None]:
+    if first is None or second is None:
+        return None, None
+    delta_two_theta = float(first[0]) - float(second[0])
+    delta_phi = float(_wrap_phi_deg(float(first[1]) - float(second[1])))
+    return [float(delta_two_theta), float(delta_phi)], float(math.hypot(delta_two_theta, delta_phi))
+
+
+def _qr_fit_source_authority_match_payload(
+    declared_source: str,
+    objective_source: str,
+    explicit_match: object,
+) -> Dict[str, object]:
+    declared = str(declared_source or "").strip()
+    objective = str(objective_source or "").strip()
+    if declared == "sim_visual_caked_deg" and objective == "point_only_detector_projection":
+        return {
+            "match": False,
+            "reason": "declared_sim_visual_caked_but_objective_used_point_only_detector_projection",
+        }
+    if declared and objective:
+        live_caked_match = declared == "sim_visual_caked_deg" and (
+            objective in QR_FIT_LIVE_CAKED_SOURCES
+        )
+        if declared == objective or live_caked_match:
+            return {"match": True, "reason": None}
+        return {
+            "match": False,
+            "reason": f"declared_{declared}_but_objective_used_{objective}",
+        }
+    if isinstance(explicit_match, bool):
+        return {
+            "match": bool(explicit_match),
+            "reason": None if explicit_match else "source_authority_match_false",
+        }
+    return {"match": True, "reason": None}
+
+
+def _build_qr_fit_point_surface_contract(
+    *,
+    row: Mapping[str, object],
+    prediction: Mapping[str, object],
+    observed: Mapping[str, object],
+    objective_space: str,
+) -> Dict[str, object]:
+    objective_space_label = str(objective_space or "").strip()
+    objective_units = str(
+        _first_mapping_value("objective_residual_units", prediction, row) or ""
+    ).strip() or ("deg" if objective_space_label == "caked_deg" else "")
+    surface_kind = _source_row_surface_kind(row)
+
+    manual_target_caked = _first_mapping_pair(
+        (
+            "optimizer_measured_anchor_two_theta_phi",
+            "manual_target_caked_deg",
+            "background_caked_deg",
+        ),
+        observed,
+        row,
+    )
+    manual_target_display = _first_mapping_pair(
+        (
+            "manual_target_detector_display_px",
+            "background_detector_display_px",
+            "measured_detector_display_px",
+        ),
+        observed,
+        row,
+    )
+    manual_target_native = _first_mapping_pair(
+        (
+            "manual_target_detector_native_px",
+            "background_detector_native_px",
+            "measured_detector_native_px",
+        ),
+        observed,
+        row,
+    )
+    gui_drawn_caked = _first_mapping_pair(
+        (
+            "gui_drawn_sim_caked_deg",
+            "dynamic_sim_visual_caked_deg_two_theta_phi",
+            "sim_visual_caked_deg",
+            "sim_caked",
+            "sim_caked_display",
+        ),
+        row,
+        prediction,
+    )
+    objective_caked = _first_mapping_pair(
+        (
+            "optimizer_simulated_source_two_theta_phi",
+            "objective_sim_caked_deg",
+            "fit_prediction_caked_deg",
+        ),
+        prediction,
+        row,
+    )
+    gui_drawn_display = _first_mapping_pair(
+        (
+            "gui_drawn_sim_detector_display_px",
+            "visual_sim_detector_display_px",
+            "sim_nominal_detector_display_px",
+        ),
+        row,
+        prediction,
+    )
+
+    detector_display_source = str(
+        _first_mapping_value("fit_prediction_detector_display_px_source", prediction, row) or ""
+    ).strip()
+    raw_objective_display = _first_mapping_pair(
+        (
+            "objective_sim_detector_display_px",
+            "fit_prediction_detector_display_px",
+            "resolved_detector_display_px",
+            "sim_nominal_detector_display_px",
+        ),
+        prediction,
+        row,
+    )
+    caked_degrees_used_as_detector_px = bool(
+        raw_objective_display is not None
+        and detector_display_source in QR_FIT_CAKED_DEG_DETECTOR_DISPLAY_SOURCES
+    )
+    objective_display = None if caked_degrees_used_as_detector_px else raw_objective_display
+
+    declared_source = str(
+        _first_mapping_value("objective_source_authority", prediction, row) or ""
+    ).strip()
+    objective_source = str(_first_mapping_value("optimizer_source_source", prediction, row) or "")
+    authority_payload = _qr_fit_source_authority_match_payload(
+        declared_source,
+        objective_source,
+        _first_mapping_value("source_authority_match", prediction, row),
+    )
+    source_authority_match = bool(authority_payload.get("match"))
+    surface_delta, surface_norm = _caked_surface_delta_norm(gui_drawn_caked, objective_caked)
+    visual_objective_surface_match = bool(
+        surface_norm is not None and float(surface_norm) <= QR_FIT_SURFACE_MATCH_TOL_DEG
+    )
+
+    point_only_projection_used = bool(
+        _first_mapping_value("point_only_detector_projection_used", prediction, row)
+    )
+    detector_display_projection_used = bool(
+        _first_mapping_value(
+            "sim_nominal_detector_display_px_used_for_caked_projection",
+            prediction,
+            row,
+        )
+    )
+    detector_projection_used_for_objective = bool(
+        objective_space_label == "caked_deg"
+        and (
+            point_only_projection_used
+            or detector_display_projection_used
+            or objective_source == "point_only_detector_projection"
+        )
+    )
+    detector_projection_used_as_diagnostic_only = bool(
+        surface_kind == "caked_display" and not detector_projection_used_for_objective
+    )
+    saved_sim_refined_caked_used = bool(
+        _first_mapping_value("saved_sim_refined_caked_used", prediction, row)
+    )
+    if not saved_sim_refined_caked_used:
+        refinement_source = str(
+            _first_mapping_value("sim_refinement_caked_image_source", prediction, row) or ""
+        )
+        saved_sim_refined_caked_used = bool("saved" in refinement_source)
+
+    failure_reasons: List[str] = []
+    if not source_authority_match:
+        failure_reasons.append("source_authority_mismatch")
+    if not visual_objective_surface_match:
+        failure_reasons.append("visual_objective_surface_mismatch")
+    if caked_degrees_used_as_detector_px:
+        failure_reasons.append("caked_degrees_used_as_detector_px")
+    if saved_sim_refined_caked_used:
+        failure_reasons.append("saved_sim_refined_caked_used")
+    if surface_kind == "caked_display" and detector_projection_used_for_objective:
+        failure_reasons.append("caked_display_row_used_detector_projection_for_objective")
+
+    return {
+        "pair_id": copy.deepcopy(_first_mapping_value("pair_id", row, prediction, observed)),
+        "q_group_key": copy.deepcopy(_first_mapping_value("q_group_key", row, prediction)),
+        "hkl": copy.deepcopy(_first_mapping_value("hkl", row, prediction)),
+        "source_branch_index": copy.deepcopy(
+            _first_mapping_value("source_branch_index", row, prediction)
+        ),
+        "source_table_index": copy.deepcopy(
+            _first_mapping_value("source_table_index", row, prediction)
+        ),
+        "source_row_index": copy.deepcopy(
+            _first_mapping_value("source_row_index", row, prediction)
+        ),
+        "manual_target_caked_deg": _jsonable_pair(manual_target_caked),
+        "manual_target_detector_display_px": _jsonable_pair(manual_target_display),
+        "manual_target_detector_native_px": _jsonable_pair(manual_target_native),
+        "gui_drawn_sim_caked_deg": _jsonable_pair(gui_drawn_caked),
+        "gui_drawn_sim_detector_display_px": _jsonable_pair(gui_drawn_display),
+        "gui_drawn_sim_caked_source": str(
+            _first_mapping_value(
+                "gui_drawn_sim_caked_source",
+                row,
+                prediction,
+            )
+            or _first_mapping_value("dynamic_source_source", row, prediction)
+            or "sim_visual_caked_deg"
+        ),
+        "gui_drawn_sim_source": str(
+            _first_mapping_value(
+                "gui_drawn_sim_caked_source",
+                row,
+                prediction,
+            )
+            or _first_mapping_value("dynamic_source_source", row, prediction)
+            or "sim_visual_caked_deg"
+        ),
+        "objective_sim_caked_deg": _jsonable_pair(objective_caked),
+        "objective_sim_detector_display_px": _jsonable_pair(objective_display),
+        "objective_sim_source": objective_source or None,
+        "objective_space": objective_space_label,
+        "objective_units": objective_units,
+        "visual_objective_surface_match": visual_objective_surface_match,
+        "visual_vs_objective_caked_delta_deg": surface_delta,
+        "visual_vs_objective_caked_norm_deg": surface_norm,
+        "source_authority_match": source_authority_match,
+        "source_authority_mismatch_reason": authority_payload.get("reason"),
+        "detector_projection_used_for_objective": detector_projection_used_for_objective,
+        "detector_projection_used_as_diagnostic_only": detector_projection_used_as_diagnostic_only,
+        "caked_degrees_used_as_detector_px": caked_degrees_used_as_detector_px,
+        "saved_sim_refined_caked_used": saved_sim_refined_caked_used,
+        "source_row_surface_kind": surface_kind,
+        "qr_fit_contract_status": "pass" if not failure_reasons else "fail",
+        "qr_fit_contract_failure_reasons": list(failure_reasons),
+    }
 
 
 def _fit_qr_visual_caked_anchor_payload(

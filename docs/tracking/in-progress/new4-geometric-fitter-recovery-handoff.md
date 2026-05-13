@@ -14,6 +14,14 @@ Last updated: 2026-05-13
   loops. Bug/error/feature status is unchanged: this is a behavior-preserving
   cleanup of debug audit bookkeeping, with no public CLI, config, saved-state,
   artifact-schema, deprecation, or migration impact.
+- 2026-05-13 QR surface contract slice completed. The optimizer now exposes a
+  central `_build_qr_fit_point_surface_contract(...)` diagnostic helper, the
+  single-step audit writes per-row contract payloads and top-level contract
+  counters, and the caked audit rows record `gui_drawn_sim_caked_source`. The
+  regenerated New4 proof reports `qr_fit_contract_status=pass`,
+  `qr_fit_contract_failure_count=0`, `source_authority_mismatch_row_count=0`,
+  and `surface_mismatch_row_count=0`. Remaining work is the full gamma/Gamma
+  GUI-fit gate and overnight recovery report, not threshold tuning.
 - 2026-05-13 single-step QR coordinate visual audit completed. The New4
   coordinate visualizer now has a dry-run `--single-step-detector-angle-audit`
   mode that evaluates base dynamic residuals, finite-differences only

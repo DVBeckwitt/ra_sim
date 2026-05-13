@@ -4469,9 +4469,7 @@ def test_single_step_qr_visual_audit_rejects_mixed_detector_frames() -> None:
             sim_detector_display_col=12.0,
             sim_detector_display_row=13.0,
         )
-        row["fit_qr_branch_key"] = _point_only_dynamic_qr_row(40.0, 20.0)[
-            "fit_qr_branch_key"
-        ]
+        row["fit_qr_branch_key"] = _point_only_dynamic_qr_row(40.0, 20.0)["fit_qr_branch_key"]
         return _locked_qr_source_rows_payload([row])
 
     request.dataset_specs[0]["qr_fit_trial_source_rows_builder"] = detector_source_rows_builder
@@ -4616,6 +4614,123 @@ def _single_step_surface_audit_rows(module, request, before, after):
     )
 
 
+def test_qr_fit_contract_fails_when_declared_authority_and_objective_source_diverge() -> None:
+    row = {
+        "pair_id": "pair-1",
+        "objective_source_authority": "sim_visual_caked_deg",
+        "dynamic_sim_visual_caked_deg_two_theta_phi": [40.242, 114.520],
+        "optimizer_source_source": "point_only_detector_projection",
+        "optimizer_simulated_source_two_theta_phi": [69.251, -130.750],
+    }
+
+    contract = opt._build_qr_fit_point_surface_contract(
+        row=row,
+        prediction=row,
+        observed={"optimizer_measured_anchor_two_theta_phi": [40.006, 39.050]},
+        objective_space="caked_deg",
+    )
+
+    assert contract["source_authority_match"] is False
+    assert contract["visual_objective_surface_match"] is False
+    assert contract["source_authority_mismatch_reason"] == (
+        "declared_sim_visual_caked_but_objective_used_point_only_detector_projection"
+    )
+    assert contract["qr_fit_contract_status"] == "fail"
+
+
+def test_qr_fit_contract_passes_when_gui_visual_and_objective_caked_match() -> None:
+    row = {
+        "pair_id": "pair-1",
+        "objective_source_authority": "sim_visual_caked_deg",
+        "dynamic_sim_visual_caked_deg_two_theta_phi": [40.212, 39.904],
+        "optimizer_source_source": "sim_visual_caked_deg",
+        "optimizer_simulated_source_two_theta_phi": [40.212, 39.904],
+    }
+
+    contract = opt._build_qr_fit_point_surface_contract(
+        row=row,
+        prediction=row,
+        observed={"optimizer_measured_anchor_two_theta_phi": [40.006, 39.050]},
+        objective_space="caked_deg",
+    )
+
+    assert contract["source_authority_match"] is True
+    assert contract["visual_objective_surface_match"] is True
+    assert contract["qr_fit_contract_status"] == "pass"
+
+
+def test_qr_fit_contract_never_treats_caked_degrees_as_detector_display_pixels() -> None:
+    row = {
+        "pair_id": "pair-1",
+        "display_frame": "caked_display",
+        "objective_source_authority": "sim_visual_caked_deg",
+        "dynamic_sim_visual_caked_deg_two_theta_phi": [40.212, 39.904],
+        "optimizer_source_source": "sim_visual_caked_deg",
+        "optimizer_simulated_source_two_theta_phi": [40.212, 39.904],
+        "fit_prediction_detector_display_px": [40.212, 39.904],
+        "fit_prediction_detector_display_px_source": "fit_prediction_caked_deg",
+    }
+
+    contract = opt._build_qr_fit_point_surface_contract(
+        row=row,
+        prediction=row,
+        observed={"optimizer_measured_anchor_two_theta_phi": [40.006, 39.050]},
+        objective_space="caked_deg",
+    )
+
+    assert contract["caked_degrees_used_as_detector_px"] is True
+    assert contract["objective_sim_detector_display_px"] is None
+    assert contract["qr_fit_contract_status"] == "fail"
+
+
+def test_qr_fit_contract_allows_detector_projection_only_for_true_detector_frame() -> None:
+    row = {
+        "pair_id": "pair-1",
+        "display_frame": "detector_display",
+        "coordinate_frame": "simulation_native",
+        "objective_source_authority": "point_only_detector_projection",
+        "dynamic_sim_visual_caked_deg_two_theta_phi": [40.212, 39.904],
+        "optimizer_source_source": "point_only_detector_projection",
+        "optimizer_simulated_source_two_theta_phi": [40.212, 39.904],
+        "fit_prediction_detector_display_px": [112.0, 113.0],
+        "fit_prediction_detector_display_px_source": "sim_nominal_detector_display_px",
+        "point_only_detector_projection_used": True,
+    }
+
+    contract = opt._build_qr_fit_point_surface_contract(
+        row=row,
+        prediction=row,
+        observed={"optimizer_measured_anchor_two_theta_phi": [40.006, 39.050]},
+        objective_space="caked_deg",
+    )
+
+    assert contract["detector_projection_used_for_objective"] is True
+    assert contract["detector_projection_used_as_diagnostic_only"] is False
+    assert contract["caked_degrees_used_as_detector_px"] is False
+    assert contract["qr_fit_contract_status"] == "pass"
+
+
+def test_qr_fit_contract_rejects_pass_status_with_source_authority_mismatch() -> None:
+    row = {
+        "pair_id": "pair-1",
+        "proof_status": "pass",
+        "objective_source_authority": "sim_visual_caked_deg",
+        "dynamic_sim_visual_caked_deg_two_theta_phi": [40.242, 114.520],
+        "optimizer_source_source": "point_only_detector_projection",
+        "optimizer_simulated_source_two_theta_phi": [69.251, -130.750],
+    }
+
+    contract = opt._build_qr_fit_point_surface_contract(
+        row=row,
+        prediction=row,
+        observed={"optimizer_measured_anchor_two_theta_phi": [40.006, 39.050]},
+        objective_space="caked_deg",
+    )
+
+    assert contract["source_authority_match"] is False
+    assert contract["qr_fit_contract_status"] == "fail"
+
+
 def test_single_step_qr_visual_audit_fails_when_visual_sim_and_objective_projection_diverge() -> (
     None
 ):
@@ -4648,6 +4763,41 @@ def test_single_step_qr_visual_audit_fails_when_visual_sim_and_objective_project
     assert (
         report["proof_failure_reason"] == "visual_simulation_surface_differs_from_objective_surface"
     )
+
+
+def test_single_step_qr_visual_audit_reports_qr_fit_contract_failure() -> None:
+    module = _load_new4_coordinate_audit_module()
+    request = _single_step_qr_request(source_display_offset=100.0)
+    before = _single_step_surface_row(
+        visual_caked=(40.242, 114.520),
+        objective_caked=(69.251, -130.750),
+    )
+    before.update(
+        {
+            "objective_source_authority": "sim_visual_caked_deg",
+            "optimizer_source_source": "point_only_detector_projection",
+            "source_authority_match": False,
+        }
+    )
+    after = dict(before)
+
+    rows = _single_step_surface_audit_rows(module, request, before, after)
+    row = rows[0]
+    report = module._single_step_checks(
+        rows,
+        delta_gamma_deg=0.0,
+        delta_Gamma_deg=0.0,
+        max_angle_step_deg=5.0,
+    )
+
+    assert row["qr_fit_contract_status"] == "fail"
+    assert row["qr_fit_point_surface_contract"]["source_authority_match"] is False
+    assert report["qr_fit_contract_status"] == "fail"
+    assert report["qr_fit_contract_failure_count"] == 1
+    assert report["source_authority_mismatch_reasons_by_count"] == {
+        "declared_sim_visual_caked_but_objective_used_point_only_detector_projection": 1
+    }
+    assert report["proof_status"] == "fail"
 
 
 def test_single_step_qr_visual_audit_uses_objective_surface_for_plotted_caked_points() -> None:
@@ -5123,9 +5273,7 @@ def test_qr_caked_objective_prefers_live_sim_visual_caked_over_point_only_detect
     assert prediction["fit_prediction_caked_deg"] == pytest.approx(list(live_caked))
     assert prediction["optimizer_source_source"] == "sim_visual_caked_deg"
     assert prediction["source_authority_match"] is True
-    assert prediction["optimizer_simulated_source_two_theta_phi"] == pytest.approx(
-        list(live_caked)
-    )
+    assert prediction["optimizer_simulated_source_two_theta_phi"] == pytest.approx(list(live_caked))
     assert prediction["sim_nominal_detector_display_px_used_for_caked_projection"] is False
 
 
@@ -5953,9 +6101,7 @@ def test_point_only_qr_acceptance_rejects_mixed_display_native_detector_distance
             sim_detector_display_col=predicted_display[0],
             sim_detector_display_row=predicted_display[1],
         )
-        row["fit_qr_branch_key"] = _point_only_dynamic_qr_row(40.212, 39.904)[
-            "fit_qr_branch_key"
-        ]
+        row["fit_qr_branch_key"] = _point_only_dynamic_qr_row(40.212, 39.904)["fit_qr_branch_key"]
         return _locked_qr_source_rows_payload([row])
 
     def projector(cols, rows, *, local_params=None, **_kwargs):

@@ -728,6 +728,11 @@ Status as of 2026-05-13:
 - maintenance status: the single-step proof checks share small row-value and
   row-predicate helpers, reducing duplicate audit bookkeeping without changing
   JSON fields, PNG semantics, CLI flags, config, or saved-state behavior
+- contract status: QR audit rows now include a nested
+  `qr_fit_point_surface_contract` plus top-level contract counters. The
+  regenerated New4 proof reports `qr_fit_contract_status="pass"`,
+  `qr_fit_contract_failure_count=0`, `surface_mismatch_row_count=0`, and
+  `source_authority_mismatch_row_count=0`.
 
 Run:
 
@@ -754,6 +759,11 @@ before/after identity check. `saved_sim_refined_caked_used` is always false in
 this audit. Rows with inconsistent detector display/native conversion are
 counted in `invalid_detector_display_row_count` and excluded from the detector
 panel instead of being plotted on mixed coordinate frames.
+
+Each row also records the GUI-drawn caked simulation source through
+`gui_drawn_sim_caked_source`. For the current caked-display New4 proof this is
+`sim_visual_caked_deg`, and it matches the optimizer source for all fitted QR
+rows.
 
 Proof mode is strict by default. `proof_status` is `pass` only when every GUI
 visual simulation QR point and optimizer objective QR point share the same

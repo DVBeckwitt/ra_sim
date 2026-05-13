@@ -66,6 +66,7 @@ OBJECTIVE_AUDIT_REQUIRED_PAIR_FIELDS: tuple[str, ...] = (
     "dynamic_source_two_theta_deg",
     "dynamic_source_phi_deg",
     "dynamic_source_source",
+    "gui_drawn_sim_caked_source",
     "optimizer_source_two_theta_deg",
     "optimizer_source_phi_deg",
     "optimizer_source_source",
@@ -715,6 +716,7 @@ def _build_objective_audit_pair_row(
         "dynamic_source_two_theta_deg": (float(dynamic_source[0]) if dynamic_source else None),
         "dynamic_source_phi_deg": float(dynamic_source[1]) if dynamic_source else None,
         "dynamic_source_source": dynamic_source_label,
+        "gui_drawn_sim_caked_source": dynamic_source_label,
         "optimizer_source_two_theta_deg": (
             float(optimizer_source[0]) if optimizer_source else None
         ),
@@ -1996,126 +1998,143 @@ def _single_step_audit_rows(
         objective_source_authority = before.get("objective_source_authority")
         if objective_source_authority is None and dynamic_source_label == "sim_visual_caked_deg":
             objective_source_authority = "sim_visual_caked_deg"
-        out.append(
-            {
-                "pair_id": before.get("pair_id"),
-                "q_group_key": before.get("q_group_key"),
-                "hkl": hkl_before,
-                "source_branch_index": before.get("source_branch_index"),
-                "source_table_index": before.get("source_table_index"),
-                "source_row_index": before.get("source_row_index"),
-                "background_index": before.get("dataset_index", 0),
-                "manual_detector_display_px": _pair_list(background_display),
-                "manual_detector_display_valid": bool(
-                    background_display is not None and background_display_valid
-                ),
-                "background_detector_display_px": _pair_list(background_display),
-                "background_detector_native_px": _pair_list(background_native),
-                "manual_target_caked_deg": _pair_list(manual_target_caked),
-                "background_caked_deg": _pair_list(manual_target_caked),
-                "background_caked_source": before.get("optimizer_measured_source"),
-                "visual_sim_detector_display_px": _pair_list(visual_display),
-                "visual_sim_detector_display_valid": bool(
-                    visual_display is not None and visual_display_valid
-                ),
-                "objective_sim_detector_display_px": _pair_list(objective_display),
-                "objective_sim_detector_display_valid": bool(
-                    objective_display is not None and objective_display_valid
-                ),
-                "trial_objective_sim_detector_display_px": _pair_list(trial_objective_display),
-                "trial_objective_sim_detector_display_valid": bool(
-                    trial_objective_display is not None and trial_objective_display_valid
-                ),
-                "original_sim_detector_display_px": _pair_list(objective_display),
-                "original_sim_detector_native_px": _pair_list(original_native),
-                "original_sim_caked_deg": _pair_list(original_caked),
-                "original_sim_source": optimizer_source_label,
-                "dynamic_source_source": before.get("dynamic_source_source"),
-                "optimizer_source_source": optimizer_source_label,
-                "objective_source_authority": objective_source_authority,
-                "source_authority_match": bool(source_authority_match),
-                "surface_mismatch_class": before.get("surface_mismatch_class"),
-                "recommended_next_fix": before.get("recommended_next_fix"),
-                "point_only_detector_projection_used": before.get(
-                    "point_only_detector_projection_used"
-                ),
-                "sim_nominal_detector_display_px_used_for_caked_projection": before.get(
-                    "sim_nominal_detector_display_px_used_for_caked_projection"
-                ),
-                "detector_native_reprojection_is_diagnostic": before.get(
-                    "detector_native_reprojection_is_diagnostic"
-                ),
-                "detector_native_reprojection_used_for_objective": before.get(
-                    "detector_native_reprojection_used_for_objective"
-                ),
-                "visual_sim_base_caked_deg": _pair_list(visual_sim_base_caked),
-                "objective_sim_base_caked_deg": _pair_list(objective_sim_base_caked),
-                "original_live_projected_detector_caked_deg": _pair_list(original_caked),
-                "trial_sim_detector_display_px": _pair_list(trial_objective_display),
-                "trial_sim_detector_native_px": _pair_list(trial_native),
-                "trial_sim_caked_deg": _pair_list(trial_caked),
-                "trial_sim_source": after.get("optimizer_source_source"),
-                "visual_sim_trial_caked_deg": _pair_list(visual_sim_trial_caked),
-                "objective_sim_trial_caked_deg": _pair_list(objective_sim_trial_caked),
-                "trial_live_projected_detector_caked_deg": _pair_list(trial_caked),
-                "fit_prediction_caked_deg": _pair_list(fit_prediction_caked),
-                "visual_vs_objective_base_delta_caked_deg": [
-                    visual_vs_objective_base_delta["delta_two_theta"],
-                    visual_vs_objective_base_delta["delta_phi_wrapped"],
-                ],
-                "visual_vs_objective_base_norm_deg": visual_vs_objective_base_delta["norm"],
-                "visual_vs_objective_trial_delta_caked_deg": [
-                    visual_vs_objective_trial_delta["delta_two_theta"],
-                    visual_vs_objective_trial_delta["delta_phi_wrapped"],
-                ],
-                "visual_vs_objective_trial_norm_deg": visual_vs_objective_trial_delta["norm"],
-                "objective_base_to_manual_delta_caked_deg": [
-                    original_delta["delta_two_theta"],
-                    original_delta["delta_phi_wrapped"],
-                ],
-                "objective_base_to_manual_norm_deg": original_delta["norm"],
-                "objective_trial_to_manual_delta_caked_deg": [
-                    trial_delta["delta_two_theta"],
-                    trial_delta["delta_phi_wrapped"],
-                ],
-                "objective_trial_to_manual_norm_deg": trial_delta["norm"],
-                "original_to_background_delta_caked_deg": [
-                    original_delta["delta_two_theta"],
-                    original_delta["delta_phi_wrapped"],
-                ],
-                "trial_to_background_delta_caked_deg": [
-                    trial_delta["delta_two_theta"],
-                    trial_delta["delta_phi_wrapped"],
-                ],
-                "original_to_background_norm_deg": original_delta["norm"],
-                "trial_to_background_norm_deg": trial_delta["norm"],
-                "delta_gamma_deg": float(delta_by_name.get("gamma", 0.0)),
-                "delta_Gamma_deg": float(delta_by_name.get("Gamma", 0.0)),
-                "single_step_status": str(single_step_status),
-                "identity_same_before_after": pair_same,
-                "q_group_same_before_after": q_group_same,
-                "hkl_same_before_after": hkl_same,
-                "branch_same_before_after": branch_same,
-                "detector_display_frame_valid": detector_valid,
-                "detector_native_frame_valid": detector_native_valid,
-                "caked_frame_valid": caked_valid,
-                "objective_detector_display_available": objective_detector_display_available,
-                "detector_panel_proof_complete": detector_valid,
-                "real_caked_projector_used": real_projector_used,
-                "saved_sim_refined_caked_used": False,
-                "visual_objective_base_surface_match": visual_objective_base_surface_match,
-                "visual_objective_trial_surface_match": visual_objective_trial_surface_match,
-                "objective_surface_used_for_residual": True,
-                "visual_surface_used_for_residual": False,
-                "original_sim_caked_matches_fit_prediction_caked_deg": bool(
-                    _point_match(original_caked, fit_prediction_caked)
-                ),
-                "detector_display_invalid_reason": detector_reasons[0]
-                if detector_reasons
-                else None,
-                "detector_display_invalid_reasons": detector_reasons,
-            }
+        audit_row = {
+            "pair_id": before.get("pair_id"),
+            "q_group_key": before.get("q_group_key"),
+            "hkl": hkl_before,
+            "source_branch_index": before.get("source_branch_index"),
+            "source_table_index": before.get("source_table_index"),
+            "source_row_index": before.get("source_row_index"),
+            "background_index": before.get("dataset_index", 0),
+            "manual_detector_display_px": _pair_list(background_display),
+            "manual_detector_display_valid": bool(
+                background_display is not None and background_display_valid
+            ),
+            "background_detector_display_px": _pair_list(background_display),
+            "background_detector_native_px": _pair_list(background_native),
+            "manual_target_caked_deg": _pair_list(manual_target_caked),
+            "background_caked_deg": _pair_list(manual_target_caked),
+            "background_caked_source": before.get("optimizer_measured_source"),
+            "visual_sim_detector_display_px": _pair_list(visual_display),
+            "visual_sim_detector_display_valid": bool(
+                visual_display is not None and visual_display_valid
+            ),
+            "objective_sim_detector_display_px": _pair_list(objective_display),
+            "objective_sim_detector_display_valid": bool(
+                objective_display is not None and objective_display_valid
+            ),
+            "trial_objective_sim_detector_display_px": _pair_list(trial_objective_display),
+            "trial_objective_sim_detector_display_valid": bool(
+                trial_objective_display is not None and trial_objective_display_valid
+            ),
+            "original_sim_detector_display_px": _pair_list(objective_display),
+            "original_sim_detector_native_px": _pair_list(original_native),
+            "original_sim_caked_deg": _pair_list(original_caked),
+            "original_sim_source": optimizer_source_label,
+            "dynamic_source_source": before.get("dynamic_source_source"),
+            "optimizer_source_source": optimizer_source_label,
+            "objective_source_authority": objective_source_authority,
+            "source_authority_match": bool(source_authority_match),
+            "surface_mismatch_class": before.get("surface_mismatch_class"),
+            "recommended_next_fix": before.get("recommended_next_fix"),
+            "point_only_detector_projection_used": before.get(
+                "point_only_detector_projection_used"
+            ),
+            "sim_nominal_detector_display_px_used_for_caked_projection": before.get(
+                "sim_nominal_detector_display_px_used_for_caked_projection"
+            ),
+            "detector_native_reprojection_is_diagnostic": before.get(
+                "detector_native_reprojection_is_diagnostic"
+            ),
+            "detector_native_reprojection_used_for_objective": before.get(
+                "detector_native_reprojection_used_for_objective"
+            ),
+            "visual_sim_base_caked_deg": _pair_list(visual_sim_base_caked),
+            "objective_sim_base_caked_deg": _pair_list(objective_sim_base_caked),
+            "original_live_projected_detector_caked_deg": _pair_list(original_caked),
+            "trial_sim_detector_display_px": _pair_list(trial_objective_display),
+            "trial_sim_detector_native_px": _pair_list(trial_native),
+            "trial_sim_caked_deg": _pair_list(trial_caked),
+            "trial_sim_source": after.get("optimizer_source_source"),
+            "visual_sim_trial_caked_deg": _pair_list(visual_sim_trial_caked),
+            "objective_sim_trial_caked_deg": _pair_list(objective_sim_trial_caked),
+            "trial_live_projected_detector_caked_deg": _pair_list(trial_caked),
+            "fit_prediction_caked_deg": _pair_list(fit_prediction_caked),
+            "visual_vs_objective_base_delta_caked_deg": [
+                visual_vs_objective_base_delta["delta_two_theta"],
+                visual_vs_objective_base_delta["delta_phi_wrapped"],
+            ],
+            "visual_vs_objective_base_norm_deg": visual_vs_objective_base_delta["norm"],
+            "visual_vs_objective_trial_delta_caked_deg": [
+                visual_vs_objective_trial_delta["delta_two_theta"],
+                visual_vs_objective_trial_delta["delta_phi_wrapped"],
+            ],
+            "visual_vs_objective_trial_norm_deg": visual_vs_objective_trial_delta["norm"],
+            "objective_base_to_manual_delta_caked_deg": [
+                original_delta["delta_two_theta"],
+                original_delta["delta_phi_wrapped"],
+            ],
+            "objective_base_to_manual_norm_deg": original_delta["norm"],
+            "objective_trial_to_manual_delta_caked_deg": [
+                trial_delta["delta_two_theta"],
+                trial_delta["delta_phi_wrapped"],
+            ],
+            "objective_trial_to_manual_norm_deg": trial_delta["norm"],
+            "original_to_background_delta_caked_deg": [
+                original_delta["delta_two_theta"],
+                original_delta["delta_phi_wrapped"],
+            ],
+            "trial_to_background_delta_caked_deg": [
+                trial_delta["delta_two_theta"],
+                trial_delta["delta_phi_wrapped"],
+            ],
+            "original_to_background_norm_deg": original_delta["norm"],
+            "trial_to_background_norm_deg": trial_delta["norm"],
+            "delta_gamma_deg": float(delta_by_name.get("gamma", 0.0)),
+            "delta_Gamma_deg": float(delta_by_name.get("Gamma", 0.0)),
+            "single_step_status": str(single_step_status),
+            "identity_same_before_after": pair_same,
+            "q_group_same_before_after": q_group_same,
+            "hkl_same_before_after": hkl_same,
+            "branch_same_before_after": branch_same,
+            "detector_display_frame_valid": detector_valid,
+            "detector_native_frame_valid": detector_native_valid,
+            "caked_frame_valid": caked_valid,
+            "objective_detector_display_available": objective_detector_display_available,
+            "detector_panel_proof_complete": detector_valid,
+            "real_caked_projector_used": real_projector_used,
+            "saved_sim_refined_caked_used": False,
+            "visual_objective_base_surface_match": visual_objective_base_surface_match,
+            "visual_objective_trial_surface_match": visual_objective_trial_surface_match,
+            "objective_surface_used_for_residual": True,
+            "visual_surface_used_for_residual": False,
+            "original_sim_caked_matches_fit_prediction_caked_deg": bool(
+                _point_match(original_caked, fit_prediction_caked)
+            ),
+            "detector_display_invalid_reason": detector_reasons[0] if detector_reasons else None,
+            "detector_display_invalid_reasons": detector_reasons,
+        }
+        contract_input = dict(before)
+        contract_input.update(audit_row)
+        contract = opt._build_qr_fit_point_surface_contract(
+            row=contract_input,
+            prediction=contract_input,
+            observed=audit_row,
+            objective_space="caked_deg",
         )
+        audit_row["qr_fit_point_surface_contract"] = contract
+        audit_row["qr_fit_contract_status"] = contract.get("qr_fit_contract_status")
+        audit_row["qr_fit_contract_failure_reasons"] = contract.get(
+            "qr_fit_contract_failure_reasons",
+            [],
+        )
+        audit_row["source_authority_mismatch_reason"] = contract.get(
+            "source_authority_mismatch_reason"
+        )
+        audit_row["caked_degrees_used_as_detector_px"] = bool(
+            contract.get("caked_degrees_used_as_detector_px")
+        )
+        out.append(audit_row)
     return out
 
 
@@ -2180,10 +2199,36 @@ def _single_step_checks(
     source_authority_mismatch_rows = [
         row for row in source_authority_rows if row.get("source_authority_match") is not True
     ]
+    contract_rows = [row for row in rows if row.get("qr_fit_contract_status") is not None]
+    contract_failure_rows = [
+        row for row in contract_rows if row.get("qr_fit_contract_status") != "pass"
+    ]
+    source_authority_mismatch_reasons_by_count: dict[str, int] = {}
+    for row in contract_failure_rows:
+        reason = str(row.get("source_authority_mismatch_reason") or "").strip()
+        if reason:
+            source_authority_mismatch_reasons_by_count[reason] = (
+                int(source_authority_mismatch_reasons_by_count.get(reason, 0)) + 1
+            )
     base_norms = _finite_row_values(rows, "visual_vs_objective_base_norm_deg")
     trial_norms = _finite_row_values(rows, "visual_vs_objective_trial_norm_deg")
+    contract_norms: list[float] = []
+    for row in contract_rows:
+        contract = row.get("qr_fit_point_surface_contract")
+        if not isinstance(contract, Mapping):
+            continue
+        norm = _finite_float(contract.get("visual_vs_objective_caked_norm_deg"))
+        if norm is not None:
+            contract_norms.append(float(norm))
     surface_match_all = bool(rows and not mismatch_rows)
-    if surface_match_all:
+    hard_contract_failure = any(
+        reason != "source_authority_match_false"
+        for reason in source_authority_mismatch_reasons_by_count
+    )
+    if hard_contract_failure:
+        proof_status = "fail"
+        proof_failure_reason = "qr_fit_point_surface_contract_failed"
+    elif surface_match_all:
         proof_status = "pass"
         proof_failure_reason = None
     elif allow_visual_objective_surface_divergence:
@@ -2220,6 +2265,14 @@ def _single_step_checks(
         ),
         "source_authority_mismatch_row_count": int(len(source_authority_mismatch_rows)),
         "source_authority_mismatch_pair_ids": _pair_ids(source_authority_mismatch_rows),
+        "source_authority_mismatch_reasons_by_count": dict(
+            source_authority_mismatch_reasons_by_count
+        ),
+        "qr_fit_contract_status": (
+            "not_evaluated" if not contract_rows else "fail" if contract_failure_rows else "pass"
+        ),
+        "qr_fit_contract_failure_count": int(len(contract_failure_rows)),
+        "qr_fit_contract_failure_pair_ids": _pair_ids(contract_failure_rows),
         "saved_sim_refined_caked_used_false_for_all_rows": _all_rows_is(
             rows,
             "saved_sim_refined_caked_used",
@@ -2254,6 +2307,9 @@ def _single_step_checks(
         "visual_objective_surface_match_all_rows": surface_match_all,
         "max_visual_vs_objective_base_norm_deg": max(base_norms) if base_norms else None,
         "max_visual_vs_objective_trial_norm_deg": max(trial_norms) if trial_norms else None,
+        "max_visual_vs_objective_caked_norm_deg": (
+            max(contract_norms) if contract_norms else max(base_norms) if base_norms else None
+        ),
         "surface_mismatch_row_count": int(len(mismatch_rows)),
         "surface_mismatch_pair_ids": _pair_ids(mismatch_rows),
         "surface_warning_tolerance_deg": float(SURFACE_WARNING_TOL_DEG),
@@ -2720,10 +2776,20 @@ def run_coordinate_audit(
             "max_visual_vs_objective_trial_norm_deg": checks.get(
                 "max_visual_vs_objective_trial_norm_deg"
             ),
+            "max_visual_vs_objective_caked_norm_deg": checks.get(
+                "max_visual_vs_objective_caked_norm_deg"
+            ),
             "surface_mismatch_row_count": int(checks.get("surface_mismatch_row_count", 0) or 0),
             "surface_mismatch_pair_ids": list(checks.get("surface_mismatch_pair_ids", ()) or ()),
             "surface_warning_tolerance_deg": checks.get("surface_warning_tolerance_deg"),
             "surface_warning_row_count": int(checks.get("surface_warning_row_count", 0) or 0),
+            "qr_fit_contract_status": checks.get("qr_fit_contract_status"),
+            "qr_fit_contract_failure_count": int(
+                checks.get("qr_fit_contract_failure_count", 0) or 0
+            ),
+            "qr_fit_contract_failure_pair_ids": list(
+                checks.get("qr_fit_contract_failure_pair_ids", ()) or ()
+            ),
             "source_authority_match_all_caked_display_rows": bool(
                 checks.get("source_authority_match_all_caked_display_rows", False)
             ),
@@ -2732,6 +2798,9 @@ def run_coordinate_audit(
             ),
             "source_authority_mismatch_pair_ids": list(
                 checks.get("source_authority_mismatch_pair_ids", ()) or ()
+            ),
+            "source_authority_mismatch_reasons_by_count": dict(
+                checks.get("source_authority_mismatch_reasons_by_count", {}) or {}
             ),
             "proof_status": checks.get("proof_status"),
             "proof_failure_reason": checks.get("proof_failure_reason"),

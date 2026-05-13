@@ -10490,6 +10490,7 @@
       "native_detector_px_missing": 28
     },
     "max_visual_vs_objective_base_norm_deg": 0.0,
+    "max_visual_vs_objective_caked_norm_deg": 0.0,
     "max_visual_vs_objective_trial_norm_deg": 0.0,
     "objective_surface_used_for_residual_all_rows": true,
     "original_sim_caked_matches_fit_prediction_caked_deg_all_rows": true,
@@ -10498,11 +10499,15 @@
     "proof_failure_reason": null,
     "proof_status": "pass",
     "q_group_same_before_after_all_rows": true,
+    "qr_fit_contract_failure_count": 0,
+    "qr_fit_contract_failure_pair_ids": [],
+    "qr_fit_contract_status": "pass",
     "row_count": 7,
     "row_count_gt_zero": true,
     "saved_sim_refined_caked_used_false_for_all_rows": true,
     "source_authority_match_all_caked_display_rows": true,
     "source_authority_mismatch_pair_ids": [],
+    "source_authority_mismatch_reasons_by_count": {},
     "source_authority_mismatch_row_count": 0,
     "surface_mismatch_pair_ids": [],
     "surface_mismatch_row_count": 0,
@@ -10516,7 +10521,7 @@
     "Gamma": 5.0,
     "gamma": -5.0
   },
-  "created_at_unix": 1778645034.8638046,
+  "created_at_unix": 1778647265.4826257,
   "csv_path": "artifacts/geometry_fit_ladder/new4_single_iteration_visual_audit/bg0/new4_qr_single_iteration.csv",
   "delta_Gamma_deg": 5.0,
   "delta_gamma_deg": -5.0,
@@ -10628,6 +10633,7 @@
   "json_path": "artifacts/geometry_fit_ladder/new4_single_iteration_visual_audit/bg0/new4_qr_single_iteration.json",
   "max_angle_step_deg": 5.0,
   "max_visual_vs_objective_base_norm_deg": 0.0,
+  "max_visual_vs_objective_caked_norm_deg": 0.0,
   "max_visual_vs_objective_trial_norm_deg": 0.0,
   "params_mode": "base",
   "plotted_row_count": 0,
@@ -10640,6 +10646,9 @@
     "gamma": -85.57441418954383
   },
   "provider_pair_count": 7,
+  "qr_fit_contract_failure_count": 0,
+  "qr_fit_contract_failure_pair_ids": [],
+  "qr_fit_contract_status": "pass",
   "row_count": 7,
   "row_count_changed_between_base_and_trial": false,
   "rows": [
@@ -10659,6 +10668,7 @@
       ],
       "background_index": 0,
       "branch_same_before_after": true,
+      "caked_degrees_used_as_detector_px": false,
       "caked_frame_valid": true,
       "delta_Gamma_deg": 5.0,
       "delta_gamma_deg": -5.0,
@@ -10745,12 +10755,73 @@
         3
       ],
       "q_group_same_before_after": true,
+      "qr_fit_contract_failure_reasons": [],
+      "qr_fit_contract_status": "pass",
+      "qr_fit_point_surface_contract": {
+        "caked_degrees_used_as_detector_px": false,
+        "detector_projection_used_as_diagnostic_only": true,
+        "detector_projection_used_for_objective": false,
+        "gui_drawn_sim_caked_deg": [
+          9.25259605531369,
+          0.0
+        ],
+        "gui_drawn_sim_detector_display_px": null,
+        "gui_drawn_sim_source": "sim_visual_caked_deg",
+        "hkl": [
+          0,
+          0,
+          3
+        ],
+        "manual_target_caked_deg": [
+          9.315993437026432,
+          -1.2169320075511507
+        ],
+        "manual_target_detector_display_px": [
+          1455.246663897277,
+          1472.9363426415914
+        ],
+        "manual_target_detector_native_px": [
+          1472.9363426415914,
+          1543.753336102723
+        ],
+        "objective_sim_caked_deg": [
+          9.25259605531369,
+          0.0
+        ],
+        "objective_sim_detector_display_px": null,
+        "objective_sim_source": "sim_visual_caked_deg",
+        "objective_space": "caked_deg",
+        "objective_units": "deg",
+        "pair_id": "bg0:pair0",
+        "q_group_key": [
+          "q_group",
+          "primary",
+          0,
+          3
+        ],
+        "qr_fit_contract_failure_reasons": [],
+        "qr_fit_contract_status": "pass",
+        "saved_sim_refined_caked_used": false,
+        "source_authority_match": true,
+        "source_authority_mismatch_reason": null,
+        "source_branch_index": 0,
+        "source_row_index": 24,
+        "source_row_surface_kind": "caked_display",
+        "source_table_index": 10,
+        "visual_objective_surface_match": true,
+        "visual_vs_objective_caked_delta_deg": [
+          0.0,
+          0.0
+        ],
+        "visual_vs_objective_caked_norm_deg": 0.0
+      },
       "real_caked_projector_used": false,
       "recommended_next_fix": null,
       "saved_sim_refined_caked_used": false,
       "sim_nominal_detector_display_px_used_for_caked_projection": false,
       "single_step_status": "ok",
       "source_authority_match": true,
+      "source_authority_mismatch_reason": null,
       "source_branch_index": 0,
       "source_row_index": 24,
       "source_table_index": 10,
@@ -10813,6 +10884,7 @@
       ],
       "background_index": 0,
       "branch_same_before_after": true,
+      "caked_degrees_used_as_detector_px": false,
       "caked_frame_valid": true,
       "delta_Gamma_deg": 5.0,
       "delta_gamma_deg": -5.0,
@@ -10899,12 +10971,73 @@
         5
       ],
       "q_group_same_before_after": true,
+      "qr_fit_contract_failure_reasons": [],
+      "qr_fit_contract_status": "pass",
+      "qr_fit_point_surface_contract": {
+        "caked_degrees_used_as_detector_px": false,
+        "detector_projection_used_as_diagnostic_only": true,
+        "detector_projection_used_for_objective": false,
+        "gui_drawn_sim_caked_deg": [
+          35.3381587997551,
+          -18.25
+        ],
+        "gui_drawn_sim_detector_display_px": null,
+        "gui_drawn_sim_source": "sim_visual_caked_deg",
+        "hkl": [
+          -1,
+          0,
+          5
+        ],
+        "manual_target_caked_deg": [
+          29.29165538323298,
+          57.079369517688804
+        ],
+        "manual_target_detector_display_px": [
+          1099.4480074178325,
+          1367.2678777680248
+        ],
+        "manual_target_detector_native_px": [
+          1367.2678777680248,
+          1899.5519925821675
+        ],
+        "objective_sim_caked_deg": [
+          35.3381587997551,
+          -18.25
+        ],
+        "objective_sim_detector_display_px": null,
+        "objective_sim_source": "sim_visual_caked_deg",
+        "objective_space": "caked_deg",
+        "objective_units": "deg",
+        "pair_id": "bg0:pair1",
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          5
+        ],
+        "qr_fit_contract_failure_reasons": [],
+        "qr_fit_contract_status": "pass",
+        "saved_sim_refined_caked_used": false,
+        "source_authority_match": true,
+        "source_authority_mismatch_reason": null,
+        "source_branch_index": 0,
+        "source_row_index": 24,
+        "source_row_surface_kind": "caked_display",
+        "source_table_index": 105,
+        "visual_objective_surface_match": true,
+        "visual_vs_objective_caked_delta_deg": [
+          0.0,
+          0.0
+        ],
+        "visual_vs_objective_caked_norm_deg": 0.0
+      },
       "real_caked_projector_used": false,
       "recommended_next_fix": null,
       "saved_sim_refined_caked_used": false,
       "sim_nominal_detector_display_px_used_for_caked_projection": false,
       "single_step_status": "ok",
       "source_authority_match": true,
+      "source_authority_mismatch_reason": null,
       "source_branch_index": 0,
       "source_row_index": 24,
       "source_table_index": 105,
@@ -10967,6 +11100,7 @@
       ],
       "background_index": 0,
       "branch_same_before_after": true,
+      "caked_degrees_used_as_detector_px": false,
       "caked_frame_valid": true,
       "delta_Gamma_deg": 5.0,
       "delta_gamma_deg": -5.0,
@@ -11053,12 +11187,73 @@
         5
       ],
       "q_group_same_before_after": true,
+      "qr_fit_contract_failure_reasons": [],
+      "qr_fit_contract_status": "pass",
+      "qr_fit_point_surface_contract": {
+        "caked_degrees_used_as_detector_px": false,
+        "detector_projection_used_as_diagnostic_only": true,
+        "detector_projection_used_for_objective": false,
+        "gui_drawn_sim_caked_deg": [
+          20.28539186983084,
+          -139.7784058050912
+        ],
+        "gui_drawn_sim_detector_display_px": null,
+        "gui_drawn_sim_source": "sim_visual_caked_deg",
+        "hkl": [
+          -1,
+          0,
+          5
+        ],
+        "manual_target_caked_deg": [
+          29.861006834273667,
+          -59.073942507948104
+        ],
+        "manual_target_detector_display_px": [
+          1821.9936837473379,
+          1374.6236621955957
+        ],
+        "manual_target_detector_native_px": [
+          1374.6236621955957,
+          1177.0063162526621
+        ],
+        "objective_sim_caked_deg": [
+          20.28539186983084,
+          -139.7784058050912
+        ],
+        "objective_sim_detector_display_px": null,
+        "objective_sim_source": "sim_visual_caked_deg",
+        "objective_space": "caked_deg",
+        "objective_units": "deg",
+        "pair_id": "bg0:pair2",
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          5
+        ],
+        "qr_fit_contract_failure_reasons": [],
+        "qr_fit_contract_status": "pass",
+        "saved_sim_refined_caked_used": false,
+        "source_authority_match": true,
+        "source_authority_mismatch_reason": null,
+        "source_branch_index": 1,
+        "source_row_index": 24,
+        "source_row_surface_kind": "caked_display",
+        "source_table_index": 107,
+        "visual_objective_surface_match": true,
+        "visual_vs_objective_caked_delta_deg": [
+          0.0,
+          0.0
+        ],
+        "visual_vs_objective_caked_norm_deg": 0.0
+      },
       "real_caked_projector_used": false,
       "recommended_next_fix": null,
       "saved_sim_refined_caked_used": false,
       "sim_nominal_detector_display_px_used_for_caked_projection": false,
       "single_step_status": "ok",
       "source_authority_match": true,
+      "source_authority_mismatch_reason": null,
       "source_branch_index": 1,
       "source_row_index": 24,
       "source_table_index": 107,
@@ -11121,6 +11316,7 @@
       ],
       "background_index": 0,
       "branch_same_before_after": true,
+      "caked_degrees_used_as_detector_px": false,
       "caked_frame_valid": true,
       "delta_Gamma_deg": 5.0,
       "delta_gamma_deg": -5.0,
@@ -11207,12 +11403,73 @@
         10
       ],
       "q_group_same_before_after": true,
+      "qr_fit_contract_failure_reasons": [],
+      "qr_fit_contract_status": "pass",
+      "qr_fit_point_surface_contract": {
+        "caked_degrees_used_as_detector_px": false,
+        "detector_projection_used_as_diagnostic_only": true,
+        "detector_projection_used_for_objective": false,
+        "gui_drawn_sim_caked_deg": [
+          40.24211533226425,
+          114.25
+        ],
+        "gui_drawn_sim_detector_display_px": null,
+        "gui_drawn_sim_source": "sim_visual_caked_deg",
+        "hkl": [
+          -1,
+          0,
+          10
+        ],
+        "manual_target_caked_deg": [
+          40.14250893640562,
+          35.566836371696525
+        ],
+        "manual_target_detector_display_px": [
+          1084.7218823668009,
+          1081.4190956439036
+        ],
+        "manual_target_detector_native_px": [
+          1081.4190956439036,
+          1914.2781176331991
+        ],
+        "objective_sim_caked_deg": [
+          40.24211533226425,
+          114.25
+        ],
+        "objective_sim_detector_display_px": null,
+        "objective_sim_source": "sim_visual_caked_deg",
+        "objective_space": "caked_deg",
+        "objective_units": "deg",
+        "pair_id": "bg0:pair3",
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          10
+        ],
+        "qr_fit_contract_failure_reasons": [],
+        "qr_fit_contract_status": "pass",
+        "saved_sim_refined_caked_used": false,
+        "source_authority_match": true,
+        "source_authority_mismatch_reason": null,
+        "source_branch_index": 0,
+        "source_row_index": 24,
+        "source_row_surface_kind": "caked_display",
+        "source_table_index": 160,
+        "visual_objective_surface_match": true,
+        "visual_vs_objective_caked_delta_deg": [
+          0.0,
+          0.0
+        ],
+        "visual_vs_objective_caked_norm_deg": 0.0
+      },
       "real_caked_projector_used": false,
       "recommended_next_fix": null,
       "saved_sim_refined_caked_used": false,
       "sim_nominal_detector_display_px_used_for_caked_projection": false,
       "single_step_status": "ok",
       "source_authority_match": true,
+      "source_authority_mismatch_reason": null,
       "source_branch_index": 0,
       "source_row_index": 24,
       "source_table_index": 160,
@@ -11275,6 +11532,7 @@
       ],
       "background_index": 0,
       "branch_same_before_after": true,
+      "caked_degrees_used_as_detector_px": false,
       "caked_frame_valid": true,
       "delta_Gamma_deg": 5.0,
       "delta_gamma_deg": -5.0,
@@ -11361,12 +11619,73 @@
         10
       ],
       "q_group_same_before_after": true,
+      "qr_fit_contract_failure_reasons": [],
+      "qr_fit_contract_status": "pass",
+      "qr_fit_point_surface_contract": {
+        "caked_degrees_used_as_detector_px": false,
+        "detector_projection_used_as_diagnostic_only": true,
+        "detector_projection_used_for_objective": false,
+        "gui_drawn_sim_caked_deg": [
+          40.24211533226425,
+          42.75
+        ],
+        "gui_drawn_sim_detector_display_px": null,
+        "gui_drawn_sim_source": "sim_visual_caked_deg",
+        "hkl": [
+          -1,
+          0,
+          10
+        ],
+        "manual_target_caked_deg": [
+          40.85301991187549,
+          -37.56585507558714
+        ],
+        "manual_target_detector_display_px": [
+          1848.0465669515438,
+          1081.8154342999576
+        ],
+        "manual_target_detector_native_px": [
+          1081.8154342999576,
+          1150.9534330484562
+        ],
+        "objective_sim_caked_deg": [
+          40.24211533226425,
+          42.75
+        ],
+        "objective_sim_detector_display_px": null,
+        "objective_sim_source": "sim_visual_caked_deg",
+        "objective_space": "caked_deg",
+        "objective_units": "deg",
+        "pair_id": "bg0:pair4",
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          10
+        ],
+        "qr_fit_contract_failure_reasons": [],
+        "qr_fit_contract_status": "pass",
+        "saved_sim_refined_caked_used": false,
+        "source_authority_match": true,
+        "source_authority_mismatch_reason": null,
+        "source_branch_index": 1,
+        "source_row_index": 24,
+        "source_row_surface_kind": "caked_display",
+        "source_table_index": 167,
+        "visual_objective_surface_match": true,
+        "visual_vs_objective_caked_delta_deg": [
+          0.0,
+          0.0
+        ],
+        "visual_vs_objective_caked_norm_deg": 0.0
+      },
       "real_caked_projector_used": false,
       "recommended_next_fix": null,
       "saved_sim_refined_caked_used": false,
       "sim_nominal_detector_display_px_used_for_caked_projection": false,
       "single_step_status": "ok",
       "source_authority_match": true,
+      "source_authority_mismatch_reason": null,
       "source_branch_index": 1,
       "source_row_index": 24,
       "source_table_index": 167,
@@ -11429,6 +11748,7 @@
       ],
       "background_index": 0,
       "branch_same_before_after": true,
+      "caked_degrees_used_as_detector_px": false,
       "caked_frame_valid": true,
       "delta_Gamma_deg": 5.0,
       "delta_gamma_deg": -5.0,
@@ -11515,12 +11835,73 @@
         16
       ],
       "q_group_same_before_after": true,
+      "qr_fit_contract_failure_reasons": [],
+      "qr_fit_contract_status": "pass",
+      "qr_fit_point_surface_contract": {
+        "caked_degrees_used_as_detector_px": false,
+        "detector_projection_used_as_diagnostic_only": true,
+        "detector_projection_used_for_objective": false,
+        "gui_drawn_sim_caked_deg": [
+          57.4660806716561,
+          11.731359606813157
+        ],
+        "gui_drawn_sim_detector_display_px": null,
+        "gui_drawn_sim_source": "sim_visual_caked_deg",
+        "hkl": [
+          -1,
+          0,
+          16
+        ],
+        "manual_target_caked_deg": [
+          57.69427286954033,
+          11.731359606813157
+        ],
+        "manual_target_detector_display_px": [
+          1211.4533088564194,
+          434.57859171719974
+        ],
+        "manual_target_detector_native_px": [
+          434.5785917171996,
+          1787.5466911435806
+        ],
+        "objective_sim_caked_deg": [
+          57.4660806716561,
+          11.731359606813157
+        ],
+        "objective_sim_detector_display_px": null,
+        "objective_sim_source": "sim_visual_caked_deg",
+        "objective_space": "caked_deg",
+        "objective_units": "deg",
+        "pair_id": "bg0:pair5",
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          16
+        ],
+        "qr_fit_contract_failure_reasons": [],
+        "qr_fit_contract_status": "pass",
+        "saved_sim_refined_caked_used": false,
+        "source_authority_match": true,
+        "source_authority_mismatch_reason": null,
+        "source_branch_index": 0,
+        "source_row_index": 24,
+        "source_row_surface_kind": "caked_display",
+        "source_table_index": 215,
+        "visual_objective_surface_match": true,
+        "visual_vs_objective_caked_delta_deg": [
+          0.0,
+          0.0
+        ],
+        "visual_vs_objective_caked_norm_deg": 0.0
+      },
       "real_caked_projector_used": false,
       "recommended_next_fix": null,
       "saved_sim_refined_caked_used": false,
       "sim_nominal_detector_display_px_used_for_caked_projection": false,
       "single_step_status": "ok",
       "source_authority_match": true,
+      "source_authority_mismatch_reason": null,
       "source_branch_index": 0,
       "source_row_index": 24,
       "source_table_index": 215,
@@ -11583,6 +11964,7 @@
       ],
       "background_index": 0,
       "branch_same_before_after": true,
+      "caked_degrees_used_as_detector_px": false,
       "caked_frame_valid": true,
       "delta_Gamma_deg": 5.0,
       "delta_gamma_deg": -5.0,
@@ -11669,12 +12051,73 @@
         16
       ],
       "q_group_same_before_after": true,
+      "qr_fit_contract_failure_reasons": [],
+      "qr_fit_contract_status": "pass",
+      "qr_fit_point_surface_contract": {
+        "caked_degrees_used_as_detector_px": false,
+        "detector_projection_used_as_diagnostic_only": true,
+        "detector_projection_used_for_objective": false,
+        "gui_drawn_sim_caked_deg": [
+          57.4660806716561,
+          66.25
+        ],
+        "gui_drawn_sim_detector_display_px": null,
+        "gui_drawn_sim_source": "sim_visual_caked_deg",
+        "hkl": [
+          -1,
+          0,
+          16
+        ],
+        "manual_target_caked_deg": [
+          58.12173201702556,
+          -13.731087598395106
+        ],
+        "manual_target_detector_display_px": [
+          1738.867290909798,
+          424.44309281907954
+        ],
+        "manual_target_detector_native_px": [
+          424.4430928190797,
+          1260.132709090202
+        ],
+        "objective_sim_caked_deg": [
+          57.4660806716561,
+          66.25
+        ],
+        "objective_sim_detector_display_px": null,
+        "objective_sim_source": "sim_visual_caked_deg",
+        "objective_space": "caked_deg",
+        "objective_units": "deg",
+        "pair_id": "bg0:pair6",
+        "q_group_key": [
+          "q_group",
+          "primary",
+          1,
+          16
+        ],
+        "qr_fit_contract_failure_reasons": [],
+        "qr_fit_contract_status": "pass",
+        "saved_sim_refined_caked_used": false,
+        "source_authority_match": true,
+        "source_authority_mismatch_reason": null,
+        "source_branch_index": 1,
+        "source_row_index": 24,
+        "source_row_surface_kind": "caked_display",
+        "source_table_index": 213,
+        "visual_objective_surface_match": true,
+        "visual_vs_objective_caked_delta_deg": [
+          0.0,
+          0.0
+        ],
+        "visual_vs_objective_caked_norm_deg": 0.0
+      },
       "real_caked_projector_used": false,
       "recommended_next_fix": null,
       "saved_sim_refined_caked_used": false,
       "sim_nominal_detector_display_px_used_for_caked_projection": false,
       "single_step_status": "ok",
       "source_authority_match": true,
+      "source_authority_mismatch_reason": null,
       "source_branch_index": 1,
       "source_row_index": 24,
       "source_table_index": 213,
@@ -11727,6 +12170,7 @@
   "single_step_status": "ok",
   "source_authority_match_all_caked_display_rows": true,
   "source_authority_mismatch_pair_ids": [],
+  "source_authority_mismatch_reasons_by_count": {},
   "source_authority_mismatch_row_count": 0,
   "state_path": "artifacts/geometry_fit_gui_states/new4.json",
   "state_sha256": "4b59f99ca88f7dfc8be91eb9325dff61dac282782afa15c5eb4e718a671de129",

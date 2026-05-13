@@ -35415,6 +35415,21 @@ def test_optimizer_source_uses_dynamic_sim_visual_caked_deg() -> None:
         assert abs(float(row["source_delta_vs_dynamic_phi_deg_wrapped"])) <= 1.0e-6
 
 
+def test_caked_gui_drawn_sim_source_is_recorded_for_geometry_fit() -> None:
+    _module, rows = _new4_coordinate_audit_schema_rows()
+    allowed_sources = {
+        "sim_visual_caked_deg",
+        "optimizer_simulated_source_two_theta_phi",
+        "point_only_detector_projection",
+    }
+
+    assert rows
+    for row in rows:
+        assert row["gui_drawn_sim_caked_source"] in allowed_sources
+        assert row["gui_drawn_sim_caked_source"] == "sim_visual_caked_deg"
+        assert row["gui_drawn_sim_caked_source"] == row["optimizer_source_source"]
+
+
 def _coordinate_audit_perturbed_rows(source_shift: tuple[float, float]):
     module, base_rows = _new4_coordinate_audit_schema_rows()
     rows = copy.deepcopy(base_rows)
