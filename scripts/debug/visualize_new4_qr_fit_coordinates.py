@@ -27,12 +27,12 @@ from scripts.debug import validate_geometry_preflight_rebind as preflight  # noq
 
 
 DEFAULT_STATE_PATH = REPO_ROOT / "artifacts" / "geometry_fit_gui_states" / "new4.json"
-DEFAULT_OUTPUT_ROOT = REPO_ROOT / "artifacts" / "geometry_fit_ladder" / "new4_coordinate_audit"
+DEFAULT_OUTPUT_ROOT = REPO_ROOT / "artifacts" / "geometry_fit_recovery" / "latest"
 REPORT_NAME = "new4_qr_fit_coordinates.json"
 PLOT_NAME = "new4_qr_fit_coordinates.png"
-SINGLE_STEP_REPORT_NAME = "new4_qr_single_iteration.json"
-SINGLE_STEP_PLOT_NAME = "new4_qr_single_iteration.png"
-SINGLE_STEP_CSV_NAME = "new4_qr_single_iteration.csv"
+SINGLE_STEP_REPORT_NAME = "01_single_step_qr_coordinate_audit.json"
+SINGLE_STEP_PLOT_NAME = "01_single_step_qr_coordinate_audit.png"
+SINGLE_STEP_CSV_NAME = "01_single_step_qr_coordinate_audit.csv"
 EXACT_TOL_DEG = 1.0e-6
 DETECTOR_FRAME_TOL_PX = 1.0e-6
 SURFACE_MATCH_TOL_DEG = 1.0e-6
@@ -2200,9 +2200,13 @@ def _single_step_checks(
         row for row in source_authority_rows if row.get("source_authority_match") is not True
     ]
     contract_rows = [row for row in rows if row.get("qr_fit_contract_status") is not None]
-    contract_failure_rows = [
-        row for row in contract_rows if row.get("qr_fit_contract_status") != "pass"
-    ]
+    contract_failure_rows = [row for row in rows if row.get("qr_fit_contract_status") != "pass"]
+    if not rows:
+        contract_status = "not_evaluated"
+    elif contract_failure_rows:
+        contract_status = "fail"
+    else:
+        contract_status = "pass"
     source_authority_mismatch_reasons_by_count: dict[str, int] = {}
     for row in contract_failure_rows:
         reason = str(row.get("source_authority_mismatch_reason") or "").strip()
@@ -2221,11 +2225,7 @@ def _single_step_checks(
         if norm is not None:
             contract_norms.append(float(norm))
     surface_match_all = bool(rows and not mismatch_rows)
-    hard_contract_failure = any(
-        reason != "source_authority_match_false"
-        for reason in source_authority_mismatch_reasons_by_count
-    )
-    if hard_contract_failure:
+    if contract_status == "fail":
         proof_status = "fail"
         proof_failure_reason = "qr_fit_point_surface_contract_failed"
     elif surface_match_all:
@@ -2268,9 +2268,7 @@ def _single_step_checks(
         "source_authority_mismatch_reasons_by_count": dict(
             source_authority_mismatch_reasons_by_count
         ),
-        "qr_fit_contract_status": (
-            "not_evaluated" if not contract_rows else "fail" if contract_failure_rows else "pass"
-        ),
+        "qr_fit_contract_status": contract_status,
         "qr_fit_contract_failure_count": int(len(contract_failure_rows)),
         "qr_fit_contract_failure_pair_ids": _pair_ids(contract_failure_rows),
         "saved_sim_refined_caked_used_false_for_all_rows": _all_rows_is(
@@ -2319,19 +2317,35 @@ def _single_step_checks(
     }
 
 
-def _checks_pass(checks: Mapping[str, object], *, perturb_applied: bool) -> bool:
+def _checks_pass(
+    checks: Mapping[str, object],
+    *,
+    perturb_applied: bool,
+    allow_visual_objective_surface_divergence: bool = False,
+) -> bool:
     detector_diagnostic_keys = {
         "plotted_row_count_gt_zero",
         "all_plotted_detector_display_frame_valid",
         "all_plotted_caked_frame_valid",
         "all_plotted_real_caked_projector_used",
     }
+    surface_diagnostic_keys = (
+        {"visual_objective_surface_match_all_rows"}
+        if allow_visual_objective_surface_divergence
+        else set()
+    )
     for key, value in checks.items():
         if key in detector_diagnostic_keys:
+            continue
+        if key in surface_diagnostic_keys:
             continue
         if key == "source_moves_under_perturbation" and not perturb_applied:
             continue
         if key == "pixel_residual_path_used":
+            continue
+        if key == "qr_fit_contract_status":
+            if value != "pass":
+                return False
             continue
         if isinstance(value, bool) and not value:
             return False
@@ -2736,11 +2750,18 @@ def run_coordinate_audit(
                 allow_visual_objective_surface_divergence
             ),
         )
-        status = "pass" if _checks_pass(checks, perturb_applied=False) else "fail"
+        checks_pass = _checks_pass(
+            checks,
+            perturb_applied=False,
+            allow_visual_objective_surface_divergence=bool(
+                allow_visual_objective_surface_divergence
+            ),
+        )
+        status = "pass" if checks_pass else "fail"
         proof_status = str(checks.get("proof_status") or "")
         if proof_status == "fail":
             status = "fail"
-        elif proof_status == "diagnostic_only":
+        elif proof_status == "diagnostic_only" and checks_pass:
             status = "diagnostic_only"
         report_path = output_root / SINGLE_STEP_REPORT_NAME
         plot_path = output_root / SINGLE_STEP_PLOT_NAME
@@ -2892,7 +2913,10 @@ def run_coordinate_audit(
         before_rows_for_report = base_rows
     status = (
         "pass"
-        if _checks_pass(checks, perturb_applied=bool(perturb_info.get("applied", False)))
+        if _checks_pass(
+            checks,
+            perturb_applied=bool(perturb_info.get("applied", False)),
+        )
         else "fail"
     )
     report_path = output_root / REPORT_NAME

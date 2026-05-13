@@ -772,14 +772,14 @@ python scripts/debug/visualize_new4_qr_fit_coordinates.py \
   --active-vars gamma,Gamma \
   --max-angle-step-deg 5 \
   --fd-step-deg 0.05 \
-  --output-root artifacts/geometry_fit_ladder/new4_single_iteration_visual_audit/bg0
+  --output-root artifacts/geometry_fit_recovery/latest
 ```
 
 Outputs:
 
-- `new4_qr_single_iteration.json` is the authoritative row-level proof
-- `new4_qr_single_iteration.csv` mirrors the JSON row table for quick inspection
-- `new4_qr_single_iteration.png` is diagnostic visual evidence only
+- `01_single_step_qr_coordinate_audit.json` is the authoritative row-level proof
+- `01_single_step_qr_coordinate_audit.csv` mirrors the JSON row table for quick inspection
+- `01_single_step_qr_coordinate_audit.png` is diagnostic visual evidence only
 
 The JSON records every row identity, detector display/native coordinate,
 caked coordinate, live-projector source, residual delta, validity flag, and
@@ -793,16 +793,20 @@ Each row also records the GUI-drawn caked simulation source through
 `sim_visual_caked_deg`, and it matches the optimizer source for all fitted QR
 rows.
 
-Proof mode is strict by default. `proof_status` is `pass` only when every GUI
+Proof mode is strict by default. `proof_status` is `pass` only when every row
+has an evaluated QR fit surface contract, each contract passes, and every GUI
 visual simulation QR point and optimizer objective QR point share the same
-caked coordinate surface within `1e-6` degrees. When surfaces diverge,
-the JSON must report `proof_status="fail"` with
+caked coordinate surface within `1e-6` degrees. Contract failure or a missing
+contract status always reports `proof_status="fail"` with
+`proof_failure_reason="qr_fit_point_surface_contract_failed"`. Surface-only
+divergence without a contract failure reports
 `proof_failure_reason="visual_simulation_surface_differs_from_objective_surface"`.
 The caked panel plots objective base/trial simulation points as square/triangle
 markers, and plots divergent GUI visual points separately as diagnostic
 diamond/x markers. Use `--allow-visual-objective-surface-divergence` only for
-diagnostic artifacts; it marks the artifact `diagnostic_only` and is not a
-passing proof.
+diagnostic artifacts; it can mark the artifact `diagnostic_only` only when no
+non-surface gate failed. Identity, row-count, branch/hkl, bounded-step, and
+contract failures still leave the final status as `fail`.
 
 Detector panel coordinates are display pixels only. Caked-degree sources such
 as `fit_prediction_caked_deg`, `optimizer_simulated_source_two_theta_phi`, and
@@ -832,6 +836,10 @@ python -m ra_sim.dev check
 The full manual-selection helper file is slow in local desktop runs; use the
 targeted manual QR helper slice first when validating this debug mode, then run
 the full file when time permits.
+
+Generated files under `artifacts/geometry_fit_recovery/` are local diagnostic
+output and are ignored by git unless a future task explicitly asks to version a
+specific artifact.
 
 ## Weighted-event diffraction status
 

@@ -4407,6 +4407,17 @@ def test_single_step_qr_visual_audit_does_not_call_full_optimizer(monkeypatch) -
     assert result["single_step_status"] in {"ok", "insensitive_to_gamma_Gamma"}
 
 
+def test_single_step_qr_visual_audit_uses_recovery_artifact_names() -> None:
+    module = _load_new4_coordinate_audit_module()
+
+    assert module.DEFAULT_OUTPUT_ROOT == (
+        module.REPO_ROOT / "artifacts" / "geometry_fit_recovery" / "latest"
+    )
+    assert module.SINGLE_STEP_REPORT_NAME == "01_single_step_qr_coordinate_audit.json"
+    assert module.SINGLE_STEP_PLOT_NAME == "01_single_step_qr_coordinate_audit.png"
+    assert module.SINGLE_STEP_CSV_NAME == "01_single_step_qr_coordinate_audit.csv"
+
+
 def test_single_step_qr_visual_audit_bounds_gamma_Gamma_to_five_deg() -> None:
     module = _load_new4_coordinate_audit_module()
     request = _single_step_qr_request(
@@ -4760,9 +4771,7 @@ def test_single_step_qr_visual_audit_fails_when_visual_sim_and_objective_project
     assert row["visual_objective_base_surface_match"] is False
     assert row["visual_vs_objective_base_norm_deg"] > 70.0
     assert report["proof_status"] == "fail"
-    assert (
-        report["proof_failure_reason"] == "visual_simulation_surface_differs_from_objective_surface"
-    )
+    assert report["proof_failure_reason"] == "qr_fit_point_surface_contract_failed"
 
 
 def test_single_step_qr_visual_audit_reports_qr_fit_contract_failure() -> None:
@@ -4798,6 +4807,117 @@ def test_single_step_qr_visual_audit_reports_qr_fit_contract_failure() -> None:
         "declared_sim_visual_caked_but_objective_used_point_only_detector_projection": 1
     }
     assert report["proof_status"] == "fail"
+
+
+def test_single_step_qr_visual_audit_proof_status_fails_when_contract_status_fails_even_if_surfaces_match() -> (
+    None
+):
+    module = _load_new4_coordinate_audit_module()
+    request = _single_step_qr_request(source_display_offset=100.0)
+    before = _single_step_surface_row(
+        visual_caked=(40.242, 114.520),
+        objective_caked=(40.242, 114.520),
+        detector_display_source="fit_prediction_caked_deg",
+    )
+    after = dict(before)
+
+    rows = _single_step_surface_audit_rows(module, request, before, after)
+    row = rows[0]
+    report = module._single_step_checks(
+        rows,
+        delta_gamma_deg=0.0,
+        delta_Gamma_deg=0.0,
+        max_angle_step_deg=5.0,
+    )
+
+    assert row["qr_fit_contract_status"] == "fail"
+    assert row["caked_degrees_used_as_detector_px"] is True
+    assert report["visual_objective_surface_match_all_rows"] is True
+    assert report["proof_status"] == "fail"
+    assert report["proof_failure_reason"] == "qr_fit_point_surface_contract_failed"
+
+
+def test_single_step_qr_visual_audit_diagnostic_mode_does_not_mask_non_surface_failures() -> None:
+    module = _load_new4_coordinate_audit_module()
+    request = _single_step_qr_request(source_display_offset=100.0)
+    before = _single_step_surface_row(
+        visual_caked=(40.242, 114.520),
+        objective_caked=(69.251, -130.750),
+        detector_display_source="fit_prediction_caked_deg",
+    )
+    after = dict(before)
+
+    rows = _single_step_surface_audit_rows(module, request, before, after)
+    report = module._single_step_checks(
+        rows,
+        delta_gamma_deg=0.0,
+        delta_Gamma_deg=0.0,
+        max_angle_step_deg=5.0,
+        allow_visual_objective_surface_divergence=True,
+    )
+
+    assert rows[0]["qr_fit_contract_status"] == "fail"
+    assert rows[0]["caked_degrees_used_as_detector_px"] is True
+    assert report["visual_objective_surface_match_all_rows"] is False
+    assert report["proof_status"] == "fail"
+    assert report["proof_failure_reason"] == "qr_fit_point_surface_contract_failed"
+
+
+def test_single_step_qr_visual_audit_fails_when_contract_status_missing() -> None:
+    module = _load_new4_coordinate_audit_module()
+    request = _single_step_qr_request(source_display_offset=100.0)
+    before = _single_step_surface_row(
+        visual_caked=(40.242, 114.520),
+        objective_caked=(40.242, 114.520),
+    )
+    after = dict(before)
+
+    rows = _single_step_surface_audit_rows(module, request, before, after)
+    rows[0].pop("qr_fit_contract_status")
+    rows[0].pop("qr_fit_point_surface_contract")
+    report = module._single_step_checks(
+        rows,
+        delta_gamma_deg=0.0,
+        delta_Gamma_deg=0.0,
+        max_angle_step_deg=5.0,
+    )
+
+    assert report["visual_objective_surface_match_all_rows"] is True
+    assert report["qr_fit_contract_status"] == "fail"
+    assert report["qr_fit_contract_failure_count"] == 1
+    assert report["proof_status"] == "fail"
+    assert module._checks_pass(report, perturb_applied=False) is False
+
+
+def test_single_step_qr_visual_audit_diagnostic_mode_keeps_non_surface_status_failing() -> None:
+    module = _load_new4_coordinate_audit_module()
+    request = _single_step_qr_request(source_display_offset=100.0)
+    before = _single_step_surface_row(
+        visual_caked=(40.242, 114.520),
+        objective_caked=(69.251, -130.750),
+    )
+    after = dict(before)
+
+    rows = _single_step_surface_audit_rows(module, request, before, after)
+    rows[0]["qr_fit_contract_status"] = "pass"
+    report = module._single_step_checks(
+        rows,
+        delta_gamma_deg=10.0,
+        delta_Gamma_deg=0.0,
+        max_angle_step_deg=5.0,
+        allow_visual_objective_surface_divergence=True,
+    )
+
+    assert report["proof_status"] == "diagnostic_only"
+    assert report["delta_gamma_bounded"] is False
+    assert (
+        module._checks_pass(
+            report,
+            perturb_applied=False,
+            allow_visual_objective_surface_divergence=True,
+        )
+        is False
+    )
 
 
 def test_single_step_qr_visual_audit_uses_objective_surface_for_plotted_caked_points() -> None:

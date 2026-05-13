@@ -9,6 +9,24 @@ Last updated: 2026-05-13
 
 ## Current status
 
+- 2026-05-13 proof-status hardening completed. The single-step QR coordinate
+  audit now fails closed when any row has a failing or missing QR fit contract
+  status, so `proof_status=pass` cannot coexist with a failed contract. The
+  `--allow-visual-objective-surface-divergence` diagnostic flag no longer masks
+  non-surface failures: row-count, identity, branch/hkl, bounded `gamma/Gamma`,
+  and contract failures keep the final artifact status at `fail`. Generated
+  recovery artifacts under `artifacts/geometry_fit_recovery/` are ignored as
+  local diagnostic output. Bug/error status: the proof image/JSON gate no longer
+  presents a human approval artifact as pass/diagnostic when the contract layer
+  failed. Feature status: this is an additive debug-artifact hardening slice; no
+  fit thresholds, manual picks, GUI state, config keys, saved-state schema, or
+  accepted geometry outputs changed. No deprecation or migration is required.
+  Validation: the focused QR contract/single-step audit slice passed
+  (`23 passed`), the broader QR/sensitivity target passed (`37 passed`), the
+  full geometry fitting file passed (`260 passed`), the full GUI geometry-fit
+  workflow file passed (`635 passed, 2 skipped`), the manual fit-space
+  classification file passed (`9 passed`), and `python -m ra_sim.dev check`
+  passed.
 - 2026-05-13 sensitivity ladder slice completed. The dynamic caked QR objective
   sensitivity diagnostic no longer classifies `gamma`/`Gamma` from a
   sub-0.1-degree probe alone; angular fit variables are probed at
@@ -70,8 +88,9 @@ Last updated: 2026-05-13
   coordinate visualizer now has a dry-run `--single-step-detector-angle-audit`
   mode that evaluates base dynamic residuals, finite-differences only
   `gamma,Gamma`, applies one clipped least-squares trial step, and writes
-  `new4_qr_single_iteration.json`, `.csv`, and one two-panel `.png` without
-  calling the full geometry optimizer, updating GUI state, or accepting geometry.
+  `01_single_step_qr_coordinate_audit.json`, `.csv`, and one two-panel `.png`
+  under `artifacts/geometry_fit_recovery/latest` without calling the full
+  geometry optimizer, updating GUI state, or accepting geometry.
 - Bug/error fixed: the proof no longer trusts stale saved `sim_refined_caked`
   fields for simulated QR points. Original and trial simulation caked points
   come from the live caked objective surface. Caked-display QR source rows now
