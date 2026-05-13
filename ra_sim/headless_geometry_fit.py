@@ -1868,14 +1868,17 @@ def _headless_progress_pair(value: object) -> list[float] | None:
     return [float(first), float(second)]
 
 
-def _headless_live_record_display_alias_is_caked(record: Mapping[str, object]) -> bool:
-    if _headless_progress_pair(record.get("fit_prediction_detector_display_px")) is None:
-        return False
+def _headless_live_record_caked_display_alias(
+    record: Mapping[str, object],
+) -> list[float] | None:
+    alias = _headless_progress_pair(record.get("fit_prediction_detector_display_px"))
+    if alias is None:
+        return None
     source = str(record.get("fit_prediction_detector_display_px_source") or "").strip()
     if source in _HEADLESS_CAKED_DEG_DETECTOR_DISPLAY_SOURCES:
-        return True
+        return alias
     if _headless_progress_pair(record.get("fit_prediction_detector_native_px")) is not None:
-        return False
+        return None
     simulated_detector_missing = (
         _headless_progress_float(record.get("simulated_detector_x")) is None
         or _headless_progress_float(record.get("simulated_detector_y")) is None
@@ -1886,21 +1889,23 @@ def _headless_live_record_display_alias_is_caked(record: Mapping[str, object]) -
         _headless_progress_float(record.get("simulated_two_theta_deg")) is not None
         and _headless_progress_float(record.get("simulated_phi_deg")) is not None
     )
-    return bool(simulated_detector_missing and simulated_caked_present)
+    if simulated_detector_missing and simulated_caked_present:
+        return alias
+    return None
 
 
 def _headless_sanitize_live_cache_record(record: object) -> object:
     if not isinstance(record, Mapping):
         return record
     sanitized = dict(record)
-    if not _headless_live_record_display_alias_is_caked(sanitized):
+    alias = _headless_live_record_caked_display_alias(sanitized)
+    if alias is None:
         return sanitized
-    alias = _headless_progress_pair(sanitized.get("fit_prediction_detector_display_px"))
     sanitized["fit_prediction_detector_display_px"] = None
     sanitized["fit_prediction_detector_display_px_unavailable_reason"] = (
         "caked_degrees_not_detector_display_px"
     )
-    if alias is not None and "fit_prediction_caked_deg" not in sanitized:
+    if "fit_prediction_caked_deg" not in sanitized:
         sanitized["fit_prediction_caked_deg"] = alias
         sanitized["fit_prediction_caked_deg_source"] = "fit_prediction_detector_display_px"
     return sanitized
@@ -2554,8 +2559,7 @@ def _write_headless_geometry_fit_recovery_artifacts(
         "json_authoritative": True,
         "png_diagnostic_only": True,
         "recovery_run_label": report_label,
-        "input_state_path": state_provenance["input_state_path"],
-        "input_state_sha256": state_provenance["input_state_sha256"],
+        **state_provenance,
         "full_fit_success": bool(accepted),
         "geometry_updated": bool(accepted),
         "gamma_before": initial_params.get("gamma"),
@@ -2605,8 +2609,7 @@ def _write_headless_geometry_fit_recovery_artifacts(
         worst_report = {
             "json_authoritative": True,
             "png_diagnostic_only": True,
-            "input_state_path": state_provenance["input_state_path"],
-            "input_state_sha256": state_provenance["input_state_sha256"],
+            **state_provenance,
             "failure_classification": failure_classification,
             "row_count": int(len(worst_rows)),
             "rows": worst_rows,
@@ -2633,8 +2636,7 @@ def _write_headless_geometry_fit_recovery_artifacts(
     artifact_payload = {
         "geometry_fit_recovery_artifact_status": "pass",
         "geometry_fit_recovery_run_label": report_label,
-        "input_state_path": state_provenance["input_state_path"],
-        "input_state_sha256": state_provenance["input_state_sha256"],
+        **state_provenance,
         "geometry_fit_recovery_required_pngs": required_pngs,
         "geometry_fit_recovery_artifacts": artifact_paths,
         "single_step_status": single_step_report.get("status"),
