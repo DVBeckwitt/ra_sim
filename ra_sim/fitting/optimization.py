@@ -6869,10 +6869,12 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             ).strip()
             or None
         )
+        manual_target_caked_deg = [float(measured_two_theta), float(measured_phi)]
+        objective_sim_caked_deg = [float(sim_two_theta), float(sim_phi)]
         contract_row = {
             **diag,
             "pair_id": pair_id,
-            "manual_target_caked_deg": [float(measured_two_theta), float(measured_phi)],
+            "manual_target_caked_deg": manual_target_caked_deg,
             "gui_drawn_sim_caked_deg": (
                 [float(gui_drawn_sim_caked[0]), float(gui_drawn_sim_caked[1])]
                 if gui_drawn_sim_caked is not None
@@ -6889,19 +6891,13 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         }
         contract_prediction = {
             **fit_prediction,
-            "objective_sim_caked_deg": [float(sim_two_theta), float(sim_phi)],
-            "optimizer_simulated_source_two_theta_phi": [
-                float(sim_two_theta),
-                float(sim_phi),
-            ],
+            "objective_sim_caked_deg": objective_sim_caked_deg,
+            "optimizer_simulated_source_two_theta_phi": objective_sim_caked_deg,
             "objective_residual_units": "deg",
         }
         contract_observed = {
-            "manual_target_caked_deg": [float(measured_two_theta), float(measured_phi)],
-            "optimizer_measured_anchor_two_theta_phi": [
-                float(measured_two_theta),
-                float(measured_phi),
-            ],
+            "manual_target_caked_deg": manual_target_caked_deg,
+            "optimizer_measured_anchor_two_theta_phi": manual_target_caked_deg,
         }
         qr_fit_contract = _build_qr_fit_point_surface_contract(
             row=contract_row,
@@ -18695,6 +18691,16 @@ def _build_qr_fit_point_surface_contract(
     if surface_kind == "caked_display" and detector_projection_used_for_objective:
         failure_reasons.append("caked_display_row_used_detector_projection_for_objective")
 
+    gui_drawn_source = str(
+        _first_mapping_value(
+            "gui_drawn_sim_caked_source",
+            row,
+            prediction,
+        )
+        or _first_mapping_value("dynamic_source_source", row, prediction)
+        or "sim_visual_caked_deg"
+    )
+
     return {
         "pair_id": copy.deepcopy(_first_mapping_value("pair_id", row, prediction, observed)),
         "q_group_key": copy.deepcopy(_first_mapping_value("q_group_key", row, prediction)),
@@ -18713,24 +18719,8 @@ def _build_qr_fit_point_surface_contract(
         "manual_target_detector_native_px": _jsonable_pair(manual_target_native),
         "gui_drawn_sim_caked_deg": _jsonable_pair(gui_drawn_caked),
         "gui_drawn_sim_detector_display_px": _jsonable_pair(gui_drawn_display),
-        "gui_drawn_sim_caked_source": str(
-            _first_mapping_value(
-                "gui_drawn_sim_caked_source",
-                row,
-                prediction,
-            )
-            or _first_mapping_value("dynamic_source_source", row, prediction)
-            or "sim_visual_caked_deg"
-        ),
-        "gui_drawn_sim_source": str(
-            _first_mapping_value(
-                "gui_drawn_sim_caked_source",
-                row,
-                prediction,
-            )
-            or _first_mapping_value("dynamic_source_source", row, prediction)
-            or "sim_visual_caked_deg"
-        ),
+        "gui_drawn_sim_caked_source": gui_drawn_source,
+        "gui_drawn_sim_source": gui_drawn_source,
         "objective_sim_caked_deg": _jsonable_pair(objective_caked),
         "objective_sim_detector_display_px": _jsonable_pair(objective_display),
         "objective_sim_source": objective_source or None,

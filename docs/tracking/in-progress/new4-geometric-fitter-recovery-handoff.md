@@ -9,6 +9,17 @@ Last updated: 2026-05-13
 
 ## Current status
 
+- 2026-05-13 maintenance cleanup: full-fit QR contract assembly now reuses the
+  already-normalized manual and objective caked point payloads, and the contract
+  helper resolves the GUI-drawn simulation source once before writing both
+  legacy-compatible source fields. Bug/error/feature status is unchanged: this
+  is a behavior-preserving cleanup of the diagnostic contract path, with no
+  CLI, config, saved-state, artifact-schema, deprecation, migration, or launch
+  impact. The narrow QR contract/audit test slice and `python -m ra_sim.dev
+  check` passed after formatting. A longer New4 headless gamma/Gamma recheck
+  was interrupted before completion, so no new runtime artifact status is
+  claimed from that aborted run and generated recovery artifacts remain
+  unversioned.
 - 2026-05-13 full gamma/Gamma headless gate reproduced. The New4 fit now
   exposes top-level QR contract fields in the public point-match summary:
   `qr_fit_expected_count=7`, `qr_fit_resolved_count=7`,

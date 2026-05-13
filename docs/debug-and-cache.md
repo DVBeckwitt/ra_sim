@@ -742,6 +742,13 @@ Status as of 2026-05-13:
   `objective_param_sensitivity_status="sensitive"`. The fit remains correctly
   rejected as `branch_source_pairing_mismatch`, with worst rows listed, rather
   than as a source-surface mismatch.
+- full-fit maintenance status: the contract assembly now reuses the canonical
+  manual/objective caked point payloads and resolves the GUI-drawn simulation
+  source once before writing both source fields. This preserves the existing
+  diagnostic schema and has no migration, deprecation, config, saved-state, or
+  launch impact. A later long New4 headless recheck was interrupted before
+  completion, so generated recovery artifacts from that attempt are diagnostic
+  scratch output only and are not versioned.
 
 Run:
 
