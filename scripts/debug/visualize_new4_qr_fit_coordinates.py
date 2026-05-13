@@ -1787,6 +1787,27 @@ def _surface_match(
     return bool(norm is not None and float(norm) <= SURFACE_MATCH_TOL_DEG)
 
 
+def _finite_row_values(rows: Sequence[Mapping[str, object]], key: str) -> list[float]:
+    values: list[float] = []
+    for row in rows:
+        value = _finite_float(row.get(key))
+        if value is not None:
+            values.append(float(value))
+    return values
+
+
+def _all_rows_truthy(rows: Sequence[Mapping[str, object]], key: str) -> bool:
+    return bool(rows and all(bool(row.get(key)) for row in rows))
+
+
+def _all_rows_is(rows: Sequence[Mapping[str, object]], key: str, expected: object) -> bool:
+    return bool(rows and all(row.get(key) is expected for row in rows))
+
+
+def _pair_ids(rows: Sequence[Mapping[str, object]]) -> list[str]:
+    return [str(row.get("pair_id")) for row in rows if row.get("pair_id") is not None]
+
+
 def _detector_display_source_is_caked(row: Mapping[str, object]) -> bool:
     source = str(row.get("fit_prediction_detector_display_px_source") or "").strip().lower()
     return source in CAKED_DEG_DETECTOR_DISPLAY_SOURCES
@@ -2159,16 +2180,8 @@ def _single_step_checks(
     source_authority_mismatch_rows = [
         row for row in source_authority_rows if row.get("source_authority_match") is not True
     ]
-    base_norms = [
-        float(row.get("visual_vs_objective_base_norm_deg"))
-        for row in rows
-        if _finite_float(row.get("visual_vs_objective_base_norm_deg")) is not None
-    ]
-    trial_norms = [
-        float(row.get("visual_vs_objective_trial_norm_deg"))
-        for row in rows
-        if _finite_float(row.get("visual_vs_objective_trial_norm_deg")) is not None
-    ]
+    base_norms = _finite_row_values(rows, "visual_vs_objective_base_norm_deg")
+    trial_norms = _finite_row_values(rows, "visual_vs_objective_trial_norm_deg")
     surface_match_all = bool(rows and not mismatch_rows)
     if surface_match_all:
         proof_status = "pass"
@@ -2182,55 +2195,54 @@ def _single_step_checks(
     return {
         "row_count_gt_zero": bool(row_count > 0),
         "plotted_row_count_gt_zero": bool(plotted_count > 0),
-        "all_plotted_detector_display_frame_valid": bool(
-            plotted and all(bool(row.get("detector_display_frame_valid")) for row in plotted)
+        "all_plotted_detector_display_frame_valid": _all_rows_truthy(
+            plotted,
+            "detector_display_frame_valid",
         ),
-        "all_plotted_caked_frame_valid": bool(
-            plotted and all(bool(row.get("caked_frame_valid")) for row in plotted)
+        "all_plotted_caked_frame_valid": _all_rows_truthy(plotted, "caked_frame_valid"),
+        "all_plotted_real_caked_projector_used": _all_rows_truthy(
+            plotted,
+            "real_caked_projector_used",
         ),
-        "all_plotted_real_caked_projector_used": bool(
-            plotted and all(bool(row.get("real_caked_projector_used")) for row in plotted)
+        "all_rows_caked_frame_valid": _all_rows_truthy(rows, "caked_frame_valid"),
+        "objective_surface_used_for_residual_all_rows": _all_rows_is(
+            rows,
+            "objective_surface_used_for_residual",
+            True,
         ),
-        "all_rows_caked_frame_valid": bool(
-            rows and all(bool(row.get("caked_frame_valid")) for row in rows)
-        ),
-        "objective_surface_used_for_residual_all_rows": bool(
-            rows and all(row.get("objective_surface_used_for_residual") is True for row in rows)
-        ),
-        "visual_surface_used_for_residual_false_all_rows": bool(
-            rows and all(row.get("visual_surface_used_for_residual") is False for row in rows)
+        "visual_surface_used_for_residual_false_all_rows": _all_rows_is(
+            rows,
+            "visual_surface_used_for_residual",
+            False,
         ),
         "source_authority_match_all_caked_display_rows": bool(
             source_authority_rows and not source_authority_mismatch_rows
         ),
         "source_authority_mismatch_row_count": int(len(source_authority_mismatch_rows)),
-        "source_authority_mismatch_pair_ids": [
-            str(row.get("pair_id"))
-            for row in source_authority_mismatch_rows
-            if row.get("pair_id") is not None
-        ],
-        "saved_sim_refined_caked_used_false_for_all_rows": bool(
-            rows and all(row.get("saved_sim_refined_caked_used") is False for row in rows)
+        "source_authority_mismatch_pair_ids": _pair_ids(source_authority_mismatch_rows),
+        "saved_sim_refined_caked_used_false_for_all_rows": _all_rows_is(
+            rows,
+            "saved_sim_refined_caked_used",
+            False,
         ),
         "delta_gamma_bounded": bool(abs(float(delta_gamma_deg)) <= float(max_angle_step_deg)),
         "delta_Gamma_bounded": bool(abs(float(delta_Gamma_deg)) <= float(max_angle_step_deg)),
-        "identity_same_before_after_all_rows": bool(
-            rows and all(bool(row.get("identity_same_before_after")) for row in rows)
+        "identity_same_before_after_all_rows": _all_rows_truthy(
+            rows,
+            "identity_same_before_after",
         ),
-        "q_group_same_before_after_all_rows": bool(
-            rows and all(bool(row.get("q_group_same_before_after")) for row in rows)
+        "q_group_same_before_after_all_rows": _all_rows_truthy(
+            rows,
+            "q_group_same_before_after",
         ),
-        "hkl_same_before_after_all_rows": bool(
-            rows and all(bool(row.get("hkl_same_before_after")) for row in rows)
+        "hkl_same_before_after_all_rows": _all_rows_truthy(rows, "hkl_same_before_after"),
+        "branch_same_before_after_all_rows": _all_rows_truthy(
+            rows,
+            "branch_same_before_after",
         ),
-        "branch_same_before_after_all_rows": bool(
-            rows and all(bool(row.get("branch_same_before_after")) for row in rows)
-        ),
-        "original_sim_caked_matches_fit_prediction_caked_deg_all_rows": bool(
-            rows
-            and all(
-                bool(row.get("original_sim_caked_matches_fit_prediction_caked_deg")) for row in rows
-            )
+        "original_sim_caked_matches_fit_prediction_caked_deg_all_rows": _all_rows_truthy(
+            rows,
+            "original_sim_caked_matches_fit_prediction_caked_deg",
         ),
         "invalid_detector_display_row_count": int(len(invalid_detector_rows)),
         "valid_plotted_fraction": (
@@ -2243,9 +2255,7 @@ def _single_step_checks(
         "max_visual_vs_objective_base_norm_deg": max(base_norms) if base_norms else None,
         "max_visual_vs_objective_trial_norm_deg": max(trial_norms) if trial_norms else None,
         "surface_mismatch_row_count": int(len(mismatch_rows)),
-        "surface_mismatch_pair_ids": [
-            str(row.get("pair_id")) for row in mismatch_rows if row.get("pair_id") is not None
-        ],
+        "surface_mismatch_pair_ids": _pair_ids(mismatch_rows),
         "surface_warning_tolerance_deg": float(SURFACE_WARNING_TOL_DEG),
         "surface_warning_row_count": int(len(warning_rows)),
         "proof_status": proof_status,

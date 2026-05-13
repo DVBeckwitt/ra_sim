@@ -725,6 +725,9 @@ Status as of 2026-05-13:
   additive debug-script flags
 - shipping status: local artifact generation is complete, generated PNG/JSON/CSV
   files are diagnostic proof artifacts and this is not a production release
+- maintenance status: the single-step proof checks share small row-value and
+  row-predicate helpers, reducing duplicate audit bookkeeping without changing
+  JSON fields, PNG semantics, CLI flags, config, or saved-state behavior
 
 Run:
 

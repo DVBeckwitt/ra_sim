@@ -9,6 +9,11 @@ Last updated: 2026-05-13
 
 ## Current status
 
+- 2026-05-13 maintenance cleanup: single-step QR visual audit proof checks now
+  use shared row-value and row-predicate helpers instead of repeated inline
+  loops. Bug/error/feature status is unchanged: this is a behavior-preserving
+  cleanup of debug audit bookkeeping, with no public CLI, config, saved-state,
+  artifact-schema, deprecation, or migration impact.
 - 2026-05-13 single-step QR coordinate visual audit completed. The New4
   coordinate visualizer now has a dry-run `--single-step-detector-angle-audit`
   mode that evaluates base dynamic residuals, finite-differences only
