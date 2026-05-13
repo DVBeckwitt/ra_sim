@@ -391,7 +391,7 @@ config, or artifact schema changed.
 
 | Path | Purpose |
 |---|---|
-| `scripts/debug/visualize_new4_qr_fit_coordinates.py` | Visualizes New4 Qr fit-coordinate diagnostics. |
+| `scripts/debug/visualize_new4_qr_fit_coordinates.py` | Visualizes Bi2Se3 Qr fit-coordinate diagnostics. |
 | `scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py` | Runs parallel background peak-fit diagnostics with a shared linear baseline. |
 | `scripts/diagnostics/background_peak_fit_worker.py` | Worker helper for background peak-fit diagnostic batches. |
 | `scripts/diagnostics/run_all_background_peak_fits.py` | Launches the background peak-fit diagnostic batch runner. |

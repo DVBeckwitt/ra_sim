@@ -2162,12 +2162,41 @@ def _geometry_fit_recovery_axis_limits(
     return (min(xs) - x_pad, max(xs) + x_pad), (min(ys) - y_pad, max(ys) + y_pad)
 
 
+def _geometry_fit_recovery_report_label(
+    *,
+    state_path: Path,
+    rows: Sequence[Mapping[str, object]],
+    progress_data: Mapping[str, object],
+) -> str:
+    candidates = [state_path.stem]
+    for row in rows:
+        candidates.extend(
+            str(row.get(key) or "")
+            for key in ("dataset_label", "dataset/background", "background_path", "cif_path")
+        )
+    last_live_update = progress_data.get("last_live_update")
+    if isinstance(last_live_update, Mapping):
+        for record in last_live_update.get("live_cache_records", ()) or ():
+            if isinstance(record, Mapping):
+                candidates.extend(
+                    str(record.get(key) or "")
+                    for key in ("dataset_label", "background_path", "cif_path")
+                )
+    for candidate in candidates:
+        if "bi2se3" in candidate.lower().replace("_", "").replace("-", ""):
+            return "Bi2Se3"
+    if state_path.stem.strip().lower() == "new4":
+        return "Bi2Se3"
+    return state_path.stem.strip() or "geometry fit"
+
+
 def _plot_geometry_fit_recovery_overlay(
     path: Path,
     rows: Sequence[Mapping[str, object]],
     *,
     initial_caked_by_pair: Mapping[str, tuple[float, float]],
     accepted: bool,
+    report_label: str,
 ) -> None:
     import matplotlib
 
@@ -2233,7 +2262,7 @@ def _plot_geometry_fit_recovery_overlay(
         ax.text(0.5, 0.5, "No caked QR rows available", ha="center", va="center")
     ax.set_xlabel("two theta (deg)")
     ax.set_ylabel("phi (deg)")
-    ax.set_title("New4 gamma/Gamma QR fit: initial vs final")
+    ax.set_title(f"{report_label} gamma/Gamma QR fit: initial vs final")
     handles, labels = ax.get_legend_handles_labels()
     unique: dict[str, object] = {}
     for handle, label in zip(handles, labels, strict=False):
@@ -2347,6 +2376,7 @@ def _write_headless_geometry_fit_single_step_artifacts(
     state_path: Path,
     background_index: int,
     output_root: Path,
+    report_label: str,
 ) -> Mapping[str, object]:
     module_path = (
         Path(__file__).resolve().parents[1]
@@ -2355,11 +2385,11 @@ def _write_headless_geometry_fit_single_step_artifacts(
         / "visualize_new4_qr_fit_coordinates.py"
     )
     spec = importlib.util.spec_from_file_location(
-        "_ra_sim_new4_qr_fit_coordinates",
+        "_ra_sim_qr_fit_coordinates",
         module_path,
     )
     if spec is None or spec.loader is None:
-        raise RuntimeError(f"Unable to load New4 QR coordinate audit script: {module_path}")
+        raise RuntimeError(f"Unable to load QR coordinate audit script: {module_path}")
     coordinate_audit = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(coordinate_audit)
 
@@ -2372,6 +2402,7 @@ def _write_headless_geometry_fit_single_step_artifacts(
         single_step_detector_angle_audit=True,
         max_angle_step_deg=5.0,
         fd_step_deg=0.05,
+        report_label=report_label,
     )
 
 
@@ -2418,15 +2449,22 @@ def _write_headless_geometry_fit_recovery_artifacts(
         or rejection_reason
     )
     initial_caked_by_pair = _geometry_fit_recovery_initial_caked_by_pair(progress_data)
+    report_label = _geometry_fit_recovery_report_label(
+        state_path=state_file,
+        rows=rows,
+        progress_data=progress_data,
+    )
 
     single_step_report = _write_headless_geometry_fit_single_step_artifacts(
         state_path=state_file,
         background_index=int(background_index),
         output_root=output_path,
+        report_label=report_label,
     )
     full_fit_report = {
         "json_authoritative": True,
         "png_diagnostic_only": True,
+        "recovery_run_label": report_label,
         "full_fit_success": bool(accepted),
         "geometry_updated": bool(accepted),
         "gamma_before": initial_params.get("gamma"),
@@ -2455,6 +2493,7 @@ def _write_headless_geometry_fit_recovery_artifacts(
         rows,
         initial_caked_by_pair=initial_caked_by_pair,
         accepted=bool(accepted),
+        report_label=report_label,
     )
 
     required_pngs = [paths["single_step_png"], paths["full_fit_png"]]
@@ -2500,6 +2539,7 @@ def _write_headless_geometry_fit_recovery_artifacts(
 
     artifact_payload = {
         "geometry_fit_recovery_artifact_status": "pass",
+        "geometry_fit_recovery_run_label": report_label,
         "geometry_fit_recovery_required_pngs": required_pngs,
         "geometry_fit_recovery_artifacts": artifact_paths,
         "single_step_status": single_step_report.get("status"),

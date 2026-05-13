@@ -76,15 +76,15 @@ The GUI acceptance gate remains detector-pixel strict even when caked angular
 diagnostics are present. The caked angular acceptance shortcut is reserved for
 true headless geometry-fit runs that set the private headless runtime flag.
 
-For New4 headless `gamma,Gamma` recovery runs, `fit-geometry` now writes visual
+For Bi2Se3 headless `gamma,Gamma` recovery runs, `fit-geometry` now writes visual
 approval artifacts into the same output directory as the fitted state and
 progress sidecar. A run such as:
 
 ```bash
-python -m ra_sim fit-geometry artifacts/geometry_fit_gui_states/new4.json \
+python -m ra_sim fit-geometry artifacts/geometry_fit_gui_states/bi2se3.json \
   --active-vars gamma,Gamma \
   --seed-policy ladder-multistart \
-  --out-state artifacts/geometry_fit_recovery/new4_headless_gamma_gamma/new4_gamma_gamma_fit.json
+  --out-state artifacts/geometry_fit_recovery/bi2se3_headless_gamma_gamma/bi2se3_gamma_gamma_fit.json
 ```
 
 must write:
@@ -102,7 +102,7 @@ operator inspection. Required PNGs are gate artifacts: the run fails if the
 single-step PNG or full-fit overlay PNG is missing, and a rejected fit also
 fails if the worst-row PNG is missing. This keeps a caked angular rejection such
 as `branch_source_pairing_mismatch` paired with visual evidence in the same
-folder as `new4_gamma_gamma_fit.progress.json`.
+folder as `bi2se3_gamma_gamma_fit.progress.json`.
 
 ## Background Peak-Fit Diagnostic Caches
 
@@ -794,10 +794,11 @@ Run:
 
 ```bash
 python scripts/debug/visualize_new4_qr_fit_coordinates.py \
-  --state artifacts/geometry_fit_gui_states/new4.json \
+  --state artifacts/geometry_fit_gui_states/bi2se3.json \
   --background-index 0 \
   --single-step-detector-angle-audit \
   --active-vars gamma,Gamma \
+  --report-label Bi2Se3 \
   --max-angle-step-deg 5 \
   --fd-step-deg 0.05 \
   --output-root artifacts/geometry_fit_recovery/latest

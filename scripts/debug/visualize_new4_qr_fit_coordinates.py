@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Audit New4 manual caked Qr fit coordinates as JSON plus scatter PNG."""
+"""Audit Bi2Se3 manual caked Qr fit coordinates as JSON plus scatter PNG."""
 
 from __future__ import annotations
 
@@ -26,10 +26,11 @@ from scripts.debug import run_new4_geometry_fit_ladder as ladder  # noqa: E402
 from scripts.debug import validate_geometry_preflight_rebind as preflight  # noqa: E402
 
 
-DEFAULT_STATE_PATH = REPO_ROOT / "artifacts" / "geometry_fit_gui_states" / "new4.json"
+DEFAULT_STATE_PATH = REPO_ROOT / "artifacts" / "geometry_fit_gui_states" / "bi2se3.json"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "artifacts" / "geometry_fit_recovery" / "latest"
-REPORT_NAME = "new4_qr_fit_coordinates.json"
-PLOT_NAME = "new4_qr_fit_coordinates.png"
+DEFAULT_REPORT_LABEL = "Bi2Se3"
+REPORT_NAME = "bi2se3_qr_fit_coordinates.json"
+PLOT_NAME = "bi2se3_qr_fit_coordinates.png"
 SINGLE_STEP_REPORT_NAME = "01_single_step_qr_coordinate_audit.json"
 SINGLE_STEP_PLOT_NAME = "01_single_step_qr_coordinate_audit.png"
 SINGLE_STEP_CSV_NAME = "01_single_step_qr_coordinate_audit.csv"
@@ -2352,7 +2353,12 @@ def _checks_pass(
     return True
 
 
-def _plot_rows(path: Path, rows: Sequence[Mapping[str, object]]) -> None:
+def _plot_rows(
+    path: Path,
+    rows: Sequence[Mapping[str, object]],
+    *,
+    report_label: str = DEFAULT_REPORT_LABEL,
+) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -2389,7 +2395,7 @@ def _plot_rows(path: Path, rows: Sequence[Mapping[str, object]]) -> None:
             ax.text(source[0], source[1], str(row.get("pair_index")), fontsize=8)
     ax.set_xlabel("two_theta_deg")
     ax.set_ylabel("phi_deg")
-    ax.set_title("New4 Qr Fit Coordinate Audit")
+    ax.set_title(f"{report_label} Qr Fit Coordinate Audit")
     ax.grid(True, alpha=0.25)
     ax.legend(loc="best")
     fig.tight_layout()
@@ -2401,6 +2407,8 @@ def _plot_improvement_rows(
     path: Path,
     before_rows: Sequence[Mapping[str, object]],
     after_rows: Sequence[Mapping[str, object]],
+    *,
+    report_label: str = DEFAULT_REPORT_LABEL,
 ) -> None:
     import matplotlib
 
@@ -2461,7 +2469,7 @@ def _plot_improvement_rows(
         ax.scatter(after_x, after_y, label="source after solve", marker="+", s=65)
     ax.set_xlabel("two_theta_deg")
     ax.set_ylabel("phi_deg")
-    ax.set_title("New4 Fit Improvement Audit")
+    ax.set_title(f"{report_label} Fit Improvement Audit")
     ax.grid(True, alpha=0.25)
     ax.legend(loc="best")
     fig.tight_layout()
@@ -2680,11 +2688,13 @@ def run_coordinate_audit(
     max_angle_step_deg: float = 5.0,
     fd_step_deg: float = 0.05,
     allow_visual_objective_surface_divergence: bool = False,
+    report_label: str = DEFAULT_REPORT_LABEL,
 ) -> dict[str, object]:
     if str(params_mode).strip().lower() != "base":
         raise ValueError("only --params base is supported")
     state_path = state_path.expanduser().resolve()
     output_root = output_root.expanduser().resolve()
+    display_label = str(report_label or DEFAULT_REPORT_LABEL).strip() or DEFAULT_REPORT_LABEL
     effective_perturb = _step_perturbation(
         perturb=perturb,
         step_param=step_param,
@@ -2769,6 +2779,7 @@ def run_coordinate_audit(
         state_hash = _file_sha256(state_path)
         report = {
             "status": status,
+            "report_label": display_label,
             "checks": checks,
             "state_path": _artifact_path_string(state_path),
             "state_sha256": state_hash,
@@ -2836,7 +2847,7 @@ def run_coordinate_audit(
         _write_json(report_path, report)
         _write_csv(csv_path, rows)
         title = (
-            f"New4 QR single-step audit bg={int(background_index)} "
+            f"{display_label} QR single-step audit bg={int(background_index)} "
             f"state={state_hash[:12]} active vars=gamma,Gamma "
             f"delta gamma={float(trial_payload.get('delta_gamma_deg', 0.0) or 0.0):.6g} "
             f"delta Gamma={float(trial_payload.get('delta_Gamma_deg', 0.0) or 0.0):.6g} "
@@ -2923,6 +2934,7 @@ def run_coordinate_audit(
     plot_path = output_root / PLOT_NAME
     report = {
         "status": status,
+        "report_label": display_label,
         "checks": checks,
         "state_path": _artifact_path_string(state_path),
         "background_index": int(background_index),
@@ -2965,17 +2977,23 @@ def run_coordinate_audit(
         )
     _write_json(report_path, report)
     if fit_improvement_audit:
-        _plot_improvement_rows(plot_path, before_rows_for_report, rows)
+        _plot_improvement_rows(
+            plot_path,
+            before_rows_for_report,
+            rows,
+            report_label=display_label,
+        )
     else:
-        _plot_rows(plot_path, rows)
+        _plot_rows(plot_path, rows, report_label=display_label)
     return report
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Visualize New4 Qr fit coordinate contract.")
+    parser = argparse.ArgumentParser(description="Visualize Bi2Se3 Qr fit coordinate contract.")
     parser.add_argument("--state", "--state-path", default=str(DEFAULT_STATE_PATH))
     parser.add_argument("--background-index", type=int, default=0)
     parser.add_argument("--output-root", default=str(DEFAULT_OUTPUT_ROOT))
+    parser.add_argument("--report-label", default=DEFAULT_REPORT_LABEL)
     parser.add_argument("--params", default="base")
     parser.add_argument("--perturb", default=None)
     parser.add_argument("--objective-audit", action="store_true")
@@ -3009,6 +3027,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         allow_visual_objective_surface_divergence=bool(
             args.allow_visual_objective_surface_divergence
         ),
+        report_label=str(args.report_label),
     )
     print(
         json.dumps(

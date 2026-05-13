@@ -35697,6 +35697,7 @@ def test_new4_coordinate_audit_cli_accepts_objective_step_flags(
     assert captured["after_objective_step"] is True
     assert captured["step_param"] == "center_x"
     assert captured["step_size"] == pytest.approx(0.25)
+    assert captured["report_label"] == "Bi2Se3"
 
 
 def test_caked_point_reprojection_recomputes_when_theta_changes(tmp_path) -> None:
@@ -36470,7 +36471,7 @@ def _write_fake_single_step_recovery_artifacts(output_root: Path, *, include_png
 def _headless_recovery_summary_row() -> dict[str, object]:
     return {
         "dataset_index": 0,
-        "dataset_label": "bg0.osc",
+        "dataset_label": "Bi2Se3_5m_5d.osc",
         "pair_id": "bg0:pair0",
         "q_group_key": ["q_group", "primary", 0, 3],
         "hkl": [0, 0, 3],
@@ -36494,14 +36495,16 @@ def test_headless_gamma_gamma_recovery_artifacts_write_rejected_required_pngs(
 ) -> None:
     from ra_sim import headless_geometry_fit
 
-    state_path = tmp_path / "new4.json"
+    state_path = tmp_path / "bi2se3.json"
     state_path.write_text("{}", encoding="utf-8")
-    output_dir = tmp_path / "new4_headless_gamma_gamma"
+    output_dir = tmp_path / "bi2se3_headless_gamma_gamma"
     row = _headless_recovery_summary_row()
+    captured_single_step: dict[str, object] = {}
 
     def _fake_single_step(**kwargs):
+        captured_single_step.update(kwargs)
         _write_fake_single_step_recovery_artifacts(kwargs["output_root"], include_png=True)
-        return {"status": "pass"}
+        return {"status": "pass", "report_label": kwargs["report_label"]}
 
     monkeypatch.setattr(
         headless_geometry_fit,
@@ -36540,6 +36543,8 @@ def test_headless_gamma_gamma_recovery_artifacts_write_rejected_required_pngs(
     )
 
     assert payload["geometry_fit_recovery_artifact_status"] == "pass"
+    assert payload["geometry_fit_recovery_run_label"] == "Bi2Se3"
+    assert captured_single_step["report_label"] == "Bi2Se3"
     assert (output_dir / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_SINGLE_STEP_PNG).exists()
     assert (output_dir / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_PNG).exists()
     assert (output_dir / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_WORST_ROWS_PNG).exists()
@@ -36556,6 +36561,7 @@ def test_headless_gamma_gamma_recovery_artifacts_write_rejected_required_pngs(
     )
     assert full_report["full_fit_success"] is False
     assert full_report["geometry_updated"] is False
+    assert full_report["recovery_run_label"] == "Bi2Se3"
     assert full_report["plotted_row_identities"][0]["pair_id"] == "bg0:pair0"
     worst_report = json.loads(
         (output_dir / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_WORST_ROWS_JSON).read_text(
@@ -36563,7 +36569,7 @@ def test_headless_gamma_gamma_recovery_artifacts_write_rejected_required_pngs(
         )
     )
     assert worst_report["rows"][0]["failure_classification"] == ("branch_source_pairing_mismatch")
-    progress_path = output_dir / "new4_gamma_gamma_fit.progress.json"
+    progress_path = output_dir / "bi2se3_gamma_gamma_fit.progress.json"
     writer = headless_geometry_fit._HeadlessGeometryFitProgressWriter(progress_path)
     writer.write("final_validation", **payload)
     progress = json.loads(progress_path.read_text(encoding="utf-8"))
@@ -36581,9 +36587,9 @@ def test_headless_gamma_gamma_recovery_artifacts_fail_if_required_png_missing(
 ) -> None:
     from ra_sim import headless_geometry_fit
 
-    state_path = tmp_path / "new4.json"
+    state_path = tmp_path / "bi2se3.json"
     state_path.write_text("{}", encoding="utf-8")
-    output_dir = tmp_path / "new4_headless_gamma_gamma"
+    output_dir = tmp_path / "bi2se3_headless_gamma_gamma"
 
     def _fake_single_step(**kwargs):
         _write_fake_single_step_recovery_artifacts(kwargs["output_root"], include_png=False)
@@ -36619,9 +36625,9 @@ def test_headless_gamma_gamma_recovery_artifacts_accept_requires_full_overlay_on
 ) -> None:
     from ra_sim import headless_geometry_fit
 
-    state_path = tmp_path / "new4.json"
+    state_path = tmp_path / "bi2se3.json"
     state_path.write_text("{}", encoding="utf-8")
-    output_dir = tmp_path / "new4_headless_gamma_gamma"
+    output_dir = tmp_path / "bi2se3_headless_gamma_gamma"
 
     def _fake_single_step(**kwargs):
         _write_fake_single_step_recovery_artifacts(kwargs["output_root"], include_png=True)
