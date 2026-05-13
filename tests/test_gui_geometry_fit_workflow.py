@@ -36486,6 +36486,37 @@ def test_headless_progress_live_update_renames_caked_display_prediction_alias(
     assert record["fit_prediction_caked_deg_source"] == "fit_prediction_detector_display_px"
 
 
+def test_headless_progress_live_update_preserves_true_detector_display_prediction(
+    tmp_path,
+) -> None:
+    from ra_sim import headless_geometry_fit
+
+    progress_path = tmp_path / "fit.progress.json"
+    writer = headless_geometry_fit._HeadlessGeometryFitProgressWriter(progress_path)
+
+    writer.live_update(
+        {
+            "live_cache_records": [
+                {
+                    "pair_id": "bg0:pair0",
+                    "fit_prediction_detector_display_px": [112.0, 113.0],
+                    "fit_prediction_detector_display_px_source": "sim_display",
+                    "fit_prediction_detector_native_px": [12.0, 13.0],
+                    "simulated_detector_x": 12.0,
+                    "simulated_detector_y": 13.0,
+                    "sim_nominal_caked_deg": [9.2526, 0.0],
+                }
+            ],
+        }
+    )
+
+    progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    record = progress["last_live_update"]["live_cache_records"][0]
+    assert record["fit_prediction_detector_display_px"] == pytest.approx([112.0, 113.0])
+    assert "fit_prediction_detector_display_px_unavailable_reason" not in record
+    assert "fit_prediction_caked_deg" not in record
+
+
 def _write_fake_single_step_recovery_artifacts(output_root: Path, *, include_png: bool) -> None:
     from ra_sim import headless_geometry_fit
 

@@ -9,10 +9,23 @@ Last updated: 2026-05-13
 
 ## Current status
 
+- 2026-05-13 review hardening cleanup completed. Versioned tracking docs now
+  refer to user-local GUI states as `%LOCALAPPDATA%\ra_sim\*.json` instead of
+  committing machine-specific absolute paths. The headless progress sanitizer
+  now reuses the optimizer's QR caked-source contract list instead of carrying
+  a second copy in `headless_geometry_fit.py`, and the progress tests now guard
+  that true detector-display predictions with detector/native proof remain
+  unchanged. Bug/error status: closes the review findings for docs hygiene,
+  avoidable duplicated source-list code, and missing detector-preservation test
+  coverage. Feature status: behavior-preserving hardening only; no threshold
+  tuning, forced acceptance, manual-pick edits, saved-state schema changes,
+  deprecation, migration, or public CLI changes. Validation: focused headless
+  recovery/progress tests passed (`5 passed`) and `python -m ra_sim.dev check`
+  passed (`281 passed`).
 - 2026-05-13 Bi2Se3 recovery provenance/reporting cleanup completed. Headless
   gamma/Gamma progress and recovery overlay JSON now record `input_state_path`
   and `input_state_sha256`, so the artifact folder proves whether it used the
-  user-local `C:\Users\Kenpo\.local\share\ra_sim\Bi2Se3.json` state or another
+  user-local `%LOCALAPPDATA%\ra_sim\Bi2Se3.json` state or another
   saved state. Live-cache progress rows no longer leave caked `(2theta, phi)`
   values under `fit_prediction_detector_display_px` for caked-display aliases:
   the detector-display field is `null` with
@@ -24,7 +37,7 @@ Last updated: 2026-05-13
   focused QR contract/objective tests passed (`11 passed`), overlay legacy
   compatibility tests passed (`2 passed`), `python -m ra_sim.dev check` passed,
   and a full headless run from
-  `C:\Users\Kenpo\.local\share\ra_sim\Bi2Se3.json` completed with artifact
+  `%LOCALAPPDATA%\ra_sim\Bi2Se3.json` completed with artifact
   status `pass`. That run stayed fail-closed with `full_fit_success=false`,
   `geometry_updated=false`, `qr_fit_resolved_count=82`,
   `qr_fit_expected_count=82`, `objective_param_sensitivity_status=sensitive`,
@@ -533,7 +546,7 @@ Last updated: 2026-05-13
   fell (`1.37x` and `2.15x`). This is expected, not a fitting regression. Do
   not mix it with the exact-caked path.
 - New4 Mode A dynamic/refined Qr prediction is implemented and verified for
-  saved state `C:\Users\Kenpo\.local\share\ra_sim\new4.json`, background index
+  saved state `%LOCALAPPDATA%\ra_sim\new4.json`, background index
   `0` (`Bi2Se3_5m_5d.osc`). The optimizer regenerates trial detector-space
   source rows from trial params, resolves locked Qr branch identity by durable
   key, projects through the trial caked projector, refines in simulated caked

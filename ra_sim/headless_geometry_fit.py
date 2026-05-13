@@ -1790,20 +1790,6 @@ _HEADLESS_GEOMETRY_FIT_PROGRESS_PHASES = frozenset(
         "output_state_write",
     }
 )
-_HEADLESS_CAKED_DEG_DETECTOR_DISPLAY_SOURCES = frozenset(
-    (
-        "fit_prediction_caked_deg",
-        "optimizer_simulated_source_two_theta_phi",
-        "dynamic_sim_visual_caked_deg_two_theta_phi",
-        "sim_visual_caked_deg",
-        "sim_caked",
-        "sim_caked_display",
-        "two_theta_deg/phi_deg",
-        "caked_x/y",
-    )
-)
-
-
 def _headless_geometry_fit_state_provenance(state_path: str | Path) -> dict[str, object]:
     state_file = Path(state_path).expanduser().resolve()
     try:
@@ -1875,7 +1861,7 @@ def _headless_live_record_caked_display_alias(
     if alias is None:
         return None
     source = str(record.get("fit_prediction_detector_display_px_source") or "").strip()
-    if source in _HEADLESS_CAKED_DEG_DETECTOR_DISPLAY_SOURCES:
+    if source and source in _load_fitting_runtime().QR_FIT_CAKED_DEG_DETECTOR_DISPLAY_SOURCES:
         return alias
     if _headless_progress_pair(record.get("fit_prediction_detector_native_px")) is not None:
         return None

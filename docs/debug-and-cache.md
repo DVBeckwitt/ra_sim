@@ -553,8 +553,10 @@ that detector-display value for caked-display rows, set
 `fit_prediction_detector_display_px` to `null`, set
 `fit_prediction_detector_display_px_unavailable_reason` to
 `caked_degrees_not_detector_display_px`, and expose the coordinate as
-`fit_prediction_caked_deg`. Detector display pixels must not be promoted to
-caked angles without that metadata. Overlay diagnostics record
+`fit_prediction_caked_deg`. Live-cache records that carry a true detector
+display prediction and detector/native projection proof keep
+`fit_prediction_detector_display_px` unchanged. Detector display pixels must
+not be promoted to caked angles without that metadata. Overlay diagnostics record
 `final_sim_display_source`, `final_sim_native_source`, and
 `final_sim_caked_display_source` so the drawn green `fit sim` marker source can
 be compared with cached/calculated distance fields and the rendered caked
