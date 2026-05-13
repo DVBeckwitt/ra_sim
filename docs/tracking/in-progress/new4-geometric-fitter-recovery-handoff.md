@@ -9,6 +9,28 @@ Last updated: 2026-05-13
 
 ## Current status
 
+- 2026-05-13 headless recovery artifact wiring completed. New4 headless
+  `gamma,Gamma` fits now write `01_single_step_qr_coordinate_audit.{json,csv,png}`,
+  `02_full_fit_initial_vs_final_qr_overlay.{json,png}`, and, on rejection,
+  `03_worst_residual_rows.{json,png}` into the same output folder as
+  `new4_gamma_gamma_fit.progress.json`. The progress sidecar records all
+  generated paths under `geometry_fit_recovery_artifacts` and at the common
+  top-level keys. Bug/error status: the prior run saved only JSON progress, so
+  a rejected `branch_source_pairing_mismatch` fit lacked the required visual
+  approval layer. The headless run now fails closed if the single-step PNG, the
+  full-fit overlay PNG, or the rejected-fit worst-row PNG is missing. Feature
+  status: additive local recovery artifacts only; no threshold tuning, forced
+  acceptance, manual-pick edits, saved-state schema changes, config changes,
+  public CLI flag changes, deprecation, or migration. Validation: the focused
+  artifact writer slice passed (`3 passed, 637 deselected`), the QR
+  contract/single-step slice passed (`23 passed`), the broader QR/sensitivity
+  target passed (`37 passed`), the full geometry fitting file passed
+  (`260 passed`), the full GUI geometry-fit workflow file passed
+  (`637 passed, 2 skipped`), the manual fit-space classification file passed
+  (`9 passed`), and `python -m ra_sim.dev check` passed. A local verification
+  regenerated ignored images from the existing New4 progress JSON and updated
+  that ignored progress sidecar with the artifact paths; a fresh full optimizer
+  rerun remains optional for overnight validation.
 - 2026-05-13 proof-status hardening completed. The single-step QR coordinate
   audit now fails closed when any row has a failing or missing QR fit contract
   status, so `proof_status=pass` cannot coexist with a failed contract. The

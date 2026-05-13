@@ -36451,6 +36451,206 @@ def test_headless_geometry_fit_progress_sidecar_tracks_solve_phases(tmp_path) ->
     assert progress["output_state_path"].endswith("fit.json")
 
 
+def _write_fake_single_step_recovery_artifacts(output_root: Path, *, include_png: bool) -> None:
+    from ra_sim import headless_geometry_fit
+
+    output_root.mkdir(parents=True, exist_ok=True)
+    (output_root / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_SINGLE_STEP_JSON).write_text(
+        json.dumps({"status": "pass"}), encoding="utf-8"
+    )
+    (output_root / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_SINGLE_STEP_CSV).write_text(
+        "pair_id\nbg0:pair0\n", encoding="utf-8"
+    )
+    if include_png:
+        (output_root / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_SINGLE_STEP_PNG).write_bytes(
+            b"\x89PNG\r\n\x1a\n"
+        )
+
+
+def _headless_recovery_summary_row() -> dict[str, object]:
+    return {
+        "dataset_index": 0,
+        "dataset_label": "bg0.osc",
+        "pair_id": "bg0:pair0",
+        "q_group_key": ["q_group", "primary", 0, 3],
+        "hkl": [0, 0, 3],
+        "source_branch_index": 0,
+        "source_table_index": 10,
+        "source_row_index": 24,
+        "observed_caked_deg": [9.2, 1.0],
+        "predicted_caked_deg": [10.1, -3.0],
+        "delta_two_theta_deg": 0.9,
+        "wrapped_delta_phi_deg": -4.0,
+        "angular_residual_norm_deg": 4.1,
+        "same_q_group_hkl_candidate_count": 2,
+        "nearest_same_q_group_hkl_candidate_residual_norm_deg": 1.2,
+        "branch_swap_would_help": True,
+    }
+
+
+def test_headless_gamma_gamma_recovery_artifacts_write_rejected_required_pngs(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from ra_sim import headless_geometry_fit
+
+    state_path = tmp_path / "new4.json"
+    state_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "new4_headless_gamma_gamma"
+    row = _headless_recovery_summary_row()
+
+    def _fake_single_step(**kwargs):
+        _write_fake_single_step_recovery_artifacts(kwargs["output_root"], include_png=True)
+        return {"status": "pass"}
+
+    monkeypatch.setattr(
+        headless_geometry_fit,
+        "_write_headless_geometry_fit_single_step_artifacts",
+        _fake_single_step,
+    )
+
+    payload = headless_geometry_fit._write_headless_geometry_fit_recovery_artifacts(
+        state_path=state_path,
+        output_dir=output_dir,
+        background_index=0,
+        active_var_names=["gamma", "Gamma"],
+        accepted=False,
+        rejection_reason="caked angular residual too large",
+        final_summary={
+            "dynamic_angular_failure_classification": "branch_source_pairing_mismatch",
+            "raw_angular_rms_deg": 4.1,
+            "raw_angular_max_deg": 4.1,
+            "qr_fit_resolved_count": 1,
+            "qr_fit_expected_count": 1,
+            "qr_fit_missing_pairs": [],
+            "source_authority_mismatch_count": 0,
+            "visual_objective_surface_mismatch_count": 0,
+            "objective_param_sensitivity_status": "sensitive",
+            "worst_angular_residual_rows": [row],
+        },
+        progress_data={
+            "last_live_update": {
+                "live_cache_records": [
+                    {"pair_id": "bg0:pair0", "sim_nominal_caked_deg": [9.6, -1.0]}
+                ]
+            }
+        },
+        initial_params={"gamma": 1.0, "Gamma": 2.0},
+        final_params={"gamma": 1.5, "Gamma": 2.5},
+    )
+
+    assert payload["geometry_fit_recovery_artifact_status"] == "pass"
+    assert (output_dir / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_SINGLE_STEP_PNG).exists()
+    assert (output_dir / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_PNG).exists()
+    assert (output_dir / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_WORST_ROWS_PNG).exists()
+    assert payload["single_step_png"] == (
+        output_dir / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_SINGLE_STEP_PNG
+    )
+    assert payload["worst_rows_png"] == (
+        output_dir / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_WORST_ROWS_PNG
+    )
+    full_report = json.loads(
+        (output_dir / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_JSON).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert full_report["full_fit_success"] is False
+    assert full_report["geometry_updated"] is False
+    assert full_report["plotted_row_identities"][0]["pair_id"] == "bg0:pair0"
+    worst_report = json.loads(
+        (output_dir / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_WORST_ROWS_JSON).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert worst_report["rows"][0]["failure_classification"] == ("branch_source_pairing_mismatch")
+    progress_path = output_dir / "new4_gamma_gamma_fit.progress.json"
+    writer = headless_geometry_fit._HeadlessGeometryFitProgressWriter(progress_path)
+    writer.write("final_validation", **payload)
+    progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert progress["geometry_fit_recovery_artifacts"]["single_step_png"].endswith(
+        headless_geometry_fit.GEOMETRY_FIT_RECOVERY_SINGLE_STEP_PNG
+    )
+    assert progress["geometry_fit_recovery_artifacts"]["worst_rows_png"].endswith(
+        headless_geometry_fit.GEOMETRY_FIT_RECOVERY_WORST_ROWS_PNG
+    )
+
+
+def test_headless_gamma_gamma_recovery_artifacts_fail_if_required_png_missing(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from ra_sim import headless_geometry_fit
+
+    state_path = tmp_path / "new4.json"
+    state_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "new4_headless_gamma_gamma"
+
+    def _fake_single_step(**kwargs):
+        _write_fake_single_step_recovery_artifacts(kwargs["output_root"], include_png=False)
+        return {"status": "pass"}
+
+    monkeypatch.setattr(
+        headless_geometry_fit,
+        "_write_headless_geometry_fit_single_step_artifacts",
+        _fake_single_step,
+    )
+
+    with pytest.raises(RuntimeError, match="01_single_step_qr_coordinate_audit.png"):
+        headless_geometry_fit._write_headless_geometry_fit_recovery_artifacts(
+            state_path=state_path,
+            output_dir=output_dir,
+            background_index=0,
+            active_var_names=["gamma", "Gamma"],
+            accepted=False,
+            rejection_reason="caked angular residual too large",
+            final_summary={
+                "dynamic_angular_failure_classification": "branch_source_pairing_mismatch",
+                "worst_angular_residual_rows": [_headless_recovery_summary_row()],
+            },
+            progress_data={},
+            initial_params={"gamma": 1.0, "Gamma": 2.0},
+            final_params={"gamma": 1.5, "Gamma": 2.5},
+        )
+
+
+def test_headless_gamma_gamma_recovery_artifacts_accept_requires_full_overlay_only(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from ra_sim import headless_geometry_fit
+
+    state_path = tmp_path / "new4.json"
+    state_path.write_text("{}", encoding="utf-8")
+    output_dir = tmp_path / "new4_headless_gamma_gamma"
+
+    def _fake_single_step(**kwargs):
+        _write_fake_single_step_recovery_artifacts(kwargs["output_root"], include_png=True)
+        return {"status": "pass"}
+
+    monkeypatch.setattr(
+        headless_geometry_fit,
+        "_write_headless_geometry_fit_single_step_artifacts",
+        _fake_single_step,
+    )
+
+    payload = headless_geometry_fit._write_headless_geometry_fit_recovery_artifacts(
+        state_path=state_path,
+        output_dir=output_dir,
+        background_index=0,
+        active_var_names=["gamma", "Gamma"],
+        accepted=True,
+        rejection_reason=None,
+        final_summary={"worst_angular_residual_rows": [_headless_recovery_summary_row()]},
+        progress_data={},
+        initial_params={"gamma": 1.0, "Gamma": 2.0},
+        final_params={"gamma": 1.5, "Gamma": 2.5},
+    )
+
+    assert (output_dir / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_PNG).exists()
+    assert payload["worst_rows_png"] is None
+    assert not (output_dir / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_WORST_ROWS_PNG).exists()
+
+
 def test_headless_caked_angular_metric_acceptance_skips_pixel_thresholds() -> None:
     result = SimpleNamespace(
         success=False,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import copy
+import importlib.util
 import json
 import math
 import os
@@ -53,6 +54,13 @@ HEADLESS_GEOMETRY_SUPPORTED_ACTIVE_VAR_NAMES = (
 HEADLESS_GEOMETRY_SUPPORTED_ACTIVE_VAR_NAME_SET = set(
     HEADLESS_GEOMETRY_SUPPORTED_ACTIVE_VAR_NAMES
 )
+GEOMETRY_FIT_RECOVERY_SINGLE_STEP_JSON = "01_single_step_qr_coordinate_audit.json"
+GEOMETRY_FIT_RECOVERY_SINGLE_STEP_PNG = "01_single_step_qr_coordinate_audit.png"
+GEOMETRY_FIT_RECOVERY_SINGLE_STEP_CSV = "01_single_step_qr_coordinate_audit.csv"
+GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_JSON = "02_full_fit_initial_vs_final_qr_overlay.json"
+GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_PNG = "02_full_fit_initial_vs_final_qr_overlay.png"
+GEOMETRY_FIT_RECOVERY_WORST_ROWS_JSON = "03_worst_residual_rows.json"
+GEOMETRY_FIT_RECOVERY_WORST_ROWS_PNG = "03_worst_residual_rows.png"
 _HEADLESS_GEOMETRY_FIT_SAVED_MANUAL_CAKED_DEFAULT_ACTIVE_VAR_NAMES = (
     "a",
     "theta_offset",
@@ -2013,6 +2021,491 @@ def write_headless_geometry_fit_progress(
             existing = {}
     writer.data.update(existing)
     writer.write(phase, **updates)
+
+
+def _geometry_fit_recovery_artifacts_required(
+    *,
+    state_path: str | Path,
+    active_var_names: Sequence[object] | None,
+) -> bool:
+    active_names = {str(name) for name in (active_var_names or ())}
+    return {"gamma", "Gamma"}.issubset(active_names) and Path(state_path).expanduser().exists()
+
+
+def _geometry_fit_recovery_float(value: object) -> float | None:
+    try:
+        number = float(value)
+    except Exception:
+        return None
+    if not math.isfinite(number):
+        return None
+    return float(number)
+
+
+def _geometry_fit_recovery_pair(value: object) -> tuple[float, float] | None:
+    if not isinstance(value, (list, tuple, np.ndarray)) or len(value) < 2:
+        return None
+    first = _geometry_fit_recovery_float(value[0])
+    second = _geometry_fit_recovery_float(value[1])
+    if first is None or second is None:
+        return None
+    return first, second
+
+
+def _geometry_fit_recovery_hkl(value: object) -> list[object]:
+    if isinstance(value, np.ndarray):
+        value = value.tolist()
+    if isinstance(value, (list, tuple)):
+        return [_headless_progress_jsonable(item) for item in value]
+    if value is None:
+        return []
+    return [str(value)]
+
+
+def _geometry_fit_recovery_rows(
+    final_summary: Mapping[str, object],
+    progress_data: Mapping[str, object],
+) -> list[dict[str, object]]:
+    worst_rows = final_summary.get("worst_angular_residual_rows")
+    if isinstance(worst_rows, Sequence) and not isinstance(worst_rows, (str, bytes)):
+        rows = [dict(row) for row in worst_rows if isinstance(row, Mapping)]
+        if rows:
+            return rows
+
+    live_update = progress_data.get("last_live_update")
+    live_records = (
+        live_update.get("live_cache_records") if isinstance(live_update, Mapping) else None
+    )
+    if not isinstance(live_records, Sequence) or isinstance(live_records, (str, bytes)):
+        return []
+    rows = []
+    for record in live_records:
+        if not isinstance(record, Mapping):
+            continue
+        predicted = _geometry_fit_recovery_pair(record.get("sim_refined_caked_deg"))
+        if predicted is None:
+            predicted = _geometry_fit_recovery_pair(record.get("sim_nominal_caked_deg"))
+        rows.append(
+            {
+                "dataset_index": record.get("dataset_index"),
+                "dataset_label": record.get("dataset_label"),
+                "pair_id": record.get("pair_id"),
+                "q_group_key": record.get("q_group_key"),
+                "hkl": record.get("hkl"),
+                "source_branch_index": record.get("source_branch_index"),
+                "source_table_index": record.get("source_table_index"),
+                "source_row_index": record.get("source_row_index"),
+                "predicted_caked_deg": predicted,
+            }
+        )
+    return rows
+
+
+def _geometry_fit_recovery_initial_caked_by_pair(
+    progress_data: Mapping[str, object],
+) -> dict[str, tuple[float, float]]:
+    live_update = progress_data.get("last_live_update")
+    live_records = (
+        live_update.get("live_cache_records") if isinstance(live_update, Mapping) else None
+    )
+    if not isinstance(live_records, Sequence) or isinstance(live_records, (str, bytes)):
+        return {}
+    caked_by_pair: dict[str, tuple[float, float]] = {}
+    for record in live_records:
+        if not isinstance(record, Mapping):
+            continue
+        pair_id = record.get("pair_id")
+        caked = _geometry_fit_recovery_pair(record.get("sim_nominal_caked_deg"))
+        if pair_id is not None and caked is not None:
+            caked_by_pair[str(pair_id)] = caked
+    return caked_by_pair
+
+
+def _geometry_fit_recovery_row_identity(row: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "pair_id": row.get("pair_id") or row.get("manual_pair_id"),
+        "q_group_key": _headless_progress_jsonable(row.get("q_group_key")),
+        "hkl": _geometry_fit_recovery_hkl(row.get("hkl")),
+        "branch": row.get("source_branch_index"),
+        "source_table_index": row.get("source_table_index"),
+        "source_row_index": row.get("source_row_index"),
+    }
+
+
+def _geometry_fit_recovery_label(row: Mapping[str, object]) -> str:
+    identity = _geometry_fit_recovery_row_identity(row)
+    pair_id = str(identity.get("pair_id") or "?")
+    hkl = identity.get("hkl")
+    branch = identity.get("branch")
+    return f"{pair_id} hkl={hkl} b={branch}"
+
+
+def _geometry_fit_recovery_json(path: Path, payload: Mapping[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(_headless_progress_jsonable(payload), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _geometry_fit_recovery_axis_limits(
+    points: Sequence[tuple[float, float]],
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    if not points:
+        return None
+    xs = [point[0] for point in points]
+    ys = [point[1] for point in points]
+    x_span = max(xs) - min(xs)
+    y_span = max(ys) - min(ys)
+    x_pad = max(1.0, 0.08 * x_span)
+    y_pad = max(1.0, 0.08 * y_span)
+    return (min(xs) - x_pad, max(xs) + x_pad), (min(ys) - y_pad, max(ys) + y_pad)
+
+
+def _plot_geometry_fit_recovery_overlay(
+    path: Path,
+    rows: Sequence[Mapping[str, object]],
+    *,
+    initial_caked_by_pair: Mapping[str, tuple[float, float]],
+    accepted: bool,
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(8.5, 6.0))
+    plotted_points: list[tuple[float, float]] = []
+    for row in rows:
+        pair_id = str(row.get("pair_id") or row.get("manual_pair_id") or "")
+        observed = _geometry_fit_recovery_pair(row.get("observed_caked_deg"))
+        initial = initial_caked_by_pair.get(pair_id)
+        final = _geometry_fit_recovery_pair(row.get("predicted_caked_deg"))
+        label = _geometry_fit_recovery_label(row)
+        if observed is not None:
+            plotted_points.append(observed)
+            ax.scatter(
+                observed[0],
+                observed[1],
+                marker="o",
+                c="#1f77b4",
+                s=56,
+                label="manual/background QR",
+            )
+        if initial is not None:
+            plotted_points.append(initial)
+            ax.scatter(
+                initial[0],
+                initial[1],
+                marker="s",
+                c="#4c4c4c",
+                s=50,
+                label="initial objective simulation QR",
+            )
+        if final is not None:
+            plotted_points.append(final)
+            ax.scatter(
+                final[0],
+                final[1],
+                marker="^",
+                c="#2ca02c" if accepted else "#d62728",
+                s=62,
+                label=(
+                    "final accepted objective simulation QR"
+                    if accepted
+                    else "final rejected objective simulation QR"
+                ),
+            )
+            ax.annotate(label, xy=final, xytext=(4, 4), textcoords="offset points", fontsize=7)
+        if initial is not None and final is not None:
+            ax.annotate(
+                "",
+                xy=final,
+                xytext=initial,
+                arrowprops={"arrowstyle": "->", "color": "#7f7f7f", "lw": 1.0},
+            )
+    limits = _geometry_fit_recovery_axis_limits(plotted_points)
+    if limits is not None:
+        ax.set_xlim(*limits[0])
+        ax.set_ylim(*limits[1])
+    else:
+        ax.text(0.5, 0.5, "No caked QR rows available", ha="center", va="center")
+    ax.set_xlabel("two theta (deg)")
+    ax.set_ylabel("phi (deg)")
+    ax.set_title("New4 gamma/Gamma QR fit: initial vs final")
+    handles, labels = ax.get_legend_handles_labels()
+    unique: dict[str, object] = {}
+    for handle, label in zip(handles, labels, strict=False):
+        unique.setdefault(label, handle)
+    if unique:
+        ax.legend(unique.values(), unique.keys(), loc="best", fontsize=8)
+    ax.grid(True, alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def _geometry_fit_recovery_worst_rows(
+    rows: Sequence[Mapping[str, object]],
+    *,
+    failure_classification: object,
+) -> list[dict[str, object]]:
+    worst_rows: list[dict[str, object]] = []
+    for rank, row in enumerate(rows, start=1):
+        dataset = row.get("dataset_label")
+        if dataset is None and row.get("dataset_index") is not None:
+            dataset = f"bg{row.get('dataset_index')}"
+        worst_rows.append(
+            {
+                "rank": rank,
+                "dataset/background": dataset,
+                "pair_id": row.get("pair_id") or row.get("manual_pair_id"),
+                "q_group_key": _headless_progress_jsonable(row.get("q_group_key")),
+                "hkl": _geometry_fit_recovery_hkl(row.get("hkl")),
+                "branch": row.get("source_branch_index"),
+                "observed_caked_deg": _headless_progress_jsonable(row.get("observed_caked_deg")),
+                "predicted_caked_deg": _headless_progress_jsonable(row.get("predicted_caked_deg")),
+                "delta_two_theta_deg": row.get("delta_two_theta_deg"),
+                "wrapped_delta_phi_deg": row.get("wrapped_delta_phi_deg"),
+                "angular_residual_norm_deg": row.get("angular_residual_norm_deg"),
+                "same_q_group_hkl_candidate_count": row.get("same_q_group_hkl_candidate_count"),
+                "nearest_same_q_group_hkl_candidate_residual_norm_deg": row.get(
+                    "nearest_same_q_group_hkl_candidate_residual_norm_deg"
+                ),
+                "branch_swap_would_help": bool(row.get("branch_swap_would_help", False)),
+                "failure_classification": failure_classification,
+            }
+        )
+    return worst_rows
+
+
+def _plot_geometry_fit_recovery_worst_rows(
+    path: Path,
+    rows: Sequence[Mapping[str, object]],
+    *,
+    failure_classification: object,
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(8.5, 6.0))
+    plotted_points: list[tuple[float, float]] = []
+    for rank, row in enumerate(rows, start=1):
+        observed = _geometry_fit_recovery_pair(row.get("observed_caked_deg"))
+        predicted = _geometry_fit_recovery_pair(row.get("predicted_caked_deg"))
+        if observed is not None:
+            plotted_points.append(observed)
+            ax.scatter(observed[0], observed[1], marker="o", c="#1f77b4", s=58)
+            ax.annotate(
+                f"{rank}",
+                xy=observed,
+                xytext=(-8, -8),
+                textcoords="offset points",
+                fontsize=8,
+            )
+        if predicted is not None:
+            plotted_points.append(predicted)
+            ax.scatter(predicted[0], predicted[1], marker="^", c="#d62728", s=68)
+            ax.annotate(
+                _geometry_fit_recovery_label(row),
+                xy=predicted,
+                xytext=(4, 4),
+                textcoords="offset points",
+                fontsize=7,
+            )
+        if observed is not None and predicted is not None:
+            ax.annotate(
+                "",
+                xy=predicted,
+                xytext=observed,
+                arrowprops={"arrowstyle": "->", "color": "#7f7f7f", "lw": 1.0},
+            )
+    limits = _geometry_fit_recovery_axis_limits(plotted_points)
+    if limits is not None:
+        ax.set_xlim(*limits[0])
+        ax.set_ylim(*limits[1])
+    else:
+        ax.text(0.5, 0.5, "No worst residual rows available", ha="center", va="center")
+    ax.set_xlabel("two theta (deg)")
+    ax.set_ylabel("phi (deg)")
+    ax.set_title(f"Worst QR residual rows ({failure_classification or 'unclassified'})")
+    ax.scatter([], [], marker="o", c="#1f77b4", s=58, label="observed/manual QR")
+    ax.scatter([], [], marker="^", c="#d62728", s=68, label="predicted QR")
+    ax.legend(loc="best", fontsize=8)
+    ax.grid(True, alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def _write_headless_geometry_fit_single_step_artifacts(
+    *,
+    state_path: Path,
+    background_index: int,
+    output_root: Path,
+) -> Mapping[str, object]:
+    module_path = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "debug"
+        / "visualize_new4_qr_fit_coordinates.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "_ra_sim_new4_qr_fit_coordinates",
+        module_path,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load New4 QR coordinate audit script: {module_path}")
+    coordinate_audit = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(coordinate_audit)
+
+    return coordinate_audit.run_coordinate_audit(
+        state_path=state_path,
+        background_index=int(background_index),
+        output_root=output_root,
+        params_mode="base",
+        active_vars=["gamma", "Gamma"],
+        single_step_detector_angle_audit=True,
+        max_angle_step_deg=5.0,
+        fd_step_deg=0.05,
+    )
+
+
+def _headless_geometry_fit_recovery_paths(output_dir: Path) -> dict[str, Path]:
+    return {
+        "single_step_json": output_dir / GEOMETRY_FIT_RECOVERY_SINGLE_STEP_JSON,
+        "single_step_png": output_dir / GEOMETRY_FIT_RECOVERY_SINGLE_STEP_PNG,
+        "single_step_csv": output_dir / GEOMETRY_FIT_RECOVERY_SINGLE_STEP_CSV,
+        "full_fit_json": output_dir / GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_JSON,
+        "full_fit_png": output_dir / GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_PNG,
+        "worst_rows_json": output_dir / GEOMETRY_FIT_RECOVERY_WORST_ROWS_JSON,
+        "worst_rows_png": output_dir / GEOMETRY_FIT_RECOVERY_WORST_ROWS_PNG,
+    }
+
+
+def _write_headless_geometry_fit_recovery_artifacts(
+    *,
+    state_path: str | Path,
+    output_dir: str | Path,
+    background_index: int,
+    active_var_names: Sequence[object],
+    accepted: bool,
+    rejection_reason: object,
+    final_summary: Mapping[str, object] | None,
+    progress_data: Mapping[str, object],
+    initial_params: Mapping[str, object],
+    final_params: Mapping[str, object],
+) -> dict[str, object]:
+    if not _geometry_fit_recovery_artifacts_required(
+        state_path=state_path,
+        active_var_names=active_var_names,
+    ):
+        return {}
+
+    state_file = Path(state_path).expanduser().resolve()
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    paths = _headless_geometry_fit_recovery_paths(output_path)
+    summary = dict(final_summary or {})
+    rows = _geometry_fit_recovery_rows(summary, progress_data)
+    failure_classification = (
+        summary.get("dynamic_angular_failure_classification")
+        or summary.get("failure_classification")
+        or rejection_reason
+    )
+    initial_caked_by_pair = _geometry_fit_recovery_initial_caked_by_pair(progress_data)
+
+    single_step_report = _write_headless_geometry_fit_single_step_artifacts(
+        state_path=state_file,
+        background_index=int(background_index),
+        output_root=output_path,
+    )
+    full_fit_report = {
+        "json_authoritative": True,
+        "png_diagnostic_only": True,
+        "full_fit_success": bool(accepted),
+        "geometry_updated": bool(accepted),
+        "gamma_before": initial_params.get("gamma"),
+        "Gamma_before": initial_params.get("Gamma"),
+        "gamma_after": final_params.get("gamma"),
+        "Gamma_after": final_params.get("Gamma"),
+        "raw_angular_rms_deg": summary.get("raw_angular_rms_deg") or summary.get("final_rms_deg"),
+        "raw_angular_max_deg": summary.get("raw_angular_max_deg") or summary.get("final_max_deg"),
+        "qr_fit_resolved_count": summary.get("qr_fit_resolved_count")
+        or summary.get("fixed_source_resolved_count"),
+        "qr_fit_expected_count": summary.get("qr_fit_expected_count"),
+        "qr_fit_missing_pairs": list(summary.get("qr_fit_missing_pairs", ()) or ()),
+        "source_authority_mismatch_count": summary.get("source_authority_mismatch_count"),
+        "visual_objective_surface_mismatch_count": summary.get(
+            "visual_objective_surface_mismatch_count"
+        ),
+        "objective_param_sensitivity_status": summary.get("objective_param_sensitivity_status"),
+        "failure_classification": failure_classification,
+        "plotted_row_count": int(len(rows)),
+        "plotted_row_identities": [_geometry_fit_recovery_row_identity(row) for row in rows],
+        "rows": rows,
+    }
+    _geometry_fit_recovery_json(paths["full_fit_json"], full_fit_report)
+    _plot_geometry_fit_recovery_overlay(
+        paths["full_fit_png"],
+        rows,
+        initial_caked_by_pair=initial_caked_by_pair,
+        accepted=bool(accepted),
+    )
+
+    required_pngs = [paths["single_step_png"], paths["full_fit_png"]]
+    artifact_paths: dict[str, object] = {
+        "single_step_json": paths["single_step_json"],
+        "single_step_png": paths["single_step_png"],
+        "single_step_csv": paths["single_step_csv"],
+        "full_fit_json": paths["full_fit_json"],
+        "full_fit_png": paths["full_fit_png"],
+        "worst_rows_json": None,
+        "worst_rows_png": None,
+    }
+    if not accepted:
+        worst_rows = _geometry_fit_recovery_worst_rows(
+            rows,
+            failure_classification=failure_classification,
+        )
+        worst_report = {
+            "json_authoritative": True,
+            "png_diagnostic_only": True,
+            "failure_classification": failure_classification,
+            "row_count": int(len(worst_rows)),
+            "rows": worst_rows,
+        }
+        _geometry_fit_recovery_json(paths["worst_rows_json"], worst_report)
+        _plot_geometry_fit_recovery_worst_rows(
+            paths["worst_rows_png"],
+            rows,
+            failure_classification=failure_classification,
+        )
+        artifact_paths["worst_rows_json"] = paths["worst_rows_json"]
+        artifact_paths["worst_rows_png"] = paths["worst_rows_png"]
+        required_pngs.append(paths["worst_rows_png"])
+
+    missing_required_pngs = [
+        path for path in required_pngs if not path.exists() or path.stat().st_size <= 0
+    ]
+    if missing_required_pngs:
+        missing_text = ", ".join(str(path) for path in missing_required_pngs)
+        raise RuntimeError(
+            f"Geometry fit recovery artifact generation missing required PNGs: {missing_text}"
+        )
+
+    artifact_payload = {
+        "geometry_fit_recovery_artifact_status": "pass",
+        "geometry_fit_recovery_required_pngs": required_pngs,
+        "geometry_fit_recovery_artifacts": artifact_paths,
+        "single_step_status": single_step_report.get("status"),
+    }
+    artifact_payload.update(artifact_paths)
+    return artifact_payload
 
 
 def _headless_runtime_solver_mapping(runtime_cfg: Mapping[str, object]) -> dict[str, object]:
@@ -4344,6 +4837,7 @@ def run_headless_geometry_fit(
         ),
         live_update_callback=progress_writer.live_update,
     )
+    initial_fit_params = dict(value_callbacks.current_params())
     progress_writer.write("solve_start")
     execution = gui_geometry_fit.execute_runtime_geometry_fit(
         prepared_run=prepared_run,
@@ -4370,6 +4864,28 @@ def run_headless_geometry_fit(
         final_progress["optimizer_nfev"] = getattr(solver_result, "nfev", None)
         final_progress["optimizer_njev"] = getattr(solver_result, "njev", None)
     progress_writer.write("final_validation", **final_progress)
+    try:
+        artifact_progress = _write_headless_geometry_fit_recovery_artifacts(
+            state_path=state_path,
+            output_dir=downloads_path,
+            background_index=background_state.current_background_index,
+            active_var_names=var_names,
+            accepted=bool(execution.apply_result.accepted),
+            rejection_reason=execution.apply_result.rejection_reason,
+            final_summary=final_summary if isinstance(final_summary, Mapping) else None,
+            progress_data=progress_writer.data,
+            initial_params=initial_fit_params,
+            final_params=dict(value_callbacks.current_params()),
+        )
+    except Exception as exc:
+        progress_writer.write(
+            "final_validation",
+            geometry_fit_recovery_artifact_status="fail",
+            geometry_fit_recovery_artifact_error=str(exc),
+        )
+        raise
+    if artifact_progress:
+        progress_writer.write("final_validation", **artifact_progress)
 
     updated_state = _updated_state_snapshot(saved_state, defaults, var_store)
     if manual_caked_backfill_changed_count > 0:

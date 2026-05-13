@@ -36,6 +36,10 @@
   - Updated `load_tilt_hint` to return converted simulation-space tilt/center/distance hints.
 
 - **Fitting and optimization**
+  - Wired New4 headless `gamma,Gamma` recovery fits to write the single-step QR
+    coordinate audit, full-fit before/after overlay, and rejected-fit worst-row
+    PNG/JSON artifacts into the fit output folder, record their paths in the
+    progress sidecar, and fail closed when any required PNG is missing.
   - Changed the dynamic caked QR objective sensitivity diagnostic to probe
     angular variables with a bounded `0.1` to `5` degree ladder and report the
     first meaningful step plus caked-prediction and residual-vector deltas,

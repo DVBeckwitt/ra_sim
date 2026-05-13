@@ -76,6 +76,34 @@ The GUI acceptance gate remains detector-pixel strict even when caked angular
 diagnostics are present. The caked angular acceptance shortcut is reserved for
 true headless geometry-fit runs that set the private headless runtime flag.
 
+For New4 headless `gamma,Gamma` recovery runs, `fit-geometry` now writes visual
+approval artifacts into the same output directory as the fitted state and
+progress sidecar. A run such as:
+
+```bash
+python -m ra_sim fit-geometry artifacts/geometry_fit_gui_states/new4.json \
+  --active-vars gamma,Gamma \
+  --seed-policy ladder-multistart \
+  --out-state artifacts/geometry_fit_recovery/new4_headless_gamma_gamma/new4_gamma_gamma_fit.json
+```
+
+must write:
+
+- `01_single_step_qr_coordinate_audit.json`
+- `01_single_step_qr_coordinate_audit.csv`
+- `01_single_step_qr_coordinate_audit.png`
+- `02_full_fit_initial_vs_final_qr_overlay.json`
+- `02_full_fit_initial_vs_final_qr_overlay.png`
+- `03_worst_residual_rows.json` and `03_worst_residual_rows.png` when the fit rejects
+
+The progress JSON records the generated paths under
+`geometry_fit_recovery_artifacts` and mirrors the common paths at top level for
+operator inspection. Required PNGs are gate artifacts: the run fails if the
+single-step PNG or full-fit overlay PNG is missing, and a rejected fit also
+fails if the worst-row PNG is missing. This keeps a caked angular rejection such
+as `branch_source_pairing_mismatch` paired with visual evidence in the same
+folder as `new4_gamma_gamma_fit.progress.json`.
+
 ## Background Peak-Fit Diagnostic Caches
 
 The parallel background peak-fit diagnostic script
