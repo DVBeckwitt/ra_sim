@@ -735,13 +735,13 @@ def _apply_headless_geometry_fit_sweep_result_to_state(
 ) -> tuple[dict[str, object], dict[str, object]]:
     from ra_sim.gui import geometry_fit as gui_geometry_fit
 
-    approved_ids = (
-        _load_shared_headless_geometry_fit().normalize_headless_geometry_fit_excluded_pair_ids(
-            approved_excluded_pair_ids
-        )
+    shared_headless = _load_shared_headless_geometry_fit()
+    approved_ids = shared_headless.normalize_headless_geometry_fit_excluded_pair_ids(
+        approved_excluded_pair_ids
     )
     if not approved_ids:
         raise ValueError("approved_excluded_pair_ids_required")
+    excluded_pair_ids = list(approved_ids)
 
     updated_state = copy.deepcopy(dict(state))
     variables = _saved_state_section(updated_state, "variables")
@@ -752,10 +752,10 @@ def _apply_headless_geometry_fit_sweep_result_to_state(
         for public_name, state_key in _GEOMETRY_FIT_SWEEP_STATE_VAR_KEYS.items()
     }
     artifact_dir = Path(output_dir) if output_dir is not None else Path(source_path).parent
-    overlay_png = artifact_dir / _load_shared_headless_geometry_fit().GEOMETRY_FIT_APPLIED_OVERLAY_PNG
+    overlay_png = artifact_dir / shared_headless.GEOMETRY_FIT_APPLIED_OVERLAY_PNG
     result = gui_geometry_fit.apply_geometry_fit_sweep_result(
         combo_result_path=combo_result_path,
-        approved_excluded_pair_ids=approved_ids,
+        approved_excluded_pair_ids=excluded_pair_ids,
         var_map=var_map,
         current_state_path=source_path,
         accepted_overlay_path=overlay_png,
@@ -767,7 +767,7 @@ def _apply_headless_geometry_fit_sweep_result_to_state(
     updated_state["variables"] = variables
 
     geometry = _saved_state_section(updated_state, "geometry")
-    geometry["geometry_fit_excluded_pair_ids"] = list(approved_ids)
+    geometry["geometry_fit_excluded_pair_ids"] = excluded_pair_ids
     geometry["geometry_fit_exclusion_reason"] = "manual_outliers_or_physical_bad_fit"
     updated_state["geometry"] = geometry
 
@@ -777,6 +777,7 @@ def _apply_headless_geometry_fit_sweep_result_to_state(
     except Exception:
         combo_payload = {}
     combo_result = combo_payload if isinstance(combo_payload, Mapping) else {}
+    combo_name = str(combo_result.get("name") or combo_path.stem)
     plotted_row_identities: list[object] = []
     artifacts = combo_result.get("artifacts")
     artifact_map = artifacts if isinstance(artifacts, Mapping) else {}
@@ -793,14 +794,14 @@ def _apply_headless_geometry_fit_sweep_result_to_state(
     output_state_hash = hashlib.sha256(
         json.dumps(updated_state, sort_keys=True, default=str).encode("utf-8")
     ).hexdigest()
-    overlay_json = artifact_dir / _load_shared_headless_geometry_fit().GEOMETRY_FIT_APPLIED_OVERLAY_JSON
+    overlay_json = artifact_dir / shared_headless.GEOMETRY_FIT_APPLIED_OVERLAY_JSON
     overlay_json.parent.mkdir(parents=True, exist_ok=True)
     overlay_payload = {
         "json_authoritative": True,
         "png_diagnostic_only": True,
-        "applied_combo_name": str(combo_result.get("name") or combo_path.stem),
+        "applied_combo_name": combo_name,
         "applied_active_vars": list(result.active_vars),
-        "excluded_pair_ids": list(approved_ids),
+        "excluded_pair_ids": excluded_pair_ids,
         "gamma_before": gamma_before,
         "Gamma_before": Gamma_before,
         "gamma_after": variables.get("gamma_var"),
@@ -820,11 +821,11 @@ def _apply_headless_geometry_fit_sweep_result_to_state(
         "accepted": True,
         "apply_success": True,
         "geometry_updated": True,
-        "applied_combo_name": str(combo_result.get("name") or combo_path.stem),
+        "applied_combo_name": combo_name,
         "applied_active_vars": list(result.active_vars),
         "applied_values": dict(result.applied_values),
-        "excluded_pair_ids": list(approved_ids),
-        "excluded_pair_count": int(len(approved_ids)),
+        "excluded_pair_ids": excluded_pair_ids,
+        "excluded_pair_count": int(len(excluded_pair_ids)),
         "raw_angular_rms_deg": combo_result.get("raw_angular_rms_deg"),
         "raw_angular_max_deg": combo_result.get("raw_angular_max_deg"),
         "qr_fit_expected_count": combo_result.get("qr_fit_expected_count"),

@@ -1427,14 +1427,20 @@ def _headless_geometry_fit_classify_combo_result(
 def _headless_geometry_fit_validate_combo_artifacts(combo_result: Mapping[str, object]) -> None:
     if str(combo_result.get("status") or "") == "skipped":
         return
-    missing = [
+    missing = _headless_geometry_fit_missing_required_pngs(combo_result)
+    if missing:
+        missing_text = ", ".join(str(path) for path in missing)
+        raise RuntimeError(f"Geometry fit combo missing required PNGs: {missing_text}")
+
+
+def _headless_geometry_fit_missing_required_pngs(
+    combo_result: Mapping[str, object],
+) -> list[Path]:
+    return [
         path
         for path in _headless_geometry_fit_combo_required_pngs(combo_result)
         if not path.exists() or path.stat().st_size <= 0
     ]
-    if missing:
-        missing_text = ", ".join(str(path) for path in missing)
-        raise RuntimeError(f"Geometry fit combo missing required PNGs: {missing_text}")
 
 
 def _headless_geometry_fit_combo_artifact_status(
@@ -1446,9 +1452,7 @@ def _headless_geometry_fit_combo_artifact_status(
         result["required_pngs_present"] = False
         return result
     required_pngs = _headless_geometry_fit_combo_required_pngs(result)
-    missing = [
-        path for path in required_pngs if not path.exists() or path.stat().st_size <= 0
-    ]
+    missing = _headless_geometry_fit_missing_required_pngs(result)
     result["required_pngs_present"] = bool(required_pngs) and not missing
     result["artifact_status"] = (
         "required_pngs_present" if result["required_pngs_present"] else "required_pngs_missing"
