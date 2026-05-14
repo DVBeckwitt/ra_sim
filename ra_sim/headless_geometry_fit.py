@@ -9,6 +9,7 @@ import importlib.util
 import json
 import math
 import os
+import textwrap
 import time
 import warnings
 from dataclasses import dataclass, replace
@@ -52,9 +53,30 @@ HEADLESS_GEOMETRY_SUPPORTED_ACTIVE_VAR_NAMES = (
     "center_x",
     "center_y",
 )
-HEADLESS_GEOMETRY_SUPPORTED_ACTIVE_VAR_NAME_SET = set(
-    HEADLESS_GEOMETRY_SUPPORTED_ACTIVE_VAR_NAMES
+HEADLESS_GEOMETRY_SUPPORTED_ACTIVE_VAR_NAME_SET = set(HEADLESS_GEOMETRY_SUPPORTED_ACTIVE_VAR_NAMES)
+HEADLESS_GEOMETRY_FIT_REQUIRED_PARAMETER_COMBOS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("00_gamma_Gamma", ("gamma", "Gamma")),
+    ("01_gamma_Gamma_theta_initial", ("gamma", "Gamma", "theta_initial")),
+    ("02_gamma_Gamma_corto_detector", ("gamma", "Gamma", "corto_detector")),
+    ("03_gamma_Gamma_center_x_center_y", ("gamma", "Gamma", "center_x", "center_y")),
+    (
+        "04_gamma_Gamma_theta_initial_corto_detector",
+        ("gamma", "Gamma", "theta_initial", "corto_detector"),
+    ),
+    (
+        "05_gamma_Gamma_theta_initial_center_x_center_y",
+        ("gamma", "Gamma", "theta_initial", "center_x", "center_y"),
+    ),
 )
+HEADLESS_GEOMETRY_FIT_DIAGNOSTIC_PARAMETER_COMBOS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("diagnostic_gamma", ("gamma",)),
+    ("diagnostic_Gamma_only", ("Gamma",)),
+    ("diagnostic_theta_initial", ("theta_initial",)),
+    ("diagnostic_center_x_center_y", ("center_x", "center_y")),
+    ("diagnostic_corto_detector", ("corto_detector",)),
+)
+HEADLESS_GEOMETRY_FIT_SWEEP_RMS_THRESHOLD_DEG = 5.0
+HEADLESS_GEOMETRY_FIT_SWEEP_MAX_THRESHOLD_DEG = 10.0
 GEOMETRY_FIT_RECOVERY_SINGLE_STEP_JSON = "01_single_step_qr_coordinate_audit.json"
 GEOMETRY_FIT_RECOVERY_SINGLE_STEP_PNG = "01_single_step_qr_coordinate_audit.png"
 GEOMETRY_FIT_RECOVERY_SINGLE_STEP_CSV = "01_single_step_qr_coordinate_audit.csv"
@@ -62,6 +84,7 @@ GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_JSON = "02_full_fit_initial_vs_final_qr_overl
 GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_PNG = "02_full_fit_initial_vs_final_qr_overlay.png"
 GEOMETRY_FIT_RECOVERY_WORST_ROWS_JSON = "03_worst_residual_rows.json"
 GEOMETRY_FIT_RECOVERY_WORST_ROWS_PNG = "03_worst_residual_rows.png"
+GEOMETRY_FIT_SWEEP_SUMMARY_PNG = "sweep_summary.png"
 _HEADLESS_GEOMETRY_FIT_SAVED_MANUAL_CAKED_DEFAULT_ACTIVE_VAR_NAMES = (
     "a",
     "theta_offset",
@@ -228,31 +251,15 @@ def _headless_geometry_fit_domain_from_bounds_entry(
         if mode in {"relative", "rel"}:
             if not np.isfinite(current_value_float):
                 return None
-            lo = (
-                current_value_float + float(min_raw)
-                if min_raw is not None
-                else float("-inf")
-            )
-            hi = (
-                current_value_float + float(max_raw)
-                if max_raw is not None
-                else float("inf")
-            )
+            lo = current_value_float + float(min_raw) if min_raw is not None else float("-inf")
+            hi = current_value_float + float(max_raw) if max_raw is not None else float("inf")
         elif mode in {"relative_min0", "rel_min0"}:
             if not np.isfinite(current_value_float):
                 return None
-            lo = (
-                current_value_float + float(min_raw)
-                if min_raw is not None
-                else float("-inf")
-            )
+            lo = current_value_float + float(min_raw) if min_raw is not None else float("-inf")
             if np.isfinite(lo):
                 lo = max(0.0, lo)
-            hi = (
-                current_value_float + float(max_raw)
-                if max_raw is not None
-                else float("inf")
-            )
+            hi = current_value_float + float(max_raw) if max_raw is not None else float("inf")
         else:
             lo = float(min_raw) if min_raw is not None else float("-inf")
             hi = float(max_raw) if max_raw is not None else float("inf")
@@ -553,9 +560,7 @@ def _headless_background_display_to_native_detector_coords_for_background(
             -int(display_rotate_k),
         )
 
-    _to_native.__name__ = (
-        f"_headless_background_display_to_native_detector_coords_bg_{bg_idx}"
-    )
+    _to_native.__name__ = f"_headless_background_display_to_native_detector_coords_bg_{bg_idx}"
     return _to_native
 
 
@@ -604,9 +609,7 @@ def _legacy_background_subtraction_requested(
     mode_override: object | None,
 ) -> bool:
     override_text = (
-        ""
-        if mode_override is None
-        else str(mode_override).strip().lower().replace("_", "-")
+        "" if mode_override is None else str(mode_override).strip().lower().replace("_", "-")
     )
     if override_text and override_text not in {"off", "saved"}:
         return True
@@ -620,21 +623,20 @@ def _legacy_background_subtraction_requested(
     )
     if _coerce_bool(saved_variables.get("background_subtraction_enabled_var"), False):
         return True
-    saved_mode = str(
-        saved_variables.get("background_subtraction_mode_var") or ""
-    ).strip().lower().replace("_", "-")
+    saved_mode = (
+        str(saved_variables.get("background_subtraction_mode_var") or "")
+        .strip()
+        .lower()
+        .replace("_", "-")
+    )
     if saved_mode and saved_mode != "off":
         return True
 
     geometry_cfg = (
-        defaults.fit_config.get("geometry", {})
-        if isinstance(defaults.fit_config, Mapping)
-        else {}
+        defaults.fit_config.get("geometry", {}) if isinstance(defaults.fit_config, Mapping) else {}
     )
     config_cfg = (
-        geometry_cfg.get("background_subtraction", {})
-        if isinstance(geometry_cfg, Mapping)
-        else {}
+        geometry_cfg.get("background_subtraction", {}) if isinstance(geometry_cfg, Mapping) else {}
     )
     if isinstance(config_cfg, Mapping):
         if _coerce_bool(config_cfg.get("enabled"), False):
@@ -1204,6 +1206,824 @@ def _restore_manual_pairs(
         refresh_status=lambda: None,
     )
     return pairs_by_background
+
+
+def normalize_headless_geometry_fit_excluded_pair_ids(
+    excluded_pair_ids: Sequence[object] | str | None,
+) -> list[str]:
+    """Return stable exact pair IDs to omit from one headless fit request."""
+
+    if excluded_pair_ids is None:
+        return []
+    if isinstance(excluded_pair_ids, str):
+        raw_values: Sequence[object] = excluded_pair_ids.split(",")
+    else:
+        raw_values = list(excluded_pair_ids)
+    return sorted({str(value).strip() for value in raw_values if str(value).strip()})
+
+
+def headless_geometry_fit_parameter_combo_matrix(
+    *,
+    supported_var_names: Sequence[object] | set[object] | None = None,
+) -> list[dict[str, object]]:
+    """Return stable Bi2Se3 recovery active-variable combinations."""
+
+    supported = (
+        {str(name) for name in supported_var_names}
+        if supported_var_names is not None
+        else set(HEADLESS_GEOMETRY_SUPPORTED_ACTIVE_VAR_NAME_SET)
+    )
+    combos: list[dict[str, object]] = []
+    for required, combo_source in (
+        (True, HEADLESS_GEOMETRY_FIT_REQUIRED_PARAMETER_COMBOS),
+        (False, HEADLESS_GEOMETRY_FIT_DIAGNOSTIC_PARAMETER_COMBOS),
+    ):
+        for name, active_vars in combo_source:
+            missing = [var_name for var_name in active_vars if var_name not in supported]
+            skipped = bool(missing)
+            combos.append(
+                {
+                    "name": str(name),
+                    "active_vars": [str(var_name) for var_name in active_vars],
+                    "required": bool(required),
+                    "diagnostic_only": not bool(required),
+                    "status": "skipped" if skipped else "pending",
+                    "skip_reason": "unsupported_variable" if skipped else None,
+                    "unsupported_variables": list(missing),
+                }
+            )
+    return combos
+
+
+def _headless_geometry_fit_combo_result_json_path(combo_dir: Path) -> Path:
+    return combo_dir / "combo_result.json"
+
+
+def _headless_geometry_fit_combo_required_pngs(combo_result: Mapping[str, object]) -> list[Path]:
+    artifacts = combo_result.get("artifacts")
+    artifact_map = artifacts if isinstance(artifacts, Mapping) else {}
+    combo_dir_value = combo_result.get("combo_artifact_dir")
+    combo_dir = Path(combo_dir_value) if combo_dir_value is not None else None
+
+    def _artifact_path(key: str, filename: str) -> Path | None:
+        value = artifact_map.get(key)
+        if value is not None:
+            return Path(value)
+        if combo_dir is not None:
+            return combo_dir / filename
+        return None
+
+    required: list[Path] = []
+    for key, filename in (
+        ("single_step_png", GEOMETRY_FIT_RECOVERY_SINGLE_STEP_PNG),
+        ("full_fit_png", GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_PNG),
+    ):
+        value = _artifact_path(key, filename)
+        if value is not None:
+            required.append(value)
+    if str(combo_result.get("status") or "") == "rejected":
+        value = _artifact_path("worst_rows_png", GEOMETRY_FIT_RECOVERY_WORST_ROWS_PNG)
+        if value is not None:
+            required.append(value)
+    return required
+
+
+def _headless_geometry_fit_combo_float(value: object) -> float | None:
+    try:
+        number = float(value)
+    except Exception:
+        return None
+    return float(number) if math.isfinite(number) else None
+
+
+def _headless_geometry_fit_combo_int(value: object) -> int | None:
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _headless_geometry_fit_classify_combo_result(
+    combo_result: Mapping[str, object],
+) -> dict[str, object]:
+    result = dict(combo_result)
+    if str(result.get("status") or "") == "skipped":
+        result["would_update_geometry"] = False
+        result["geometry_updated"] = False
+        result.setdefault("failure_reasons", [])
+        return result
+    if not bool(result.get("full_fit_success", False)):
+        result["status"] = "rejected"
+        result["would_update_geometry"] = False
+        result["geometry_updated"] = False
+        result.setdefault("failure_reasons", ["full_fit_rejected"])
+        return result
+
+    failure_reasons: list[str] = []
+    resolved = _headless_geometry_fit_combo_int(result.get("qr_fit_resolved_count"))
+    expected = _headless_geometry_fit_combo_int(result.get("qr_fit_expected_count"))
+    if resolved is None or expected is None:
+        failure_reasons.append("qr_fit_contract_missing")
+    elif resolved != expected:
+        failure_reasons.append("qr_fit_resolved_expected_mismatch")
+    missing_pairs = result.get("qr_fit_missing_pairs")
+    if not isinstance(missing_pairs, Sequence) or isinstance(missing_pairs, (str, bytes)):
+        failure_reasons.append("qr_fit_missing_pairs_missing")
+    elif len(missing_pairs) > 0:
+        failure_reasons.append("qr_fit_missing_pairs")
+    source_mismatch = _headless_geometry_fit_combo_int(
+        result.get("source_authority_mismatch_count")
+    )
+    if source_mismatch is None:
+        failure_reasons.append("source_authority_mismatch_missing")
+    elif source_mismatch != 0:
+        failure_reasons.append("source_authority_mismatch")
+    surface_mismatch = _headless_geometry_fit_combo_int(
+        result.get("visual_objective_surface_mismatch_count")
+    )
+    if surface_mismatch is None:
+        failure_reasons.append("visual_objective_surface_mismatch_missing")
+    elif surface_mismatch != 0:
+        failure_reasons.append("visual_objective_surface_mismatch")
+    sensitivity = str(result.get("objective_param_sensitivity_status") or "").strip()
+    if not sensitivity:
+        failure_reasons.append("objective_param_sensitivity_missing")
+    elif sensitivity == "all_fit_vars_insensitive":
+        failure_reasons.append("objective_param_insensitive")
+    elif sensitivity not in {"sensitive", "partially_insensitive"}:
+        failure_reasons.append("objective_param_sensitivity_not_accepting")
+    metric_space = str(result.get("acceptance_metric_space") or "").strip()
+    if metric_space != "caked_deg":
+        failure_reasons.append("acceptance_metric_not_caked_deg")
+    if "saved_sim_refined_caked_used" not in result:
+        failure_reasons.append("saved_sim_refined_caked_used_missing")
+    elif bool(result.get("saved_sim_refined_caked_used", False)):
+        failure_reasons.append("saved_sim_refined_caked_used")
+    if "pixel_residual_used_for_objective" not in result:
+        failure_reasons.append("pixel_residual_used_for_objective_missing")
+    elif bool(result.get("pixel_residual_used_for_objective", False)):
+        failure_reasons.append("pixel_residual_used_for_objective")
+    rms = _headless_geometry_fit_combo_float(result.get("raw_angular_rms_deg"))
+    max_value = _headless_geometry_fit_combo_float(result.get("raw_angular_max_deg"))
+    if rms is None:
+        failure_reasons.append("raw_angular_rms_missing")
+    elif rms > HEADLESS_GEOMETRY_FIT_SWEEP_RMS_THRESHOLD_DEG:
+        failure_reasons.append("rms_threshold_exceeded")
+    if max_value is None:
+        failure_reasons.append("raw_angular_max_missing")
+    elif max_value > HEADLESS_GEOMETRY_FIT_SWEEP_MAX_THRESHOLD_DEG:
+        failure_reasons.append("max_threshold_exceeded")
+
+    if failure_reasons:
+        result["status"] = "rejected"
+        result["full_fit_success"] = False
+        result["would_update_geometry"] = False
+    else:
+        result["status"] = "accepted"
+        result["would_update_geometry"] = True
+    result["geometry_updated"] = False
+    result["failure_reasons"] = failure_reasons
+    return result
+
+
+def _headless_geometry_fit_validate_combo_artifacts(combo_result: Mapping[str, object]) -> None:
+    if str(combo_result.get("status") or "") == "skipped":
+        return
+    missing = [
+        path
+        for path in _headless_geometry_fit_combo_required_pngs(combo_result)
+        if not path.exists() or path.stat().st_size <= 0
+    ]
+    if missing:
+        missing_text = ", ".join(str(path) for path in missing)
+        raise RuntimeError(f"Geometry fit combo missing required PNGs: {missing_text}")
+
+
+def _headless_geometry_fit_best_combo(
+    combo_results: Sequence[Mapping[str, object]],
+) -> Mapping[str, object] | None:
+    accepted = [
+        result
+        for result in combo_results
+        if str(result.get("status") or "") == "accepted"
+        and bool(result.get("full_fit_success", False))
+    ]
+    if not accepted:
+        return None
+
+    def _metric(value: Mapping[str, object], key: str) -> float:
+        try:
+            number = float(value.get(key))
+        except Exception:
+            return float("inf")
+        return float(number) if math.isfinite(number) else float("inf")
+
+    return min(
+        accepted,
+        key=lambda result: (
+            _metric(result, "raw_angular_rms_deg"),
+            _metric(result, "raw_angular_max_deg"),
+            len(result.get("active_vars", ()) or ()),
+        ),
+    )
+
+
+def _headless_geometry_fit_write_sweep_summary_png(
+    path: Path,
+    combo_results: Sequence[Mapping[str, object]],
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    results = list(combo_results)
+    names = [str(result.get("name") or index) for index, result in enumerate(results)]
+    x_values = np.arange(len(results), dtype=float)
+    rms_values = np.array(
+        [
+            (
+                value
+                if (value := _headless_geometry_fit_combo_float(result.get("raw_angular_rms_deg")))
+                is not None
+                else np.nan
+            )
+            for result in results
+        ],
+        dtype=float,
+    )
+    max_values = np.array(
+        [
+            (
+                value
+                if (value := _headless_geometry_fit_combo_float(result.get("raw_angular_max_deg")))
+                is not None
+                else np.nan
+            )
+            for result in results
+        ],
+        dtype=float,
+    )
+    colors = [
+        (
+            "#2ca02c"
+            if str(result.get("status") or "") == "accepted"
+            else "#d62728"
+            if str(result.get("status") or "") == "rejected"
+            else "#7f7f7f"
+        )
+        for result in results
+    ]
+
+    fig, ax_rms = plt.subplots(figsize=(max(8.5, 0.72 * max(len(results), 1)), 5.4))
+    finite_rms = np.isfinite(rms_values)
+    finite_max = np.isfinite(max_values)
+    if len(results) == 0 or (not finite_rms.any() and not finite_max.any()):
+        ax_rms.text(
+            0.5,
+            0.5,
+            "No parameter-combo metrics available",
+            ha="center",
+            va="center",
+            transform=ax_rms.transAxes,
+        )
+        ax_rms.set_xticks([])
+    else:
+        ax_rms.bar(
+            x_values[finite_rms],
+            rms_values[finite_rms],
+            color=[colors[index] for index in np.flatnonzero(finite_rms)],
+            alpha=0.72,
+            label="RMS deg",
+        )
+        ax_rms.axhline(
+            HEADLESS_GEOMETRY_FIT_SWEEP_RMS_THRESHOLD_DEG,
+            color="#4c4c4c",
+            linestyle="--",
+            linewidth=1.0,
+            label="RMS threshold",
+        )
+        ax_max = ax_rms.twinx()
+        ax_max.scatter(
+            x_values[finite_max],
+            max_values[finite_max],
+            color=[colors[index] for index in np.flatnonzero(finite_max)],
+            marker="D",
+            s=44,
+            label="max deg",
+            zorder=3,
+        )
+        ax_max.axhline(
+            HEADLESS_GEOMETRY_FIT_SWEEP_MAX_THRESHOLD_DEG,
+            color="#8c564b",
+            linestyle=":",
+            linewidth=1.2,
+            label="max threshold",
+        )
+        ax_max.set_ylabel("max residual (deg)")
+        handles, labels = ax_rms.get_legend_handles_labels()
+        max_handles, max_labels = ax_max.get_legend_handles_labels()
+        ax_rms.legend(handles + max_handles, labels + max_labels, loc="best", fontsize=8)
+        ax_rms.set_xticks(x_values, names, rotation=45, ha="right", fontsize=8)
+    ax_rms.set_ylabel("RMS residual (deg)")
+    ax_rms.set_title("Bi2Se3 geometry-fit parameter sweep")
+    ax_rms.grid(True, axis="y", alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def _headless_geometry_fit_write_failure_png(
+    path: Path,
+    *,
+    title: str,
+    message: str,
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    import matplotlib.pyplot as plt
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    wrapped = "\n".join(textwrap.wrap(str(message), width=92)[:18])
+    fig, ax = plt.subplots(figsize=(8.5, 4.8))
+    ax.axis("off")
+    ax.set_title(str(title), loc="left", fontsize=12)
+    ax.text(
+        0.02,
+        0.95,
+        wrapped or "No failure details available",
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=9,
+        family="monospace",
+    )
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+
+
+def _headless_geometry_fit_load_progress(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return dict(loaded) if isinstance(loaded, Mapping) else {}
+
+
+def _headless_geometry_fit_fail_closed_combo_result(
+    *,
+    combo: Mapping[str, object],
+    combo_dir: Path,
+    state_file: Path,
+    exception: BaseException,
+) -> dict[str, object]:
+    progress_path = combo_dir / f"{combo['name']}.progress.json"
+    progress = _headless_geometry_fit_load_progress(progress_path)
+    message = str(exception).strip() or type(exception).__name__
+    paths = _headless_geometry_fit_recovery_paths(combo_dir)
+    artifact_paths: dict[str, object] = {
+        "single_step_json": paths["single_step_json"],
+        "single_step_png": paths["single_step_png"],
+        "single_step_csv": paths["single_step_csv"],
+        "full_fit_json": paths["full_fit_json"],
+        "full_fit_png": paths["full_fit_png"],
+        "worst_rows_json": paths["worst_rows_json"],
+        "worst_rows_png": paths["worst_rows_png"],
+    }
+    state_provenance = _headless_geometry_fit_state_provenance(state_file)
+    failure_payload = {
+        "json_authoritative": True,
+        **state_provenance,
+        "combo_name": combo.get("name"),
+        "active_vars": list(combo.get("active_vars", ()) or ()),
+        "status": "rejected",
+        "full_fit_success": False,
+        "failure_reasons": ["headless_fit_exception"],
+        "exception_type": type(exception).__name__,
+        "rejection_reason": message,
+        "progress_path": progress_path,
+        "progress_phase": progress.get("phase"),
+        "status_text": progress.get("status_text"),
+    }
+    _geometry_fit_recovery_json(paths["single_step_json"], failure_payload)
+    paths["single_step_csv"].write_text(
+        "field,value\nstatus,rejected\nfailure_reason," + json.dumps(message) + "\n",
+        encoding="utf-8",
+    )
+    _geometry_fit_recovery_json(paths["full_fit_json"], failure_payload)
+    _geometry_fit_recovery_json(
+        paths["worst_rows_json"],
+        {**failure_payload, "row_count": 0, "rows": []},
+    )
+    for key, title in (
+        ("single_step_png", "Single-step QR coordinate audit unavailable"),
+        ("full_fit_png", "Full-fit overlay unavailable"),
+        ("worst_rows_png", "Worst residual rows unavailable"),
+    ):
+        _headless_geometry_fit_write_failure_png(
+            Path(artifact_paths[key]),
+            title=title,
+            message=message,
+        )
+
+    combo_result: dict[str, object] = {
+        "status": "rejected",
+        "full_fit_success": False,
+        "rejection_reason": message,
+        "failure_reasons": ["headless_fit_exception"],
+        "exception_type": type(exception).__name__,
+        "geometry_updated": False,
+        "would_update_geometry": False,
+        "progress_path": progress_path,
+        "artifacts": artifact_paths,
+        **state_provenance,
+    }
+    summary = progress.get("point_match_summary")
+    summary_map = summary if isinstance(summary, Mapping) else {}
+    for key in (
+        "raw_angular_rms_deg",
+        "raw_angular_max_deg",
+        "final_rms_deg",
+        "final_max_deg",
+        "excluded_pair_ids",
+        "excluded_pair_count",
+        "excluded_rows",
+        "excluded_pair_ids_present",
+        "original_qr_fit_expected_count",
+        "excluded_rows_do_not_count_as_missing",
+        "saved_gui_state_mutated",
+        "qr_fit_resolved_count",
+        "qr_fit_expected_count",
+        "qr_fit_missing_pairs",
+        "source_authority_mismatch_count",
+        "visual_objective_surface_mismatch_count",
+        "objective_param_sensitivity_status",
+        "acceptance_metric_space",
+        "saved_sim_refined_caked_used",
+        "pixel_residual_used_for_objective",
+    ):
+        if key in progress:
+            combo_result[key] = progress.get(key)
+        elif key in summary_map:
+            combo_result[key] = summary_map.get(key)
+    combo_result.setdefault("saved_sim_refined_caked_used", False)
+    combo_result.setdefault("pixel_residual_used_for_objective", False)
+    return combo_result
+
+
+def _headless_geometry_fit_supplement_combo_artifacts(
+    *,
+    combo: Mapping[str, object],
+    combo_dir: Path,
+    state_file: Path,
+    combo_result: Mapping[str, object],
+) -> dict[str, object]:
+    result = dict(combo_result)
+    artifact_map = result.get("artifacts")
+    declared_artifacts = artifact_map if isinstance(artifact_map, Mapping) else {}
+    declared_png = any(
+        declared_artifacts.get(key) is not None
+        for key in ("single_step_png", "full_fit_png", "worst_rows_png")
+    )
+    if declared_png:
+        return result
+
+    required_pngs = _headless_geometry_fit_combo_required_pngs(
+        {**result, "combo_artifact_dir": combo_dir}
+    )
+    paths = _headless_geometry_fit_recovery_paths(combo_dir)
+    artifact_paths: dict[str, object] = {
+        "single_step_json": paths["single_step_json"],
+        "single_step_png": paths["single_step_png"],
+        "single_step_csv": paths["single_step_csv"],
+        "full_fit_json": paths["full_fit_json"],
+        "full_fit_png": paths["full_fit_png"],
+        "worst_rows_json": paths["worst_rows_json"],
+        "worst_rows_png": paths["worst_rows_png"],
+    }
+    if required_pngs and all(path.exists() and path.stat().st_size > 0 for path in required_pngs):
+        result["artifacts"] = artifact_paths
+        return result
+
+    message = (
+        str(result.get("rejection_reason") or "").strip()
+        or str(result.get("status_text") or "").strip()
+        or "geometry_fit_recovery_artifacts_unavailable_for_active_variables"
+    )
+    payload = {
+        "json_authoritative": True,
+        **_headless_geometry_fit_state_provenance(state_file),
+        "combo_name": combo.get("name"),
+        "active_vars": list(combo.get("active_vars", ()) or ()),
+        "status": result.get("status"),
+        "full_fit_success": bool(result.get("full_fit_success", False)),
+        "rejection_reason": message,
+        "raw_angular_rms_deg": result.get("raw_angular_rms_deg"),
+        "raw_angular_max_deg": result.get("raw_angular_max_deg"),
+        "artifact_note": "summary_placeholder_written_by_parameter_combo_sweep",
+    }
+    _geometry_fit_recovery_json(paths["single_step_json"], payload)
+    paths["single_step_csv"].write_text(
+        "field,value\nstatus,"
+        + json.dumps(str(result.get("status") or ""))
+        + "\nartifact_note,"
+        + json.dumps(str(payload["artifact_note"]))
+        + "\n",
+        encoding="utf-8",
+    )
+    _geometry_fit_recovery_json(paths["full_fit_json"], payload)
+    _geometry_fit_recovery_json(paths["worst_rows_json"], {**payload, "row_count": 0, "rows": []})
+    for key, title in (
+        ("single_step_png", "Single-step QR coordinate audit summary"),
+        ("full_fit_png", "Full-fit overlay summary"),
+        ("worst_rows_png", "Worst residual rows summary"),
+    ):
+        _headless_geometry_fit_write_failure_png(
+            Path(artifact_paths[key]),
+            title=title,
+            message=message,
+        )
+    result["artifacts"] = artifact_paths
+    return result
+
+
+def _headless_geometry_fit_write_sweep_markdown(path: Path, report: Mapping[str, object]) -> None:
+    summary_png = report.get("sweep_summary_png")
+    lines = [
+        "# Bi2Se3 Geometry Fit Parameter Sweep",
+        "",
+        f"- Best combo: `{report.get('best_combo_name') or 'none'}`",
+        f"- All supported required combos pass: `{report.get('all_supported_required_combos_pass')}`",
+        "",
+        f"![Sweep summary]({summary_png})" if summary_png else "",
+        "",
+        "| Combo | Status | RMS deg | Max deg | Overlay | Worst rows |",
+        "| --- | --- | ---: | ---: | --- | --- |",
+    ]
+    for result in report.get("combo_results", ()) or ():
+        if not isinstance(result, Mapping):
+            continue
+        artifacts = result.get("artifacts")
+        artifact_map = artifacts if isinstance(artifacts, Mapping) else {}
+        overlay = artifact_map.get("full_fit_png")
+        worst = artifact_map.get("worst_rows_png")
+        lines.append(
+            "| "
+            + " | ".join(
+                (
+                    str(result.get("name") or ""),
+                    str(result.get("status") or ""),
+                    str(result.get("raw_angular_rms_deg") or ""),
+                    str(result.get("raw_angular_max_deg") or ""),
+                    f"[overlay]({overlay})" if overlay else "",
+                    f"[worst]({worst})" if worst else "",
+                )
+            )
+            + " |"
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _run_headless_geometry_fit_parameter_combo(
+    *,
+    saved_state: Mapping[str, object],
+    state_path: Path,
+    combo: Mapping[str, object],
+    combo_dir: Path,
+    excluded_pair_ids: Sequence[str],
+    seed_policy: object | None,
+) -> dict[str, object]:
+    combo_dir.mkdir(parents=True, exist_ok=True)
+    progress_path = combo_dir / f"{combo['name']}.progress.json"
+    result = run_headless_geometry_fit(
+        copy.deepcopy(dict(saved_state)),
+        state_path=state_path,
+        downloads_dir=combo_dir,
+        stamp=str(combo.get("name") or state_path.stem),
+        active_var_names=combo.get("active_vars", ()),
+        seed_policy=seed_policy,
+        progress_path=progress_path,
+        excluded_pair_ids=excluded_pair_ids,
+    )
+    progress = _headless_geometry_fit_load_progress(progress_path)
+    artifact_map = progress.get("geometry_fit_recovery_artifacts")
+    artifacts = dict(artifact_map) if isinstance(artifact_map, Mapping) else {}
+    combo_result = {
+        "status": "accepted" if result.accepted else "rejected",
+        "full_fit_success": bool(result.accepted),
+        "rejection_reason": result.rejection_reason,
+        "raw_angular_rms_deg": progress.get("raw_angular_rms_deg") or progress.get("final_rms_deg"),
+        "raw_angular_max_deg": progress.get("raw_angular_max_deg") or progress.get("final_max_deg"),
+        "geometry_updated": False,
+        "would_update_geometry": bool(result.accepted),
+        "progress_path": progress_path,
+        "artifacts": artifacts,
+    }
+    point_match_summary = progress.get("point_match_summary")
+    summary_map = point_match_summary if isinstance(point_match_summary, Mapping) else {}
+    if combo_result["raw_angular_rms_deg"] is None:
+        combo_result["raw_angular_rms_deg"] = summary_map.get(
+            "raw_angular_rms_deg"
+        ) or summary_map.get("final_rms_deg")
+    if combo_result["raw_angular_max_deg"] is None:
+        combo_result["raw_angular_max_deg"] = summary_map.get(
+            "raw_angular_max_deg"
+        ) or summary_map.get("final_max_deg")
+    result_variables = result.state.get("variables") if isinstance(result.state, Mapping) else {}
+    if isinstance(result_variables, Mapping):
+        combo_result["result_variables"] = {
+            str(name): result_variables.get(str(name))
+            for name in combo.get("active_vars", ()) or ()
+            if str(name) in result_variables
+        }
+    for key in (
+        "input_state_path",
+        "input_state_sha256",
+        "excluded_pair_ids",
+        "excluded_pair_count",
+        "excluded_rows",
+        "excluded_pair_ids_present",
+        "original_qr_fit_expected_count",
+        "excluded_rows_do_not_count_as_missing",
+        "saved_gui_state_mutated",
+        "qr_fit_resolved_count",
+        "qr_fit_expected_count",
+        "qr_fit_missing_pairs",
+        "source_authority_mismatch_count",
+        "visual_objective_surface_mismatch_count",
+        "objective_param_sensitivity_status",
+        "acceptance_metric_space",
+        "saved_sim_refined_caked_used",
+        "pixel_residual_used_for_objective",
+    ):
+        if key in progress:
+            combo_result[key] = progress.get(key)
+        elif key in summary_map:
+            combo_result[key] = summary_map.get(key)
+    combo_result.setdefault("saved_sim_refined_caked_used", False)
+    combo_result.setdefault("pixel_residual_used_for_objective", False)
+    return combo_result
+
+
+def run_headless_geometry_fit_parameter_combo_sweep(
+    saved_state: Mapping[str, object],
+    *,
+    state_path: str | Path,
+    output_dir: str | Path,
+    excluded_pair_ids: Sequence[object] | str | None = None,
+    seed_policy: object | None = None,
+) -> dict[str, object]:
+    state_file = Path(state_path).expanduser().resolve()
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    sweep_root = output_path / "sweep"
+    sweep_root.mkdir(parents=True, exist_ok=True)
+    excluded_ids = normalize_headless_geometry_fit_excluded_pair_ids(excluded_pair_ids)
+    exclusion_payload = {
+        "excluded_pair_ids": excluded_ids,
+        "excluded_pair_count": int(len(excluded_ids)),
+        "excluded_rows_do_not_count_as_missing": True,
+        "saved_gui_state_mutated": False,
+    }
+    combo_results: list[dict[str, object]] = []
+    for combo in headless_geometry_fit_parameter_combo_matrix():
+        combo_dir = sweep_root / str(combo["name"])
+        combo_dir.mkdir(parents=True, exist_ok=True)
+        if str(combo.get("status") or "") == "skipped":
+            combo_result = {
+                **combo,
+                **exclusion_payload,
+                "dry_run": True,
+                "geometry_updated": False,
+                "combo_artifact_dir": combo_dir,
+            }
+        else:
+            try:
+                combo_payload = _run_headless_geometry_fit_parameter_combo(
+                    saved_state=saved_state,
+                    state_path=state_file,
+                    combo=combo,
+                    combo_dir=combo_dir,
+                    excluded_pair_ids=excluded_ids,
+                    seed_policy=seed_policy,
+                )
+            except Exception as exc:
+                combo_payload = _headless_geometry_fit_fail_closed_combo_result(
+                    combo=combo,
+                    combo_dir=combo_dir,
+                    state_file=state_file,
+                    exception=exc,
+                )
+            combo_payload = _headless_geometry_fit_supplement_combo_artifacts(
+                combo=combo,
+                combo_dir=combo_dir,
+                state_file=state_file,
+                combo_result=combo_payload,
+            )
+            combo_result = {
+                **combo,
+                **exclusion_payload,
+                **combo_payload,
+                "dry_run": True,
+                "geometry_updated": False,
+                "combo_artifact_dir": combo_dir,
+            }
+            combo_result = _headless_geometry_fit_classify_combo_result(combo_result)
+            _headless_geometry_fit_validate_combo_artifacts(combo_result)
+        combo_result_path = _headless_geometry_fit_combo_result_json_path(combo_dir)
+        combo_result["combo_result_json"] = combo_result_path
+        _geometry_fit_recovery_json(combo_result_path, combo_result)
+        combo_results.append(combo_result)
+
+    best_combo = _headless_geometry_fit_best_combo(combo_results)
+    supported_required = [
+        result
+        for result in combo_results
+        if bool(result.get("required", False)) and str(result.get("status")) != "skipped"
+    ]
+    report = {
+        "json_authoritative": True,
+        "input_state_path": state_file,
+        **_headless_geometry_fit_state_provenance(state_file),
+        **exclusion_payload,
+        "sweep_root": sweep_root,
+        "combo_results": combo_results,
+        "all_supported_required_combos_pass": bool(
+            supported_required
+            and all(str(result.get("status") or "") == "accepted" for result in supported_required)
+        ),
+        "best_combo_name": best_combo.get("name") if best_combo is not None else None,
+        "best_combo_active_vars": (
+            list(best_combo.get("active_vars", ())) if best_combo is not None else []
+        ),
+        "best_combo_rms_deg": (
+            best_combo.get("raw_angular_rms_deg") if best_combo is not None else None
+        ),
+        "best_combo_max_deg": (
+            best_combo.get("raw_angular_max_deg") if best_combo is not None else None
+        ),
+        "best_combo_artifact_dir": (
+            best_combo.get("combo_artifact_dir") if best_combo is not None else None
+        ),
+        "recommended_action": "apply_best_combo" if best_combo is not None else "inspect_failures",
+        "sweep_summary_png": output_path / GEOMETRY_FIT_SWEEP_SUMMARY_PNG,
+    }
+    _headless_geometry_fit_write_sweep_summary_png(
+        Path(report["sweep_summary_png"]),
+        combo_results,
+    )
+    _geometry_fit_recovery_json(output_path / "sweep_report.json", report)
+    _headless_geometry_fit_write_sweep_markdown(output_path / "sweep_report.md", report)
+    return report
+
+
+def _headless_geometry_fit_exclude_manual_pairs(
+    pairs_by_background: Mapping[int, Sequence[Mapping[str, object]]],
+    excluded_pair_ids: Sequence[object] | str | None,
+) -> tuple[dict[int, list[dict[str, object]]], dict[str, object]]:
+    excluded_ids = set(normalize_headless_geometry_fit_excluded_pair_ids(excluded_pair_ids))
+    filtered: dict[int, list[dict[str, object]]] = {}
+    excluded_rows: list[dict[str, object]] = []
+    original_count = 0
+    for raw_background_idx, raw_entries in pairs_by_background.items():
+        try:
+            background_idx = int(raw_background_idx)
+        except Exception:
+            background_idx = 0
+        kept_entries: list[dict[str, object]] = []
+        for pair_index, raw_entry in enumerate(raw_entries or ()):
+            if not isinstance(raw_entry, Mapping):
+                continue
+            entry = dict(raw_entry)
+            original_count += 1
+            pair_id = str(entry.get("pair_id") or f"bg{background_idx}:pair{pair_index}")
+            if pair_id in excluded_ids:
+                excluded_rows.append(
+                    {"background_index": int(background_idx), **entry, "pair_id": pair_id}
+                )
+                continue
+            kept_entries.append(entry)
+        filtered[int(background_idx)] = kept_entries
+    report = {
+        "excluded_pair_ids": sorted(excluded_ids),
+        "excluded_pair_count": int(len(excluded_rows)),
+        "excluded_rows": excluded_rows,
+        "original_qr_fit_expected_count": int(original_count),
+        "qr_fit_expected_count": int(original_count - len(excluded_rows)),
+        "excluded_rows_do_not_count_as_missing": True,
+        "saved_gui_state_mutated": False,
+    }
+    present_ids = sorted(
+        str(row.get("pair_id") or "") for row in excluded_rows if row.get("pair_id")
+    )
+    if present_ids:
+        report["excluded_pair_ids_present"] = present_ids
+    return filtered, report
 
 
 def _load_structure_model(
@@ -1790,6 +2610,8 @@ _HEADLESS_GEOMETRY_FIT_PROGRESS_PHASES = frozenset(
         "output_state_write",
     }
 )
+
+
 def _headless_geometry_fit_state_provenance(state_path: str | Path) -> dict[str, object]:
     state_file = Path(state_path).expanduser().resolve()
     try:
@@ -2219,6 +3041,20 @@ def _geometry_fit_recovery_label(row: Mapping[str, object]) -> str:
     return f"{pair_id} hkl={hkl} b={branch}"
 
 
+def _geometry_fit_recovery_exclusion_report(
+    progress_data: Mapping[str, object],
+) -> dict[str, object]:
+    keys = (
+        "excluded_pair_ids",
+        "excluded_pair_count",
+        "excluded_rows",
+        "original_qr_fit_expected_count",
+        "excluded_rows_do_not_count_as_missing",
+        "saved_gui_state_mutated",
+    )
+    return {key: copy.deepcopy(progress_data[key]) for key in keys if key in progress_data}
+
+
 def _geometry_fit_recovery_json(path: Path, payload: Mapping[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -2529,6 +3365,7 @@ def _write_headless_geometry_fit_recovery_artifacts(
         or rejection_reason
     )
     initial_caked_by_pair = _geometry_fit_recovery_initial_caked_by_pair(progress_data)
+    exclusion_report = _geometry_fit_recovery_exclusion_report(progress_data)
     report_label = _geometry_fit_recovery_report_label(
         state_path=state_file,
         rows=rows,
@@ -2546,6 +3383,7 @@ def _write_headless_geometry_fit_recovery_artifacts(
         "png_diagnostic_only": True,
         "recovery_run_label": report_label,
         **state_provenance,
+        **exclusion_report,
         "full_fit_success": bool(accepted),
         "geometry_updated": bool(accepted),
         "gamma_before": initial_params.get("gamma"),
@@ -2563,6 +3401,11 @@ def _write_headless_geometry_fit_recovery_artifacts(
             "visual_objective_surface_mismatch_count"
         ),
         "objective_param_sensitivity_status": summary.get("objective_param_sensitivity_status"),
+        "acceptance_metric_space": summary.get("acceptance_metric_space"),
+        "saved_sim_refined_caked_used": bool(summary.get("saved_sim_refined_caked_used", False)),
+        "pixel_residual_used_for_objective": bool(
+            summary.get("pixel_residual_used_for_objective", False)
+        ),
         "failure_classification": failure_classification,
         "plotted_row_count": int(len(rows)),
         "plotted_row_identities": [_geometry_fit_recovery_row_identity(row) for row in rows],
@@ -2596,6 +3439,7 @@ def _write_headless_geometry_fit_recovery_artifacts(
             "json_authoritative": True,
             "png_diagnostic_only": True,
             **state_provenance,
+            **exclusion_report,
             "failure_classification": failure_classification,
             "row_count": int(len(worst_rows)),
             "rows": worst_rows,
@@ -2623,6 +3467,24 @@ def _write_headless_geometry_fit_recovery_artifacts(
         "geometry_fit_recovery_artifact_status": "pass",
         "geometry_fit_recovery_run_label": report_label,
         **state_provenance,
+        **exclusion_report,
+        "raw_angular_rms_deg": full_fit_report.get("raw_angular_rms_deg"),
+        "raw_angular_max_deg": full_fit_report.get("raw_angular_max_deg"),
+        "qr_fit_expected_count": full_fit_report.get("qr_fit_expected_count"),
+        "qr_fit_resolved_count": full_fit_report.get("qr_fit_resolved_count"),
+        "qr_fit_missing_pairs": full_fit_report.get("qr_fit_missing_pairs"),
+        "source_authority_mismatch_count": full_fit_report.get("source_authority_mismatch_count"),
+        "visual_objective_surface_mismatch_count": full_fit_report.get(
+            "visual_objective_surface_mismatch_count"
+        ),
+        "objective_param_sensitivity_status": full_fit_report.get(
+            "objective_param_sensitivity_status"
+        ),
+        "acceptance_metric_space": full_fit_report.get("acceptance_metric_space"),
+        "saved_sim_refined_caked_used": full_fit_report.get("saved_sim_refined_caked_used"),
+        "pixel_residual_used_for_objective": full_fit_report.get(
+            "pixel_residual_used_for_objective"
+        ),
         "geometry_fit_recovery_required_pngs": required_pngs,
         "geometry_fit_recovery_artifacts": artifact_paths,
         "single_step_status": single_step_report.get("status"),
@@ -2715,9 +3577,7 @@ def _infer_headless_saved_manual_caked_defaults(
         else list(_HEADLESS_GEOMETRY_FIT_SAVED_MANUAL_CAKED_DEFAULT_ACTIVE_VAR_NAMES)
     )
     resolved_seed_policy = (
-        seed_policy
-        if seed_policy is not None
-        else HEADLESS_GEOMETRY_FIT_SEED_POLICY_DIRECT
+        seed_policy if seed_policy is not None else HEADLESS_GEOMETRY_FIT_SEED_POLICY_DIRECT
     )
     return resolved_active, resolved_seed_policy, True
 
@@ -2851,6 +3711,7 @@ def run_headless_geometry_fit(
     active_var_names: Sequence[object] | str | None = None,
     seed_policy: object | None = None,
     progress_path: str | Path | None = None,
+    excluded_pair_ids: Sequence[object] | str | None = None,
     weighted_event_workers: int | None = None,
     background_subtraction_mode: object | None = None,
     background_subtraction_scale: object | None = None,
@@ -2861,10 +3722,11 @@ def run_headless_geometry_fit(
 
     if not isinstance(saved_state, dict):
         raise ValueError("Saved GUI state must be a dictionary.")
-    resolved_active_var_names = normalize_headless_geometry_fit_active_var_names(
-        active_var_names
-    )
+    resolved_active_var_names = normalize_headless_geometry_fit_active_var_names(active_var_names)
     resolved_seed_policy = normalize_headless_geometry_fit_seed_policy(seed_policy)
+    resolved_excluded_pair_ids = normalize_headless_geometry_fit_excluded_pair_ids(
+        excluded_pair_ids
+    )
     progress_writer = _HeadlessGeometryFitProgressWriter(
         progress_path,
         active_vars=resolved_active_var_names,
@@ -2875,6 +3737,8 @@ def run_headless_geometry_fit(
         state_path=Path(state_path),
         **_headless_geometry_fit_state_provenance(state_path),
         downloads_dir=downloads_dir,
+        excluded_pair_ids=resolved_excluded_pair_ids,
+        excluded_pair_count=0,
     )
     weighted_event_worker_count = None
     if weighted_event_workers is not None:
@@ -3701,14 +4565,10 @@ def run_headless_geometry_fit(
                 except Exception:
                     continue
                 entries = [
-                    dict(entry)
-                    for entry in (raw_entries or ())
-                    if isinstance(entry, Mapping)
+                    dict(entry) for entry in (raw_entries or ()) if isinstance(entry, Mapping)
                 ]
                 if not entries or not any(
-                    gui_manual_geometry.geometry_manual_entry_needs_caked_coordinate_backfill(
-                        entry
-                    )
+                    gui_manual_geometry.geometry_manual_entry_needs_caked_coordinate_backfill(entry)
                     for entry in entries
                 ):
                     continue
@@ -3734,9 +4594,7 @@ def run_headless_geometry_fit(
                 )
                 if changed_count <= 0:
                     continue
-                pairs_by_background[int(background_idx)] = [
-                    dict(entry) for entry in backfilled
-                ]
+                pairs_by_background[int(background_idx)] = [dict(entry) for entry in backfilled]
                 changed_total += int(changed_count)
         finally:
             if int(background_state.current_background_index) != int(previous_background_idx):
@@ -3750,6 +4608,12 @@ def run_headless_geometry_fit(
         manual_caked_backfill_changed_count,
         manual_caked_backfill_failed_indices,
     ) = _backfill_headless_manual_pair_caked_coordinates()
+    if resolved_excluded_pair_ids:
+        pairs_by_background, exclusion_report = _headless_geometry_fit_exclude_manual_pairs(
+            pairs_by_background,
+            resolved_excluded_pair_ids,
+        )
+        progress_writer.write("preflight", **exclusion_report)
 
     def _geometry_fit_required_background_indices() -> list[int]:
         selected = [int(idx) for idx in _current_geometry_fit_background_indices(strict=True)]
@@ -3839,9 +4703,7 @@ def run_headless_geometry_fit(
         caked_transform_bundle=lambda: _headless_caked_payload_value("transform_bundle"),
         current_background_index=lambda: int(background_state.current_background_index),
         caked_projection_payload=_headless_current_caked_projection_for_callbacks,
-        last_caked_raw_azimuth_values=lambda: _headless_caked_payload_value(
-            "raw_azimuth_axis"
-        ),
+        last_caked_raw_azimuth_values=lambda: _headless_caked_payload_value("raw_azimuth_axis"),
         last_caked_raw_to_gui_row_permutation=lambda: _headless_caked_payload_value(
             "raw_to_gui_row_permutation"
         ),
@@ -4038,27 +4900,25 @@ def run_headless_geometry_fit(
                 required_manual_fit_targets=required_targets,
                 preflight_mode="manual_geometry_targeted",
             )
-            source_rows, _lattice, _hit_tables, _source_indices = _build_source_rows_from_hit_tables(
-                hit_tables,
-                image_size_value=int(defaults.image_size),
-                params_local=params_local,
-                native_sim_to_display_coords=lambda col, row, image_shape_local: (
-                    gui_geometry_overlay.native_sim_to_display_coords(
-                        col,
-                        row,
-                        image_shape_local,
-                        sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
-                    )
-                ),
-                allow_nominal_hkl_indices=True,
+            source_rows, _lattice, _hit_tables, _source_indices = (
+                _build_source_rows_from_hit_tables(
+                    hit_tables,
+                    image_size_value=int(defaults.image_size),
+                    params_local=params_local,
+                    native_sim_to_display_coords=lambda col, row, image_shape_local: (
+                        gui_geometry_overlay.native_sim_to_display_coords(
+                            col,
+                            row,
+                            image_shape_local,
+                            sim_display_rotate_k=SIM_DISPLAY_ROTATE_K,
+                        )
+                    ),
+                    allow_nominal_hkl_indices=True,
+                )
             )
             projected_rows = _project_peaks_to_current_view_for_dataset(source_rows)
             if projected_rows:
-                return [
-                    dict(entry)
-                    for entry in projected_rows
-                    if isinstance(entry, Mapping)
-                ]
+                return [dict(entry) for entry in projected_rows if isinstance(entry, Mapping)]
         except Exception:
             pass
         try:
@@ -4275,8 +5135,8 @@ def run_headless_geometry_fit(
             arr = np.asarray(table, dtype=np.float64)
             if arr.ndim != 2 or arr.shape[0] <= 0 or arr.shape[1] < 7:
                 continue
-            source_table_index, _source_row_index, _best_sample_index = (
-                extract_hit_row_provenance(arr[0])
+            source_table_index, _source_row_index, _best_sample_index = extract_hit_row_provenance(
+                arr[0]
             )
             if source_table_index is None:
                 source_table_index = int(table_idx)
@@ -4289,7 +5149,8 @@ def run_headless_geometry_fit(
             except Exception:
                 continue
             source_index_required = (
-                source_table_index is not None and int(source_table_index) in required_source_indices
+                source_table_index is not None
+                and int(source_table_index) in required_source_indices
             )
             if table_hkl not in required_hkls and not source_index_required:
                 continue
@@ -4818,18 +5679,13 @@ def run_headless_geometry_fit(
 
     def _build_headless_runtime_config(_fit_params: Mapping[str, object]) -> dict[str, object]:
         base_runtime_cfg = copy.deepcopy(
-            headless_fit_config.get("geometry", {})
-            if isinstance(headless_fit_config, dict)
-            else {}
+            headless_fit_config.get("geometry", {}) if isinstance(headless_fit_config, dict) else {}
         )
         if not isinstance(base_runtime_cfg, dict):
             base_runtime_cfg = {}
         if runtime_active_var_names is None:
             return base_runtime_cfg
-        candidate_params = {
-            str(name): _fit_params.get(str(name))
-            for name in var_names
-        }
+        candidate_params = {str(name): _fit_params.get(str(name)) for name in var_names}
         parameter_domains = _headless_runtime_geometry_fit_parameter_domains(
             fit_config=base_runtime_cfg,
             current_params=_fit_params,
@@ -4875,14 +5731,12 @@ def run_headless_geometry_fit(
     )
     headless_geometry_cfg[gui_geometry_fit.GEOMETRY_FIT_HEADLESS_RUNTIME_CONTEXT_FLAG] = True
     _apply_headless_geometry_fit_seed_policy(headless_geometry_cfg, resolved_seed_policy)
-    budget_enabled, manual_caked_fixed_row_count = (
-        _apply_headless_saved_manual_caked_budget(
-            headless_geometry_cfg,
-            seed_policy=resolved_seed_policy,
-            prepared_run=prepared_run,
-            active_var_names=var_names,
-            manual_pair_rows=_headless_fixed_manual_caked_qr_pair_rows(),
-        )
+    budget_enabled, manual_caked_fixed_row_count = _apply_headless_saved_manual_caked_budget(
+        headless_geometry_cfg,
+        seed_policy=resolved_seed_policy,
+        prepared_run=prepared_run,
+        active_var_names=var_names,
+        manual_pair_rows=_headless_fixed_manual_caked_qr_pair_rows(),
     )
     progress_writer.update_static(
         runtime_cfg=headless_geometry_cfg,
@@ -4984,6 +5838,23 @@ def run_headless_geometry_fit(
     if isinstance(final_summary, Mapping):
         final_progress.update(progress_writer._merge_point_match_summary(final_summary))
         final_progress["point_match_summary"] = copy.deepcopy(dict(final_summary))
+        for key in (
+            "raw_angular_rms_deg",
+            "raw_angular_max_deg",
+            "final_rms_deg",
+            "final_max_deg",
+            "qr_fit_resolved_count",
+            "qr_fit_expected_count",
+            "qr_fit_missing_pairs",
+            "source_authority_mismatch_count",
+            "visual_objective_surface_mismatch_count",
+            "objective_param_sensitivity_status",
+            "acceptance_metric_space",
+            "saved_sim_refined_caked_used",
+            "pixel_residual_used_for_objective",
+        ):
+            if key in final_summary:
+                final_progress[key] = final_summary.get(key)
     if solver_result is not None:
         final_progress["optimizer_nfev"] = getattr(solver_result, "nfev", None)
         final_progress["optimizer_njev"] = getattr(solver_result, "njev", None)

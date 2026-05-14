@@ -1698,6 +1698,18 @@ class GeometryFitRuntimeApplyResult:
 
 
 @dataclass(frozen=True)
+class GeometryFitSweepApplyResult:
+    """Result metadata for applying one dry-run parameter-sweep combo."""
+
+    applied: bool
+    combo_result_path: Path
+    active_vars: list[str]
+    applied_values: dict[str, float]
+    accepted_overlay_path: Path | None = None
+    rebuild_overlay_result: object | None = None
+
+
+@dataclass(frozen=True)
 class GeometryFitRuntimeExecutionResult:
     """Result metadata for one full runtime geometry-fit execution."""
 
@@ -21622,6 +21634,138 @@ def apply_geometry_fit_result_values(
             var.set(value)
         except Exception:
             continue
+
+
+def _normalize_geometry_fit_sweep_pair_ids(
+    pair_ids: Sequence[object] | str | None,
+) -> list[str]:
+    if pair_ids is None:
+        return []
+    if isinstance(pair_ids, str):
+        raw_values: Sequence[object] = pair_ids.split(",")
+    else:
+        raw_values = list(pair_ids)
+    return sorted({str(value).strip() for value in raw_values if str(value).strip()})
+
+
+def _geometry_fit_current_state_sha256(
+    *,
+    current_state_sha256: str | None,
+    current_state_path: Path | str | None,
+) -> str:
+    if current_state_sha256 is not None and str(current_state_sha256).strip():
+        return str(current_state_sha256).strip()
+    if current_state_path is None:
+        raise ValueError("current_state_hash_missing")
+    return hashlib.sha256(Path(current_state_path).read_bytes()).hexdigest()
+
+
+def _geometry_fit_load_sweep_combo_result(path: Path) -> dict[str, object]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError(f"invalid_sweep_result_json: {exc}") from exc
+    if not isinstance(payload, Mapping):
+        raise ValueError("invalid_sweep_result_json")
+    return dict(payload)
+
+
+def _geometry_fit_sweep_result_values(
+    combo_result: Mapping[str, object],
+    active_vars: Sequence[str],
+) -> list[float]:
+    raw_variables = combo_result.get("result_variables")
+    if not isinstance(raw_variables, Mapping):
+        raw_variables = combo_result.get("fitted_params")
+    if not isinstance(raw_variables, Mapping):
+        raise ValueError("missing_result_variables")
+
+    values: list[float] = []
+    for name in active_vars:
+        if name not in raw_variables:
+            raise ValueError(f"missing_result_variable:{name}")
+        try:
+            value = float(raw_variables[name])
+        except Exception as exc:
+            raise ValueError(f"invalid_result_variable:{name}") from exc
+        if not np.isfinite(value):
+            raise ValueError(f"invalid_result_variable:{name}")
+        values.append(float(value))
+    return values
+
+
+def apply_geometry_fit_sweep_result(
+    *,
+    combo_result_path: Path | str,
+    approved_excluded_pair_ids: Sequence[object] | str | None,
+    var_map: Mapping[str, object],
+    current_state_sha256: str | None = None,
+    current_state_path: Path | str | None = None,
+    geometry_theta_offset_var: object | None = None,
+    rebuild_overlay: Callable[[Mapping[str, object]], object] | None = None,
+    accepted_overlay_path: Path | str | None = None,
+) -> GeometryFitSweepApplyResult:
+    """Apply one accepted dry-run sweep result after state and exclusion checks."""
+
+    result_path = Path(combo_result_path)
+    combo_result = _geometry_fit_load_sweep_combo_result(result_path)
+    if (
+        str(combo_result.get("status") or "") != "accepted"
+        or bool(combo_result.get("full_fit_success")) is not True
+    ):
+        raise ValueError("sweep_result_not_accepted")
+
+    expected_hash = str(combo_result.get("input_state_sha256") or "").strip()
+    current_hash = _geometry_fit_current_state_sha256(
+        current_state_sha256=current_state_sha256,
+        current_state_path=current_state_path,
+    )
+    if not expected_hash or expected_hash != current_hash:
+        raise ValueError("state_hash_mismatch")
+
+    approved_ids = _normalize_geometry_fit_sweep_pair_ids(approved_excluded_pair_ids)
+    result_ids = _normalize_geometry_fit_sweep_pair_ids(combo_result.get("excluded_pair_ids"))
+    if result_ids != approved_ids:
+        raise ValueError("excluded_pair_ids_mismatch")
+
+    raw_active_vars = combo_result.get("active_vars")
+    if not isinstance(raw_active_vars, Sequence) or isinstance(raw_active_vars, (str, bytes)):
+        raise ValueError("missing_active_vars")
+    active_vars = [str(name).strip() for name in raw_active_vars if str(name).strip()]
+    if not active_vars:
+        raise ValueError("missing_active_vars")
+    values = _geometry_fit_sweep_result_values(combo_result, active_vars)
+
+    apply_geometry_fit_result_values(
+        active_vars,
+        values,
+        var_map=var_map,
+        geometry_theta_offset_var=geometry_theta_offset_var,
+    )
+    rebuild_result = rebuild_overlay(combo_result) if callable(rebuild_overlay) else None
+
+    resolved_overlay_path: Path | None = None
+    if accepted_overlay_path is not None:
+        artifacts = combo_result.get("artifacts")
+        artifact_map = artifacts if isinstance(artifacts, Mapping) else {}
+        source_overlay = artifact_map.get("full_fit_png")
+        if source_overlay is None:
+            raise ValueError("accepted_overlay_source_missing")
+        source_path = Path(str(source_overlay))
+        if not source_path.exists():
+            raise ValueError("accepted_overlay_source_missing")
+        resolved_overlay_path = Path(accepted_overlay_path)
+        resolved_overlay_path.parent.mkdir(parents=True, exist_ok=True)
+        resolved_overlay_path.write_bytes(source_path.read_bytes())
+
+    return GeometryFitSweepApplyResult(
+        applied=True,
+        combo_result_path=result_path,
+        active_vars=active_vars,
+        applied_values=dict(zip(active_vars, values, strict=False)),
+        accepted_overlay_path=resolved_overlay_path,
+        rebuild_overlay_result=rebuild_result,
+    )
 
 
 def _geometry_fit_normalize_hkl(raw_hkl: object) -> tuple[int, int, int] | object:

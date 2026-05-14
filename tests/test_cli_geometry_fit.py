@@ -101,10 +101,7 @@ def test_saved_manual_caked_defaults_preserve_explicit_policy() -> None:
 
     assert inferred is True
     assert active_vars == explicit_active
-    assert (
-        seed_policy
-        == headless_geometry_fit.HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART
-    )
+    assert seed_policy == headless_geometry_fit.HEADLESS_GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART
 
 
 def test_cli_build_parser_accepts_fit_geometry_active_vars_option() -> None:
@@ -122,6 +119,41 @@ def test_cli_build_parser_accepts_fit_geometry_active_vars_option() -> None:
     )
 
     assert args.active_vars == "corto_detector,theta_initial,cor_angle,chi,zs,zb"
+
+
+def test_cli_build_parser_accepts_fit_geometry_exclude_pair_id_option() -> None:
+    if getattr(cli, "_cmd_fit_geometry", None) is None:
+        pytest.skip("fit-geometry CLI command is not available in this checkout")
+
+    parser = cli._build_parser()
+    args = parser.parse_args(
+        [
+            "fit-geometry",
+            "saved_state.json",
+            "--exclude-pair-id",
+            "bg1:pair15",
+            "--exclude-pair-id",
+            "bg0:pair20",
+        ]
+    )
+
+    assert args.exclude_pair_id == ["bg1:pair15", "bg0:pair20"]
+
+
+def test_cli_build_parser_accepts_fit_geometry_parameter_combo_sweep_option() -> None:
+    if getattr(cli, "_cmd_fit_geometry", None) is None:
+        pytest.skip("fit-geometry CLI command is not available in this checkout")
+
+    parser = cli._build_parser()
+    args = parser.parse_args(
+        [
+            "fit-geometry",
+            "saved_state.json",
+            "--parameter-combo-sweep",
+        ]
+    )
+
+    assert args.parameter_combo_sweep is True
 
 
 def test_cli_build_parser_accepts_background_subtraction_options() -> None:
@@ -253,9 +285,7 @@ def test_cmd_fit_geometry_loads_saved_state_runs_fit_and_saves(monkeypatch, tmp_
 
     assert events[0] == ("load", str(input_path))
     assert events[1][0] == "run"
-    assert events[1][1]["kwargs"]["progress_path"] == output_path.with_suffix(
-        ".progress.json"
-    )
+    assert events[1][1]["kwargs"]["progress_path"] == output_path.with_suffix(".progress.json")
     assert events[2] == ("save", str(output_path), {})
     assert saved_payload["path"] == str(output_path)
     assert saved_payload["state"]["geometry"]["fit_result"] == "ok"
@@ -336,6 +366,8 @@ def test_cmd_fit_geometry_passes_active_vars_to_runner(monkeypatch, tmp_path) ->
         in_place=False,
         overwrite=False,
         active_vars="corto_detector,theta_initial,cor_angle,chi,zs,zb",
+        exclude_pair_id=["bg1:pair15", "bg0:pair20"],
+        parameter_combo_sweep=True,
     )
 
     cmd(args)
@@ -348,6 +380,8 @@ def test_cmd_fit_geometry_passes_active_vars_to_runner(monkeypatch, tmp_path) ->
         "zs",
         "zb",
     ]
+    assert captured["kwargs"]["excluded_pair_ids"] == ["bg1:pair15", "bg0:pair20"]
+    assert captured["kwargs"]["parameter_combo_sweep"] is True
     assert captured["kwargs"]["background_subtraction_mode"] == "saved"
 
 
@@ -477,9 +511,7 @@ def test_run_headless_geometry_fit_delegates_to_shared_runner_for_geometry_only(
         active_var_names=None,
         progress_path=None,
     ):
-        calls.append(
-            (state_arg, state_path, downloads_dir, active_var_names, progress_path)
-        )
+        calls.append((state_arg, state_path, downloads_dir, active_var_names, progress_path))
         return SimpleNamespace(
             state={
                 "files": {"background_files": ["bg0.osc"]},
@@ -837,8 +869,9 @@ def test_run_headless_geometry_fit_mosaic_uses_module_refraction_wrapper(
     monkeypatch.setattr(
         cli,
         "resolve_index_of_refraction",
-        lambda lambda_m, *, cif_path: refraction_calls.append((float(lambda_m), str(cif_path)))
-        or (1.0 + 0.0j),
+        lambda lambda_m, *, cif_path: (
+            refraction_calls.append((float(lambda_m), str(cif_path))) or (1.0 + 0.0j)
+        ),
     )
     monkeypatch.setattr(
         cli,

@@ -716,6 +716,8 @@ def run_headless_geometry_fit(
     active_var_names: Sequence[str] | str | None = None,
     seed_policy: str | None = None,
     progress_path: str | Path | None = None,
+    excluded_pair_ids: Sequence[str] | str | None = None,
+    parameter_combo_sweep: bool = False,
     weighted_event_workers: int | None = None,
     background_subtraction_mode: object | None = None,
     background_subtraction_scale: object | None = None,
@@ -735,12 +737,27 @@ def run_headless_geometry_fit(
         else None
     )
     if not run_mosaic_shape_fit:
+        if parameter_combo_sweep:
+            sweep_report = _load_shared_headless_geometry_fit().run_headless_geometry_fit_parameter_combo_sweep(
+                copy.deepcopy(dict(state)),
+                state_path=source_path,
+                output_dir=(output_dir if output_dir is not None else Path(source_path).parent),
+                excluded_pair_ids=excluded_pair_ids,
+                seed_policy=seed_policy,
+            )
+            return dict(state), {
+                "accepted": False,
+                "dry_run": True,
+                "parameter_combo_sweep": sweep_report,
+            }
         shared_kwargs: dict[str, object] = {
             "state_path": source_path,
             "downloads_dir": output_dir,
             "active_var_names": resolved_active_var_names,
             "progress_path": progress_path,
         }
+        if excluded_pair_ids is not None:
+            shared_kwargs["excluded_pair_ids"] = excluded_pair_ids
         if seed_policy is not None:
             shared_kwargs["seed_policy"] = seed_policy
         if weighted_event_workers is not None:
@@ -750,9 +767,7 @@ def run_headless_geometry_fit(
         if background_subtraction_scale is not None:
             shared_kwargs["background_subtraction_scale"] = background_subtraction_scale
         if background_subtraction_diagnostics is not None:
-            shared_kwargs["background_subtraction_diagnostics"] = (
-                background_subtraction_diagnostics
-            )
+            shared_kwargs["background_subtraction_diagnostics"] = background_subtraction_diagnostics
         if background_subtraction_phi_block_overrides:
             shared_kwargs["background_subtraction_phi_block_overrides"] = dict(
                 background_subtraction_phi_block_overrides
@@ -1480,12 +1495,10 @@ def run_headless_geometry_fit(
         if backend_background is None:
             backend_background = native_background
         raw_backend_image = np.asarray(backend_background, dtype=np.float64)
-        payload = (
-            shared_headless._build_headless_geometry_fit_caked_view_payload(
-                raw_backend_image,
-                params=params_local,
-                pixel_size_m=float(pixel_size_m),
-            )
+        payload = shared_headless._build_headless_geometry_fit_caked_view_payload(
+            raw_backend_image,
+            params=params_local,
+            pixel_size_m=float(pixel_size_m),
         )
         if not isinstance(payload, dict):
             return None
@@ -1573,38 +1586,26 @@ def run_headless_geometry_fit(
                 background_idx = int(raw_background_idx)
             except Exception:
                 continue
-            entries = [
-                dict(entry)
-                for entry in (raw_entries or ())
-                if isinstance(entry, Mapping)
-            ]
+            entries = [dict(entry) for entry in (raw_entries or ()) if isinstance(entry, Mapping)]
             if not entries or not any(needs_backfill(entry) for entry in entries):
                 continue
-            native_to_caked = _native_detector_coords_to_caked_coords_for_index(
-                background_idx
-            )
+            native_to_caked = _native_detector_coords_to_caked_coords_for_index(background_idx)
             if native_to_caked is None:
                 continue
             backfilled, changed_count = backfill_entries(
                 entries,
                 background_display_to_native_detector_coords=(
-                    _background_display_to_native_detector_coords_for_index(
-                        background_idx
-                    )
+                    _background_display_to_native_detector_coords_for_index(background_idx)
                 ),
                 native_detector_coords_to_caked_display_coords=native_to_caked,
             )
             if changed_count <= 0:
                 continue
-            pairs_by_background[int(background_idx)] = [
-                dict(entry) for entry in backfilled
-            ]
+            pairs_by_background[int(background_idx)] = [dict(entry) for entry in backfilled]
             changed_total += int(changed_count)
         return int(changed_total)
 
-    manual_caked_backfill_changed_count = (
-        _backfill_headless_manual_pair_caked_coordinates()
-    )
+    manual_caked_backfill_changed_count = _backfill_headless_manual_pair_caked_coordinates()
 
     def _geometry_fit_required_background_indices() -> list[int]:
         selected = [int(idx) for idx in _current_geometry_fit_background_indices(strict=True)]
@@ -2356,9 +2357,7 @@ def run_headless_mosaic_shape_fit(
     if background_subtraction_scale is not None:
         fit_kwargs["background_subtraction_scale"] = background_subtraction_scale
     if background_subtraction_diagnostics is not None:
-        fit_kwargs["background_subtraction_diagnostics"] = (
-            background_subtraction_diagnostics
-        )
+        fit_kwargs["background_subtraction_diagnostics"] = background_subtraction_diagnostics
     if background_subtraction_phi_block_overrides:
         fit_kwargs["background_subtraction_phi_block_overrides"] = dict(
             background_subtraction_phi_block_overrides
@@ -2941,9 +2940,7 @@ def _cmd_fit_geometry(args: argparse.Namespace) -> None:
         active_var_names = _normalize_fit_geometry_active_var_names(
             getattr(args, "active_vars", None)
         )
-        seed_policy = _normalize_fit_geometry_seed_policy(
-            getattr(args, "seed_policy", None)
-        )
+        seed_policy = _normalize_fit_geometry_seed_policy(getattr(args, "seed_policy", None))
         payload = load_gui_state_file(input_path)
         state_result, report = _extract_fit_geometry_state_result(
             run_headless_geometry_fit(
@@ -2953,6 +2950,8 @@ def _cmd_fit_geometry(args: argparse.Namespace) -> None:
                 active_var_names=active_var_names,
                 seed_policy=seed_policy,
                 progress_path=progress_path,
+                excluded_pair_ids=getattr(args, "exclude_pair_id", None),
+                parameter_combo_sweep=bool(getattr(args, "parameter_combo_sweep", False)),
                 weighted_event_workers=getattr(args, "weighted_event_workers", None),
                 background_subtraction_mode=getattr(
                     args,
@@ -3164,6 +3163,19 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=("direct", "ladder-multistart"),
         default=None,
         help="Optional headless seed policy override.",
+    )
+    fit_geometry_parser.add_argument(
+        "--exclude-pair-id",
+        dest="exclude_pair_id",
+        action="append",
+        default=None,
+        help="Exact manual QR pair ID to exclude from this headless fit. Repeat as needed.",
+    )
+    fit_geometry_parser.add_argument(
+        "--parameter-combo-sweep",
+        dest="parameter_combo_sweep",
+        action="store_true",
+        help="Dry-run the Bi2Se3 geometry-fit parameter-combo sweep.",
     )
     fit_geometry_parser.add_argument(
         "--weighted-event-workers",

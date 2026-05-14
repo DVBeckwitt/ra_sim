@@ -18566,6 +18566,742 @@ def test_headless_geometry_fit_active_var_override_canonicalizes_theta_initial_i
         assert result.state["variables"][name] == value
 
 
+def test_geometry_fit_exact_pair_exclusion_does_not_mutate_manual_pairs() -> None:
+    from ra_sim import headless_geometry_fit
+
+    pairs_by_background = {
+        0: [
+            {"pair_id": "bg0:pair0", "hkl": [0, 0, 3]},
+            {"pair_id": "bg0:pair20", "hkl": [-2, 0, 5]},
+        ],
+        1: [{"pair_id": "bg1:pair15", "hkl": [-2, 0, 5]}],
+    }
+    original_pairs = copy.deepcopy(pairs_by_background)
+
+    filtered, report = headless_geometry_fit._headless_geometry_fit_exclude_manual_pairs(
+        pairs_by_background,
+        {"bg0:pair20", "bg1:pair15"},
+    )
+
+    assert pairs_by_background == original_pairs
+    assert [entry["pair_id"] for entry in filtered[0]] == ["bg0:pair0"]
+    assert filtered.get(1, []) == []
+    assert report["excluded_pair_ids"] == ["bg0:pair20", "bg1:pair15"]
+    assert report["excluded_pair_count"] == 2
+    assert [row["pair_id"] for row in report["excluded_rows"]] == [
+        "bg0:pair20",
+        "bg1:pair15",
+    ]
+
+
+def test_geometry_fit_exact_pair_exclusion_removes_rows_before_objective() -> None:
+    from ra_sim import headless_geometry_fit
+
+    pairs_by_background = {
+        0: [
+            {"pair_id": "bg0:pair0", "x": 1.0, "y": 2.0},
+            {"pair_id": "bg0:pair20", "x": 3.0, "y": 4.0},
+        ],
+        2: [
+            {"pair_id": "bg2:pair17", "x": 5.0, "y": 6.0},
+            {"pair_id": "bg2:pair18", "x": 7.0, "y": 8.0},
+        ],
+    }
+
+    filtered, report = headless_geometry_fit._headless_geometry_fit_exclude_manual_pairs(
+        pairs_by_background,
+        {"bg0:pair20", "bg2:pair17"},
+    )
+
+    remaining_pair_ids = [entry["pair_id"] for entries in filtered.values() for entry in entries]
+    assert remaining_pair_ids == ["bg0:pair0", "bg2:pair18"]
+    assert "bg0:pair20" not in remaining_pair_ids
+    assert "bg2:pair17" not in remaining_pair_ids
+    assert report["original_qr_fit_expected_count"] == 4
+    assert report["qr_fit_expected_count"] == 2
+    assert report["excluded_rows_do_not_count_as_missing"] is True
+
+
+def test_geometry_fit_exact_pair_exclusion_matches_generated_pair_id() -> None:
+    from ra_sim import headless_geometry_fit
+
+    pairs_by_background = {
+        2: [
+            {"hkl": [0, 0, 6]},
+            {"hkl": [0, 0, 9]},
+            {"hkl": [0, 0, 12]},
+        ],
+    }
+
+    filtered, report = headless_geometry_fit._headless_geometry_fit_exclude_manual_pairs(
+        pairs_by_background,
+        {"bg2:pair1"},
+    )
+
+    assert len(filtered[2]) == 2
+    assert [row["pair_id"] for row in report["excluded_rows"]] == ["bg2:pair1"]
+    assert report["excluded_pair_count"] == 1
+    assert report["original_qr_fit_expected_count"] == 3
+    assert report["qr_fit_expected_count"] == 2
+
+
+def test_parameter_combo_matrix_contains_required_gamma_Gamma_combinations() -> None:
+    from ra_sim import headless_geometry_fit
+
+    combos = headless_geometry_fit.headless_geometry_fit_parameter_combo_matrix()
+    required = [combo for combo in combos if not combo["diagnostic_only"]]
+
+    assert [combo["name"] for combo in required] == [
+        "00_gamma_Gamma",
+        "01_gamma_Gamma_theta_initial",
+        "02_gamma_Gamma_corto_detector",
+        "03_gamma_Gamma_center_x_center_y",
+        "04_gamma_Gamma_theta_initial_corto_detector",
+        "05_gamma_Gamma_theta_initial_center_x_center_y",
+    ]
+    assert required[0]["active_vars"] == ["gamma", "Gamma"]
+    assert required[-1]["active_vars"] == [
+        "gamma",
+        "Gamma",
+        "theta_initial",
+        "center_x",
+        "center_y",
+    ]
+
+
+def test_parameter_combo_unsupported_variable_is_skipped_not_failed() -> None:
+    from ra_sim import headless_geometry_fit
+
+    combos = headless_geometry_fit.headless_geometry_fit_parameter_combo_matrix(
+        supported_var_names={"gamma", "Gamma", "theta_initial"}
+    )
+    by_name = {combo["name"]: combo for combo in combos}
+
+    assert by_name["02_gamma_Gamma_corto_detector"]["status"] == "skipped"
+    assert by_name["02_gamma_Gamma_corto_detector"]["skip_reason"] == "unsupported_variable"
+    assert by_name["01_gamma_Gamma_theta_initial"]["status"] == "pending"
+
+
+def test_parameter_combo_single_variable_runs_are_diagnostic_only() -> None:
+    from ra_sim import headless_geometry_fit
+
+    combos = headless_geometry_fit.headless_geometry_fit_parameter_combo_matrix()
+    diagnostic = [combo for combo in combos if combo["diagnostic_only"]]
+
+    assert [combo["name"] for combo in diagnostic] == [
+        "diagnostic_gamma",
+        "diagnostic_Gamma_only",
+        "diagnostic_theta_initial",
+        "diagnostic_center_x_center_y",
+        "diagnostic_corto_detector",
+    ]
+    assert len({str(combo["name"]).casefold() for combo in combos}) == len(combos)
+    assert all(combo["required"] is False for combo in diagnostic)
+
+
+def _accepted_parameter_combo_contract(
+    *,
+    rms: float = 0.7,
+    max_deg: float = 1.2,
+) -> dict[str, object]:
+    return {
+        "raw_angular_rms_deg": float(rms),
+        "raw_angular_max_deg": float(max_deg),
+        "qr_fit_resolved_count": 79,
+        "qr_fit_expected_count": 79,
+        "qr_fit_missing_pairs": [],
+        "source_authority_mismatch_count": 0,
+        "visual_objective_surface_mismatch_count": 0,
+        "objective_param_sensitivity_status": "sensitive",
+        "acceptance_metric_space": "caked_deg",
+        "saved_sim_refined_caked_used": False,
+        "pixel_residual_used_for_objective": False,
+    }
+
+
+def test_parameter_combo_sweep_writes_one_result_per_combo(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from ra_sim import headless_geometry_fit
+
+    state_path = tmp_path / "Bi2Se3.json"
+    state_path.write_text("{}", encoding="utf-8")
+    calls: list[dict[str, object]] = []
+
+    def _fake_combo_runner(**kwargs):
+        combo = kwargs["combo"]
+        combo_dir = Path(kwargs["combo_dir"])
+        calls.append({"name": combo["name"], "active_vars": list(combo["active_vars"])})
+        for filename in (
+            headless_geometry_fit.GEOMETRY_FIT_RECOVERY_SINGLE_STEP_PNG,
+            headless_geometry_fit.GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_PNG,
+            headless_geometry_fit.GEOMETRY_FIT_RECOVERY_WORST_ROWS_PNG,
+        ):
+            (combo_dir / filename).write_bytes(b"\x89PNG\r\n\x1a\n")
+        return {
+            "status": "accepted",
+            "full_fit_success": True,
+            **_accepted_parameter_combo_contract(),
+            "geometry_updated": False,
+            "would_update_geometry": True,
+            "artifacts": {
+                "single_step_png": combo_dir
+                / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_SINGLE_STEP_PNG,
+                "full_fit_png": combo_dir
+                / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_PNG,
+                "worst_rows_png": combo_dir
+                / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_WORST_ROWS_PNG,
+            },
+        }
+
+    monkeypatch.setattr(
+        headless_geometry_fit,
+        "_run_headless_geometry_fit_parameter_combo",
+        _fake_combo_runner,
+    )
+
+    report = headless_geometry_fit.run_headless_geometry_fit_parameter_combo_sweep(
+        {"geometry": {"manual_pairs": []}},
+        state_path=state_path,
+        output_dir=tmp_path / "bi2se3_headless_gamma_gamma",
+        excluded_pair_ids=["bg1:pair15", "bg0:pair20", "bg2:pair17"],
+    )
+
+    assert len(calls) == len(headless_geometry_fit.headless_geometry_fit_parameter_combo_matrix())
+    assert len(report["combo_results"]) == len(calls)
+    assert (tmp_path / "bi2se3_headless_gamma_gamma" / "sweep_report.json").exists()
+    assert (tmp_path / "bi2se3_headless_gamma_gamma" / "sweep_report.md").exists()
+    for combo_result in report["combo_results"]:
+        assert Path(combo_result["combo_result_json"]).exists()
+
+
+def test_parameter_combo_sweep_summary_png_is_written(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from ra_sim import headless_geometry_fit
+
+    state_path = tmp_path / "Bi2Se3.json"
+    state_path.write_text("{}", encoding="utf-8")
+
+    def _fake_combo_runner(**kwargs):
+        combo_dir = Path(kwargs["combo_dir"])
+        for filename in (
+            headless_geometry_fit.GEOMETRY_FIT_RECOVERY_SINGLE_STEP_PNG,
+            headless_geometry_fit.GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_PNG,
+        ):
+            (combo_dir / filename).write_bytes(b"\x89PNG\r\n\x1a\n")
+        return {
+            "status": "accepted",
+            "full_fit_success": True,
+            **_accepted_parameter_combo_contract(),
+            "artifacts": {
+                "single_step_png": combo_dir
+                / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_SINGLE_STEP_PNG,
+                "full_fit_png": combo_dir
+                / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_PNG,
+            },
+        }
+
+    monkeypatch.setattr(
+        headless_geometry_fit,
+        "_run_headless_geometry_fit_parameter_combo",
+        _fake_combo_runner,
+    )
+
+    report = headless_geometry_fit.run_headless_geometry_fit_parameter_combo_sweep(
+        {},
+        state_path=state_path,
+        output_dir=tmp_path / "bi2se3_headless_gamma_gamma",
+        excluded_pair_ids=["bg1:pair15"],
+    )
+
+    summary_png = Path(report["sweep_summary_png"])
+    assert summary_png.name == headless_geometry_fit.GEOMETRY_FIT_SWEEP_SUMMARY_PNG
+    assert summary_png.exists()
+    assert summary_png.stat().st_size > 0
+
+
+def test_parameter_combo_sweep_report_links_each_combo_artifact(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from ra_sim import headless_geometry_fit
+
+    state_path = tmp_path / "Bi2Se3.json"
+    state_path.write_text("{}", encoding="utf-8")
+
+    def _fake_combo_runner(**kwargs):
+        combo_dir = Path(kwargs["combo_dir"])
+        for filename in (
+            headless_geometry_fit.GEOMETRY_FIT_RECOVERY_SINGLE_STEP_PNG,
+            headless_geometry_fit.GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_PNG,
+        ):
+            (combo_dir / filename).write_bytes(b"\x89PNG\r\n\x1a\n")
+        return {
+            "status": "accepted",
+            "full_fit_success": True,
+            **_accepted_parameter_combo_contract(),
+            "artifacts": {
+                "single_step_png": combo_dir
+                / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_SINGLE_STEP_PNG,
+                "full_fit_png": combo_dir
+                / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_PNG,
+            },
+        }
+
+    monkeypatch.setattr(
+        headless_geometry_fit,
+        "_run_headless_geometry_fit_parameter_combo",
+        _fake_combo_runner,
+    )
+
+    report = headless_geometry_fit.run_headless_geometry_fit_parameter_combo_sweep(
+        {},
+        state_path=state_path,
+        output_dir=tmp_path / "bi2se3_headless_gamma_gamma",
+        excluded_pair_ids=["bg1:pair15"],
+    )
+    markdown = (tmp_path / "bi2se3_headless_gamma_gamma" / "sweep_report.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert str(report["sweep_summary_png"]) in markdown
+    for combo_result in report["combo_results"]:
+        artifacts = combo_result.get("artifacts") or {}
+        overlay = artifacts.get("full_fit_png")
+        assert overlay is not None
+        assert str(overlay) in markdown
+
+
+def test_parameter_combo_sweep_records_excluded_pair_ids_in_every_combo(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from ra_sim import headless_geometry_fit
+
+    state_path = tmp_path / "Bi2Se3.json"
+    state_path.write_text("{}", encoding="utf-8")
+
+    def _fake_combo_runner(**kwargs):
+        combo_dir = Path(kwargs["combo_dir"])
+        for filename in (
+            headless_geometry_fit.GEOMETRY_FIT_RECOVERY_SINGLE_STEP_PNG,
+            headless_geometry_fit.GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_PNG,
+            headless_geometry_fit.GEOMETRY_FIT_RECOVERY_WORST_ROWS_PNG,
+        ):
+            (combo_dir / filename).write_bytes(b"\x89PNG\r\n\x1a\n")
+        return {
+            "status": "rejected",
+            "full_fit_success": False,
+            "raw_angular_rms_deg": 13.0,
+            "raw_angular_max_deg": 70.0,
+            "artifacts": {
+                "single_step_png": combo_dir
+                / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_SINGLE_STEP_PNG,
+                "full_fit_png": combo_dir
+                / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_PNG,
+                "worst_rows_png": combo_dir
+                / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_WORST_ROWS_PNG,
+            },
+        }
+
+    monkeypatch.setattr(
+        headless_geometry_fit,
+        "_run_headless_geometry_fit_parameter_combo",
+        _fake_combo_runner,
+    )
+
+    report = headless_geometry_fit.run_headless_geometry_fit_parameter_combo_sweep(
+        {},
+        state_path=state_path,
+        output_dir=tmp_path / "bi2se3_headless_gamma_gamma",
+        excluded_pair_ids=["bg1:pair15", "bg0:pair20", "bg2:pair17"],
+    )
+
+    for combo_result in report["combo_results"]:
+        assert combo_result["excluded_pair_ids"] == ["bg0:pair20", "bg1:pair15", "bg2:pair17"]
+        assert combo_result["excluded_pair_count"] == 3
+        assert combo_result["dry_run"] is True
+        assert combo_result["geometry_updated"] is False
+
+
+def test_sweep_dry_run_does_not_update_geometry_even_when_combo_accepts(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from ra_sim import headless_geometry_fit
+
+    state_path = tmp_path / "Bi2Se3.json"
+    state_path.write_text("{}", encoding="utf-8")
+    saved_state = {"variables": {"gamma": 0.0, "Gamma": 0.0}}
+    saved_state_before = copy.deepcopy(saved_state)
+
+    def _fake_combo_runner(**kwargs):
+        combo = kwargs["combo"]
+        combo_dir = Path(kwargs["combo_dir"])
+        for filename in (
+            headless_geometry_fit.GEOMETRY_FIT_RECOVERY_SINGLE_STEP_PNG,
+            headless_geometry_fit.GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_PNG,
+        ):
+            (combo_dir / filename).write_bytes(b"\x89PNG\r\n\x1a\n")
+        return {
+            "status": "accepted",
+            "full_fit_success": True,
+            **_accepted_parameter_combo_contract(),
+            "result_variables": {name: 1.0 for name in combo["active_vars"]},
+            "artifacts": {
+                "single_step_png": combo_dir
+                / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_SINGLE_STEP_PNG,
+                "full_fit_png": combo_dir
+                / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_PNG,
+            },
+        }
+
+    monkeypatch.setattr(
+        headless_geometry_fit,
+        "_run_headless_geometry_fit_parameter_combo",
+        _fake_combo_runner,
+    )
+
+    report = headless_geometry_fit.run_headless_geometry_fit_parameter_combo_sweep(
+        saved_state,
+        state_path=state_path,
+        output_dir=tmp_path / "bi2se3_headless_gamma_gamma",
+        excluded_pair_ids=["bg1:pair15"],
+    )
+
+    assert saved_state == saved_state_before
+    assert all(result["dry_run"] is True for result in report["combo_results"])
+    assert all(result["geometry_updated"] is False for result in report["combo_results"])
+    assert any(result["would_update_geometry"] is True for result in report["combo_results"])
+
+
+def test_parameter_combo_sweep_fails_if_required_png_missing(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from ra_sim import headless_geometry_fit
+
+    state_path = tmp_path / "Bi2Se3.json"
+    state_path.write_text("{}", encoding="utf-8")
+
+    def _fake_combo_runner(**kwargs):
+        combo_dir = Path(kwargs["combo_dir"])
+        (combo_dir / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_SINGLE_STEP_PNG).write_bytes(
+            b"\x89PNG\r\n\x1a\n"
+        )
+        return {
+            "status": "accepted",
+            "full_fit_success": True,
+            **_accepted_parameter_combo_contract(),
+            "artifacts": {
+                "single_step_png": combo_dir
+                / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_SINGLE_STEP_PNG,
+                "full_fit_png": combo_dir
+                / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_PNG,
+            },
+        }
+
+    monkeypatch.setattr(
+        headless_geometry_fit,
+        "_run_headless_geometry_fit_parameter_combo",
+        _fake_combo_runner,
+    )
+
+    with pytest.raises(RuntimeError, match="02_full_fit_initial_vs_final_qr_overlay.png"):
+        headless_geometry_fit.run_headless_geometry_fit_parameter_combo_sweep(
+            {},
+            state_path=state_path,
+            output_dir=tmp_path / "bi2se3_headless_gamma_gamma",
+            excluded_pair_ids=["bg1:pair15"],
+        )
+
+
+def test_parameter_combo_sweep_records_fail_closed_result_if_combo_raises(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from ra_sim import headless_geometry_fit
+
+    state_path = tmp_path / "Bi2Se3.json"
+    state_path.write_text("{}", encoding="utf-8")
+
+    def _fake_combo_runner(**kwargs):
+        combo_dir = Path(kwargs["combo_dir"])
+        progress_path = combo_dir / f"{kwargs['combo']['name']}.progress.json"
+        progress_path.write_text(
+            json.dumps(
+                {
+                    "phase": "solve_start",
+                    "status_text": "failed: qr_fit_objective_incomplete=yes",
+                }
+            ),
+            encoding="utf-8",
+        )
+        raise RuntimeError("qr_fit_objective_incomplete=yes resolved_count=24 expected_count=25")
+
+    monkeypatch.setattr(
+        headless_geometry_fit,
+        "_run_headless_geometry_fit_parameter_combo",
+        _fake_combo_runner,
+    )
+
+    report = headless_geometry_fit.run_headless_geometry_fit_parameter_combo_sweep(
+        {},
+        state_path=state_path,
+        output_dir=tmp_path / "bi2se3_headless_gamma_gamma",
+        excluded_pair_ids=["bg1:pair15"],
+    )
+
+    first_result = report["combo_results"][0]
+    artifacts = first_result["artifacts"]
+    assert first_result["status"] == "rejected"
+    assert first_result["failure_reasons"] == ["headless_fit_exception"]
+    assert "qr_fit_objective_incomplete" in first_result["rejection_reason"]
+    assert Path(artifacts["single_step_png"]).exists()
+    assert Path(artifacts["full_fit_png"]).exists()
+    assert Path(artifacts["worst_rows_png"]).exists()
+    assert Path(first_result["combo_result_json"]).exists()
+
+
+def test_parameter_combo_result_requires_clean_qr_contract_before_acceptance() -> None:
+    from ra_sim import headless_geometry_fit
+
+    result = headless_geometry_fit._headless_geometry_fit_classify_combo_result(
+        {
+            "status": "accepted",
+            "full_fit_success": True,
+            "qr_fit_resolved_count": 79,
+            "qr_fit_expected_count": 79,
+            "qr_fit_missing_pairs": [],
+            "source_authority_mismatch_count": 1,
+            "visual_objective_surface_mismatch_count": 0,
+            "objective_param_sensitivity_status": "sensitive",
+            "acceptance_metric_space": "caked_deg",
+            "raw_angular_rms_deg": 0.8,
+            "raw_angular_max_deg": 1.9,
+        }
+    )
+
+    assert result["status"] == "rejected"
+    assert "source_authority_mismatch" in result["failure_reasons"]
+    assert result["would_update_geometry"] is False
+
+
+def test_sweep_combo_acceptance_requires_rms_and_max_thresholds() -> None:
+    from ra_sim import headless_geometry_fit
+
+    result = headless_geometry_fit._headless_geometry_fit_classify_combo_result(
+        {
+            "status": "accepted",
+            "full_fit_success": True,
+            "qr_fit_resolved_count": 79,
+            "qr_fit_expected_count": 79,
+            "qr_fit_missing_pairs": [],
+            "source_authority_mismatch_count": 0,
+            "visual_objective_surface_mismatch_count": 0,
+            "objective_param_sensitivity_status": "sensitive",
+            "acceptance_metric_space": "caked_deg",
+            "raw_angular_rms_deg": 5.1,
+            "raw_angular_max_deg": 9.9,
+        }
+    )
+
+    assert result["status"] == "rejected"
+    assert "rms_threshold_exceeded" in result["failure_reasons"]
+
+
+def test_parameter_combo_result_rejects_if_objective_is_insensitive() -> None:
+    from ra_sim import headless_geometry_fit
+
+    result = headless_geometry_fit._headless_geometry_fit_classify_combo_result(
+        {
+            "status": "accepted",
+            "full_fit_success": True,
+            "qr_fit_resolved_count": 79,
+            "qr_fit_expected_count": 79,
+            "qr_fit_missing_pairs": [],
+            "source_authority_mismatch_count": 0,
+            "visual_objective_surface_mismatch_count": 0,
+            "objective_param_sensitivity_status": "all_fit_vars_insensitive",
+            "acceptance_metric_space": "caked_deg",
+            "raw_angular_rms_deg": 0.8,
+            "raw_angular_max_deg": 1.9,
+        }
+    )
+
+    assert result["status"] == "rejected"
+    assert "objective_param_insensitive" in result["failure_reasons"]
+
+
+def test_parameter_combo_result_uses_caked_degree_metric() -> None:
+    from ra_sim import headless_geometry_fit
+
+    result = headless_geometry_fit._headless_geometry_fit_classify_combo_result(
+        {
+            "status": "accepted",
+            "full_fit_success": True,
+            "qr_fit_resolved_count": 79,
+            "qr_fit_expected_count": 79,
+            "qr_fit_missing_pairs": [],
+            "source_authority_mismatch_count": 0,
+            "visual_objective_surface_mismatch_count": 0,
+            "objective_param_sensitivity_status": "sensitive",
+            "acceptance_metric_space": "pixels",
+            "raw_angular_rms_deg": 0.8,
+            "raw_angular_max_deg": 1.9,
+        }
+    )
+
+    assert result["status"] == "rejected"
+    assert "acceptance_metric_not_caked_deg" in result["failure_reasons"]
+
+
+def test_parameter_combo_runner_reads_contract_fields_from_point_match_summary(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from ra_sim import headless_geometry_fit
+
+    state_path = tmp_path / "Bi2Se3.json"
+    state_path.write_text("{}", encoding="utf-8")
+
+    def _fake_run_headless_geometry_fit(*_args, **kwargs):
+        progress_path = Path(kwargs["progress_path"])
+        progress_path.write_text(
+            json.dumps(
+                {
+                    "input_state_sha256": "hash",
+                    "point_match_summary": {
+                        "raw_angular_rms_deg": 0.8,
+                        "raw_angular_max_deg": 1.9,
+                        "qr_fit_resolved_count": 79,
+                        "qr_fit_expected_count": 79,
+                        "qr_fit_missing_pairs": [],
+                        "source_authority_mismatch_count": 0,
+                        "visual_objective_surface_mismatch_count": 0,
+                        "objective_param_sensitivity_status": "sensitive",
+                        "acceptance_metric_space": "caked_deg",
+                    },
+                    "geometry_fit_recovery_artifacts": {},
+                }
+            ),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(
+            accepted=True,
+            rejection_reason=None,
+            state={"variables": {"gamma": 1.25, "Gamma": 2.5}},
+        )
+
+    monkeypatch.setattr(
+        headless_geometry_fit,
+        "run_headless_geometry_fit",
+        _fake_run_headless_geometry_fit,
+    )
+
+    combo_result = headless_geometry_fit._run_headless_geometry_fit_parameter_combo(
+        saved_state={},
+        state_path=state_path,
+        combo={"name": "00_gamma_Gamma", "active_vars": ["gamma", "Gamma"]},
+        combo_dir=tmp_path / "00_gamma_Gamma",
+        excluded_pair_ids=["bg0:pair20"],
+        seed_policy=None,
+    )
+
+    assert combo_result["raw_angular_rms_deg"] == 0.8
+    assert combo_result["raw_angular_max_deg"] == 1.9
+    assert combo_result["qr_fit_resolved_count"] == 79
+    assert combo_result["acceptance_metric_space"] == "caked_deg"
+    assert combo_result["result_variables"] == {"gamma": 1.25, "Gamma": 2.5}
+
+
+def test_parameter_combo_sweep_selects_lowest_rms_accepted_combo() -> None:
+    from ra_sim import headless_geometry_fit
+
+    best = headless_geometry_fit._headless_geometry_fit_best_combo(
+        [
+            {
+                "name": "high",
+                "status": "accepted",
+                "full_fit_success": True,
+                "raw_angular_rms_deg": 2.0,
+                "raw_angular_max_deg": 2.0,
+                "active_vars": ["gamma"],
+            },
+            {
+                "name": "low",
+                "status": "accepted",
+                "full_fit_success": True,
+                "raw_angular_rms_deg": 1.0,
+                "raw_angular_max_deg": 3.0,
+                "active_vars": ["gamma", "Gamma"],
+            },
+        ]
+    )
+
+    assert best is not None
+    assert best["name"] == "low"
+
+
+def test_parameter_combo_sweep_prefers_simpler_combo_on_tie() -> None:
+    from ra_sim import headless_geometry_fit
+
+    best = headless_geometry_fit._headless_geometry_fit_best_combo(
+        [
+            {
+                "name": "wide",
+                "status": "accepted",
+                "full_fit_success": True,
+                "raw_angular_rms_deg": 1.0,
+                "raw_angular_max_deg": 2.0,
+                "active_vars": ["gamma", "Gamma", "theta_initial"],
+            },
+            {
+                "name": "simple",
+                "status": "accepted",
+                "full_fit_success": True,
+                "raw_angular_rms_deg": 1.0,
+                "raw_angular_max_deg": 2.0,
+                "active_vars": ["gamma", "Gamma"],
+            },
+        ]
+    )
+
+    assert best is not None
+    assert best["name"] == "simple"
+
+
+def test_parameter_combo_sweep_never_selects_rejected_combo() -> None:
+    from ra_sim import headless_geometry_fit
+
+    best = headless_geometry_fit._headless_geometry_fit_best_combo(
+        [
+            {
+                "name": "rejected",
+                "status": "rejected",
+                "full_fit_success": False,
+                "raw_angular_rms_deg": 0.1,
+                "raw_angular_max_deg": 0.2,
+                "active_vars": ["gamma"],
+            },
+            {
+                "name": "accepted",
+                "status": "accepted",
+                "full_fit_success": True,
+                "raw_angular_rms_deg": 1.0,
+                "raw_angular_max_deg": 1.2,
+                "active_vars": ["gamma", "Gamma"],
+            },
+        ]
+    )
+
+    assert best is not None
+    assert best["name"] == "accepted"
+
+
 def test_select_live_candidate_for_saved_entry_rejects_same_branch_pixel_tie() -> None:
     probe = _load_geometry_preflight_probe_module()
 
@@ -29276,6 +30012,135 @@ def test_apply_geometry_fit_result_values_updates_named_vars_and_offset_text() -
     assert theta_offset_var.get() == "0.333333"
 
 
+def test_apply_sweep_result_requires_matching_state_hash(tmp_path) -> None:
+    state_path = tmp_path / "Bi2Se3.json"
+    state_path.write_text('{"state": "current"}', encoding="utf-8")
+    combo_result_path = tmp_path / "combo_result.json"
+    combo_result_path.write_text(
+        json.dumps(
+            {
+                "status": "accepted",
+                "full_fit_success": True,
+                "input_state_sha256": "stale",
+                "excluded_pair_ids": ["bg0:pair20"],
+                "active_vars": ["gamma"],
+                "result_variables": {"gamma": 1.2},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="state_hash_mismatch"):
+        geometry_fit.apply_geometry_fit_sweep_result(
+            combo_result_path=combo_result_path,
+            current_state_path=state_path,
+            approved_excluded_pair_ids=["bg0:pair20"],
+            var_map={"gamma": _DummyVar(0.0)},
+        )
+
+
+def test_apply_sweep_result_requires_same_excluded_pair_ids(tmp_path) -> None:
+    state_path = tmp_path / "Bi2Se3.json"
+    state_path.write_text('{"state": "current"}', encoding="utf-8")
+    state_hash = _hash_file(state_path)
+    combo_result_path = tmp_path / "combo_result.json"
+    combo_result_path.write_text(
+        json.dumps(
+            {
+                "status": "accepted",
+                "full_fit_success": True,
+                "input_state_sha256": state_hash,
+                "excluded_pair_ids": ["bg0:pair20"],
+                "active_vars": ["gamma"],
+                "result_variables": {"gamma": 1.2},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="excluded_pair_ids_mismatch"):
+        geometry_fit.apply_geometry_fit_sweep_result(
+            combo_result_path=combo_result_path,
+            current_state_path=state_path,
+            approved_excluded_pair_ids=["bg1:pair15"],
+            var_map={"gamma": _DummyVar(0.0)},
+        )
+
+
+def test_apply_sweep_result_updates_geometry_and_rebuilds_overlay(tmp_path) -> None:
+    state_path = tmp_path / "Bi2Se3.json"
+    state_path.write_text('{"state": "current"}', encoding="utf-8")
+    state_hash = _hash_file(state_path)
+    combo_dir = tmp_path / "00_gamma_Gamma"
+    combo_dir.mkdir()
+    overlay_path = combo_dir / "02_full_fit_initial_vs_final_qr_overlay.png"
+    overlay_path.write_bytes(b"\x89PNG\r\n\x1a\naccepted")
+    accepted_overlay_path = tmp_path / "accepted_overlay.png"
+    combo_result_path = combo_dir / "combo_result.json"
+    combo_result_path.write_text(
+        json.dumps(
+            {
+                "status": "accepted",
+                "full_fit_success": True,
+                "input_state_sha256": state_hash,
+                "excluded_pair_ids": ["bg0:pair20", "bg1:pair15", "bg2:pair17"],
+                "active_vars": ["gamma", "Gamma"],
+                "result_variables": {"gamma": 1.25, "Gamma": 2.5},
+                "artifacts": {"full_fit_png": str(overlay_path)},
+            }
+        ),
+        encoding="utf-8",
+    )
+    gamma_var = _DummyVar(0.0)
+    big_gamma_var = _DummyVar(0.0)
+    rebuild_calls: list[Mapping[str, object]] = []
+
+    result = geometry_fit.apply_geometry_fit_sweep_result(
+        combo_result_path=combo_result_path,
+        current_state_path=state_path,
+        approved_excluded_pair_ids=["bg1:pair15", "bg0:pair20", "bg2:pair17"],
+        var_map={"gamma": gamma_var, "Gamma": big_gamma_var},
+        rebuild_overlay=lambda combo_result: rebuild_calls.append(combo_result),
+        accepted_overlay_path=accepted_overlay_path,
+    )
+
+    assert result.applied is True
+    assert gamma_var.get() == 1.25
+    assert big_gamma_var.get() == 2.5
+    assert rebuild_calls and rebuild_calls[0]["active_vars"] == ["gamma", "Gamma"]
+    assert accepted_overlay_path.read_bytes() == overlay_path.read_bytes()
+
+
+def test_apply_sweep_result_refuses_rejected_combo(tmp_path) -> None:
+    state_path = tmp_path / "Bi2Se3.json"
+    state_path.write_text('{"state": "current"}', encoding="utf-8")
+    state_hash = _hash_file(state_path)
+    combo_result_path = tmp_path / "combo_result.json"
+    combo_result_path.write_text(
+        json.dumps(
+            {
+                "status": "rejected",
+                "full_fit_success": False,
+                "input_state_sha256": state_hash,
+                "excluded_pair_ids": ["bg0:pair20"],
+                "active_vars": ["gamma"],
+                "result_variables": {"gamma": 1.2},
+            }
+        ),
+        encoding="utf-8",
+    )
+    gamma_var = _DummyVar(0.0)
+
+    with pytest.raises(ValueError, match="sweep_result_not_accepted"):
+        geometry_fit.apply_geometry_fit_sweep_result(
+            combo_result_path=combo_result_path,
+            current_state_path=state_path,
+            approved_excluded_pair_ids=["bg0:pair20"],
+            var_map={"gamma": gamma_var},
+        )
+    assert gamma_var.get() == 0.0
+
+
 def test_write_geometry_fit_run_start_log_emits_prepared_prelude() -> None:
     events: list[tuple[str, object]] = []
     prepared_run = geometry_fit.GeometryFitPreparedRun(
@@ -36597,11 +37462,21 @@ def test_headless_gamma_gamma_recovery_artifacts_write_rejected_required_pngs(
             "worst_angular_residual_rows": [row],
         },
         progress_data={
+            "excluded_pair_ids": ["bg0:pair20", "bg1:pair15", "bg2:pair17"],
+            "excluded_pair_count": 3,
+            "excluded_rows": [
+                {"background_index": 0, "pair_id": "bg0:pair20"},
+                {"background_index": 1, "pair_id": "bg1:pair15"},
+                {"background_index": 2, "pair_id": "bg2:pair17"},
+            ],
+            "original_qr_fit_expected_count": 82,
+            "excluded_rows_do_not_count_as_missing": True,
+            "saved_gui_state_mutated": False,
             "last_live_update": {
                 "live_cache_records": [
                     {"pair_id": "bg0:pair0", "sim_nominal_caked_deg": [9.6, -1.0]}
                 ]
-            }
+            },
         },
         initial_params={"gamma": 1.0, "Gamma": 2.0},
         final_params={"gamma": 1.5, "Gamma": 2.5},
@@ -36612,6 +37487,12 @@ def test_headless_gamma_gamma_recovery_artifacts_write_rejected_required_pngs(
     assert payload["geometry_fit_recovery_run_label"] == "Bi2Se3"
     assert payload["input_state_path"] == state_path.resolve()
     assert payload["input_state_sha256"] == expected_state_hash
+    assert payload["excluded_pair_count"] == 3
+    assert payload["excluded_pair_ids"] == ["bg0:pair20", "bg1:pair15", "bg2:pair17"]
+    assert payload["original_qr_fit_expected_count"] == 82
+    assert payload["qr_fit_expected_count"] == 1
+    assert payload["qr_fit_missing_pairs"] == []
+    assert payload["excluded_rows_do_not_count_as_missing"] is True
     assert captured_single_step["report_label"] == "Bi2Se3"
     assert (output_dir / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_SINGLE_STEP_PNG).exists()
     assert (output_dir / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_PNG).exists()
@@ -36632,6 +37513,8 @@ def test_headless_gamma_gamma_recovery_artifacts_write_rejected_required_pngs(
     assert full_report["recovery_run_label"] == "Bi2Se3"
     assert full_report["input_state_path"].endswith("bi2se3.json")
     assert full_report["input_state_sha256"] == expected_state_hash
+    assert full_report["excluded_pair_count"] == 3
+    assert full_report["excluded_rows"][0]["pair_id"] == "bg0:pair20"
     assert full_report["plotted_row_identities"][0]["pair_id"] == "bg0:pair0"
     worst_report = json.loads(
         (output_dir / headless_geometry_fit.GEOMETRY_FIT_RECOVERY_WORST_ROWS_JSON).read_text(
@@ -36639,6 +37522,7 @@ def test_headless_gamma_gamma_recovery_artifacts_write_rejected_required_pngs(
         )
     )
     assert worst_report["rows"][0]["failure_classification"] == ("branch_source_pairing_mismatch")
+    assert worst_report["excluded_pair_ids"] == ["bg0:pair20", "bg1:pair15", "bg2:pair17"]
     progress_path = output_dir / "bi2se3_gamma_gamma_fit.progress.json"
     writer = headless_geometry_fit._HeadlessGeometryFitProgressWriter(progress_path)
     writer.write("final_validation", **payload)

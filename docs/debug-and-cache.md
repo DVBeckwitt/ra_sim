@@ -106,6 +106,52 @@ PNG is missing. This keeps a caked angular rejection such as
 `branch_source_pairing_mismatch` paired with visual evidence in the same folder
 as `bi2se3_gamma_gamma_fit.progress.json`.
 
+The same headless `fit-geometry` command supports an opt-in dry-run parameter
+sweep for controlled Bi2Se3 recovery investigations:
+
+```bash
+python -m ra_sim fit-geometry artifacts/geometry_fit_gui_states/bi2se3.json \
+  --seed-policy ladder-multistart \
+  --parameter-combo-sweep \
+  --exclude-pair-id bg1:pair15 \
+  --exclude-pair-id bg0:pair20 \
+  --exclude-pair-id bg2:pair17 \
+  --out-state artifacts/geometry_fit_recovery/bi2se3_headless_gamma_gamma/bi2se3_gamma_gamma_fit.json
+```
+
+`--exclude-pair-id` removes exact manual-pair IDs before objective assembly; it
+does not match by HKL and does not mutate the saved GUI state. Sweep reports
+record `excluded_pair_ids`, `excluded_pair_count`, `excluded_rows`,
+`original_qr_fit_expected_count`, `qr_fit_expected_count`,
+`qr_fit_resolved_count`, `qr_fit_missing_pairs`, and
+`excluded_rows_do_not_count_as_missing`. For the Bi2Se3 recovery case above, the
+contract is `original_qr_fit_expected_count=82`,
+`qr_fit_expected_count=79`, `qr_fit_resolved_count=79`, and
+`excluded_pair_count=3`.
+
+`--parameter-combo-sweep` writes one subdirectory per combo under
+`sweep/`, with each combo containing the single-step audit, full-fit overlay,
+rejected-fit worst-row image/JSON when applicable, and `combo_result.json`.
+The top-level `sweep_report.json`, `sweep_report.md`, and
+`sweep_summary.png` list every combo, pass/fail state, RMS/max residuals,
+dry-run geometry-update status, and artifact links. Accepted dry-run combos set
+`would_update_geometry=true` and `geometry_updated=false`; geometry changes are
+reserved for the explicit GUI apply step, which verifies the saved-state hash,
+approved exclusion list, and accepted combo result before applying variables.
+
+Current Bi2Se3 status as of 2026-05-14: with
+`bg1:pair15`, `bg0:pair20`, and `bg2:pair17` excluded, the supported required
+combos `00_gamma_Gamma`, `01_gamma_Gamma_theta_initial`,
+`02_gamma_Gamma_corto_detector`, and `03_gamma_Gamma_center_x_center_y`
+accepted under the normal `5 deg` RMS and `10 deg` max thresholds. The two
+larger supported required combos
+`04_gamma_Gamma_theta_initial_corto_detector` and
+`05_gamma_Gamma_theta_initial_center_x_center_y` failed closed with
+`qr_fit_objective_incomplete` (`resolved_count=23`, `expected_count=24` inside
+the failing objective). Therefore `all_supported_required_combos_pass=false`
+for this run, and the recommended action is to apply the best accepted dry-run
+combo, `00_gamma_Gamma`.
+
 ## Background Peak-Fit Diagnostic Caches
 
 The parallel background peak-fit diagnostic script
