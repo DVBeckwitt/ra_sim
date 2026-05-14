@@ -30663,6 +30663,150 @@ def test_apply_sweep_result_rejects_non_png_overlay_before_update(tmp_path) -> N
     assert not accepted_overlay_path.exists()
 
 
+def test_apply_sweep_result_overlay_destination_failure_does_not_update_geometry(
+    tmp_path,
+) -> None:
+    state_path = tmp_path / "Bi2Se3.json"
+    state_path.write_text('{"state": "current"}', encoding="utf-8")
+    state_hash = _hash_file(state_path)
+    combo_dir = tmp_path / "00_gamma_Gamma"
+    combo_dir.mkdir()
+    overlay_path = combo_dir / "02_full_fit_initial_vs_final_qr_overlay.png"
+    overlay_path.write_bytes(b"\x89PNG\r\n\x1a\naccepted")
+    accepted_overlay_path = tmp_path / "accepted_overlay.png"
+    accepted_overlay_path.mkdir()
+    combo_result_path = combo_dir / "combo_result.json"
+    combo_result_path.write_text(
+        json.dumps(
+            {
+                "status": "accepted",
+                "full_fit_success": True,
+                "dry_run": True,
+                "input_state_sha256": state_hash,
+                "excluded_pair_ids": ["bg0:pair20"],
+                "active_vars": ["gamma", "Gamma"],
+                **_accepted_parameter_combo_contract(),
+                "result_variables": {"gamma": 1.23, "Gamma": 4.56},
+                "artifacts": {"full_fit_png": str(overlay_path)},
+            }
+        ),
+        encoding="utf-8",
+    )
+    gamma_var = _DummyVar(0.1)
+    big_gamma_var = _DummyVar(0.2)
+
+    with pytest.raises(ValueError, match="accepted_overlay_destination_is_directory"):
+        geometry_fit.apply_geometry_fit_sweep_result(
+            combo_result_path=combo_result_path,
+            current_state_path=state_path,
+            approved_excluded_pair_ids=["bg0:pair20"],
+            var_map={"gamma": gamma_var, "Gamma": big_gamma_var},
+            accepted_overlay_path=accepted_overlay_path,
+        )
+
+    assert gamma_var.get() == 0.1
+    assert big_gamma_var.get() == 0.2
+
+
+def test_apply_sweep_result_rebuild_failure_rolls_back_geometry(tmp_path) -> None:
+    state_path = tmp_path / "Bi2Se3.json"
+    state_path.write_text('{"state": "current"}', encoding="utf-8")
+    state_hash = _hash_file(state_path)
+    combo_dir = tmp_path / "00_gamma_Gamma"
+    combo_dir.mkdir()
+    overlay_path = combo_dir / "02_full_fit_initial_vs_final_qr_overlay.png"
+    overlay_path.write_bytes(b"\x89PNG\r\n\x1a\naccepted")
+    accepted_overlay_path = tmp_path / "accepted_overlay.png"
+    combo_result_path = combo_dir / "combo_result.json"
+    combo_result_path.write_text(
+        json.dumps(
+            {
+                "status": "accepted",
+                "full_fit_success": True,
+                "dry_run": True,
+                "input_state_sha256": state_hash,
+                "excluded_pair_ids": ["bg0:pair20"],
+                "active_vars": ["gamma", "Gamma"],
+                **_accepted_parameter_combo_contract(),
+                "result_variables": {"gamma": 1.23, "Gamma": 4.56},
+                "artifacts": {"full_fit_png": str(overlay_path)},
+            }
+        ),
+        encoding="utf-8",
+    )
+    gamma_var = _DummyVar(0.1)
+    big_gamma_var = _DummyVar(0.2)
+
+    def _raise_rebuild(_combo_result):
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        geometry_fit.apply_geometry_fit_sweep_result(
+            combo_result_path=combo_result_path,
+            current_state_path=state_path,
+            approved_excluded_pair_ids=["bg0:pair20"],
+            var_map={"gamma": gamma_var, "Gamma": big_gamma_var},
+            rebuild_overlay=_raise_rebuild,
+            accepted_overlay_path=accepted_overlay_path,
+        )
+
+    assert gamma_var.get() == 0.1
+    assert big_gamma_var.get() == 0.2
+    assert not accepted_overlay_path.exists()
+
+
+def test_apply_sweep_result_temp_overlay_failure_rolls_back_geometry(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    state_path = tmp_path / "Bi2Se3.json"
+    state_path.write_text('{"state": "current"}', encoding="utf-8")
+    state_hash = _hash_file(state_path)
+    combo_dir = tmp_path / "00_gamma_Gamma"
+    combo_dir.mkdir()
+    overlay_path = combo_dir / "02_full_fit_initial_vs_final_qr_overlay.png"
+    overlay_path.write_bytes(b"\x89PNG\r\n\x1a\naccepted")
+    accepted_overlay_path = tmp_path / "accepted_overlay.png"
+    combo_result_path = combo_dir / "combo_result.json"
+    combo_result_path.write_text(
+        json.dumps(
+            {
+                "status": "accepted",
+                "full_fit_success": True,
+                "dry_run": True,
+                "input_state_sha256": state_hash,
+                "excluded_pair_ids": ["bg0:pair20"],
+                "active_vars": ["gamma", "Gamma"],
+                **_accepted_parameter_combo_contract(),
+                "result_variables": {"gamma": 1.23, "Gamma": 4.56},
+                "artifacts": {"full_fit_png": str(overlay_path)},
+            }
+        ),
+        encoding="utf-8",
+    )
+    gamma_var = _DummyVar(0.1)
+    big_gamma_var = _DummyVar(0.2)
+
+    def _raise_replace(self, target):
+        raise RuntimeError("replace failed")
+
+    monkeypatch.setattr(geometry_fit.Path, "replace", _raise_replace)
+
+    with pytest.raises(RuntimeError, match="replace failed"):
+        geometry_fit.apply_geometry_fit_sweep_result(
+            combo_result_path=combo_result_path,
+            current_state_path=state_path,
+            approved_excluded_pair_ids=["bg0:pair20"],
+            var_map={"gamma": gamma_var, "Gamma": big_gamma_var},
+            accepted_overlay_path=accepted_overlay_path,
+        )
+
+    assert gamma_var.get() == 0.1
+    assert big_gamma_var.get() == 0.2
+    assert not accepted_overlay_path.exists()
+    assert not list(tmp_path.glob(".accepted_overlay.png.*.tmp"))
+
+
 @pytest.mark.parametrize(
     ("overrides", "match"),
     [
@@ -30673,12 +30817,19 @@ def test_apply_sweep_result_rejects_non_png_overlay_before_update(tmp_path) -> N
             "sweep_result_qr_contract_failed",
         ),
         ({"qr_fit_resolved_count": 79.1}, "sweep_result_qr_contract_failed"),
+        ({"qr_fit_resolved_count": 79.0}, "sweep_result_qr_contract_failed"),
         ({"qr_fit_expected_count": "79"}, "sweep_result_qr_contract_failed"),
+        ({"qr_fit_expected_count": 79.0}, "sweep_result_qr_contract_failed"),
         ({"qr_fit_missing_pairs": ["bg2:pair4"]}, "sweep_result_qr_contract_failed"),
         ({"source_authority_mismatch_count": 1}, "sweep_result_source_mismatch"),
+        ({"source_authority_mismatch_count": 0.0}, "sweep_result_source_mismatch"),
         ({"source_authority_mismatch_count": False}, "sweep_result_source_mismatch"),
         (
             {"visual_objective_surface_mismatch_count": 1},
+            "sweep_result_visual_objective_mismatch",
+        ),
+        (
+            {"visual_objective_surface_mismatch_count": 0.0},
             "sweep_result_visual_objective_mismatch",
         ),
         (

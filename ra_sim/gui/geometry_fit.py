@@ -10,6 +10,7 @@ import shutil
 import sys
 import inspect
 import math
+import tempfile
 import threading
 from collections import Counter, defaultdict
 from collections.abc import Callable, Mapping, Sequence
@@ -21712,8 +21713,6 @@ def _geometry_fit_sweep_int(combo_result: Mapping[str, object], key: str) -> int
         return None
     if isinstance(value, int):
         return int(value)
-    if isinstance(value, float) and value.is_integer() and np.isfinite(value):
-        return int(value)
     return None
 
 
@@ -21748,6 +21747,57 @@ def _resolve_geometry_fit_sweep_accepted_overlay_source(
     except OSError as exc:
         raise ValueError("accepted_overlay_source_missing") from exc
     return resolved_source
+
+
+def _copy_geometry_fit_sweep_overlay_to_temp(
+    *,
+    source_overlay_path: Path,
+    accepted_overlay_path: Path,
+) -> Path:
+    if accepted_overlay_path.exists() and accepted_overlay_path.is_dir():
+        raise ValueError("accepted_overlay_destination_is_directory")
+    accepted_overlay_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, raw_temp_path = tempfile.mkstemp(
+        prefix=f".{accepted_overlay_path.name}.",
+        suffix=".tmp",
+        dir=accepted_overlay_path.parent,
+    )
+    os.close(fd)
+    temp_path = Path(raw_temp_path)
+    try:
+        shutil.copyfile(source_overlay_path, temp_path)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+    return temp_path
+
+
+def _capture_geometry_fit_sweep_apply_values(
+    active_vars: Sequence[str],
+    *,
+    var_map: Mapping[str, object],
+    geometry_theta_offset_var: object | None,
+) -> list[tuple[object, object]]:
+    captured: list[tuple[object, object]] = []
+    for name in active_vars:
+        target = geometry_theta_offset_var if name == "theta_offset" else var_map.get(name)
+        getter = getattr(target, "get", None)
+        setter = getattr(target, "set", None)
+        if callable(getter) and callable(setter):
+            captured.append((target, getter()))
+    return captured
+
+
+def _restore_geometry_fit_sweep_apply_values(
+    captured_values: Sequence[tuple[object, object]],
+) -> None:
+    for target, value in reversed(list(captured_values)):
+        setter = getattr(target, "set", None)
+        if callable(setter):
+            try:
+                setter(value)
+            except Exception:
+                pass
 
 
 def _verify_geometry_fit_sweep_apply_contract(combo_result: Mapping[str, object]) -> None:
@@ -21839,25 +21889,49 @@ def apply_geometry_fit_sweep_result(
     values = _geometry_fit_sweep_result_values(combo_result, active_vars)
 
     resolved_overlay_path: Path | None = None
-    source_overlay_path: Path | None = None
+    temp_overlay_path: Path | None = None
+    final_overlay_existed = False
     if accepted_overlay_path is not None:
         source_overlay_path = _resolve_geometry_fit_sweep_accepted_overlay_source(
             combo_result,
             combo_result_path=result_path,
         )
         resolved_overlay_path = Path(accepted_overlay_path)
-        resolved_overlay_path.parent.mkdir(parents=True, exist_ok=True)
-
-    apply_geometry_fit_result_values(
+        final_overlay_existed = resolved_overlay_path.exists()
+        temp_overlay_path = _copy_geometry_fit_sweep_overlay_to_temp(
+            source_overlay_path=source_overlay_path,
+            accepted_overlay_path=resolved_overlay_path,
+        )
+    captured_values = _capture_geometry_fit_sweep_apply_values(
         active_vars,
-        values,
         var_map=var_map,
         geometry_theta_offset_var=geometry_theta_offset_var,
     )
-    rebuild_result = rebuild_overlay(combo_result) if callable(rebuild_overlay) else None
+    geometry_mutated = False
+    try:
+        apply_geometry_fit_result_values(
+            active_vars,
+            values,
+            var_map=var_map,
+            geometry_theta_offset_var=geometry_theta_offset_var,
+        )
+        geometry_mutated = True
+        rebuild_result = rebuild_overlay(combo_result) if callable(rebuild_overlay) else None
 
-    if resolved_overlay_path is not None and source_overlay_path is not None:
-        shutil.copyfile(source_overlay_path, resolved_overlay_path)
+        if resolved_overlay_path is not None and temp_overlay_path is not None:
+            temp_overlay_path.replace(resolved_overlay_path)
+            temp_overlay_path = None
+    except Exception:
+        if geometry_mutated:
+            _restore_geometry_fit_sweep_apply_values(captured_values)
+        if temp_overlay_path is not None:
+            temp_overlay_path.unlink(missing_ok=True)
+        if resolved_overlay_path is not None and not final_overlay_existed:
+            try:
+                resolved_overlay_path.unlink(missing_ok=True)
+            except IsADirectoryError:
+                pass
+        raise
 
     return GeometryFitSweepApplyResult(
         applied=True,
