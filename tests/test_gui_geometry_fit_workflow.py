@@ -19066,6 +19066,155 @@ def test_parameter_combo_sweep_records_fail_closed_result_if_combo_raises(
     assert Path(first_result["combo_result_json"]).exists()
 
 
+def test_parameter_combo_sweep_records_fail_closed_result_if_combo_exits(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from ra_sim import headless_geometry_fit
+
+    state_path = tmp_path / "Bi2Se3.json"
+    state_path.write_text("{}", encoding="utf-8")
+
+    def _fake_combo_runner(**kwargs):
+        combo_dir = Path(kwargs["combo_dir"])
+        progress_path = combo_dir / f"{kwargs['combo']['name']}.progress.json"
+        progress_path.write_text(
+            json.dumps(
+                {
+                    "phase": "solve_start",
+                    "status_text": "failed: native optimizer exited",
+                }
+            ),
+            encoding="utf-8",
+        )
+        raise SystemExit("native optimizer exited")
+
+    monkeypatch.setattr(
+        headless_geometry_fit,
+        "_run_headless_geometry_fit_parameter_combo",
+        _fake_combo_runner,
+    )
+
+    report = headless_geometry_fit.run_headless_geometry_fit_parameter_combo_sweep(
+        {},
+        state_path=state_path,
+        output_dir=tmp_path / "bi2se3_headless_gamma_gamma",
+        excluded_pair_ids=["bg1:pair15"],
+    )
+
+    first_result = report["combo_results"][0]
+    artifacts = first_result["artifacts"]
+    assert first_result["status"] == "rejected"
+    assert first_result["failure_reasons"] == ["headless_fit_exception"]
+    assert first_result["exception_type"] == "SystemExit"
+    assert "native optimizer exited" in first_result["rejection_reason"]
+    assert Path(artifacts["single_step_png"]).exists()
+    assert Path(artifacts["full_fit_png"]).exists()
+    assert Path(artifacts["worst_rows_png"]).exists()
+    assert Path(first_result["combo_result_json"]).exists()
+
+
+def test_parameter_combo_sweep_records_fail_closed_result_if_combo_subprocess_crashes(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from ra_sim import headless_geometry_fit
+
+    state_path = tmp_path / "Bi2Se3.json"
+    state_path.write_text("{}", encoding="utf-8")
+
+    def _fake_subprocess_run(*_args, **_kwargs):
+        return SimpleNamespace(
+            returncode=-1073740791,
+            stdout="",
+            stderr="native python313.dll crash",
+        )
+
+    monkeypatch.setattr(headless_geometry_fit.subprocess, "run", _fake_subprocess_run)
+
+    report = headless_geometry_fit.run_headless_geometry_fit_parameter_combo_sweep(
+        {},
+        state_path=state_path,
+        output_dir=tmp_path / "bi2se3_headless_gamma_gamma",
+        excluded_pair_ids=["bg1:pair15"],
+        isolate_combos=True,
+    )
+
+    first_result = report["combo_results"][0]
+    artifacts = first_result["artifacts"]
+    assert first_result["status"] == "rejected"
+    assert first_result["failure_reasons"] == ["headless_fit_exception"]
+    assert first_result["subprocess_returncode"] == -1073740791
+    assert "combo subprocess exited with code -1073740791" in first_result["rejection_reason"]
+    assert "native python313.dll crash" in first_result["subprocess_stderr_tail"]
+    assert Path(artifacts["single_step_png"]).exists()
+    assert Path(artifacts["full_fit_png"]).exists()
+    assert Path(artifacts["worst_rows_png"]).exists()
+    assert Path(first_result["combo_result_json"]).exists()
+
+
+def test_parameter_combo_child_writes_fail_closed_result_if_combo_raises(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from ra_sim import headless_geometry_fit
+
+    state_path = tmp_path / "Bi2Se3.json"
+    state_path.write_text("{}", encoding="utf-8")
+    combo_dir = tmp_path / "00_gamma_Gamma"
+    combo_dir.mkdir()
+    result_path = combo_dir / "_combo_child_result.json"
+    request_path = combo_dir / "_combo_child_request.json"
+    combo = {
+        "name": "00_gamma_Gamma",
+        "active_vars": ["gamma", "Gamma"],
+        "required": True,
+        "diagnostic_only": False,
+    }
+    request_path.write_text(
+        json.dumps(
+            {
+                "saved_state": {},
+                "state_path": str(state_path),
+                "combo": combo,
+                "combo_dir": str(combo_dir),
+                "excluded_pair_ids": ["bg1:pair15"],
+                "seed_policy": "ladder-multistart",
+                "result_path": str(result_path),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def _fake_combo_runner(**kwargs):
+        progress_path = Path(kwargs["combo_dir"]) / f"{kwargs['combo']['name']}.progress.json"
+        progress_path.write_text(
+            json.dumps(
+                {
+                    "phase": "selected_solve",
+                    "qr_fit_expected_count": 79,
+                    "status_text": "failed: qr_fit_objective_incomplete=yes",
+                }
+            ),
+            encoding="utf-8",
+        )
+        raise RuntimeError("qr_fit_objective_incomplete=yes resolved_count=34 expected_count=35")
+
+    monkeypatch.setattr(
+        headless_geometry_fit,
+        "_run_headless_geometry_fit_parameter_combo",
+        _fake_combo_runner,
+    )
+
+    headless_geometry_fit._run_headless_geometry_fit_parameter_combo_child(request_path)
+
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    assert result["status"] == "rejected"
+    assert result["exception_type"] == "RuntimeError"
+    assert "qr_fit_objective_incomplete" in result["rejection_reason"]
+    assert result["qr_fit_expected_count"] == 79
+
+
 def test_parameter_combo_result_requires_clean_qr_contract_before_acceptance() -> None:
     from ra_sim import headless_geometry_fit
 

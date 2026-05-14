@@ -9,6 +9,8 @@ import importlib.util
 import json
 import math
 import os
+import subprocess
+import sys
 import textwrap
 import time
 import warnings
@@ -85,6 +87,40 @@ GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_PNG = "02_full_fit_initial_vs_final_qr_overla
 GEOMETRY_FIT_RECOVERY_WORST_ROWS_JSON = "03_worst_residual_rows.json"
 GEOMETRY_FIT_RECOVERY_WORST_ROWS_PNG = "03_worst_residual_rows.png"
 GEOMETRY_FIT_SWEEP_SUMMARY_PNG = "sweep_summary.png"
+_HEADLESS_GEOMETRY_FIT_COMBO_CHILD_CODE = (
+    "from ra_sim.headless_geometry_fit import "
+    "_run_headless_geometry_fit_parameter_combo_child; "
+    "import sys; "
+    "_run_headless_geometry_fit_parameter_combo_child(sys.argv[1])"
+)
+_HEADLESS_GEOMETRY_FIT_SUBPROCESS_TAIL_CHARS = 4000
+_GEOMETRY_FIT_RECOVERY_ARTIFACT_KEYS = (
+    "single_step_json",
+    "single_step_png",
+    "single_step_csv",
+    "full_fit_json",
+    "full_fit_png",
+    "worst_rows_json",
+    "worst_rows_png",
+)
+_HEADLESS_GEOMETRY_FIT_COMBO_PROGRESS_KEYS = (
+    "excluded_pair_ids",
+    "excluded_pair_count",
+    "excluded_rows",
+    "excluded_pair_ids_present",
+    "original_qr_fit_expected_count",
+    "excluded_rows_do_not_count_as_missing",
+    "saved_gui_state_mutated",
+    "qr_fit_resolved_count",
+    "qr_fit_expected_count",
+    "qr_fit_missing_pairs",
+    "source_authority_mismatch_count",
+    "visual_objective_surface_mismatch_count",
+    "objective_param_sensitivity_status",
+    "acceptance_metric_space",
+    "saved_sim_refined_caked_used",
+    "pixel_residual_used_for_objective",
+)
 _HEADLESS_GEOMETRY_FIT_SAVED_MANUAL_CAKED_DEFAULT_ACTIVE_VAR_NAMES = (
     "a",
     "theta_offset",
@@ -1575,6 +1611,33 @@ def _headless_geometry_fit_load_progress(path: Path) -> dict[str, object]:
     return dict(loaded) if isinstance(loaded, Mapping) else {}
 
 
+def _headless_geometry_fit_recovery_artifact_paths(
+    paths: Mapping[str, Path],
+) -> dict[str, object]:
+    return {key: paths[key] for key in _GEOMETRY_FIT_RECOVERY_ARTIFACT_KEYS}
+
+
+def _headless_geometry_fit_copy_combo_progress_fields(
+    combo_result: dict[str, object],
+    progress: Mapping[str, object],
+    summary_map: Mapping[str, object],
+    *,
+    include_final_metrics: bool = False,
+) -> None:
+    keys = (
+        ("raw_angular_rms_deg", "raw_angular_max_deg", "final_rms_deg", "final_max_deg")
+        if include_final_metrics
+        else ("input_state_path", "input_state_sha256")
+    ) + _HEADLESS_GEOMETRY_FIT_COMBO_PROGRESS_KEYS
+    for key in keys:
+        if key in progress:
+            combo_result[key] = progress.get(key)
+        elif key in summary_map:
+            combo_result[key] = summary_map.get(key)
+    combo_result.setdefault("saved_sim_refined_caked_used", False)
+    combo_result.setdefault("pixel_residual_used_for_objective", False)
+
+
 def _headless_geometry_fit_fail_closed_combo_result(
     *,
     combo: Mapping[str, object],
@@ -1586,15 +1649,7 @@ def _headless_geometry_fit_fail_closed_combo_result(
     progress = _headless_geometry_fit_load_progress(progress_path)
     message = str(exception).strip() or type(exception).__name__
     paths = _headless_geometry_fit_recovery_paths(combo_dir)
-    artifact_paths: dict[str, object] = {
-        "single_step_json": paths["single_step_json"],
-        "single_step_png": paths["single_step_png"],
-        "single_step_csv": paths["single_step_csv"],
-        "full_fit_json": paths["full_fit_json"],
-        "full_fit_png": paths["full_fit_png"],
-        "worst_rows_json": paths["worst_rows_json"],
-        "worst_rows_png": paths["worst_rows_png"],
-    }
+    artifact_paths = _headless_geometry_fit_recovery_artifact_paths(paths)
     state_provenance = _headless_geometry_fit_state_provenance(state_file)
     failure_payload = {
         "json_authoritative": True,
@@ -1645,34 +1700,45 @@ def _headless_geometry_fit_fail_closed_combo_result(
     }
     summary = progress.get("point_match_summary")
     summary_map = summary if isinstance(summary, Mapping) else {}
-    for key in (
-        "raw_angular_rms_deg",
-        "raw_angular_max_deg",
-        "final_rms_deg",
-        "final_max_deg",
-        "excluded_pair_ids",
-        "excluded_pair_count",
-        "excluded_rows",
-        "excluded_pair_ids_present",
-        "original_qr_fit_expected_count",
-        "excluded_rows_do_not_count_as_missing",
-        "saved_gui_state_mutated",
-        "qr_fit_resolved_count",
-        "qr_fit_expected_count",
-        "qr_fit_missing_pairs",
-        "source_authority_mismatch_count",
-        "visual_objective_surface_mismatch_count",
-        "objective_param_sensitivity_status",
-        "acceptance_metric_space",
-        "saved_sim_refined_caked_used",
-        "pixel_residual_used_for_objective",
-    ):
-        if key in progress:
-            combo_result[key] = progress.get(key)
-        elif key in summary_map:
-            combo_result[key] = summary_map.get(key)
-    combo_result.setdefault("saved_sim_refined_caked_used", False)
-    combo_result.setdefault("pixel_residual_used_for_objective", False)
+    _headless_geometry_fit_copy_combo_progress_fields(
+        combo_result,
+        progress,
+        summary_map,
+        include_final_metrics=True,
+    )
+    return combo_result
+
+
+def _headless_geometry_fit_text_tail(value: object, *, limit: int) -> str:
+    text = str(value or "")
+    return text[-limit:] if len(text) > limit else text
+
+
+def _headless_geometry_fit_subprocess_failure_combo_result(
+    *,
+    combo: Mapping[str, object],
+    combo_dir: Path,
+    state_file: Path,
+    message: str,
+    returncode: int | None,
+    stdout: object = "",
+    stderr: object = "",
+) -> dict[str, object]:
+    combo_result = _headless_geometry_fit_fail_closed_combo_result(
+        combo=combo,
+        combo_dir=combo_dir,
+        state_file=state_file,
+        exception=RuntimeError(message),
+    )
+    combo_result["subprocess_returncode"] = returncode
+    combo_result["subprocess_stdout_tail"] = _headless_geometry_fit_text_tail(
+        stdout,
+        limit=_HEADLESS_GEOMETRY_FIT_SUBPROCESS_TAIL_CHARS,
+    )
+    combo_result["subprocess_stderr_tail"] = _headless_geometry_fit_text_tail(
+        stderr,
+        limit=_HEADLESS_GEOMETRY_FIT_SUBPROCESS_TAIL_CHARS,
+    )
     return combo_result
 
 
@@ -1697,15 +1763,7 @@ def _headless_geometry_fit_supplement_combo_artifacts(
         {**result, "combo_artifact_dir": combo_dir}
     )
     paths = _headless_geometry_fit_recovery_paths(combo_dir)
-    artifact_paths: dict[str, object] = {
-        "single_step_json": paths["single_step_json"],
-        "single_step_png": paths["single_step_png"],
-        "single_step_csv": paths["single_step_csv"],
-        "full_fit_json": paths["full_fit_json"],
-        "full_fit_png": paths["full_fit_png"],
-        "worst_rows_json": paths["worst_rows_json"],
-        "worst_rows_png": paths["worst_rows_png"],
-    }
+    artifact_paths = _headless_geometry_fit_recovery_artifact_paths(paths)
     if required_pngs and all(path.exists() and path.stat().st_size > 0 for path in required_pngs):
         result["artifacts"] = artifact_paths
         return result
@@ -1841,32 +1899,116 @@ def _run_headless_geometry_fit_parameter_combo(
             for name in combo.get("active_vars", ()) or ()
             if str(name) in result_variables
         }
-    for key in (
-        "input_state_path",
-        "input_state_sha256",
-        "excluded_pair_ids",
-        "excluded_pair_count",
-        "excluded_rows",
-        "excluded_pair_ids_present",
-        "original_qr_fit_expected_count",
-        "excluded_rows_do_not_count_as_missing",
-        "saved_gui_state_mutated",
-        "qr_fit_resolved_count",
-        "qr_fit_expected_count",
-        "qr_fit_missing_pairs",
-        "source_authority_mismatch_count",
-        "visual_objective_surface_mismatch_count",
-        "objective_param_sensitivity_status",
-        "acceptance_metric_space",
-        "saved_sim_refined_caked_used",
-        "pixel_residual_used_for_objective",
-    ):
-        if key in progress:
-            combo_result[key] = progress.get(key)
-        elif key in summary_map:
-            combo_result[key] = summary_map.get(key)
-    combo_result.setdefault("saved_sim_refined_caked_used", False)
-    combo_result.setdefault("pixel_residual_used_for_objective", False)
+    _headless_geometry_fit_copy_combo_progress_fields(combo_result, progress, summary_map)
+    return combo_result
+
+
+def _run_headless_geometry_fit_parameter_combo_child(request_path: str | Path) -> None:
+    request_file = Path(request_path)
+    request = json.loads(request_file.read_text(encoding="utf-8"))
+    if not isinstance(request, Mapping):
+        raise ValueError("Parameter-combo child request must be a JSON object.")
+    saved_state = request.get("saved_state")
+    combo = request.get("combo")
+    if not isinstance(saved_state, Mapping) or not isinstance(combo, Mapping):
+        raise ValueError("Parameter-combo child request is missing saved_state or combo.")
+    state_file = Path(str(request["state_path"]))
+    combo_dir = Path(str(request["combo_dir"]))
+    try:
+        combo_result = _run_headless_geometry_fit_parameter_combo(
+            saved_state=saved_state,
+            state_path=state_file,
+            combo=combo,
+            combo_dir=combo_dir,
+            excluded_pair_ids=request.get("excluded_pair_ids"),
+            seed_policy=request.get("seed_policy"),
+        )
+    except SystemExit as exc:
+        combo_result = _headless_geometry_fit_fail_closed_combo_result(
+            combo=combo,
+            combo_dir=combo_dir,
+            state_file=state_file,
+            exception=exc,
+        )
+    except Exception as exc:
+        combo_result = _headless_geometry_fit_fail_closed_combo_result(
+            combo=combo,
+            combo_dir=combo_dir,
+            state_file=state_file,
+            exception=exc,
+        )
+    _geometry_fit_recovery_json(Path(str(request["result_path"])), combo_result)
+
+
+def _run_headless_geometry_fit_parameter_combo_subprocess(
+    *,
+    saved_state: Mapping[str, object],
+    state_path: Path,
+    combo: Mapping[str, object],
+    combo_dir: Path,
+    excluded_pair_ids: Sequence[object],
+    seed_policy: object | None,
+) -> dict[str, object]:
+    request_path = combo_dir / "_combo_child_request.json"
+    result_path = combo_dir / "_combo_child_result.json"
+    _geometry_fit_recovery_json(
+        request_path,
+        {
+            "saved_state": saved_state,
+            "state_path": state_path,
+            "combo": combo,
+            "combo_dir": combo_dir,
+            "excluded_pair_ids": list(excluded_pair_ids),
+            "seed_policy": seed_policy,
+            "result_path": result_path,
+        },
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            _HEADLESS_GEOMETRY_FIT_COMBO_CHILD_CODE,
+            str(request_path),
+        ],
+        cwd=str(Path.cwd()),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        return _headless_geometry_fit_subprocess_failure_combo_result(
+            combo=combo,
+            combo_dir=combo_dir,
+            state_file=state_path,
+            message=f"combo subprocess exited with code {completed.returncode}",
+            returncode=int(completed.returncode),
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+        )
+    if not result_path.exists():
+        return _headless_geometry_fit_subprocess_failure_combo_result(
+            combo=combo,
+            combo_dir=combo_dir,
+            state_file=state_path,
+            message=f"combo subprocess did not write {result_path.name}",
+            returncode=int(completed.returncode),
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+        )
+    loaded = json.loads(result_path.read_text(encoding="utf-8"))
+    if not isinstance(loaded, Mapping):
+        return _headless_geometry_fit_subprocess_failure_combo_result(
+            combo=combo,
+            combo_dir=combo_dir,
+            state_file=state_path,
+            message=f"combo subprocess wrote invalid {result_path.name}",
+            returncode=int(completed.returncode),
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+        )
+    combo_result = dict(loaded)
+    combo_result["subprocess_returncode"] = int(completed.returncode)
+    combo_result["combo_child_result_json"] = result_path
     return combo_result
 
 
@@ -1877,6 +2019,7 @@ def run_headless_geometry_fit_parameter_combo_sweep(
     output_dir: str | Path,
     excluded_pair_ids: Sequence[object] | str | None = None,
     seed_policy: object | None = None,
+    isolate_combos: bool = False,
 ) -> dict[str, object]:
     state_file = Path(state_path).expanduser().resolve()
     output_path = Path(output_dir)
@@ -1904,13 +2047,25 @@ def run_headless_geometry_fit_parameter_combo_sweep(
             }
         else:
             try:
-                combo_payload = _run_headless_geometry_fit_parameter_combo(
+                combo_runner = (
+                    _run_headless_geometry_fit_parameter_combo_subprocess
+                    if isolate_combos
+                    else _run_headless_geometry_fit_parameter_combo
+                )
+                combo_payload = combo_runner(
                     saved_state=saved_state,
                     state_path=state_file,
                     combo=combo,
                     combo_dir=combo_dir,
                     excluded_pair_ids=excluded_ids,
                     seed_policy=seed_policy,
+                )
+            except SystemExit as exc:
+                combo_payload = _headless_geometry_fit_fail_closed_combo_result(
+                    combo=combo,
+                    combo_dir=combo_dir,
+                    state_file=state_file,
+                    exception=exc,
                 )
             except Exception as exc:
                 combo_payload = _headless_geometry_fit_fail_closed_combo_result(

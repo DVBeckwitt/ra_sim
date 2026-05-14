@@ -138,19 +138,24 @@ dry-run geometry-update status, and artifact links. Accepted dry-run combos set
 `would_update_geometry=true` and `geometry_updated=false`; geometry changes are
 reserved for the explicit GUI apply step, which verifies the saved-state hash,
 approved exclusion list, and accepted combo result before applying variables.
+CLI-requested sweeps isolate each combo in a child Python process so a native
+Windows `python313.dll` access violation or other non-Python process exit is
+reported as a rejected `combo_result.json` with the child return code and
+required placeholder artifacts instead of terminating the parent sweep.
 
-Current Bi2Se3 status as of 2026-05-14: with
-`bg1:pair15`, `bg0:pair20`, and `bg2:pair17` excluded, the supported required
-combos `00_gamma_Gamma`, `01_gamma_Gamma_theta_initial`,
-`02_gamma_Gamma_corto_detector`, and `03_gamma_Gamma_center_x_center_y`
-accepted under the normal `5 deg` RMS and `10 deg` max thresholds. The two
-larger supported required combos
+Current Bi2Se3 status as of the 2026-05-14 exact CLI sweep: with
+`bg1:pair15`, `bg0:pair20`, and `bg2:pair17` excluded, `00_gamma_Gamma`
+accepted at `0.8083400569700655 deg` RMS and `2.5981580333851113 deg` max, and
+`03_gamma_Gamma_center_x_center_y` accepted at `1.140136774957117 deg` RMS and
+`6.206891352600093 deg` max. Required combos
+`01_gamma_Gamma_theta_initial` and `02_gamma_Gamma_corto_detector` failed
+closed with native child return code `3221225477`, while
 `04_gamma_Gamma_theta_initial_corto_detector` and
 `05_gamma_Gamma_theta_initial_center_x_center_y` failed closed with
-`qr_fit_objective_incomplete` (`resolved_count=23`, `expected_count=24` inside
-the failing objective). Therefore `all_supported_required_combos_pass=false`
-for this run, and the recommended action is to apply the best accepted dry-run
-combo, `00_gamma_Gamma`.
+`qr_fit_objective_incomplete` on `bg2:pair4` (`[-1,0,5]`, branch 1). Therefore
+`all_supported_required_combos_pass=false`; the report's best accepted dry-run
+combo remains `00_gamma_Gamma`, and no real GUI geometry is updated by the dry
+run.
 
 ## Background Peak-Fit Diagnostic Caches
 

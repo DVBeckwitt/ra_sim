@@ -40,6 +40,10 @@
     sweeps for headless Bi2Se3 geometry recovery fits, including per-combo
     JSON/PNG artifacts, top-level sweep reports, fail-closed combo results,
     and a guarded GUI apply helper for accepted, state-matching results.
+  - Hardened headless parameter-combo sweeps so CLI runs isolate each combo in
+    a child process and record nonzero child exits, including native Windows
+    Python crashes, as rejected combo results with required artifacts instead
+    of terminating the sweep parent.
   - Wired Bi2Se3 headless `gamma,Gamma` recovery fits to write the single-step QR
     coordinate audit, full-fit before/after overlay, and rejected-fit worst-row
     PNG/JSON artifacts into the fit output folder, record their paths in the

@@ -744,6 +744,7 @@ def run_headless_geometry_fit(
                 output_dir=(output_dir if output_dir is not None else Path(source_path).parent),
                 excluded_pair_ids=excluded_pair_ids,
                 seed_policy=seed_policy,
+                isolate_combos=True,
             )
             return dict(state), {
                 "accepted": False,

@@ -598,6 +598,44 @@ def test_run_headless_geometry_fit_forwards_background_subtraction_overrides(
     }
 
 
+def test_run_headless_geometry_fit_isolates_parameter_combo_sweep(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    payload = {"type": "ra_sim.gui_state", "state": {"files": {"background_files": ["bg0.osc"]}}}
+    captured: dict[str, object] = {}
+
+    def _fake_sweep(state_arg, **kwargs):
+        captured["state"] = state_arg
+        captured["kwargs"] = dict(kwargs)
+        return {"combo_results": []}
+
+    monkeypatch.setattr(
+        cli.shared_headless_geometry_fit,
+        "run_headless_geometry_fit_parameter_combo_sweep",
+        _fake_sweep,
+    )
+
+    state_result, report = cli.run_headless_geometry_fit(
+        payload,
+        source_path=tmp_path / "state.json",
+        output_dir=tmp_path / "artifacts",
+        parameter_combo_sweep=True,
+        excluded_pair_ids=["bg1:pair15"],
+        seed_policy="ladder-multistart",
+    )
+
+    assert state_result == payload["state"]
+    assert report == {
+        "accepted": False,
+        "dry_run": True,
+        "parameter_combo_sweep": {"combo_results": []},
+    }
+    assert captured["kwargs"]["isolate_combos"] is True
+    assert captured["kwargs"]["excluded_pair_ids"] == ["bg1:pair15"]
+    assert captured["kwargs"]["seed_policy"] == "ladder-multistart"
+
+
 def test_headless_background_subtraction_config_warns_and_forces_noop() -> None:
     headless_geometry_fit._legacy_background_subtraction_warning_emitted = False
     defaults = SimpleNamespace(
