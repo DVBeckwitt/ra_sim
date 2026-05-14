@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from argparse import _SubParsersAction
+import hashlib
 import inspect
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -154,6 +157,28 @@ def test_cli_build_parser_accepts_fit_geometry_parameter_combo_sweep_option() ->
     )
 
     assert args.parameter_combo_sweep is True
+
+
+def test_cli_build_parser_accepts_fit_geometry_apply_sweep_result_options() -> None:
+    if getattr(cli, "_cmd_fit_geometry", None) is None:
+        pytest.skip("fit-geometry CLI command is not available in this checkout")
+
+    parser = cli._build_parser()
+    args = parser.parse_args(
+        [
+            "fit-geometry",
+            "saved_state.json",
+            "--apply-sweep-result",
+            "combo_result.json",
+            "--approve-excluded-pair-id",
+            "bg1:pair15",
+            "--approve-excluded-pair-id",
+            "bg0:pair20",
+        ]
+    )
+
+    assert args.apply_sweep_result == "combo_result.json"
+    assert args.approve_excluded_pair_id == ["bg1:pair15", "bg0:pair20"]
 
 
 def test_cli_build_parser_accepts_background_subtraction_options() -> None:
@@ -634,6 +659,349 @@ def test_run_headless_geometry_fit_isolates_parameter_combo_sweep(
     assert captured["kwargs"]["isolate_combos"] is True
     assert captured["kwargs"]["excluded_pair_ids"] == ["bg1:pair15"]
     assert captured["kwargs"]["seed_policy"] == "ladder-multistart"
+
+
+def _write_cli_apply_combo(
+    path: Path,
+    *,
+    input_state_sha256: str,
+    excluded_pair_ids: list[str] | None = None,
+    status: str = "accepted",
+    rms: float = 0.8,
+    max_deg: float = 2.5,
+) -> None:
+    overlay_png = path.parent / "02_full_fit_initial_vs_final_qr_overlay.png"
+    overlay_json = path.parent / "02_full_fit_initial_vs_final_qr_overlay.json"
+    overlay_png.write_bytes(b"\x89PNG\r\n\x1a\naccepted")
+    overlay_json.write_text(
+        json.dumps({"plotted_row_identities": [{"pair_id": "bg0:pair0", "hkl": [0, 0, 3]}]}),
+        encoding="utf-8",
+    )
+    path.write_text(
+        json.dumps(
+            {
+                "status": status,
+                "full_fit_success": status == "accepted",
+                "dry_run": True,
+                "input_state_sha256": input_state_sha256,
+                "excluded_pair_ids": excluded_pair_ids or ["bg0:pair20"],
+                "active_vars": ["gamma", "Gamma"],
+                "raw_angular_rms_deg": rms,
+                "raw_angular_max_deg": max_deg,
+                "qr_fit_resolved_count": 79,
+                "qr_fit_expected_count": 79,
+                "qr_fit_missing_pairs": [],
+                "source_authority_mismatch_count": 0,
+                "visual_objective_surface_mismatch_count": 0,
+                "objective_param_sensitivity_status": "sensitive",
+                "result_variables": {"gamma": 1.25, "Gamma": 2.5},
+                "artifacts": {
+                    "full_fit_png": str(overlay_png),
+                    "full_fit_json": str(overlay_json),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_cli_apply_sweep_result_requires_approved_excluded_pair_ids(tmp_path) -> None:
+    state = {
+        "variables": {"gamma_var": 0.1, "Gamma_var": 0.2},
+        "geometry": {"manual_pairs": [{"background_index": 0, "entries": []}]},
+    }
+    state_path = tmp_path / "Bi2Se3.json"
+    state_path.write_text(json.dumps({"type": "ra_sim.gui_state", "state": state}), encoding="utf-8")
+    combo_path = tmp_path / "combo_result.json"
+    _write_cli_apply_combo(
+        combo_path,
+        input_state_sha256=hashlib.sha256(state_path.read_bytes()).hexdigest(),
+        excluded_pair_ids=["bg0:pair20"],
+    )
+
+    with pytest.raises(ValueError, match="approved_excluded_pair_ids_required"):
+        cli.run_headless_geometry_fit(
+            {"state": state},
+            source_path=state_path,
+            output_dir=tmp_path,
+            apply_sweep_result=combo_path,
+            approved_excluded_pair_ids=None,
+        )
+
+
+def test_cli_apply_sweep_result_refuses_unapproved_exclusions(tmp_path) -> None:
+    state = {
+        "variables": {"gamma_var": 0.1, "Gamma_var": 0.2},
+        "geometry": {"manual_pairs": [{"background_index": 0, "entries": []}]},
+    }
+    state_path = tmp_path / "Bi2Se3.json"
+    state_path.write_text(json.dumps({"type": "ra_sim.gui_state", "state": state}), encoding="utf-8")
+    combo_path = tmp_path / "combo_result.json"
+    _write_cli_apply_combo(
+        combo_path,
+        input_state_sha256=hashlib.sha256(state_path.read_bytes()).hexdigest(),
+        excluded_pair_ids=["bg0:pair20", "bg1:pair15"],
+    )
+
+    with pytest.raises(ValueError, match="excluded_pair_ids_mismatch"):
+        cli.run_headless_geometry_fit(
+            {"state": state},
+            source_path=state_path,
+            output_dir=tmp_path,
+            apply_sweep_result=combo_path,
+            approved_excluded_pair_ids=["bg0:pair20"],
+        )
+
+
+def test_cli_apply_sweep_result_updates_state_and_records_exclusions(tmp_path) -> None:
+    state = {
+        "variables": {"gamma_var": 0.1, "Gamma_var": 0.2},
+        "geometry": {
+            "manual_pairs": [
+                {
+                    "background_index": 0,
+                    "entries": [{"pair_id": "bg0:pair20", "hkl": [-2, 0, 5]}],
+                }
+            ]
+        },
+    }
+    state_path = tmp_path / "Bi2Se3.json"
+    state_path.write_text(json.dumps({"type": "ra_sim.gui_state", "state": state}), encoding="utf-8")
+    combo_path = tmp_path / "combo_result.json"
+    _write_cli_apply_combo(
+        combo_path,
+        input_state_sha256=hashlib.sha256(state_path.read_bytes()).hexdigest(),
+        excluded_pair_ids=["bg0:pair20", "bg1:pair15", "bg2:pair17"],
+    )
+
+    state_result, report = cli.run_headless_geometry_fit(
+        {"state": state},
+        source_path=state_path,
+        output_dir=tmp_path,
+        apply_sweep_result=combo_path,
+        approved_excluded_pair_ids=["bg1:pair15", "bg0:pair20", "bg2:pair17"],
+    )
+
+    assert state_result["variables"]["gamma_var"] == 1.25
+    assert state_result["variables"]["Gamma_var"] == 2.5
+    assert state_result["geometry"]["manual_pairs"] == state["geometry"]["manual_pairs"]
+    assert state_result["geometry"]["geometry_fit_excluded_pair_ids"] == [
+        "bg0:pair20",
+        "bg1:pair15",
+        "bg2:pair17",
+    ]
+    assert (
+        state_result["geometry"]["geometry_fit_exclusion_reason"]
+        == "manual_outliers_or_physical_bad_fit"
+    )
+    assert report["apply_success"] is True
+    assert report["geometry_updated"] is True
+    assert report["applied_combo_name"] == "combo_result"
+    assert report["excluded_pair_count"] == 3
+    overlay_png = tmp_path / headless_geometry_fit.GEOMETRY_FIT_APPLIED_OVERLAY_PNG
+    overlay_json = tmp_path / headless_geometry_fit.GEOMETRY_FIT_APPLIED_OVERLAY_JSON
+    assert overlay_png.exists()
+    assert overlay_json.exists()
+    overlay_payload = json.loads(overlay_json.read_text(encoding="utf-8"))
+    assert overlay_payload["applied_combo_name"] == "combo_result"
+    assert overlay_payload["applied_active_vars"] == ["gamma", "Gamma"]
+    assert overlay_payload["excluded_pair_ids"] == ["bg0:pair20", "bg1:pair15", "bg2:pair17"]
+    assert overlay_payload["gamma_before"] == 0.1
+    assert overlay_payload["Gamma_before"] == 0.2
+    assert overlay_payload["gamma_after"] == 1.25
+    assert overlay_payload["Gamma_after"] == 2.5
+    assert overlay_payload["geometry_updated"] is True
+    assert overlay_payload["plotted_row_identities"] == [{"pair_id": "bg0:pair0", "hkl": [0, 0, 3]}]
+
+
+def test_subsequent_fit_uses_recorded_exclusions_when_user_requests_same_fit(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    payload = {
+        "state": {
+            "variables": {"gamma_var": 1.25, "Gamma_var": 2.5},
+            "geometry": {
+                "geometry_fit_excluded_pair_ids": [
+                    "bg0:pair20",
+                    "bg1:pair15",
+                    "bg2:pair17",
+                ]
+            },
+        }
+    }
+    captured: dict[str, object] = {}
+
+    def _fake_fit(state_arg, **kwargs):
+        captured["state"] = state_arg
+        captured["kwargs"] = dict(kwargs)
+        return SimpleNamespace(
+            accepted=True,
+            rejection_reason=None,
+            rms_px=1.0,
+            log_path=None,
+            state=state_arg,
+        )
+
+    monkeypatch.setattr(cli.shared_headless_geometry_fit, "run_headless_geometry_fit", _fake_fit)
+
+    cli.run_headless_geometry_fit(
+        payload,
+        source_path=tmp_path / "applied.json",
+        output_dir=tmp_path,
+    )
+
+    assert captured["kwargs"]["excluded_pair_ids"] == [
+        "bg0:pair20",
+        "bg1:pair15",
+        "bg2:pair17",
+    ]
+
+
+def test_cli_apply_best_bi2se3_combo_writes_applied_state_and_overlay(tmp_path) -> None:
+    cmd = _require_fit_geometry_command()
+
+    state = {
+        "variables": {"gamma_var": 0.1, "Gamma_var": 0.2},
+        "geometry": {"manual_pairs": [{"background_index": 0, "entries": []}]},
+    }
+    input_path = tmp_path / "Bi2Se3.json"
+    output_path = tmp_path / "bi2se3_gamma_gamma_fit_applied.json"
+    cli.save_gui_state_file(input_path, state)
+    combo_dir = tmp_path / "sweep" / "00_gamma_Gamma"
+    combo_dir.mkdir(parents=True)
+    combo_path = combo_dir / "combo_result.json"
+    _write_cli_apply_combo(
+        combo_path,
+        input_state_sha256=hashlib.sha256(input_path.read_bytes()).hexdigest(),
+        excluded_pair_ids=["bg0:pair20", "bg1:pair15", "bg2:pair17"],
+    )
+
+    args = SimpleNamespace(
+        state=str(input_path),
+        input_state=str(input_path),
+        gui_state=str(input_path),
+        source_state=str(input_path),
+        out_state=str(output_path),
+        output_state=str(output_path),
+        output=str(output_path),
+        in_place=False,
+        active_vars=None,
+        seed_policy=None,
+        exclude_pair_id=None,
+        parameter_combo_sweep=False,
+        apply_sweep_result=str(combo_path),
+        approve_excluded_pair_id=["bg1:pair15", "bg0:pair20", "bg2:pair17"],
+        weighted_event_workers=None,
+        background_subtraction="saved",
+        background_subtraction_scale=None,
+        background_subtraction_diagnostics=None,
+        background_phi_block_theta_bin_width_deg=None,
+        background_phi_block_phi_bin_width_deg=None,
+        background_phi_block_quantile=None,
+        background_phi_block_scale=None,
+        background_phi_block_interpolation=None,
+        background_phi_block_preserve_block_edges=None,
+    )
+
+    cmd(args)
+
+    applied_state = cli.load_gui_state_file(output_path)["state"]
+    assert applied_state["variables"]["gamma_var"] == 1.25
+    assert applied_state["variables"]["Gamma_var"] == 2.5
+    assert applied_state["geometry"]["geometry_fit_excluded_pair_ids"] == [
+        "bg0:pair20",
+        "bg1:pair15",
+        "bg2:pair17",
+    ]
+    overlay_png = output_path.parent / headless_geometry_fit.GEOMETRY_FIT_APPLIED_OVERLAY_PNG
+    overlay_json = output_path.parent / headless_geometry_fit.GEOMETRY_FIT_APPLIED_OVERLAY_JSON
+    assert overlay_png.exists()
+    overlay_payload = json.loads(overlay_json.read_text(encoding="utf-8"))
+    assert overlay_payload["applied_combo_name"] == "combo_result"
+    assert overlay_payload["raw_angular_rms_deg"] <= 5.0
+    assert overlay_payload["raw_angular_max_deg"] <= 10.0
+    assert overlay_payload["output_state_sha256"] == hashlib.sha256(
+        output_path.read_bytes()
+    ).hexdigest()
+
+
+def _cli_apply_args(input_path: Path, output_path: Path, combo_path: Path) -> SimpleNamespace:
+    return SimpleNamespace(
+        state=str(input_path),
+        input_state=str(input_path),
+        gui_state=str(input_path),
+        source_state=str(input_path),
+        out_state=str(output_path),
+        output_state=str(output_path),
+        output=str(output_path),
+        in_place=False,
+        active_vars=None,
+        seed_policy=None,
+        exclude_pair_id=None,
+        parameter_combo_sweep=False,
+        apply_sweep_result=str(combo_path),
+        approve_excluded_pair_id=["bg1:pair15", "bg0:pair20", "bg2:pair17"],
+        weighted_event_workers=None,
+        background_subtraction="saved",
+        background_subtraction_scale=None,
+        background_subtraction_diagnostics=None,
+        background_phi_block_theta_bin_width_deg=None,
+        background_phi_block_phi_bin_width_deg=None,
+        background_phi_block_quantile=None,
+        background_phi_block_scale=None,
+        background_phi_block_interpolation=None,
+        background_phi_block_preserve_block_edges=None,
+    )
+
+
+def test_apply_success_message_lists_exclusions_and_overlay(tmp_path, capsys) -> None:
+    cmd = _require_fit_geometry_command()
+    state = {"variables": {"gamma_var": 0.1, "Gamma_var": 0.2}, "geometry": {}}
+    input_path = tmp_path / "Bi2Se3.json"
+    output_path = tmp_path / "applied.json"
+    cli.save_gui_state_file(input_path, state)
+    combo_path = tmp_path / "combo_result.json"
+    _write_cli_apply_combo(
+        combo_path,
+        input_state_sha256=hashlib.sha256(input_path.read_bytes()).hexdigest(),
+        excluded_pair_ids=["bg0:pair20", "bg1:pair15", "bg2:pair17"],
+    )
+
+    cmd(_cli_apply_args(input_path, output_path, combo_path))
+
+    stdout = capsys.readouterr().out
+    assert "Geometry fit applied." in stdout
+    assert "Active variables: gamma,Gamma." in stdout
+    assert "Excluded manual pairs: bg0:pair20, bg1:pair15, bg2:pair17." in stdout
+    assert "RMS caked residual: 0.8 deg." in stdout
+    assert "Max caked residual: 2.5 deg." in stdout
+    assert str(output_path.parent / headless_geometry_fit.GEOMETRY_FIT_APPLIED_OVERLAY_PNG) in stdout
+
+
+def test_apply_failure_message_says_geometry_unchanged(tmp_path) -> None:
+    cmd = _require_fit_geometry_command()
+    state = {"variables": {"gamma_var": 0.1, "Gamma_var": 0.2}, "geometry": {}}
+    input_path = tmp_path / "Bi2Se3.json"
+    output_path = tmp_path / "applied.json"
+    cli.save_gui_state_file(input_path, state)
+    combo_path = tmp_path / "combo_result.json"
+    _write_cli_apply_combo(
+        combo_path,
+        input_state_sha256=hashlib.sha256(input_path.read_bytes()).hexdigest(),
+        excluded_pair_ids=["bg0:pair20", "bg1:pair15", "bg2:pair17"],
+    )
+    args = _cli_apply_args(input_path, output_path, combo_path)
+    args.approve_excluded_pair_id = ["bg0:pair20"]
+
+    with pytest.raises(SystemExit) as excinfo:
+        cmd(args)
+
+    message = str(excinfo.value)
+    assert "Geometry fit was not applied." in message
+    assert "Reason: excluded_pair_ids_mismatch" in message
+    assert "Geometry was left unchanged." in message
+    assert not output_path.exists()
 
 
 def test_headless_background_subtraction_config_warns_and_forces_noop() -> None:

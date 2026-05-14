@@ -45,6 +45,16 @@
     Python crashes, as rejected combo results with required artifacts instead
     of terminating the sweep parent, without keeping transient child
     request/result/log files in the artifact tree.
+  - Added explicit Bi2Se3 sweep-result application through `fit-geometry`
+    `--apply-sweep-result` plus repeated `--approve-excluded-pair-id` flags,
+    with state-hash/exclusion/QR-contract guards, preserved manual pairs,
+    recorded geometry-fit exclusions, actionable CLI success/failure messages,
+    and `04_applied_geometry_overlay.{png,json}` artifacts for accepted
+    `gamma,Gamma` results.
+  - Expanded parameter-combo sweep reports with selected-combo QR counts,
+    dry-run/update flags, artifact status, native child exit classification,
+    durable bounded stdout/stderr tail files for child crashes, and top missing
+    pair identities for `qr_fit_objective_incomplete` failures.
   - Wired Bi2Se3 headless `gamma,Gamma` recovery fits to write the single-step QR
     coordinate audit, full-fit before/after overlay, and rejected-fit worst-row
     PNG/JSON artifacts into the fit output folder, record their paths in the

@@ -86,6 +86,8 @@ GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_JSON = "02_full_fit_initial_vs_final_qr_overl
 GEOMETRY_FIT_RECOVERY_FULL_OVERLAY_PNG = "02_full_fit_initial_vs_final_qr_overlay.png"
 GEOMETRY_FIT_RECOVERY_WORST_ROWS_JSON = "03_worst_residual_rows.json"
 GEOMETRY_FIT_RECOVERY_WORST_ROWS_PNG = "03_worst_residual_rows.png"
+GEOMETRY_FIT_APPLIED_OVERLAY_JSON = "04_applied_geometry_overlay.json"
+GEOMETRY_FIT_APPLIED_OVERLAY_PNG = "04_applied_geometry_overlay.png"
 GEOMETRY_FIT_SWEEP_SUMMARY_PNG = "sweep_summary.png"
 _HEADLESS_GEOMETRY_FIT_COMBO_CHILD_CODE = (
     "from ra_sim.headless_geometry_fit import "
@@ -1435,6 +1437,27 @@ def _headless_geometry_fit_validate_combo_artifacts(combo_result: Mapping[str, o
         raise RuntimeError(f"Geometry fit combo missing required PNGs: {missing_text}")
 
 
+def _headless_geometry_fit_combo_artifact_status(
+    combo_result: Mapping[str, object],
+) -> dict[str, object]:
+    result = dict(combo_result)
+    if str(result.get("status") or "") == "skipped":
+        result["artifact_status"] = "skipped"
+        result["required_pngs_present"] = False
+        return result
+    required_pngs = _headless_geometry_fit_combo_required_pngs(result)
+    missing = [
+        path for path in required_pngs if not path.exists() or path.stat().st_size <= 0
+    ]
+    result["required_pngs_present"] = bool(required_pngs) and not missing
+    result["artifact_status"] = (
+        "required_pngs_present" if result["required_pngs_present"] else "required_pngs_missing"
+    )
+    if missing:
+        result["missing_required_pngs"] = [str(path) for path in missing]
+    return result
+
+
 def _headless_geometry_fit_best_combo(
     combo_results: Sequence[Mapping[str, object]],
 ) -> Mapping[str, object] | None:
@@ -1648,6 +1671,13 @@ def _headless_geometry_fit_fail_closed_combo_result(
     progress_path = combo_dir / f"{combo['name']}.progress.json"
     progress = _headless_geometry_fit_load_progress(progress_path)
     message = str(exception).strip() or type(exception).__name__
+    failure_classification = _headless_geometry_fit_failure_classification(
+        message=message,
+        exception=exception,
+    )
+    top_missing_pair_identities = _headless_geometry_fit_top_missing_pair_identities(
+        progress.get("qr_fit_missing_pairs")
+    )
     paths = _headless_geometry_fit_recovery_paths(combo_dir)
     artifact_paths = _headless_geometry_fit_recovery_artifact_paths(paths)
     state_provenance = _headless_geometry_fit_state_provenance(state_file)
@@ -1659,6 +1689,7 @@ def _headless_geometry_fit_fail_closed_combo_result(
         "status": "rejected",
         "full_fit_success": False,
         "failure_reasons": ["headless_fit_exception"],
+        "failure_classification": failure_classification,
         "exception_type": type(exception).__name__,
         "rejection_reason": message,
         "progress_path": progress_path,
@@ -1691,6 +1722,7 @@ def _headless_geometry_fit_fail_closed_combo_result(
         "full_fit_success": False,
         "rejection_reason": message,
         "failure_reasons": ["headless_fit_exception"],
+        "failure_classification": failure_classification,
         "exception_type": type(exception).__name__,
         "geometry_updated": False,
         "would_update_geometry": False,
@@ -1706,7 +1738,36 @@ def _headless_geometry_fit_fail_closed_combo_result(
         summary_map,
         include_final_metrics=True,
     )
+    if top_missing_pair_identities:
+        combo_result["top_missing_pair_identities"] = top_missing_pair_identities
     return combo_result
+
+
+def _headless_geometry_fit_failure_classification(
+    *,
+    message: str,
+    exception: BaseException | None = None,
+) -> str:
+    text = f"{type(exception).__name__ if exception is not None else ''} {message}"
+    if "qr_fit_objective_incomplete" in text:
+        return "qr_fit_objective_incomplete"
+    return "headless_fit_exception"
+
+
+def _headless_geometry_fit_top_missing_pair_identities(value: object) -> list[object]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return []
+    identities: list[object] = []
+    for item in list(value)[:10]:
+        if isinstance(item, Mapping):
+            identity: dict[str, object] = {}
+            for key in ("pair_id", "background_index", "hkl", "branch", "source_row_index"):
+                if key in item:
+                    identity[key] = copy.deepcopy(item[key])
+            identities.append(identity if identity else copy.deepcopy(dict(item)))
+        else:
+            identities.append(str(item))
+    return identities
 
 
 def _headless_geometry_fit_text_tail(value: object, *, limit: int) -> str:
@@ -1742,14 +1803,24 @@ def _headless_geometry_fit_subprocess_failure_combo_result(
         exception=RuntimeError(message),
     )
     combo_result["subprocess_returncode"] = returncode
-    combo_result["subprocess_stdout_tail"] = _headless_geometry_fit_text_tail(
+    stdout_tail = _headless_geometry_fit_text_tail(
         stdout,
         limit=_HEADLESS_GEOMETRY_FIT_SUBPROCESS_TAIL_CHARS,
     )
-    combo_result["subprocess_stderr_tail"] = _headless_geometry_fit_text_tail(
+    stderr_tail = _headless_geometry_fit_text_tail(
         stderr,
         limit=_HEADLESS_GEOMETRY_FIT_SUBPROCESS_TAIL_CHARS,
     )
+    stdout_path = combo_dir / "subprocess_stdout_tail.txt"
+    stderr_path = combo_dir / "subprocess_stderr_tail.txt"
+    stdout_path.write_text(stdout_tail, encoding="utf-8")
+    stderr_path.write_text(stderr_tail, encoding="utf-8")
+    combo_result["failure_classification"] = "native_child_exit"
+    combo_result["native_child_return_code"] = returncode
+    combo_result["subprocess_stdout_tail"] = stdout_tail
+    combo_result["subprocess_stderr_tail"] = stderr_tail
+    combo_result["subprocess_stdout_path"] = stdout_path
+    combo_result["subprocess_stderr_path"] = stderr_path
     return combo_result
 
 
@@ -2066,6 +2137,7 @@ def run_headless_geometry_fit_parameter_combo_sweep(
                 "geometry_updated": False,
                 "combo_artifact_dir": combo_dir,
             }
+            combo_result = _headless_geometry_fit_combo_artifact_status(combo_result)
         else:
             try:
                 combo_runner = (
@@ -2110,6 +2182,7 @@ def run_headless_geometry_fit_parameter_combo_sweep(
                 "combo_artifact_dir": combo_dir,
             }
             combo_result = _headless_geometry_fit_classify_combo_result(combo_result)
+            combo_result = _headless_geometry_fit_combo_artifact_status(combo_result)
             _headless_geometry_fit_validate_combo_artifacts(combo_result)
         combo_result_path = _headless_geometry_fit_combo_result_json_path(combo_dir)
         combo_result["combo_result_json"] = combo_result_path
@@ -2145,6 +2218,31 @@ def run_headless_geometry_fit_parameter_combo_sweep(
         ),
         "best_combo_artifact_dir": (
             best_combo.get("combo_artifact_dir") if best_combo is not None else None
+        ),
+        "best_combo_result_json": (
+            best_combo.get("combo_result_json") if best_combo is not None else None
+        ),
+        "best_combo_qr_fit_expected_count": (
+            best_combo.get("qr_fit_expected_count") if best_combo is not None else None
+        ),
+        "best_combo_qr_fit_resolved_count": (
+            best_combo.get("qr_fit_resolved_count") if best_combo is not None else None
+        ),
+        "best_combo_qr_fit_missing_pairs": (
+            list(best_combo.get("qr_fit_missing_pairs", ()) or ())
+            if best_combo is not None
+            else []
+        ),
+        "best_combo_dry_run": (
+            bool(best_combo.get("dry_run", False)) if best_combo is not None else False
+        ),
+        "best_combo_would_update_geometry": (
+            bool(best_combo.get("would_update_geometry", False))
+            if best_combo is not None
+            else False
+        ),
+        "best_combo_geometry_updated": (
+            bool(best_combo.get("geometry_updated", False)) if best_combo is not None else False
         ),
         "recommended_action": "apply_best_combo" if best_combo is not None else "inspect_failures",
         "sweep_summary_png": output_path / GEOMETRY_FIT_SWEEP_SUMMARY_PNG,

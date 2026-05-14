@@ -78,6 +78,9 @@ GEOMETRY_FIT_PARAM_ORDER = [
     "center_y",
 ]
 
+GEOMETRY_FIT_SWEEP_APPLY_RMS_LIMIT_DEG = 5.0
+GEOMETRY_FIT_SWEEP_APPLY_MAX_LIMIT_DEG = 10.0
+
 GEOMETRY_FIT_ACCEPT_MAX_RMS_PX = 100.0
 GEOMETRY_FIT_ACCEPT_MAX_PEAK_OFFSET_PX = 150.0
 GEOMETRY_FIT_ACCEPT_MAX_CAKED_RMS_DEG = 5.0
@@ -21694,6 +21697,60 @@ def _geometry_fit_sweep_result_values(
     return values
 
 
+def _geometry_fit_sweep_float(combo_result: Mapping[str, object], key: str) -> float | None:
+    try:
+        value = float(combo_result.get(key))
+    except Exception:
+        return None
+    return float(value) if np.isfinite(value) else None
+
+
+def _geometry_fit_sweep_int(combo_result: Mapping[str, object], key: str) -> int | None:
+    try:
+        return int(combo_result.get(key))
+    except Exception:
+        return None
+
+
+def _verify_geometry_fit_sweep_apply_contract(combo_result: Mapping[str, object]) -> None:
+    if not bool(combo_result.get("dry_run")) and not bool(combo_result.get("applyable")):
+        raise ValueError("sweep_result_not_applyable")
+
+    rms = _geometry_fit_sweep_float(combo_result, "raw_angular_rms_deg")
+    max_deg = _geometry_fit_sweep_float(combo_result, "raw_angular_max_deg")
+    if (
+        rms is None
+        or max_deg is None
+        or rms > GEOMETRY_FIT_SWEEP_APPLY_RMS_LIMIT_DEG
+        or max_deg > GEOMETRY_FIT_SWEEP_APPLY_MAX_LIMIT_DEG
+    ):
+        raise ValueError("sweep_result_threshold_failed")
+
+    resolved = _geometry_fit_sweep_int(combo_result, "qr_fit_resolved_count")
+    expected = _geometry_fit_sweep_int(combo_result, "qr_fit_expected_count")
+    missing_pairs = combo_result.get("qr_fit_missing_pairs")
+    if (
+        resolved is None
+        or expected is None
+        or resolved != expected
+        or not isinstance(missing_pairs, Sequence)
+        or isinstance(missing_pairs, (str, bytes))
+        or len(missing_pairs) > 0
+    ):
+        raise ValueError("sweep_result_qr_contract_failed")
+
+    if _geometry_fit_sweep_int(combo_result, "source_authority_mismatch_count") != 0:
+        raise ValueError("sweep_result_source_mismatch")
+    if _geometry_fit_sweep_int(combo_result, "visual_objective_surface_mismatch_count") != 0:
+        raise ValueError("sweep_result_visual_objective_mismatch")
+
+    sensitivity = str(combo_result.get("objective_param_sensitivity_status") or "").strip()
+    if not sensitivity:
+        raise ValueError("sweep_result_objective_sensitivity_missing")
+    if sensitivity == "all_fit_vars_insensitive":
+        raise ValueError("sweep_result_objective_insensitive")
+
+
 def apply_geometry_fit_sweep_result(
     *,
     combo_result_path: Path | str,
@@ -21728,12 +21785,19 @@ def apply_geometry_fit_sweep_result(
     if result_ids != approved_ids:
         raise ValueError("excluded_pair_ids_mismatch")
 
+    _verify_geometry_fit_sweep_apply_contract(combo_result)
+
     raw_active_vars = combo_result.get("active_vars")
     if not isinstance(raw_active_vars, Sequence) or isinstance(raw_active_vars, (str, bytes)):
         raise ValueError("missing_active_vars")
     active_vars = [str(name).strip() for name in raw_active_vars if str(name).strip()]
     if not active_vars:
         raise ValueError("missing_active_vars")
+    missing_targets = [
+        name for name in active_vars if name != "theta_offset" and name not in var_map
+    ]
+    if missing_targets:
+        raise ValueError(f"missing_apply_variable_target:{missing_targets[0]}")
     values = _geometry_fit_sweep_result_values(combo_result, active_vars)
 
     apply_geometry_fit_result_values(

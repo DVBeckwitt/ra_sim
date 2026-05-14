@@ -31,6 +31,7 @@ import copy
 from dataclasses import dataclass
 from datetime import datetime
 from functools import lru_cache
+import hashlib
 import importlib
 import json
 import math
@@ -707,6 +708,190 @@ def _build_headless_geometry_mosaic_params(
     )
 
 
+_GEOMETRY_FIT_SWEEP_STATE_VAR_KEYS: dict[str, str] = {
+    "zb": "zb_var",
+    "zs": "zs_var",
+    "theta_initial": "theta_initial_var",
+    "psi_z": "psi_z_var",
+    "chi": "chi_var",
+    "cor_angle": "cor_angle_var",
+    "gamma": "gamma_var",
+    "Gamma": "Gamma_var",
+    "corto_detector": "corto_detector_var",
+    "a": "a_var",
+    "c": "c_var",
+    "center_x": "center_x_var",
+    "center_y": "center_y_var",
+}
+
+
+def _apply_headless_geometry_fit_sweep_result_to_state(
+    state: Mapping[str, object],
+    *,
+    source_path: str | Path,
+    output_dir: str | Path | None,
+    combo_result_path: str | Path,
+    approved_excluded_pair_ids: Sequence[str] | str | None,
+) -> tuple[dict[str, object], dict[str, object]]:
+    from ra_sim.gui import geometry_fit as gui_geometry_fit
+
+    approved_ids = (
+        _load_shared_headless_geometry_fit().normalize_headless_geometry_fit_excluded_pair_ids(
+            approved_excluded_pair_ids
+        )
+    )
+    if not approved_ids:
+        raise ValueError("approved_excluded_pair_ids_required")
+
+    updated_state = copy.deepcopy(dict(state))
+    variables = _saved_state_section(updated_state, "variables")
+    gamma_before = variables.get("gamma_var")
+    Gamma_before = variables.get("Gamma_var")
+    var_map = {
+        public_name: _HeadlessVar(variables.get(state_key))
+        for public_name, state_key in _GEOMETRY_FIT_SWEEP_STATE_VAR_KEYS.items()
+    }
+    artifact_dir = Path(output_dir) if output_dir is not None else Path(source_path).parent
+    overlay_png = artifact_dir / _load_shared_headless_geometry_fit().GEOMETRY_FIT_APPLIED_OVERLAY_PNG
+    result = gui_geometry_fit.apply_geometry_fit_sweep_result(
+        combo_result_path=combo_result_path,
+        approved_excluded_pair_ids=approved_ids,
+        var_map=var_map,
+        current_state_path=source_path,
+        accepted_overlay_path=overlay_png,
+    )
+    for public_name, value in result.applied_values.items():
+        state_key = _GEOMETRY_FIT_SWEEP_STATE_VAR_KEYS.get(public_name)
+        if state_key is not None:
+            variables[state_key] = value
+    updated_state["variables"] = variables
+
+    geometry = _saved_state_section(updated_state, "geometry")
+    geometry["geometry_fit_excluded_pair_ids"] = list(approved_ids)
+    geometry["geometry_fit_exclusion_reason"] = "manual_outliers_or_physical_bad_fit"
+    updated_state["geometry"] = geometry
+
+    combo_path = Path(combo_result_path)
+    try:
+        combo_payload = json.loads(combo_path.read_text(encoding="utf-8"))
+    except Exception:
+        combo_payload = {}
+    combo_result = combo_payload if isinstance(combo_payload, Mapping) else {}
+    plotted_row_identities: list[object] = []
+    artifacts = combo_result.get("artifacts")
+    artifact_map = artifacts if isinstance(artifacts, Mapping) else {}
+    full_fit_json = artifact_map.get("full_fit_json")
+    if full_fit_json is not None:
+        try:
+            full_fit_payload = json.loads(Path(str(full_fit_json)).read_text(encoding="utf-8"))
+            if isinstance(full_fit_payload, Mapping):
+                raw_identities = full_fit_payload.get("plotted_row_identities")
+                if isinstance(raw_identities, list):
+                    plotted_row_identities = list(raw_identities)
+        except Exception:
+            plotted_row_identities = []
+    output_state_hash = hashlib.sha256(
+        json.dumps(updated_state, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    overlay_json = artifact_dir / _load_shared_headless_geometry_fit().GEOMETRY_FIT_APPLIED_OVERLAY_JSON
+    overlay_json.parent.mkdir(parents=True, exist_ok=True)
+    overlay_payload = {
+        "json_authoritative": True,
+        "png_diagnostic_only": True,
+        "applied_combo_name": str(combo_result.get("name") or combo_path.stem),
+        "applied_active_vars": list(result.active_vars),
+        "excluded_pair_ids": list(approved_ids),
+        "gamma_before": gamma_before,
+        "Gamma_before": Gamma_before,
+        "gamma_after": variables.get("gamma_var"),
+        "Gamma_after": variables.get("Gamma_var"),
+        "raw_angular_rms_deg": combo_result.get("raw_angular_rms_deg"),
+        "raw_angular_max_deg": combo_result.get("raw_angular_max_deg"),
+        "geometry_updated": True,
+        "input_state_sha256": combo_result.get("input_state_sha256"),
+        "output_state_sha256": output_state_hash,
+        "plotted_row_identities": plotted_row_identities,
+    }
+    overlay_json.write_text(
+        json.dumps(overlay_payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    report = {
+        "accepted": True,
+        "apply_success": True,
+        "geometry_updated": True,
+        "applied_combo_name": str(combo_result.get("name") or combo_path.stem),
+        "applied_active_vars": list(result.active_vars),
+        "applied_values": dict(result.applied_values),
+        "excluded_pair_ids": list(approved_ids),
+        "excluded_pair_count": int(len(approved_ids)),
+        "raw_angular_rms_deg": combo_result.get("raw_angular_rms_deg"),
+        "raw_angular_max_deg": combo_result.get("raw_angular_max_deg"),
+        "qr_fit_expected_count": combo_result.get("qr_fit_expected_count"),
+        "qr_fit_resolved_count": combo_result.get("qr_fit_resolved_count"),
+        "qr_fit_missing_pairs": list(combo_result.get("qr_fit_missing_pairs", ()) or ()),
+        "applied_overlay_png": overlay_png,
+        "applied_overlay_json": overlay_json,
+        "output_state_sha256": output_state_hash,
+    }
+    return updated_state, report
+
+
+def _recorded_geometry_fit_excluded_pair_ids(
+    state: Mapping[str, object],
+) -> Sequence[object] | None:
+    geometry = state.get("geometry") if isinstance(state, Mapping) else None
+    if not isinstance(geometry, Mapping):
+        return None
+    recorded = geometry.get("geometry_fit_excluded_pair_ids")
+    if isinstance(recorded, Sequence) and not isinstance(recorded, (str, bytes)):
+        return list(recorded)
+    return None
+
+
+def _finalize_applied_geometry_overlay_report(
+    report: Mapping[str, object],
+    *,
+    output_state_path: Path,
+) -> dict[str, object]:
+    updated_report = dict(report)
+    overlay_json_value = updated_report.get("applied_overlay_json")
+    if overlay_json_value is None or not output_state_path.exists():
+        return updated_report
+    overlay_json = Path(str(overlay_json_value))
+    if not overlay_json.exists():
+        return updated_report
+    output_hash = hashlib.sha256(output_state_path.read_bytes()).hexdigest()
+    try:
+        payload = json.loads(overlay_json.read_text(encoding="utf-8"))
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    payload["output_state_path"] = output_state_path
+    payload["output_state_sha256"] = output_hash
+    overlay_json.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
+        encoding="utf-8",
+    )
+    updated_report["output_state_path"] = output_state_path
+    updated_report["output_state_sha256"] = output_hash
+    return updated_report
+
+
+def _print_geometry_fit_apply_notice(report: Mapping[str, object]) -> None:
+    if not bool(report.get("apply_success", False)):
+        return
+    active_vars = ",".join(str(value) for value in report.get("applied_active_vars", ()) or ())
+    excluded_ids = ", ".join(str(value) for value in report.get("excluded_pair_ids", ()) or ())
+    print("Geometry fit applied.")
+    print(f"Active variables: {active_vars}.")
+    print(f"Excluded manual pairs: {excluded_ids}.")
+    print(f"RMS caked residual: {report.get('raw_angular_rms_deg')} deg.")
+    print(f"Max caked residual: {report.get('raw_angular_max_deg')} deg.")
+    print(f"Overlay: {report.get('applied_overlay_png')}")
+
+
 def run_headless_geometry_fit(
     payload: Mapping[str, object],
     *,
@@ -718,6 +903,8 @@ def run_headless_geometry_fit(
     progress_path: str | Path | None = None,
     excluded_pair_ids: Sequence[str] | str | None = None,
     parameter_combo_sweep: bool = False,
+    apply_sweep_result: str | Path | None = None,
+    approved_excluded_pair_ids: Sequence[str] | str | None = None,
     weighted_event_workers: int | None = None,
     background_subtraction_mode: object | None = None,
     background_subtraction_scale: object | None = None,
@@ -737,12 +924,27 @@ def run_headless_geometry_fit(
         else None
     )
     if not run_mosaic_shape_fit:
+        effective_excluded_pair_ids = (
+            excluded_pair_ids
+            if excluded_pair_ids is not None
+            else _recorded_geometry_fit_excluded_pair_ids(state)
+        )
+        if apply_sweep_result is not None:
+            if parameter_combo_sweep:
+                raise ValueError("apply_sweep_result_conflicts_with_parameter_combo_sweep")
+            return _apply_headless_geometry_fit_sweep_result_to_state(
+                state,
+                source_path=source_path,
+                output_dir=output_dir,
+                combo_result_path=apply_sweep_result,
+                approved_excluded_pair_ids=approved_excluded_pair_ids,
+            )
         if parameter_combo_sweep:
             sweep_report = _load_shared_headless_geometry_fit().run_headless_geometry_fit_parameter_combo_sweep(
                 copy.deepcopy(dict(state)),
                 state_path=source_path,
                 output_dir=(output_dir if output_dir is not None else Path(source_path).parent),
-                excluded_pair_ids=excluded_pair_ids,
+                excluded_pair_ids=effective_excluded_pair_ids,
                 seed_policy=seed_policy,
                 isolate_combos=True,
             )
@@ -757,8 +959,8 @@ def run_headless_geometry_fit(
             "active_var_names": resolved_active_var_names,
             "progress_path": progress_path,
         }
-        if excluded_pair_ids is not None:
-            shared_kwargs["excluded_pair_ids"] = excluded_pair_ids
+        if effective_excluded_pair_ids is not None:
+            shared_kwargs["excluded_pair_ids"] = effective_excluded_pair_ids
         if seed_policy is not None:
             shared_kwargs["seed_policy"] = seed_policy
         if weighted_event_workers is not None:
@@ -2953,6 +3155,8 @@ def _cmd_fit_geometry(args: argparse.Namespace) -> None:
                 progress_path=progress_path,
                 excluded_pair_ids=getattr(args, "exclude_pair_id", None),
                 parameter_combo_sweep=bool(getattr(args, "parameter_combo_sweep", False)),
+                apply_sweep_result=getattr(args, "apply_sweep_result", None),
+                approved_excluded_pair_ids=getattr(args, "approve_excluded_pair_id", None),
                 weighted_event_workers=getattr(args, "weighted_event_workers", None),
                 background_subtraction_mode=getattr(
                     args,
@@ -2975,6 +3179,10 @@ def _cmd_fit_geometry(args: argparse.Namespace) -> None:
             )
         )
         save_gui_state_file(output_path, state_result)
+        report = _finalize_applied_geometry_overlay_report(
+            report,
+            output_state_path=output_path,
+        )
         try:
             _load_shared_headless_geometry_fit().write_headless_geometry_fit_progress(
                 progress_path,
@@ -2984,6 +3192,7 @@ def _cmd_fit_geometry(args: argparse.Namespace) -> None:
         except Exception:
             pass
         print(f"Wrote fitted GUI state to {output_path}")
+        _print_geometry_fit_apply_notice(report)
         log_path = report.get("log_path")
         matched_peaks_path = report.get("matched_peaks_path")
         if log_path:
@@ -2991,6 +3200,12 @@ def _cmd_fit_geometry(args: argparse.Namespace) -> None:
         if matched_peaks_path:
             print(f"Matched peaks: {matched_peaks_path}")
     except Exception as exc:
+        if getattr(args, "apply_sweep_result", None) is not None:
+            raise SystemExit(
+                "Geometry fit was not applied.\n"
+                f"Reason: {exc}\n"
+                "Geometry was left unchanged."
+            ) from exc
         raise SystemExit(str(exc)) from exc
 
 
@@ -3177,6 +3392,19 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="parameter_combo_sweep",
         action="store_true",
         help="Dry-run the Bi2Se3 geometry-fit parameter-combo sweep.",
+    )
+    fit_geometry_parser.add_argument(
+        "--apply-sweep-result",
+        dest="apply_sweep_result",
+        default=None,
+        help="Apply one accepted parameter-combo sweep combo_result.json.",
+    )
+    fit_geometry_parser.add_argument(
+        "--approve-excluded-pair-id",
+        dest="approve_excluded_pair_id",
+        action="append",
+        default=None,
+        help="Exact excluded manual QR pair ID approved for sweep-result application.",
     )
     fit_geometry_parser.add_argument(
         "--weighted-event-workers",

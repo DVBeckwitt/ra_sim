@@ -11,36 +11,44 @@ Last updated: 2026-05-14
 
 - 2026-05-14 Bi2Se3 controlled exclusion and parameter-combo sweep completed.
   Headless `fit-geometry` now supports exact `--exclude-pair-id` removal before
-  objective assembly and `--parameter-combo-sweep` dry runs. The exclusion is
-  exact by `pair_id`, not HKL, and records `excluded_pair_ids`,
-  `excluded_rows`, `original_qr_fit_expected_count`, `qr_fit_expected_count`,
+  objective assembly, `--parameter-combo-sweep` dry runs, and explicit
+  `--apply-sweep-result` application with repeated
+  `--approve-excluded-pair-id` approvals. The exclusion is exact by `pair_id`,
+  not HKL, and records `excluded_pair_ids`, `excluded_rows`,
+  `original_qr_fit_expected_count`, `qr_fit_expected_count`,
   `qr_fit_resolved_count`, `qr_fit_missing_pairs`,
   `excluded_rows_do_not_count_as_missing=true`, and
-  `saved_gui_state_mutated=false`. The GUI apply helper only applies an
-  accepted sweep result after matching the saved-state SHA and approved
-  exclusion list. Bug/error status: the three known outlier rows
+  `saved_gui_state_mutated=false`. The apply helper only applies an accepted
+  sweep result after matching the saved-state SHA, approved exclusion list,
+  caked residual thresholds, complete QR contract, mismatch counters, and
+  objective sensitivity. Bug/error status: the three known outlier rows
   `bg1:pair15`, `bg0:pair20`, and `bg2:pair17` are removed before fitting and
-  are no longer counted as missing; unsupported or incomplete combos now fail
-  closed with JSON/PNG artifacts instead of aborting the sweep. Feature status:
-  additive CLI/report/apply workflow only; no threshold tuning, forced
-  acceptance, branch remap, saved-state mutation during dry runs, or
-  `qr_fit_objective_incomplete` removal. Validation: focused exclusion/sweep
-  tests passed, the full affected geometry files passed (`260 passed`,
-  `665 passed, 2 skipped`, `9 passed`), and `python -m ra_sim.dev check`
-  passed (`283 passed`). The real Bi2Se3 sweep from the user-local saved state
-  wrote 11 distinct combo folders, no required PNGs were missing, and every
-  result recorded the same three exclusions with `expected=79` and
-  `resolved=79` where the fit reached final validation. Required combos
-  `00_gamma_Gamma`, `01_gamma_Gamma_theta_initial`,
-  `02_gamma_Gamma_corto_detector`, and `03_gamma_Gamma_center_x_center_y`
-  accepted with normal thresholds. Required combos
-  `04_gamma_Gamma_theta_initial_corto_detector` and
+  are no longer counted as missing; they are preserved in the saved state and
+  recorded under `geometry_fit_excluded_pair_ids` when the accepted result is
+  applied. Unsupported, incomplete, and native-crashing combos now fail closed
+  with JSON/PNG artifacts and durable bounded stdout/stderr tail files instead
+  of aborting the sweep. Feature status: additive CLI/report/apply workflow
+  only; no threshold tuning, forced acceptance, branch remap, saved-state
+  mutation during dry runs, or `qr_fit_objective_incomplete` removal. Latest
+  sweep status: `00_gamma_Gamma` accepted; `03_gamma_Gamma_center_x_center_y`
+  accepted; `01_gamma_Gamma_theta_initial` and
+  `02_gamma_Gamma_corto_detector` failed closed with native child return code
+  `3221225477`; `04_gamma_Gamma_theta_initial_corto_detector` and
   `05_gamma_Gamma_theta_initial_center_x_center_y` failed closed with
-  `qr_fit_objective_incomplete` (`resolved_count=23`,
-  `expected_count=24` inside the failing objective), so
+  `qr_fit_objective_incomplete`; therefore
   `all_supported_required_combos_pass=false`. Best accepted combo:
   `00_gamma_Gamma`, RMS `0.8083400569700655 deg`, max
-  `2.5981580333851113 deg`, recommended action `apply_best_combo`.
+  `2.5981580333851113 deg`, exclusions
+  `bg0:pair20`, `bg1:pair15`, `bg2:pair17`, `qr_fit_expected_count=79`,
+  `qr_fit_resolved_count=79`, and `qr_fit_missing_pairs=[]`. Successful apply
+  writes `04_applied_geometry_overlay.{png,json}` and an output state with
+  `geometry_updated=true`. Validation for this slice: focused GUI sweep/apply
+  tests passed, CLI geometry-fit tests passed (`36 passed`), the full geometry
+  fitting file passed (`260 passed`), the full GUI geometry-fit workflow file
+  passed (`683 passed, 2 skipped`), the manual fit-space classification file
+  passed (`9 passed`), and `python -m ra_sim.dev check` passed (`292 passed`).
+  The real `%LOCALAPPDATA%\ra_sim\Bi2Se3.json` apply gate was not run in this
+  workspace because that user-local state file is absent.
 - 2026-05-13 review hardening cleanup completed. Versioned tracking docs now
   refer to user-local GUI states as `%LOCALAPPDATA%\ra_sim\*.json` instead of
   committing machine-specific absolute paths. The headless progress sanitizer

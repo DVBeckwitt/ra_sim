@@ -136,15 +136,39 @@ The top-level `sweep_report.json`, `sweep_report.md`, and
 `sweep_summary.png` list every combo, pass/fail state, RMS/max residuals,
 dry-run geometry-update status, and artifact links. Accepted dry-run combos set
 `would_update_geometry=true` and `geometry_updated=false`; geometry changes are
-reserved for the explicit GUI apply step, which verifies the saved-state hash,
-approved exclusion list, and accepted combo result before applying variables.
+reserved for the explicit apply step, which verifies the saved-state hash,
+approved exclusion list, accepted combo result, caked residual thresholds,
+complete QR contract, source/objective mismatch counters, and parameter
+sensitivity before applying variables.
 CLI-requested sweeps isolate each combo in a child Python process so a native
 Windows `python313.dll` access violation or other non-Python process exit is
 reported as a rejected `combo_result.json` with the child return code and
 required placeholder artifacts instead of terminating the parent sweep. The
 temporary child request/result/log files are deleted after the parent records
-the bounded stdout/stderr tails, so the durable artifact folder keeps only the
-documented sweep outputs.
+bounded stdout/stderr tails and writes durable `subprocess_*_tail.txt` files
+for failed child exits, so the durable artifact folder keeps only documented
+sweep outputs.
+
+To apply the accepted Bi2Se3 `gamma,Gamma` sweep result, run an explicit apply
+command with the exact user-approved exclusions:
+
+```bash
+python -m ra_sim.cli fit-geometry %LOCALAPPDATA%\ra_sim\Bi2Se3.json \
+  --out-state artifacts/geometry_fit_recovery/bi2se3_headless_gamma_gamma/bi2se3_gamma_gamma_fit_applied.json \
+  --apply-sweep-result artifacts/geometry_fit_recovery/bi2se3_headless_gamma_gamma/sweep/00_gamma_Gamma/combo_result.json \
+  --approve-excluded-pair-id bg1:pair15 \
+  --approve-excluded-pair-id bg0:pair20 \
+  --approve-excluded-pair-id bg2:pair17
+```
+
+Successful apply writes
+`04_applied_geometry_overlay.png` and `04_applied_geometry_overlay.json` beside
+the output state. The JSON records the applied combo name, active variables,
+approved excluded IDs, `gamma/Gamma` before and after, caked RMS/max residuals,
+input/output state hashes, `geometry_updated=true`, and plotted row identities.
+The saved manual pairs are preserved; the output state records
+`geometry.geometry_fit_excluded_pair_ids` and
+`geometry.geometry_fit_exclusion_reason=manual_outliers_or_physical_bad_fit`.
 
 Current Bi2Se3 status as of the 2026-05-14 exact CLI sweep: with
 `bg1:pair15`, `bg0:pair20`, and `bg2:pair17` excluded, `00_gamma_Gamma`
