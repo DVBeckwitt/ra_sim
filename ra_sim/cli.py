@@ -791,9 +791,6 @@ def _apply_headless_geometry_fit_sweep_result_to_state(
                     plotted_row_identities = list(raw_identities)
         except Exception:
             plotted_row_identities = []
-    output_state_hash = hashlib.sha256(
-        json.dumps(updated_state, sort_keys=True, default=str).encode("utf-8")
-    ).hexdigest()
     overlay_json = artifact_dir / shared_headless.GEOMETRY_FIT_APPLIED_OVERLAY_JSON
     overlay_json.parent.mkdir(parents=True, exist_ok=True)
     overlay_payload = {
@@ -810,7 +807,8 @@ def _apply_headless_geometry_fit_sweep_result_to_state(
         "raw_angular_max_deg": combo_result.get("raw_angular_max_deg"),
         "geometry_updated": True,
         "input_state_sha256": combo_result.get("input_state_sha256"),
-        "output_state_sha256": output_state_hash,
+        "output_state_sha256": None,
+        "output_state_sha256_pending": True,
         "plotted_row_identities": plotted_row_identities,
     }
     overlay_json.write_text(
@@ -833,7 +831,8 @@ def _apply_headless_geometry_fit_sweep_result_to_state(
         "qr_fit_missing_pairs": list(combo_result.get("qr_fit_missing_pairs", ()) or ()),
         "applied_overlay_png": overlay_png,
         "applied_overlay_json": overlay_json,
-        "output_state_sha256": output_state_hash,
+        "output_state_sha256": None,
+        "output_state_sha256_pending": True,
     }
     return updated_state, report
 
@@ -871,12 +870,14 @@ def _finalize_applied_geometry_overlay_report(
         payload = {}
     payload["output_state_path"] = output_state_path
     payload["output_state_sha256"] = output_hash
+    payload["output_state_sha256_pending"] = False
     overlay_json.write_text(
         json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
         encoding="utf-8",
     )
     updated_report["output_state_path"] = output_state_path
     updated_report["output_state_sha256"] = output_hash
+    updated_report["output_state_sha256_pending"] = False
     return updated_report
 
 

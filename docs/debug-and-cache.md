@@ -138,8 +138,9 @@ dry-run geometry-update status, and artifact links. Accepted dry-run combos set
 `would_update_geometry=true` and `geometry_updated=false`; geometry changes are
 reserved for the explicit apply step, which verifies the saved-state hash,
 approved exclusion list, accepted combo result, caked residual thresholds,
-complete QR contract, source/objective mismatch counters, and parameter
-sensitivity before applying variables.
+complete QR contract with strict integer counts, source/objective mismatch
+counters, parameter sensitivity, and the accepted overlay PNG artifact before
+applying variables.
 CLI-requested sweeps isolate each combo in a child Python process so a native
 Windows `python313.dll` access violation or other non-Python process exit is
 reported as a rejected `combo_result.json` with the child return code and
@@ -166,6 +167,9 @@ Successful apply writes
 the output state. The JSON records the applied combo name, active variables,
 approved excluded IDs, `gamma/Gamma` before and after, caked RMS/max residuals,
 input/output state hashes, `geometry_updated=true`, and plotted row identities.
+When the CLI writes `--out-state`, the overlay JSON's `output_state_sha256` is
+finalized from the saved state file; lower-level apply helpers mark that hash as
+pending until an output state exists.
 The saved manual pairs are preserved; the output state records
 `geometry.geometry_fit_excluded_pair_ids` and
 `geometry.geometry_fit_exclusion_reason=manual_outliers_or_physical_bad_fit`.

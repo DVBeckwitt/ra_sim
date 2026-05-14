@@ -30579,6 +30579,90 @@ def test_apply_sweep_result_updates_geometry_and_rebuilds_overlay(tmp_path) -> N
     assert accepted_overlay_path.read_bytes() == overlay_path.read_bytes()
 
 
+def test_apply_sweep_result_rejects_overlay_outside_combo_dir_before_update(
+    tmp_path,
+) -> None:
+    state_path = tmp_path / "Bi2Se3.json"
+    state_path.write_text('{"state": "current"}', encoding="utf-8")
+    state_hash = _hash_file(state_path)
+    combo_dir = tmp_path / "00_gamma_Gamma"
+    combo_dir.mkdir()
+    outside_overlay = tmp_path / "outside_overlay.png"
+    outside_overlay.write_bytes(b"\x89PNG\r\n\x1a\naccepted")
+    combo_result_path = combo_dir / "combo_result.json"
+    combo_result_path.write_text(
+        json.dumps(
+            {
+                "status": "accepted",
+                "full_fit_success": True,
+                "dry_run": True,
+                "input_state_sha256": state_hash,
+                "excluded_pair_ids": ["bg0:pair20"],
+                "active_vars": ["gamma"],
+                **_accepted_parameter_combo_contract(),
+                "result_variables": {"gamma": 1.2},
+                "artifacts": {"full_fit_png": str(outside_overlay)},
+            }
+        ),
+        encoding="utf-8",
+    )
+    gamma_var = _DummyVar(0.0)
+    accepted_overlay_path = tmp_path / "accepted_overlay.png"
+
+    with pytest.raises(ValueError, match="accepted_overlay_source_outside_combo_dir"):
+        geometry_fit.apply_geometry_fit_sweep_result(
+            combo_result_path=combo_result_path,
+            current_state_path=state_path,
+            approved_excluded_pair_ids=["bg0:pair20"],
+            var_map={"gamma": gamma_var},
+            accepted_overlay_path=accepted_overlay_path,
+        )
+
+    assert gamma_var.get() == 0.0
+    assert not accepted_overlay_path.exists()
+
+
+def test_apply_sweep_result_rejects_non_png_overlay_before_update(tmp_path) -> None:
+    state_path = tmp_path / "Bi2Se3.json"
+    state_path.write_text('{"state": "current"}', encoding="utf-8")
+    state_hash = _hash_file(state_path)
+    combo_dir = tmp_path / "00_gamma_Gamma"
+    combo_dir.mkdir()
+    overlay_path = combo_dir / "02_full_fit_initial_vs_final_qr_overlay.png"
+    overlay_path.write_bytes(b"not a png")
+    combo_result_path = combo_dir / "combo_result.json"
+    combo_result_path.write_text(
+        json.dumps(
+            {
+                "status": "accepted",
+                "full_fit_success": True,
+                "dry_run": True,
+                "input_state_sha256": state_hash,
+                "excluded_pair_ids": ["bg0:pair20"],
+                "active_vars": ["gamma"],
+                **_accepted_parameter_combo_contract(),
+                "result_variables": {"gamma": 1.2},
+                "artifacts": {"full_fit_png": str(overlay_path)},
+            }
+        ),
+        encoding="utf-8",
+    )
+    gamma_var = _DummyVar(0.0)
+    accepted_overlay_path = tmp_path / "accepted_overlay.png"
+
+    with pytest.raises(ValueError, match="accepted_overlay_source_invalid_png"):
+        geometry_fit.apply_geometry_fit_sweep_result(
+            combo_result_path=combo_result_path,
+            current_state_path=state_path,
+            approved_excluded_pair_ids=["bg0:pair20"],
+            var_map={"gamma": gamma_var},
+            accepted_overlay_path=accepted_overlay_path,
+        )
+
+    assert gamma_var.get() == 0.0
+    assert not accepted_overlay_path.exists()
+
+
 @pytest.mark.parametrize(
     ("overrides", "match"),
     [
@@ -30588,8 +30672,11 @@ def test_apply_sweep_result_updates_geometry_and_rebuilds_overlay(tmp_path) -> N
             {"qr_fit_resolved_count": 78, "qr_fit_expected_count": 79},
             "sweep_result_qr_contract_failed",
         ),
+        ({"qr_fit_resolved_count": 79.1}, "sweep_result_qr_contract_failed"),
+        ({"qr_fit_expected_count": "79"}, "sweep_result_qr_contract_failed"),
         ({"qr_fit_missing_pairs": ["bg2:pair4"]}, "sweep_result_qr_contract_failed"),
         ({"source_authority_mismatch_count": 1}, "sweep_result_source_mismatch"),
+        ({"source_authority_mismatch_count": False}, "sweep_result_source_mismatch"),
         (
             {"visual_objective_surface_mismatch_count": 1},
             "sweep_result_visual_objective_mismatch",

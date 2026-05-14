@@ -811,6 +811,8 @@ def test_cli_apply_sweep_result_updates_state_and_records_exclusions(tmp_path) -
     assert overlay_payload["gamma_after"] == 1.25
     assert overlay_payload["Gamma_after"] == 2.5
     assert overlay_payload["geometry_updated"] is True
+    assert overlay_payload["output_state_sha256"] is None
+    assert overlay_payload["output_state_sha256_pending"] is True
     assert overlay_payload["plotted_row_identities"] == [{"pair_id": "bg0:pair0", "hkl": [0, 0, 3]}]
 
 
@@ -924,6 +926,7 @@ def test_cli_apply_best_bi2se3_combo_writes_applied_state_and_overlay(tmp_path) 
     assert overlay_payload["output_state_sha256"] == hashlib.sha256(
         output_path.read_bytes()
     ).hexdigest()
+    assert overlay_payload["output_state_sha256_pending"] is False
 
 
 def _cli_apply_args(input_path: Path, output_path: Path, combo_path: Path) -> SimpleNamespace:

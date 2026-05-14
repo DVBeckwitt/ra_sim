@@ -51,6 +51,10 @@
     recorded geometry-fit exclusions, actionable CLI success/failure messages,
     and `04_applied_geometry_overlay.{png,json}` artifacts for accepted
     `gamma,Gamma` results.
+  - Hardened the sweep-result apply boundary so combo counters must be real
+    integers, accepted overlay PNGs must come from the combo artifact directory
+    and pass a PNG-header check before geometry is mutated, and output-state
+    hashes remain pending until a saved state file exists.
   - Expanded parameter-combo sweep reports with selected-combo QR counts,
     dry-run/update flags, artifact status, native child exit classification,
     durable bounded stdout/stderr tail files for child crashes, and top missing

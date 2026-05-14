@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import os
+import shutil
 import sys
 import inspect
 import math
@@ -21706,10 +21707,47 @@ def _geometry_fit_sweep_float(combo_result: Mapping[str, object], key: str) -> f
 
 
 def _geometry_fit_sweep_int(combo_result: Mapping[str, object], key: str) -> int | None:
-    try:
-        return int(combo_result.get(key))
-    except Exception:
+    value = combo_result.get(key)
+    if isinstance(value, bool):
         return None
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float) and value.is_integer() and np.isfinite(value):
+        return int(value)
+    return None
+
+
+def _resolve_geometry_fit_sweep_accepted_overlay_source(
+    combo_result: Mapping[str, object],
+    *,
+    combo_result_path: Path,
+) -> Path:
+    artifacts = combo_result.get("artifacts")
+    artifact_map = artifacts if isinstance(artifacts, Mapping) else {}
+    source_overlay = artifact_map.get("full_fit_png")
+    if source_overlay is None:
+        raise ValueError("accepted_overlay_source_missing")
+    source_path = Path(str(source_overlay))
+    if not source_path.is_absolute():
+        source_path = combo_result_path.parent / source_path
+    try:
+        resolved_source = source_path.resolve(strict=True)
+        combo_dir = combo_result_path.parent.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("accepted_overlay_source_missing") from exc
+    try:
+        resolved_source.relative_to(combo_dir)
+    except ValueError as exc:
+        raise ValueError("accepted_overlay_source_outside_combo_dir") from exc
+    try:
+        with resolved_source.open("rb") as handle:
+            if handle.read(8) != b"\x89PNG\r\n\x1a\n":
+                raise ValueError("accepted_overlay_source_invalid_png")
+    except ValueError:
+        raise
+    except OSError as exc:
+        raise ValueError("accepted_overlay_source_missing") from exc
+    return resolved_source
 
 
 def _verify_geometry_fit_sweep_apply_contract(combo_result: Mapping[str, object]) -> None:
@@ -21800,6 +21838,16 @@ def apply_geometry_fit_sweep_result(
         raise ValueError(f"missing_apply_variable_target:{missing_targets[0]}")
     values = _geometry_fit_sweep_result_values(combo_result, active_vars)
 
+    resolved_overlay_path: Path | None = None
+    source_overlay_path: Path | None = None
+    if accepted_overlay_path is not None:
+        source_overlay_path = _resolve_geometry_fit_sweep_accepted_overlay_source(
+            combo_result,
+            combo_result_path=result_path,
+        )
+        resolved_overlay_path = Path(accepted_overlay_path)
+        resolved_overlay_path.parent.mkdir(parents=True, exist_ok=True)
+
     apply_geometry_fit_result_values(
         active_vars,
         values,
@@ -21808,19 +21856,8 @@ def apply_geometry_fit_sweep_result(
     )
     rebuild_result = rebuild_overlay(combo_result) if callable(rebuild_overlay) else None
 
-    resolved_overlay_path: Path | None = None
-    if accepted_overlay_path is not None:
-        artifacts = combo_result.get("artifacts")
-        artifact_map = artifacts if isinstance(artifacts, Mapping) else {}
-        source_overlay = artifact_map.get("full_fit_png")
-        if source_overlay is None:
-            raise ValueError("accepted_overlay_source_missing")
-        source_path = Path(str(source_overlay))
-        if not source_path.exists():
-            raise ValueError("accepted_overlay_source_missing")
-        resolved_overlay_path = Path(accepted_overlay_path)
-        resolved_overlay_path.parent.mkdir(parents=True, exist_ok=True)
-        resolved_overlay_path.write_bytes(source_path.read_bytes())
+    if resolved_overlay_path is not None and source_overlay_path is not None:
+        shutil.copyfile(source_overlay_path, resolved_overlay_path)
 
     return GeometryFitSweepApplyResult(
         applied=True,

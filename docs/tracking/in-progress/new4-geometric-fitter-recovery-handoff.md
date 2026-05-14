@@ -9,6 +9,21 @@ Last updated: 2026-05-14
 
 ## Current status
 
+- 2026-05-14 sweep-apply review hardening completed. The explicit
+  `--apply-sweep-result` path now treats `combo_result.json` as an external
+  boundary: QR and mismatch counters must be real integer JSON values, accepted
+  overlay PNGs must resolve inside the combo artifact directory, and the overlay
+  source must pass a PNG-header check before any geometry variables are updated.
+  `04_applied_geometry_overlay.json` now leaves `output_state_sha256` pending
+  until the CLI finalizes it from the actual `--out-state` file. Bug/error
+  status: closes the review findings for arbitrary overlay-path copying,
+  malformed counter coercion, and pre-save output hash reporting. Feature
+  status: hardening only; no threshold tuning, combo acceptance change,
+  migration, deprecation, or new public flag. Shipping status: opt-in CLI apply
+  remains the rollout boundary, rollback is the unchanged input state or a
+  previous saved output state, and failed applies still leave geometry unchanged.
+  Validation: focused GUI apply tests passed (`19 passed`) and focused CLI apply
+  tests passed (`5 passed`); `python -m ra_sim.dev check` passed (`292 passed`).
 - 2026-05-14 Bi2Se3 controlled exclusion and parameter-combo sweep completed.
   Headless `fit-geometry` now supports exact `--exclude-pair-id` removal before
   objective assembly, `--parameter-combo-sweep` dry runs, and explicit
