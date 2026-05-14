@@ -1714,6 +1714,17 @@ def _headless_geometry_fit_text_tail(value: object, *, limit: int) -> str:
     return text[-limit:] if len(text) > limit else text
 
 
+def _headless_geometry_fit_file_tail(path: Path, *, limit: int) -> str:
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - limit))
+            return handle.read().decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
 def _headless_geometry_fit_subprocess_failure_combo_result(
     *,
     combo: Mapping[str, object],
@@ -1951,6 +1962,8 @@ def _run_headless_geometry_fit_parameter_combo_subprocess(
 ) -> dict[str, object]:
     request_path = combo_dir / "_combo_child_request.json"
     result_path = combo_dir / "_combo_child_result.json"
+    stdout_path = combo_dir / "_combo_child_stdout.log"
+    stderr_path = combo_dir / "_combo_child_stderr.log"
     _geometry_fit_recovery_json(
         request_path,
         {
@@ -1963,53 +1976,61 @@ def _run_headless_geometry_fit_parameter_combo_subprocess(
             "result_path": result_path,
         },
     )
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            _HEADLESS_GEOMETRY_FIT_COMBO_CHILD_CODE,
-            str(request_path),
-        ],
-        cwd=str(Path.cwd()),
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if completed.returncode != 0:
-        return _headless_geometry_fit_subprocess_failure_combo_result(
-            combo=combo,
-            combo_dir=combo_dir,
-            state_file=state_path,
-            message=f"combo subprocess exited with code {completed.returncode}",
-            returncode=int(completed.returncode),
-            stdout=completed.stdout,
-            stderr=completed.stderr,
+    try:
+        with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    _HEADLESS_GEOMETRY_FIT_COMBO_CHILD_CODE,
+                    str(request_path),
+                ],
+                cwd=str(Path.cwd()),
+                check=False,
+                stdout=stdout_file,
+                stderr=stderr_file,
+            )
+        stdout_tail = _headless_geometry_fit_file_tail(
+            stdout_path,
+            limit=_HEADLESS_GEOMETRY_FIT_SUBPROCESS_TAIL_CHARS,
         )
-    if not result_path.exists():
-        return _headless_geometry_fit_subprocess_failure_combo_result(
-            combo=combo,
-            combo_dir=combo_dir,
-            state_file=state_path,
-            message=f"combo subprocess did not write {result_path.name}",
-            returncode=int(completed.returncode),
-            stdout=completed.stdout,
-            stderr=completed.stderr,
+        stderr_tail = _headless_geometry_fit_file_tail(
+            stderr_path,
+            limit=_HEADLESS_GEOMETRY_FIT_SUBPROCESS_TAIL_CHARS,
         )
-    loaded = json.loads(result_path.read_text(encoding="utf-8"))
-    if not isinstance(loaded, Mapping):
-        return _headless_geometry_fit_subprocess_failure_combo_result(
-            combo=combo,
-            combo_dir=combo_dir,
-            state_file=state_path,
-            message=f"combo subprocess wrote invalid {result_path.name}",
-            returncode=int(completed.returncode),
-            stdout=completed.stdout,
-            stderr=completed.stderr,
-        )
-    combo_result = dict(loaded)
-    combo_result["subprocess_returncode"] = int(completed.returncode)
-    combo_result["combo_child_result_json"] = result_path
-    return combo_result
+
+        def _failure(message: str) -> dict[str, object]:
+            return _headless_geometry_fit_subprocess_failure_combo_result(
+                combo=combo,
+                combo_dir=combo_dir,
+                state_file=state_path,
+                message=message,
+                returncode=int(completed.returncode),
+                stdout=stdout_tail,
+                stderr=stderr_tail,
+            )
+
+        if completed.returncode != 0:
+            return _failure(f"combo subprocess exited with code {completed.returncode}")
+        if not result_path.exists():
+            return _failure(f"combo subprocess did not write {result_path.name}")
+        try:
+            loaded = json.loads(result_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            return _failure(f"combo subprocess wrote unreadable {result_path.name}: {exc}")
+        if not isinstance(loaded, Mapping):
+            return _failure(f"combo subprocess wrote invalid {result_path.name}")
+        combo_result = dict(loaded)
+        combo_result["subprocess_returncode"] = int(completed.returncode)
+        return combo_result
+    finally:
+        for transient_path in (request_path, result_path, stdout_path, stderr_path):
+            try:
+                transient_path.unlink()
+            except FileNotFoundError:
+                pass
+            except Exception:
+                pass
 
 
 def run_headless_geometry_fit_parameter_combo_sweep(

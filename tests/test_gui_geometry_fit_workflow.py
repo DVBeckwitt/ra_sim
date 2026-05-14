@@ -19123,11 +19123,11 @@ def test_parameter_combo_sweep_records_fail_closed_result_if_combo_subprocess_cr
     state_path = tmp_path / "Bi2Se3.json"
     state_path.write_text("{}", encoding="utf-8")
 
-    def _fake_subprocess_run(*_args, **_kwargs):
+    def _fake_subprocess_run(*_args, **kwargs):
+        kwargs["stdout"].write(b"child stdout before crash")
+        kwargs["stderr"].write(b"native python313.dll crash")
         return SimpleNamespace(
             returncode=-1073740791,
-            stdout="",
-            stderr="native python313.dll crash",
         )
 
     monkeypatch.setattr(headless_geometry_fit.subprocess, "run", _fake_subprocess_run)
@@ -19151,6 +19151,11 @@ def test_parameter_combo_sweep_records_fail_closed_result_if_combo_subprocess_cr
     assert Path(artifacts["full_fit_png"]).exists()
     assert Path(artifacts["worst_rows_png"]).exists()
     assert Path(first_result["combo_result_json"]).exists()
+    combo_dir = tmp_path / "bi2se3_headless_gamma_gamma" / "sweep" / "00_gamma_Gamma"
+    assert not (combo_dir / "_combo_child_request.json").exists()
+    assert not (combo_dir / "_combo_child_result.json").exists()
+    assert not (combo_dir / "_combo_child_stdout.log").exists()
+    assert not (combo_dir / "_combo_child_stderr.log").exists()
 
 
 def test_parameter_combo_child_writes_fail_closed_result_if_combo_raises(

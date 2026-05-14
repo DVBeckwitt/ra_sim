@@ -141,7 +141,10 @@ approved exclusion list, and accepted combo result before applying variables.
 CLI-requested sweeps isolate each combo in a child Python process so a native
 Windows `python313.dll` access violation or other non-Python process exit is
 reported as a rejected `combo_result.json` with the child return code and
-required placeholder artifacts instead of terminating the parent sweep.
+required placeholder artifacts instead of terminating the parent sweep. The
+temporary child request/result/log files are deleted after the parent records
+the bounded stdout/stderr tails, so the durable artifact folder keeps only the
+documented sweep outputs.
 
 Current Bi2Se3 status as of the 2026-05-14 exact CLI sweep: with
 `bg1:pair15`, `bg0:pair20`, and `bg2:pair17` excluded, `00_gamma_Gamma`

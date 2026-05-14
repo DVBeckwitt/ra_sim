@@ -43,7 +43,8 @@
   - Hardened headless parameter-combo sweeps so CLI runs isolate each combo in
     a child process and record nonzero child exits, including native Windows
     Python crashes, as rejected combo results with required artifacts instead
-    of terminating the sweep parent.
+    of terminating the sweep parent, without keeping transient child
+    request/result/log files in the artifact tree.
   - Wired Bi2Se3 headless `gamma,Gamma` recovery fits to write the single-step QR
     coordinate audit, full-fit before/after overlay, and rejected-fit worst-row
     PNG/JSON artifacts into the fit output folder, record their paths in the
