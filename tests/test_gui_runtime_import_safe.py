@@ -9159,7 +9159,7 @@ def test_runtime_session_manual_rebuild_failure_preserves_runtime_cache_state(
 
 
 class _RuntimeVar:
-    def __init__(self, value: float | bool) -> None:
+    def __init__(self, value: object) -> None:
         self._value = value
 
     def get(self):
@@ -9167,6 +9167,92 @@ class _RuntimeVar:
 
     def set(self, value) -> None:
         self._value = value
+
+
+def test_manual_geometry_undo_reconciles_fit_background_selection(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    manual_state = runtime_session.gui_state.ManualGeometryState(
+        pairs_by_background={
+            0: [{"pair_id": "bg0", "x": 1.0, "y": 2.0}],
+            1: [{"pair_id": "bg1", "x": 3.0, "y": 4.0}],
+        },
+        pick_session={},
+        undo_stack=[
+            runtime_session.gui_state.ManualGeometryUndoSnapshot(
+                pairs_by_background={0: [{"pair_id": "bg0", "x": 1.0, "y": 2.0}]},
+                pick_session={},
+            )
+        ],
+    )
+    selection_var = _RuntimeVar("1,2")
+    apply_calls: list[dict[str, object]] = []
+
+    def _apply_selection(**kwargs: object) -> bool:
+        apply_calls.append(dict(kwargs))
+        selection_var.set("current")
+        return True
+
+    monkeypatch.setattr(runtime_session, "geometry_manual_state", manual_state, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "background_runtime_state",
+        SimpleNamespace(osc_files=["bg0.osc", "bg1.osc"], current_background_index=0),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(gui_state_import_active=False),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "geometry_fit_background_selection_var",
+        selection_var,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_apply_geometry_fit_background_selection",
+        _apply_selection,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_fit_background_indices",
+        lambda strict=False: runtime_session.gui_background_theta.current_geometry_fit_background_indices(
+            osc_files=["bg0.osc", "bg1.osc"],
+            current_background_index=0,
+            geometry_fit_background_selection_var=selection_var,
+            strict=bool(strict),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "_clear_geometry_fit_dataset_cache", lambda: None)
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_geometry_manual_preview_artists",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_render_current_geometry_manual_pairs",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(runtime_session, "_update_geometry_manual_pick_button_label", lambda: None)
+    monkeypatch.setattr(runtime_session, "_refresh_background_status", lambda: None)
+    monkeypatch.setattr(
+        runtime_session,
+        "progress_label_geometry",
+        SimpleNamespace(config=lambda **_kwargs: None),
+        raising=False,
+    )
+
+    runtime_session._undo_last_geometry_manual_placement()
+
+    assert sorted(manual_state.pairs_by_background) == [0]
+    assert selection_var.get() == "1"
+    assert apply_calls == [{"trigger_update": False, "sync_live_theta": False}]
 
 
 def _install_idle_main_figure_preview_state(monkeypatch, runtime_session) -> None:

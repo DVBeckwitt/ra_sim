@@ -2127,6 +2127,14 @@ For each selected background it:
 8. runs [`select_fit_orientation`](../ra_sim/gui/geometry_overlay.py)
 9. applies the chosen orientation transform to both the measured peaks and the experimental image
 
+In multi-background GUI sessions, the geometry-fit background selector starts
+with only the initial image selected. Later backgrounds become active fit
+backgrounds when they have saved enabled manual Qr/Qz pairs. If a later
+background remains selected but has no enabled manual pairs, preflight filters
+it out and keeps a skip diagnostic instead of failing the whole fit. Undoing a
+later-background manual placement also removes that background from the active
+fit selection when no enabled pairs remain.
+
 If the saved GUI state has `manual_pairs` but no live source snapshot or no
 restored peak records, dataset preparation now treats that as a rebuildable
 state rather than a hard failure. The rebuild order is:

@@ -10793,6 +10793,40 @@ def geometry_manual_pair_enabled_for_geometry_fit(entry: object) -> bool:
     return not bool(entry.get("geometry_fit_disabled", False))
 
 
+def effective_geometry_fit_background_indices(
+    selected_indices: Sequence[object] | None,
+    *,
+    total_count: int,
+    geometry_manual_pairs_for_index: Callable[[int], Sequence[Mapping[str, object]]],
+) -> list[int]:
+    """Return selected fit backgrounds that currently have usable fit points."""
+
+    count = max(0, int(total_count))
+    if count <= 0:
+        return []
+
+    active_indices: list[int] = []
+    seen: set[int] = set()
+    for raw_idx in selected_indices or ():
+        try:
+            idx = int(raw_idx)
+        except Exception:
+            continue
+        if idx < 0 or idx >= count or idx in seen:
+            continue
+        try:
+            has_enabled_pairs = idx == 0 or any(
+                geometry_manual_pair_enabled_for_geometry_fit(entry)
+                for entry in (geometry_manual_pairs_for_index(int(idx)) or ())
+            )
+        except Exception:
+            has_enabled_pairs = idx == 0
+        if has_enabled_pairs:
+            active_indices.append(int(idx))
+            seen.add(int(idx))
+    return active_indices
+
+
 def build_geometry_manual_fit_dataset(
     background_index: int,
     *,
@@ -16954,6 +16988,11 @@ def prepare_geometry_fit_run(
             (f"Geometry fit unavailable: invalid fit background selection ({exc}).")
         )
     selected_background_indices = [int(idx) for idx in selected_background_indices]
+    selected_background_indices = effective_geometry_fit_background_indices(
+        selected_background_indices,
+        total_count=len(osc_files),
+        geometry_manual_pairs_for_index=geometry_manual_pairs_for_index,
+    )
     if not selected_background_indices:
         return _failure_result("Geometry fit unavailable: no fit backgrounds are selected.")
 

@@ -151,7 +151,7 @@ def default_geometry_fit_background_selection(
     """Return the default geometry-fit background selector text."""
 
     try:
-        return "all" if len(osc_files) > 1 else "current"
+        return "1" if len(osc_files) > 1 else "current"
     except Exception:
         return "current"
 
@@ -204,6 +204,44 @@ def serialize_geometry_fit_background_selection(
     return format_geometry_fit_background_indices(normalized)
 
 
+def geometry_fit_background_indices_after_pair_update(
+    selected_indices: Sequence[object],
+    *,
+    background_index: int,
+    total_count: int,
+    has_enabled_pairs: bool,
+) -> list[int]:
+    """Return the selector indices after one background's manual pairs changed."""
+
+    count = max(0, int(total_count))
+    if count <= 0:
+        return []
+
+    normalized: set[int] = set()
+    for raw_idx in selected_indices:
+        try:
+            idx = int(raw_idx)
+        except Exception:
+            continue
+        if 0 <= idx < count:
+            normalized.add(idx)
+    normalized = normalized or {0}
+
+    try:
+        changed_idx = int(background_index)
+    except Exception:
+        return sorted(normalized)
+    if changed_idx <= 0 or changed_idx >= count:
+        return sorted(normalized)
+
+    if has_enabled_pairs:
+        normalized.add(changed_idx)
+    else:
+        normalized.discard(changed_idx)
+        normalized = normalized or {0}
+    return sorted(normalized)
+
+
 def parse_geometry_fit_background_indices(
     raw_text: object,
     *,
@@ -219,7 +257,7 @@ def parse_geometry_fit_background_indices(
     current_idx = max(0, min(int(current_index), count - 1))
     text = str(raw_text or "").strip().lower()
     if not text:
-        return list(range(count)) if count > 1 else [current_idx]
+        return [0] if count > 1 else [current_idx]
 
     indices: list[int] = []
     saw_all = False
@@ -293,9 +331,7 @@ def current_geometry_fit_background_indices(
         return []
 
     default_indices = (
-        list(range(total_count))
-        if total_count > 1
-        else [max(0, min(int(current_background_index), total_count - 1))]
+        [0] if total_count > 1 else [max(0, min(int(current_background_index), total_count - 1))]
     )
     if geometry_fit_background_selection_var is None:
         return default_indices

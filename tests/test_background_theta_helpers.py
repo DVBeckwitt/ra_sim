@@ -113,6 +113,45 @@ def test_parse_geometry_fit_background_indices_supports_current_all_and_ranges()
     assert parse_selection("current", total_count=4, current_index=2) == [2]
     assert parse_selection("all", total_count=3, current_index=1) == [0, 1, 2]
     assert parse_selection("1, 3-4", total_count=4, current_index=0) == [0, 2, 3]
+    assert parse_selection("", total_count=3, current_index=2) == [0]
+
+
+def test_default_geometry_fit_background_selection_starts_on_initial_image() -> None:
+    assert (
+        background_theta.default_geometry_fit_background_selection(
+            osc_files=["bg0.osc", "bg1.osc", "bg2.osc"],
+        )
+        == "1"
+    )
+    assert background_theta.current_geometry_fit_background_indices(
+        osc_files=["bg0.osc", "bg1.osc", "bg2.osc"],
+        current_background_index=2,
+        geometry_fit_background_selection_var=None,
+        strict=True,
+    ) == [0]
+
+
+def test_geometry_fit_background_indices_after_pair_update_tracks_later_points() -> None:
+    update_indices = background_theta.geometry_fit_background_indices_after_pair_update
+
+    assert update_indices(
+        [0],
+        background_index=2,
+        total_count=3,
+        has_enabled_pairs=True,
+    ) == [0, 2]
+    assert update_indices(
+        [0, 1],
+        background_index=1,
+        total_count=3,
+        has_enabled_pairs=False,
+    ) == [0]
+    assert update_indices(
+        [1],
+        background_index=1,
+        total_count=3,
+        has_enabled_pairs=False,
+    ) == [0]
 
 
 def test_serialize_geometry_fit_background_selection_canonicalizes_visual_selector_output() -> None:
@@ -442,7 +481,7 @@ def test_apply_gui_state_background_theta_compatibility_seeds_legacy_theta_list(
 
     assert background_theta_list_var.get() == "12.75, 12.75"
     assert geometry_theta_offset_var.get() == "0.0"
-    assert geometry_fit_background_selection_var.get() == "all"
+    assert geometry_fit_background_selection_var.get() == "1"
 
 
 def test_apply_gui_state_background_theta_compatibility_preserves_saved_metadata() -> None:

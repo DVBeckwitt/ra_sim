@@ -4766,18 +4766,82 @@ def _geometry_manual_pairs_for_index(index: int) -> list[dict[str, object]]:
     )
 
 
+def _sync_geometry_fit_background_selection_after_manual_pair_update(
+    index: int | None,
+    entries: Sequence[dict[str, object]] | None,
+) -> None:
+    """Reconcile later fit backgrounds with enabled manual pairs."""
+
+    if geometry_fit_background_selection_var is None:
+        return
+    if getattr(simulation_runtime_state, "gui_state_import_active", False):
+        return
+    try:
+        total_count = int(len(background_runtime_state.osc_files))
+    except Exception:
+        total_count = 0
+    if total_count <= 1:
+        return
+
+    try:
+        selected_indices = list(_current_geometry_fit_background_indices(strict=False))
+    except Exception:
+        selected_indices = [0]
+    updated_indices = list(selected_indices)
+    try:
+        changed_idx = int(index) if index is not None else None
+    except Exception:
+        changed_idx = None
+    if changed_idx is not None:
+        has_enabled_pairs = any(
+            gui_geometry_fit.geometry_manual_pair_enabled_for_geometry_fit(entry)
+            for entry in (entries or ())
+        )
+        updated_indices = gui_background_theta.geometry_fit_background_indices_after_pair_update(
+            updated_indices,
+            background_index=int(changed_idx),
+            total_count=total_count,
+            has_enabled_pairs=bool(has_enabled_pairs),
+        )
+    for background_index in range(1, total_count):
+        if changed_idx is not None and int(background_index) == int(changed_idx):
+            continue
+        try:
+            background_entries = _geometry_manual_pairs_for_index(int(background_index))
+        except Exception:
+            background_entries = []
+        has_enabled_pairs = any(
+            gui_geometry_fit.geometry_manual_pair_enabled_for_geometry_fit(entry)
+            for entry in (background_entries or ())
+        )
+        updated_indices = gui_background_theta.geometry_fit_background_indices_after_pair_update(
+            updated_indices,
+            background_index=int(background_index),
+            total_count=total_count,
+            has_enabled_pairs=bool(has_enabled_pairs),
+        )
+    if selected_indices == updated_indices:
+        return
+    selection_text = gui_background_theta.format_geometry_fit_background_indices(updated_indices)
+    geometry_fit_background_selection_var.set(selection_text)
+    _apply_geometry_fit_background_selection(trigger_update=False, sync_live_theta=False)
+    geometry_fit_background_selection_var.set(selection_text)
+
+
 def _set_geometry_manual_pairs_for_index(
     index: int,
     entries: Sequence[dict[str, object]] | None,
 ) -> list[dict[str, object]]:
     """Replace one background's saved manual geometry-pair list."""
-    return gui_manual_geometry.set_geometry_manual_pairs_for_index(
+    updated_entries = gui_manual_geometry.set_geometry_manual_pairs_for_index(
         index,
         entries,
         pairs_by_background=geometry_manual_state.pairs_by_background,
         normalize_hkl_key=_normalize_hkl_key,
         sigma_floor_px=float(GEOMETRY_MANUAL_POSITION_SIGMA_FLOOR_PX),
     )
+    _sync_geometry_fit_background_selection_after_manual_pair_update(index, updated_entries)
+    return updated_entries
 
 
 def _geometry_manual_pair_group_count(index: int) -> int:
@@ -4837,6 +4901,7 @@ def _undo_last_geometry_manual_placement() -> None:
         return
 
     gui_controllers.restore_last_manual_geometry_undo_state(geometry_manual_state)
+    _sync_geometry_fit_background_selection_after_manual_pair_update(None, None)
     _clear_geometry_fit_dataset_cache()
     _clear_geometry_manual_preview_artists(redraw=False)
     _render_current_geometry_manual_pairs(update_status=True)
@@ -41950,13 +42015,26 @@ def _build_geometry_fit_async_job(
         )
     )
     selected_background_indices: list[int] = []
+    requested_indices: list[int] = []
+    skipped_empty_indices: set[int] = set()
     selection_error: str | None = None
     if selection_applied:
         try:
-            selected_background_indices = [
+            requested_indices = [
                 int(idx)
                 for idx in prepare_bindings.current_geometry_fit_background_indices(strict=True)
             ]
+            selected_background_indices = (
+                gui_geometry_fit.effective_geometry_fit_background_indices(
+                    requested_indices,
+                    total_count=len(manual_dataset_bindings.osc_files or ()),
+                    geometry_manual_pairs_for_index=(
+                        manual_dataset_bindings.geometry_manual_pairs_for_index
+                    ),
+                )
+            )
+            active_set = {int(idx) for idx in selected_background_indices}
+            skipped_empty_indices = {int(idx) for idx in requested_indices if idx not in active_set}
         except Exception as exc:
             selection_error = str(exc)
 
@@ -42036,7 +42114,9 @@ def _build_geometry_fit_async_job(
     background_labels: dict[int, str] = {}
     theta_base_by_background: dict[int, float] = {}
     theta_initial_by_background: dict[int, float] = {}
-    skipped_manual_pair_backgrounds: dict[int, str] = {}
+    skipped_manual_pair_backgrounds: dict[int, str] = {
+        int(idx): _geometry_fit_background_label(int(idx)) for idx in sorted(skipped_empty_indices)
+    }
 
     def _theta_base_for_index(dataset_index: int) -> float:
         if build_all_selected_backgrounds or joint_background_mode:
@@ -42166,6 +42246,13 @@ def _build_geometry_fit_async_job(
         current_background_index=int(current_background_index),
         active_var_names=var_names,
     )
+    has_usable_manual_pair_background = any(
+        str(kind).strip().lower() != "missing" for kind in manual_fit_space_by_background.values()
+    )
+    if skipped_empty_indices and not has_usable_manual_pair_background:
+        manual_fit_space_by_background.update(
+            {int(idx): "missing" for idx in skipped_empty_indices}
+        )
     missing_manual_pair_indices = [
         int(idx)
         for idx, kind in manual_fit_space_by_background.items()
@@ -42177,10 +42264,12 @@ def _build_geometry_fit_async_job(
     ]
     if missing_manual_pair_indices and usable_manual_pair_indices:
         usable_set = {int(idx) for idx in usable_manual_pair_indices}
-        skipped_manual_pair_backgrounds = {
-            int(idx): str(background_labels.get(int(idx), f"background {int(idx) + 1}"))
-            for idx in sorted(missing_manual_pair_indices)
-        }
+        skipped_manual_pair_backgrounds.update(
+            {
+                int(idx): str(background_labels.get(int(idx), f"background {int(idx) + 1}"))
+                for idx in sorted(missing_manual_pair_indices)
+            }
+        )
         required_indices = [int(idx) for idx in required_indices if int(idx) in usable_set]
         selected_background_indices = [
             int(idx) for idx in selected_background_indices if int(idx) in usable_set

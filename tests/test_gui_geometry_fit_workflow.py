@@ -267,6 +267,30 @@ def _make_prepared_run(
     )
 
 
+def _geometry_fit_dataset_stub(
+    background_index: int,
+    *,
+    theta_base: object | None = None,
+) -> dict[str, object]:
+    dataset_index = int(background_index)
+    spec: dict[str, object] = {"dataset_index": dataset_index}
+    if theta_base is not None:
+        spec["theta_initial"] = float(theta_base)
+    return {
+        "dataset_index": dataset_index,
+        "pair_count": 1,
+        "group_count": 1,
+        "summary_line": f"bg[{dataset_index}]",
+        "spec": spec,
+        "orientation_choice": {"label": "identity"},
+        "orientation_diag": {"pairs": 1},
+        "measured_for_fit": [{"background_index": dataset_index}],
+        "experimental_image_for_fit": f"image-{dataset_index}",
+        "initial_pairs_display": [],
+        "native_background": np.zeros((2, 2)),
+    }
+
+
 def _make_runtime_action_prepare_bindings():
     manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
         osc_files=["C:/tmp/bg0.osc"],
@@ -949,12 +973,12 @@ def test_prepare_geometry_fit_run_reports_missing_manual_pairs_by_background_nam
     )
 
 
-def test_prepare_geometry_fit_run_rejects_unpaired_selected_background() -> None:
+def test_prepare_geometry_fit_run_ignores_empty_later_selected_background() -> None:
     calls = {"datasets": []}
 
     def _build_dataset(background_index: int, **_kwargs: object) -> dict[str, object]:
         calls["datasets"].append(int(background_index))
-        return {}
+        return _geometry_fit_dataset_stub(int(background_index))
 
     result = geometry_fit.prepare_geometry_fit_run(
         params={"theta_initial": 4.0},
@@ -974,14 +998,87 @@ def test_prepare_geometry_fit_run_rejects_unpaired_selected_background() -> None
         ensure_geometry_fit_caked_view=lambda: None,
         build_dataset=_build_dataset,
         build_runtime_config=lambda fit_params: dict(fit_params),
-        include_all_selected_backgrounds=False,
+        include_all_selected_backgrounds=True,
     )
 
-    assert result.prepared_run is None
-    assert result.error_text == (
-        "Geometry fit unavailable: save manual Qr/Qz pairs first for bg1.osc."
+    assert result.error_text is None
+    assert result.prepared_run is not None
+    assert result.prepared_run.selected_background_indices == [0]
+    assert calls["datasets"] == [0]
+
+
+def test_prepare_geometry_fit_run_keeps_selected_later_background_with_points() -> None:
+    built_indices: list[int] = []
+
+    result = geometry_fit.prepare_geometry_fit_run(
+        params={"theta_initial": 4.0},
+        var_names=["gamma"],
+        fit_config={},
+        osc_files=["C:/data/bg0.osc", "C:/data/bg1.osc", "C:/data/bg2.osc"],
+        current_background_index=0,
+        theta_initial=4.0,
+        preserve_live_theta=False,
+        apply_geometry_fit_background_selection=lambda **kwargs: True,
+        current_geometry_fit_background_indices=lambda **kwargs: [0, 2],
+        geometry_fit_uses_shared_theta_offset=lambda indices: len(indices) > 1,
+        apply_background_theta_metadata=lambda **kwargs: True,
+        current_background_theta_values=lambda **kwargs: [3.0, 4.0, 5.0],
+        current_geometry_theta_offset=lambda **kwargs: 0.25,
+        geometry_manual_pairs_for_index=lambda idx: [{"pair": idx}] if idx in {0, 2} else [],
+        ensure_geometry_fit_caked_view=lambda: None,
+        build_dataset=lambda background_index, *, theta_base, base_fit_params, orientation_cfg: (
+            built_indices.append(int(background_index))
+            or _geometry_fit_dataset_stub(int(background_index), theta_base=theta_base)
+        ),
+        build_runtime_config=lambda fit_params: dict(fit_params),
+        include_all_selected_backgrounds=True,
     )
-    assert calls["datasets"] == []
+
+    assert result.error_text is None
+    assert result.prepared_run is not None
+    assert result.prepared_run.selected_background_indices == [0, 2]
+    assert result.prepared_run.joint_background_mode is True
+    assert result.prepared_run.dataset_specs == [
+        {"dataset_index": 0, "theta_initial": 3.0},
+        {"dataset_index": 2, "theta_initial": 5.0},
+    ]
+    assert built_indices == [0, 2]
+
+
+def test_prepare_geometry_fit_run_does_not_activate_disabled_later_pairs() -> None:
+    built_indices: list[int] = []
+
+    result = geometry_fit.prepare_geometry_fit_run(
+        params={"theta_initial": 4.0},
+        var_names=["gamma"],
+        fit_config={},
+        osc_files=["C:/data/bg0.osc", "C:/data/bg1.osc"],
+        current_background_index=0,
+        theta_initial=4.0,
+        preserve_live_theta=False,
+        apply_geometry_fit_background_selection=lambda **kwargs: True,
+        current_geometry_fit_background_indices=lambda **kwargs: [0],
+        geometry_fit_uses_shared_theta_offset=lambda indices: len(indices) > 1,
+        apply_background_theta_metadata=lambda **kwargs: True,
+        current_background_theta_values=lambda **kwargs: [3.0, 4.0],
+        current_geometry_theta_offset=lambda **kwargs: 0.25,
+        geometry_manual_pairs_for_index=lambda idx: (
+            [{"pair": idx}] if idx == 0 else [{"pair": idx, "geometry_fit_disabled": True}]
+        ),
+        ensure_geometry_fit_caked_view=lambda: None,
+        build_dataset=lambda background_index, *, theta_base, base_fit_params, orientation_cfg: (
+            built_indices.append(int(background_index))
+            or _geometry_fit_dataset_stub(int(background_index))
+        ),
+        build_runtime_config=lambda fit_params: dict(fit_params),
+        include_all_selected_backgrounds=True,
+    )
+
+    assert result.error_text is None
+    assert result.prepared_run is not None
+    assert result.prepared_run.selected_background_indices == [0]
+    assert result.prepared_run.joint_background_mode is False
+    assert built_indices == [0]
 
 
 def test_prepare_geometry_fit_run_can_prepare_multi_background_datasets_without_fit_vars() -> None:

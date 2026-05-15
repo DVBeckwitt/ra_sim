@@ -118,6 +118,28 @@ additive `skipped_manual_pair_backgrounds` metadata for operator diagnostics.
 Shipping status: focused classification, runtime async-job, and workflow
 missing/mixed tests pass locally. Rollback is a normal git revert.
 
+2026-05-15 GUI fit-background activation update: multi-background geometry-fit
+sessions now initialize the fit-background selector to background 1 instead of
+`all`. Later backgrounds become selected fit backgrounds only after enabled
+manual Qr/Qz pairs are saved on them; removing or disabling those pairs removes
+the later background from the selector. Manual-pair undo uses the same
+reconciliation, and pair-driven selector sync writes explicit index text such as
+`1` or `1,3` rather than a current-background-relative selector. Synchronous
+and async geometry-fit preflight both filter selected later backgrounds that
+have no enabled pairs while keeping skip metadata for operator diagnostics.
+
+Bug/error status: fixed for the unexpected all-background active default that
+made empty later images participate in fits before they had points. Feature
+status: no new GUI control, public API, saved-state schema, CLI flag,
+dependency, deprecation, migration, or version bump. Interface status: the
+existing text selector format is unchanged; the default selector text is now
+`1` for multi-background sessions, and async jobs still expose additive
+`skipped_manual_pair_backgrounds` diagnostics. Shipping status: targeted
+background-theta, runtime undo, geometry workflow, async-job, and full geometry
+workflow tests pass locally; the broader runtime import file still has two
+unrelated pre-existing failures reproduced on clean `HEAD`. Rollback is a
+normal git revert.
+
 2026-05-10 GUI saved-manual caked solve update: GUI geometry fits for saved
 manual caked Qr pairs now use the same direct fixed-source default as headless
 saved-manual caked runs. The implicit GUI default no longer switches

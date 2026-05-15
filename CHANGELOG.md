@@ -75,6 +75,12 @@
     closed when any row has a failing or missing QR fit surface contract, and so
     the diagnostic visual/objective surface-divergence flag cannot mask
     non-surface failures.
+  - Changed GUI fit-background activation so multi-background geometry-fit
+    sessions start with only the initial image selected; later backgrounds are
+    added by saved enabled manual Qr/Qz pairs, and selected later backgrounds
+    with no enabled pairs are skipped instead of blocking the fit. Manual-pair
+    undo now uses the same reconciliation so undone later-background points do
+    not leave stale active fit backgrounds behind.
   - Added a popup-mode detector Qr-region companion preview beside the Qr-rod peak marker editor in the parallel background peak-fit diagnostic script, explicitly showing the companion window, refreshing detector overlays live during Delta Qr/L-window edits, and deferring expensive Delta Qr profile reintegration until slider release or accept.
   - Fixed the parallel Qr-rod marker editor so `L Min` / `L Max` submissions reject malformed profile-refresh tables, keep redraw errors inside the editor callback, and no longer let the global Enter shortcut close the popup while an L-bound text box is being edited.
   - Fixed PbI2 Qr-rod profile/editor defaults so `HK=0` uses `L_min=1.5` and `theta_i=40°`, nonzero HK rods use `0.5 <= L <= 3.0` with linear y axes, the detector companion preview uses the same HK-specific L bounds, and configured-hidden rows such as `HK=7` stay out of editor/support/final plots.
