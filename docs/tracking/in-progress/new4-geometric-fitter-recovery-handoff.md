@@ -14,20 +14,32 @@ Last updated: 2026-05-14
   boundary: QR and mismatch counters must be real integer JSON values, accepted
   overlay PNGs must resolve inside the combo artifact directory, and the overlay
   source must pass a PNG-header check before any geometry variables are updated.
-  Overlay destination failures, overlay temp-file failures, and rebuild
-  exceptions now restore pre-apply GUI geometry values and remove temporary
-  overlay artifacts before re-raising. `04_applied_geometry_overlay.json` now
-  leaves `output_state_sha256` pending until the CLI finalizes it from the
-  actual `--out-state` file. Bug/error status: closes the review findings for
-  arbitrary overlay-path copying, malformed counter coercion, pre-save output
-  hash reporting, and non-atomic failed applies. Feature status: hardening only;
-  no threshold tuning, combo acceptance change, migration, deprecation, or new
-  public flag. Shipping status: opt-in CLI apply remains the rollout boundary,
-  rollback is the unchanged input state or a previous saved output state, and
-  failed applies leave geometry unchanged. Validation: focused GUI apply tests
-  passed (`26 passed`), CLI geometry-fit tests passed (`36 passed`),
-  touched-file `compileall` passed, and `python -m ra_sim.dev check` passed
-  (`292 passed`).
+  Missing, non-gettable, or non-settable active variable targets fail before
+  mutation. Setter failures, overlay destination failures, overlay temp-file
+  failures, and rebuild exceptions now restore pre-apply GUI geometry values
+  and remove temporary overlay artifacts before re-raising.
+  `04_applied_geometry_overlay.json` now leaves `output_state_sha256` pending
+  until the CLI finalizes it from the actual `--out-state` file. Bug/error
+  status: closes the review findings for arbitrary overlay-path copying,
+  malformed counter coercion, pre-save output hash reporting, and non-atomic
+  failed applies, including silent partial variable-set failures. Feature
+  status: hardening only; no threshold tuning, combo acceptance change,
+  migration, deprecation, or new public flag. Shipping status: opt-in CLI apply
+  remains the rollout boundary, rollback is the unchanged input state or a
+  previous saved output state, and failed applies leave geometry unchanged.
+  Validation: focused GUI apply tests passed (`30 passed`), CLI geometry-fit
+  tests passed (`36 passed`), the selected fitting regression target passed
+  (`9 passed`), the full GUI geometry-fit workflow file passed
+  (`699 passed, 2 skipped`), the full geometry fitting file passed
+  (`260 passed`), touched-file `compileall` passed, and
+  `python -m ra_sim.dev check` passed (`292 passed`, ruff clean, mypy clean).
+  CI/CD status: no workflow files changed; this used the existing local quality
+  gate as the merge signal. Deprecation/migration status: no CLI flags,
+  saved-state schema, artifact field, or compatibility path changed. ADR
+  status: no new ADR is needed because the decision stays inside the existing
+  guarded apply architecture. Shipping status: ready as a normal bug-fix commit
+  with rollback by git revert or by using the unchanged input state; the real
+  Bi2Se3 apply was not run by this hardening slice.
 - 2026-05-14 Bi2Se3 controlled exclusion and parameter-combo sweep completed.
   Headless `fit-geometry` now supports exact `--exclude-pair-id` removal before
   objective assembly, `--parameter-combo-sweep` dry runs, and explicit

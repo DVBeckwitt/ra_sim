@@ -30807,6 +30807,149 @@ def test_apply_sweep_result_temp_overlay_failure_rolls_back_geometry(
     assert not list(tmp_path.glob(".accepted_overlay.png.*.tmp"))
 
 
+def _write_apply_sweep_combo_for_atomic_tests(
+    tmp_path,
+    *,
+    active_vars: list[str],
+    result_variables: Mapping[str, object],
+) -> tuple[Path, Path, Path]:
+    state_path = tmp_path / "Bi2Se3.json"
+    state_path.write_text('{"state": "current"}', encoding="utf-8")
+    combo_dir = tmp_path / "00_gamma_Gamma"
+    combo_dir.mkdir()
+    overlay_path = combo_dir / "02_full_fit_initial_vs_final_qr_overlay.png"
+    overlay_path.write_bytes(b"\x89PNG\r\n\x1a\naccepted")
+    accepted_overlay_path = tmp_path / "accepted_overlay.png"
+    combo_result_path = combo_dir / "combo_result.json"
+    combo_result_path.write_text(
+        json.dumps(
+            {
+                "status": "accepted",
+                "full_fit_success": True,
+                "dry_run": True,
+                "input_state_sha256": _hash_file(state_path),
+                "excluded_pair_ids": ["bg0:pair20"],
+                "active_vars": active_vars,
+                **_accepted_parameter_combo_contract(),
+                "result_variables": result_variables,
+                "artifacts": {"full_fit_png": str(overlay_path)},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return state_path, combo_result_path, accepted_overlay_path
+
+
+def test_apply_sweep_result_variable_set_failure_rolls_back_geometry(tmp_path) -> None:
+    state_path, combo_result_path, accepted_overlay_path = (
+        _write_apply_sweep_combo_for_atomic_tests(
+            tmp_path,
+            active_vars=["gamma", "Gamma"],
+            result_variables={"gamma": 1.23, "Gamma": 4.56},
+        )
+    )
+    gamma_var = _DummyVar(0.1)
+    big_gamma_var = _DummyVar(0.2)
+
+    def _raise_set(_value):
+        raise RuntimeError("set failed")
+
+    big_gamma_var.set = _raise_set  # type: ignore[method-assign]
+
+    with pytest.raises(ValueError, match="sweep_apply_variable_set_failed:Gamma"):
+        geometry_fit.apply_geometry_fit_sweep_result(
+            combo_result_path=combo_result_path,
+            current_state_path=state_path,
+            approved_excluded_pair_ids=["bg0:pair20"],
+            var_map={"gamma": gamma_var, "Gamma": big_gamma_var},
+            accepted_overlay_path=accepted_overlay_path,
+        )
+
+    assert gamma_var.get() == 0.1
+    assert big_gamma_var.get() == 0.2
+    assert not accepted_overlay_path.exists()
+
+
+def test_apply_sweep_result_theta_offset_set_failure_rolls_back_geometry(tmp_path) -> None:
+    state_path, combo_result_path, accepted_overlay_path = (
+        _write_apply_sweep_combo_for_atomic_tests(
+            tmp_path,
+            active_vars=["gamma", "theta_offset"],
+            result_variables={"gamma": 1.23, "theta_offset": 4.56},
+        )
+    )
+    gamma_var = _DummyVar(0.1)
+    theta_offset_var = _DummyVar("old-offset")
+
+    def _raise_set(_value):
+        raise RuntimeError("theta set failed")
+
+    theta_offset_var.set = _raise_set  # type: ignore[method-assign]
+
+    with pytest.raises(ValueError, match="sweep_apply_variable_set_failed:theta_offset"):
+        geometry_fit.apply_geometry_fit_sweep_result(
+            combo_result_path=combo_result_path,
+            current_state_path=state_path,
+            approved_excluded_pair_ids=["bg0:pair20"],
+            var_map={"gamma": gamma_var},
+            geometry_theta_offset_var=theta_offset_var,
+            accepted_overlay_path=accepted_overlay_path,
+        )
+
+    assert gamma_var.get() == 0.1
+    assert theta_offset_var.get() == "old-offset"
+    assert not accepted_overlay_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("target_kind", "match"),
+    [
+        ("missing_set", "sweep_apply_variable_set_missing:Gamma"),
+        ("missing_get", "sweep_apply_variable_get_missing:Gamma"),
+    ],
+)
+def test_apply_sweep_result_requires_gettable_settable_targets_for_all_active_vars(
+    tmp_path,
+    target_kind,
+    match,
+) -> None:
+    state_path, combo_result_path, accepted_overlay_path = (
+        _write_apply_sweep_combo_for_atomic_tests(
+            tmp_path,
+            active_vars=["gamma", "Gamma"],
+            result_variables={"gamma": 1.23, "Gamma": 4.56},
+        )
+    )
+    gamma_var = _DummyVar(0.1)
+    if target_kind == "missing_set":
+        class _GetOnlyVar:
+            def __init__(self, value):
+                self._value = value
+
+            def get(self):
+                return self._value
+
+        target = _GetOnlyVar(0.2)
+    else:
+        class _SetOnlyVar:
+            def set(self, value):
+                pass
+
+        target = _SetOnlyVar()
+
+    with pytest.raises(ValueError, match=match):
+        geometry_fit.apply_geometry_fit_sweep_result(
+            combo_result_path=combo_result_path,
+            current_state_path=state_path,
+            approved_excluded_pair_ids=["bg0:pair20"],
+            var_map={"gamma": gamma_var, "Gamma": target},
+            accepted_overlay_path=accepted_overlay_path,
+        )
+
+    assert gamma_var.get() == 0.1
+    assert not accepted_overlay_path.exists()
+
+
 @pytest.mark.parametrize(
     ("overrides", "match"),
     [

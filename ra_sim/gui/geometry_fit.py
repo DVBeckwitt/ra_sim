@@ -21772,32 +21772,66 @@ def _copy_geometry_fit_sweep_overlay_to_temp(
     return temp_path
 
 
-def _capture_geometry_fit_sweep_apply_values(
+def _prepare_geometry_fit_sweep_apply_targets(
     active_vars: Sequence[str],
     *,
     var_map: Mapping[str, object],
     geometry_theta_offset_var: object | None,
-) -> list[tuple[object, object]]:
-    captured: list[tuple[object, object]] = []
+) -> list[tuple[str, object, object]]:
+    prepared: list[tuple[str, object, object]] = []
     for name in active_vars:
         target = geometry_theta_offset_var if name == "theta_offset" else var_map.get(name)
+        if target is None:
+            raise ValueError(f"sweep_apply_variable_target_missing:{name}")
         getter = getattr(target, "get", None)
         setter = getattr(target, "set", None)
-        if callable(getter) and callable(setter):
-            captured.append((target, getter()))
-    return captured
+        if not callable(getter):
+            raise ValueError(f"sweep_apply_variable_get_missing:{name}")
+        if not callable(setter):
+            raise ValueError(f"sweep_apply_variable_set_missing:{name}")
+        try:
+            old_value = getter()
+        except Exception as exc:
+            raise ValueError(f"sweep_apply_variable_get_failed:{name}") from exc
+        prepared.append((name, target, old_value))
+    return prepared
 
 
 def _restore_geometry_fit_sweep_apply_values(
-    captured_values: Sequence[tuple[object, object]],
+    captured_values: Sequence[tuple[str, object, object]],
 ) -> None:
-    for target, value in reversed(list(captured_values)):
+    for _, target, value in reversed(list(captured_values)):
         setter = getattr(target, "set", None)
         if callable(setter):
             try:
                 setter(value)
             except Exception:
                 pass
+
+
+def _set_geometry_fit_sweep_apply_values_strict(
+    prepared_targets: Sequence[tuple[str, object, object]],
+    values: Sequence[object],
+) -> None:
+    if len(prepared_targets) != len(values):
+        raise ValueError("sweep_apply_variable_count_mismatch")
+    changed_targets: list[tuple[str, object, object]] = []
+    for (name, target, old_value), raw_value in zip(prepared_targets, values, strict=False):
+        try:
+            value = float(raw_value)
+        except Exception as exc:
+            _restore_geometry_fit_sweep_apply_values(changed_targets)
+            raise ValueError(f"sweep_apply_variable_value_invalid:{name}") from exc
+        if not np.isfinite(value):
+            _restore_geometry_fit_sweep_apply_values(changed_targets)
+            raise ValueError(f"sweep_apply_variable_value_invalid:{name}")
+        apply_value: object = f"{value:.6g}" if name == "theta_offset" else float(value)
+        changed_targets.append((name, target, old_value))
+        try:
+            target.set(apply_value)
+        except Exception as exc:
+            _restore_geometry_fit_sweep_apply_values(changed_targets)
+            raise ValueError(f"sweep_apply_variable_set_failed:{name}") from exc
 
 
 def _verify_geometry_fit_sweep_apply_contract(combo_result: Mapping[str, object]) -> None:
@@ -21888,6 +21922,12 @@ def apply_geometry_fit_sweep_result(
         raise ValueError(f"missing_apply_variable_target:{missing_targets[0]}")
     values = _geometry_fit_sweep_result_values(combo_result, active_vars)
 
+    prepared_targets = _prepare_geometry_fit_sweep_apply_targets(
+        active_vars,
+        var_map=var_map,
+        geometry_theta_offset_var=geometry_theta_offset_var,
+    )
+
     resolved_overlay_path: Path | None = None
     temp_overlay_path: Path | None = None
     final_overlay_existed = False
@@ -21902,19 +21942,9 @@ def apply_geometry_fit_sweep_result(
             source_overlay_path=source_overlay_path,
             accepted_overlay_path=resolved_overlay_path,
         )
-    captured_values = _capture_geometry_fit_sweep_apply_values(
-        active_vars,
-        var_map=var_map,
-        geometry_theta_offset_var=geometry_theta_offset_var,
-    )
     geometry_mutated = False
     try:
-        apply_geometry_fit_result_values(
-            active_vars,
-            values,
-            var_map=var_map,
-            geometry_theta_offset_var=geometry_theta_offset_var,
-        )
+        _set_geometry_fit_sweep_apply_values_strict(prepared_targets, values)
         geometry_mutated = True
         rebuild_result = rebuild_overlay(combo_result) if callable(rebuild_overlay) else None
 
@@ -21923,7 +21953,7 @@ def apply_geometry_fit_sweep_result(
             temp_overlay_path = None
     except Exception:
         if geometry_mutated:
-            _restore_geometry_fit_sweep_apply_values(captured_values)
+            _restore_geometry_fit_sweep_apply_values(prepared_targets)
         if temp_overlay_path is not None:
             temp_overlay_path.unlink(missing_ok=True)
         if resolved_overlay_path is not None and not final_overlay_existed:

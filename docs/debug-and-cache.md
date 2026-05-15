@@ -140,7 +140,8 @@ reserved for the explicit apply step, which verifies the saved-state hash,
 approved exclusion list, accepted combo result, caked residual thresholds,
 complete QR contract with strict integer counts, source/objective mismatch
 counters, parameter sensitivity, and the accepted overlay PNG artifact before
-applying variables. The apply is atomic for GUI geometry variables: overlay
+applying variables. The apply is atomic for GUI geometry variables: missing or
+non-settable targets are rejected before mutation, and setter failures, overlay
 destination failures, overlay temp-file failures, and rebuild exceptions restore
 the pre-apply values and leave no new applied overlay behind.
 CLI-requested sweeps isolate each combo in a child Python process so a native

@@ -54,8 +54,9 @@
   - Hardened the sweep-result apply boundary so combo counters must be real
     integers, accepted overlay PNGs must come from the combo artifact directory
     and pass a PNG-header check before geometry is mutated, failed overlay or
-    rebuild steps roll back GUI geometry variables, and output-state hashes
-    remain pending until a saved state file exists.
+    rebuild steps roll back GUI geometry variables, variable setter failures
+    fail closed instead of silently returning a partial apply, and output-state
+    hashes remain pending until a saved state file exists.
   - Expanded parameter-combo sweep reports with selected-combo QR counts,
     dry-run/update flags, artifact status, native child exit classification,
     durable bounded stdout/stderr tail files for child crashes, and top missing
