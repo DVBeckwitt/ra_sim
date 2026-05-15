@@ -6410,8 +6410,8 @@ def _dynamic_point_only_sensitivity_result(
     *,
     sensitive: bool,
     minimum_sensitive_step_deg: float = 0.0,
-    fail_on_insensitive_dynamic_objective: bool = False,
     source_rows_builder_records: list[dict[str, object]] | None = None,
+    status_callback=None,
 ):
     def fake_process(*args, **kwargs):
         image_size = int(args[2])
@@ -6504,6 +6504,7 @@ def _dynamic_point_only_sensitivity_result(
         var_names=["gamma"],
         experimental_image=experimental_image,
         dataset_specs=dataset_specs,
+        status_callback=status_callback,
         refinement_config={
             "solver": {
                 "manual_point_fit_mode": True,
@@ -6514,9 +6515,6 @@ def _dynamic_point_only_sensitivity_result(
                 "weighted_matching": False,
                 "use_measurement_uncertainty": False,
                 "max_nfev": 1,
-                "fail_on_insensitive_dynamic_objective": bool(
-                    fail_on_insensitive_dynamic_objective
-                ),
             },
             "single_ray": {"enabled": False},
             "identifiability": {"enabled": False},
@@ -6636,34 +6634,33 @@ def test_rung3_objective_changes_dynamic_sim_source_when_trial_params_change(
 def test_dynamic_objective_sensitivity_detects_real_threading_failure_at_five_degrees(
     monkeypatch,
 ) -> None:
-    result = _dynamic_point_only_sensitivity_result(monkeypatch, sensitive=False)
+    messages: list[str] = []
+    result = _dynamic_point_only_sensitivity_result(
+        monkeypatch,
+        sensitive=False,
+        status_callback=messages.append,
+    )
     summary = result.point_match_summary
     record = summary["objective_param_sensitivity_by_var"][0]
 
-    assert result.success
+    assert not result.success
+    assert result.status == -9
+    assert result.message == "dynamic_objective_not_sensitive_to_fit_variables"
     assert summary["objective_param_sensitivity_status"] == "all_fit_vars_insensitive"
     assert summary["recommended_next_fix"] == "thread_trial_params_to_projector"
     assert summary["first_acceptance_metric_divergence"] == (
         "dynamic_objective_not_sensitive_to_fit_variables"
     )
+    assert any(
+        message.startswith("Geometry fit: failed")
+        and "dynamic_objective_not_sensitive_to_fit_variables" in message
+        for message in messages
+    )
+    assert not any(message.startswith("Geometry fit: complete") for message in messages)
     assert max(record["steps_deg"]) == pytest.approx(5.0)
     assert record["first_meaningful_step_deg"] is None
     assert record["sensitive"] is False
     assert record["prediction_changed"] is False
-
-
-def test_dynamic_objective_param_sensitivity_can_fail_closed_when_configured(
-    monkeypatch,
-) -> None:
-    result = _dynamic_point_only_sensitivity_result(
-        monkeypatch,
-        sensitive=False,
-        fail_on_insensitive_dynamic_objective=True,
-    )
-
-    assert not result.success
-    assert result.status == -9
-    assert result.message == "dynamic_objective_not_sensitive_to_fit_variables"
 
 
 def test_dynamic_objective_param_sensitivity_detects_sensitive_projector(

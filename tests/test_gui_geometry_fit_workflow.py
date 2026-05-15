@@ -88,6 +88,96 @@ def test_geometry_manual_pair_enabled_for_geometry_fit_skips_background_qr_refer
     )
 
 
+def test_qr_handoff_audit_does_not_use_caked_degrees_as_detector_display() -> None:
+    q_group_key = ("q_group", "primary", 1, 10)
+    hkl = (-1, 0, 10)
+    caked_point = (40.142, 35.567)
+    native_point = (1081.428, 1914.272)
+    detector_display_point = (1084.728, 1081.428)
+    native_to_display_calls: list[tuple[float, float]] = []
+
+    def native_to_display(col: float, row: float) -> tuple[float, float]:
+        native_to_display_calls.append((col, row))
+        return detector_display_point
+
+    dataset = {
+        "native_detector_coords_to_detector_display_coords": native_to_display,
+        "provider_pairs": [
+            {
+                "q_group_key": q_group_key,
+                "hkl": hkl,
+                "source_branch_index": 0,
+                "source_table_index": 160,
+                "source_row_index": 42,
+                "source_peak_index": 0,
+                "provider_selected_source_identity_canonical": {
+                    "q_group_key": q_group_key,
+                    "hkl": hkl,
+                    "source_branch_index": 0,
+                    "source_table_index": 160,
+                    "source_row_index": 42,
+                },
+                "sim_visual_detector_display_px": (1919.502, 1098.974),
+                "sim_visual_detector_native_px": (1098.974, 1079.498),
+            }
+        ],
+        "manual_point_pairs": [
+            {
+                "q_group_key": q_group_key,
+                "hkl": hkl,
+                "source_branch_index": 0,
+                "source_table_index": 160,
+                "source_row_index": 42,
+            }
+        ],
+        "measured_display": [
+            {
+                "q_group_key": q_group_key,
+                "hkl": hkl,
+                "source_branch_index": 0,
+                "x": caked_point[0],
+                "y": caked_point[1],
+            }
+        ],
+        "measured_for_fit": [
+            {
+                "q_group_key": q_group_key,
+                "hkl": hkl,
+                "source_branch_index": 0,
+                "background_detector_x": native_point[0],
+                "background_detector_y": native_point[1],
+                "background_two_theta_deg": caked_point[0],
+                "background_phi_deg": caked_point[1],
+            }
+        ],
+        "initial_pairs_display": [
+            {
+                "q_group_key": q_group_key,
+                "hkl": hkl,
+                "source_branch_index": 0,
+                "bg_display": caked_point,
+                "bg_native": native_point,
+                "sim_display": (1919.502, 1098.974),
+                "sim_native": (1098.974, 1079.498),
+                "simulated_two_theta_deg": 39.839,
+                "simulated_phi_deg": 34.75,
+            }
+        ],
+        "source_rows_for_trace": [],
+        "spec": {"fit_space_projector_kind": "exact_caked_bundle"},
+    }
+
+    rows = geometry_fit.build_geometry_fit_qr_handoff_audit_rows(dataset)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["fit_observed_caked_deg"] == pytest.approx(caked_point)
+    assert row["fit_observed_detector_native_px"] == pytest.approx(native_point)
+    assert row["fit_observed_detector_display_px"] == pytest.approx(detector_display_point)
+    assert row["fit_observed_detector_display_px"] != pytest.approx(caked_point)
+    assert native_point in native_to_display_calls
+
+
 class _DummyVar:
     def __init__(self, value):
         self._value = value

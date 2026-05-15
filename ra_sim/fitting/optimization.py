@@ -33896,14 +33896,9 @@ def fit_geometry_parameters(
                         "dynamic_objective_not_sensitive_to_fit_variables"
                     )
                     point_match_summary["recommended_next_fix"] = "thread_trial_params_to_projector"
-                    fail_on_insensitive_dynamic_objective = bool(
-                        solver_cfg.get("fail_on_insensitive_dynamic_objective", False)
-                    )
                     legacy_hit_table_only_dynamic_path = not bool(dataset_spec_entries)
                     if (
-                        fail_on_insensitive_dynamic_objective
-                        and str(point_match_summary.get("acceptance_metric_space") or "")
-                        == "caked_deg"
+                        str(point_match_summary.get("acceptance_metric_space") or "") == "caked_deg"
                         and not legacy_hit_table_only_dynamic_path
                     ):
                         result.success = False
@@ -34406,12 +34401,24 @@ def fit_geometry_parameters(
             completion_metric_text += f", detector_rms={detector_rms:.4f}px"
     else:
         completion_metric_text = f"rms={float(getattr(result, 'rms_px', np.nan)):.4f}px"
-    _emit_status(
-        "Geometry fit: complete "
-        f"(cost={float(getattr(result, 'cost', np.nan)):.6f}, "
-        f"{completion_metric_text}"
-        f"{metric_part}{matched_pair_count_text})"
-    )
+    if bool(getattr(result, "success", False)):
+        _emit_status(
+            "Geometry fit: complete "
+            f"(cost={float(getattr(result, 'cost', np.nan)):.6f}, "
+            f"{completion_metric_text}"
+            f"{metric_part}{matched_pair_count_text})"
+        )
+    else:
+        failure_reason = str(getattr(result, "message", "") or "").strip()
+        failure_reason_part = f", reason={failure_reason}" if failure_reason else ""
+        _emit_status(
+            "Geometry fit: failed "
+            f"(status={int(getattr(result, 'status', 0) or 0)}"
+            f"{failure_reason_part}, "
+            f"cost={float(getattr(result, 'cost', np.nan)):.6f}, "
+            f"{completion_metric_text}"
+            f"{metric_part}{matched_pair_count_text})"
+        )
     if metric_space_text == "caked_deg" and isinstance(point_match_summary, Mapping):
         _emit_status(
             "dynamic angular residual summary: "

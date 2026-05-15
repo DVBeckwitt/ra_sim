@@ -3539,7 +3539,7 @@ def build_geometry_fit_qr_handoff_audit_rows(
             base_fit_params=base_fit_params,
         )
 
-        fit_observed_display = (
+        raw_fit_observed_display = (
             _geometry_fit_audit_point_from_tuple_key(
                 (initial_entry,),
                 "bg_display",
@@ -3558,6 +3558,27 @@ def build_geometry_fit_qr_handoff_audit_rows(
             (fit_entry, initial_entry),
             (("background_two_theta_deg", "background_phi_deg"),),
         )
+        fit_observed_display_unavailable_reason = None
+        if fit_observed_native is not None:
+            (
+                fit_observed_display,
+                fit_observed_display_unavailable_reason,
+            ) = _geometry_fit_audit_native_to_display_result(
+                fit_observed_native,
+                dataset,
+            )
+        else:
+            fit_observed_display = None
+        if fit_observed_display is not None:
+            fit_observed_display_unavailable_reason = None
+        elif fit_observed_caked is not None:
+            fit_observed_display = None
+            if fit_observed_display_unavailable_reason is None:
+                fit_observed_display_unavailable_reason = (
+                    "caked_fit_space_detector_display_unavailable"
+                )
+        else:
+            fit_observed_display = raw_fit_observed_display
         fit_prediction_source = _geometry_fit_qr_fit_prediction_source(
             provider_pair,
             manual_pair,
@@ -3785,6 +3806,9 @@ def build_geometry_fit_qr_handoff_audit_rows(
                 "sim_refinement_delta_caked_deg",
             ),
             "fit_observed_detector_display_px": fit_observed_display,
+            "fit_observed_detector_display_px_unavailable_reason": (
+                fit_observed_display_unavailable_reason
+            ),
             "fit_observed_detector_native_px": fit_observed_native,
             "fit_observed_caked_deg": fit_observed_caked,
             "fit_prediction_source": fit_prediction_source,

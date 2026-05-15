@@ -9,6 +9,28 @@ Last updated: 2026-05-14
 
 ## Current status
 
+- 2026-05-14 Bi2Se3 first-image caked manual fit fail-closed slice completed.
+  QR handoff audit rows now keep caked observed targets in
+  `fit_observed_caked_deg` and reconstruct `fit_observed_detector_display_px`
+  only from detector-native coordinates through the dataset's native-to-display
+  conversion. Saved caked `(2theta, phi)` clicks no longer appear as detector
+  pixels in the audit. Non-legacy dynamic caked fits that prove
+  `objective_param_sensitivity_status=all_fit_vars_insensitive` now return
+  `success=false`, `status=-9`, and
+  `dynamic_objective_not_sensitive_to_fit_variables`, and the optimizer status
+  line says failed instead of complete. Bug/error status: fixed for the
+  misleading detector-display audit fields and for the Bi2Se3 two-point/three
+  caked manual fit path being reported as complete when the objective cannot
+  move under the requested fit variables. Feature status: behavior hardening
+  only; no GUI control, CLI flag, config key, dependency, migration,
+  deprecation, or release version change. Interface/artifact status: one
+  additive diagnostic reason field may appear beside
+  `fit_observed_detector_display_px`; existing saved states remain compatible.
+  Validation: the new regressions passed (`2 passed`), the full geometry
+  fitting and GUI geometry-fit workflow files passed (`959 passed, 2 skipped`),
+  and `python -m ra_sim.dev check` passed (`292 passed`, ruff clean, mypy
+  clean). Shipping status: ready as a normal bug-fix slice; rollback is a git
+  revert.
 - 2026-05-14 sweep-apply review hardening completed. The explicit
   `--apply-sweep-result` path now treats `combo_result.json` as an external
   boundary: QR and mismatch counters must be real integer JSON values, accepted

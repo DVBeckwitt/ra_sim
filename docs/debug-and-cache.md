@@ -884,6 +884,15 @@ Status as of 2026-05-13:
   has to be supported by the ladder through 5 degrees, and cache-reuse states
   such as `reused_for_same_params_signature` remain distinct from rebuilt source
   rows.
+- fail-closed status: dataset-spec-backed dynamic caked fits now reject with
+  `dynamic_objective_not_sensitive_to_fit_variables` when every active fit
+  variable is insensitive across that ladder. The optimizer emits
+  `Geometry fit: failed` for that case instead of a completed-fit status line.
+- coordinate-frame status: QR handoff audit rows report caked observed targets
+  only under `fit_observed_caked_deg`. `fit_observed_detector_display_px` is
+  reconstructed from detector-native coordinates through the dataset
+  native-to-display conversion; if no detector conversion is available, the
+  detector-display field stays unavailable instead of reusing caked degrees.
 
 Run:
 
