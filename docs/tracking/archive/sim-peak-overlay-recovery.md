@@ -324,6 +324,55 @@ Validation recorded for this closure:
 - `python -m compileall -q ra_sim/gui tests`, `git diff --check`, and
   `python -m ra_sim.dev check` passed.
 
+## Detector Picker Payload Authority Follow-Up
+
+Status: fixed on 2026-05-14. The follow-up symptom was a detector-view manual
+pick session that had detector-picker rows available but the runtime HKL/Qr
+click payload could still consume stale `grouped_candidates` first. That kept
+the operator-facing failure in the same family as `Manual Qr picker cache is
+not ready: no detector source rows` and `No Qr/Qz set found within a ... px
+window` even when visible detector markers should have been clickable.
+
+What changed:
+
+- `_hkl_pick_simulation_points_from_qr_picker_cache()` now uses the existing
+  manual-geometry detector-picker cache resolver whenever explicit
+  `detector_picker_rows`, `detector_picker_source_rows`, or
+  `detector_picker_grouped_candidates` are present.
+- Raw `grouped_candidates` remain the fallback when no detector-picker payload
+  can build candidates.
+- The provider fallback reuses the same grouped-row flattening helper; no new
+  public API, saved-state field, config key, CLI flag, dependency, CI workflow,
+  deprecation, or migration was added.
+
+Bug/error status: fixed. Detector-view picker payloads now carry
+`source_signature[0] == "detector_picker_grouped"` when detector-picker rows
+are present, and the detector click index is built from detector display
+coordinates instead of stale grouped-frame coordinates.
+
+Feature status: no new user-facing feature. This is a compatibility bug fix for
+the existing manual Qr/Qz and HKL picking flow and preserves the geometric-fit
+handoff interfaces.
+
+Validation recorded for this follow-up:
+
+- `python -m pytest tests/test_gui_runtime_import_safe.py::test_runtime_session_hkl_pick_prefers_detector_picker_rows_over_stale_grouped_cache -ra`
+  passed.
+- `python -m pytest tests/test_gui_runtime_import_safe.py -k "hkl_pick_cache or hkl_pick_uses_grouped_qr_picker_cache or hkl_pick_builds_grouped_cache" -ra`
+  passed.
+- `python -m pytest tests/test_manual_geometry_selection_helpers.py -k "detector_first_qr_selection or picker_candidates_only or detector_picker or overlay_hidden" -ra`
+  passed.
+- `python -m pytest tests/test_gui_runtime_import_safe.py -k "manual_pick_cache or hkl_live_cache or reuse_only_refresh" -ra`
+  passed.
+- `python -m pytest tests/test_gui_geometry_fit_workflow.py -k "manual_picker_truth_pairs or point_provider_matches_manual_qr_picker_assignments" -ra`
+  passed.
+- `python -m py_compile ra_sim/gui/_runtime/runtime_session.py`, `git diff
+  --check`, and `python -m ra_sim.dev check` passed.
+
+Shipping status: ready as a normal bug-fix slice after the final pre-commit
+gate passes. Rollback is a normal git revert of the runtime-session cache
+preference, focused regression test, and documentation updates.
+
 ## Main Code Paths
 
 - `ra_sim/gui/geometry_q_group_manager.py`

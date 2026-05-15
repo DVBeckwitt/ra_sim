@@ -28220,6 +28220,68 @@ def test_runtime_session_hkl_pick_uses_grouped_qr_picker_cache_without_intersect
     assert payload["source_signature"][0] == "grouped"
 
 
+def test_runtime_session_hkl_pick_prefers_detector_picker_rows_over_stale_grouped_cache() -> None:
+    peak_selection = importlib.import_module("ra_sim.gui.peak_selection")
+    manual_geometry = importlib.import_module("ra_sim.gui.manual_geometry")
+    payload_factory = _load_runtime_session_function(
+        "_hkl_pick_simulation_points_from_qr_picker_cache"
+    )
+    group_key = ("q_group", "primary", 1, 2)
+    stale_grouped_row = {
+        "source_table_index": 1,
+        "source_row_index": 2,
+        "source_branch_index": 0,
+        "q_group_key": group_key,
+        "hkl": (1, 0, 2),
+        "hkl_raw": (1.0, 0.0, 2.0),
+        "native_col": 150.0,
+        "native_row": 160.0,
+        "sim_col_raw": 10.0,
+        "sim_row_raw": 20.0,
+        "sim_col": 10.0,
+        "sim_row": 20.0,
+        "display_col": 10.0,
+        "display_row": 20.0,
+        "caked_x": 10.0,
+        "caked_y": 20.0,
+    }
+    detector_picker_row = {
+        **stale_grouped_row,
+        "sim_visual_detector_display_px": (110.0, 120.0),
+        "sim_visual_detector_native_px": (210.0, 220.0),
+        "display_col": 110.0,
+        "display_row": 120.0,
+        "sim_col": 110.0,
+        "sim_row": 120.0,
+        "sim_col_raw": 110.0,
+        "sim_row_raw": 120.0,
+        "native_col": 210.0,
+        "native_row": 220.0,
+        "detector_picker_source": "detector_picker_rows",
+    }
+    cache_data = {
+        "signature": ("mixed-cache", 1),
+        "grouped_candidates": {group_key: [dict(stale_grouped_row)]},
+        "detector_picker_rows": [dict(detector_picker_row)],
+        "detector_picker_source_rows": [dict(detector_picker_row)],
+        "detector_picker_grouped_candidates": {group_key: [dict(detector_picker_row)]},
+    }
+
+    payload_factory.__globals__["gui_peak_selection"] = peak_selection
+    payload_factory.__globals__["gui_manual_geometry"] = manual_geometry
+    payload_factory.__globals__["simulation_runtime_state"] = SimpleNamespace(profile_cache={})
+    payload_factory.__globals__["_current_geometry_fit_params"] = lambda: {"a": 5.0}
+    payload_factory.__globals__["_get_geometry_manual_pick_cache"] = lambda **_kwargs: cache_data
+    payload_factory.__globals__["_hkl_pick_simulation_points_payload_cache"] = {}
+
+    payload = payload_factory()
+
+    assert payload["source_signature"][0] == "detector_picker_grouped"
+    assert payload["candidates"][0]["display_col"] == 110.0
+    assert payload["candidates"][0]["display_row"] == 120.0
+    assert tuple(payload["detector_index"]["points"]) == ((110.0, 120.0),)
+
+
 def test_runtime_session_hkl_pick_builds_grouped_cache_from_stored_raw_peak_rows() -> None:
     peak_selection = importlib.import_module("ra_sim.gui.peak_selection")
     manual_geometry = importlib.import_module("ra_sim.gui.manual_geometry")
@@ -28351,7 +28413,7 @@ def test_runtime_session_hkl_pick_builds_grouped_cache_from_stored_raw_peak_rows
 
     payload = payload_factory()
 
-    assert payload["source_signature"][0] == "grouped"
+    assert payload["source_signature"][0] == "detector_picker_grouped"
     assert len(payload["candidates"]) == 2
     assert {tuple(candidate["hkl"]) for candidate in payload["candidates"]} == {
         (1, 0, 2),

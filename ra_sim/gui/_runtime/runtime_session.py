@@ -11346,29 +11346,49 @@ def _hkl_pick_simulation_points_from_qr_picker_cache() -> object:
             hasher.update(b"\x1e")
         return str(hasher.hexdigest())
 
+    def _flatten_grouped_rows(grouped_rows: object) -> list[dict[str, object]]:
+        rows: list[dict[str, object]] = []
+        if not isinstance(grouped_rows, dict):
+            return rows
+        for entries in grouped_rows.values():
+            if isinstance(entries, (list, tuple)):
+                rows.extend(dict(entry) for entry in entries if isinstance(entry, dict))
+        return rows
+
     def _grouped_rows_and_signature(
         cache_data: object,
     ) -> tuple[list[dict[str, object]], tuple[object, ...]]:
         if not isinstance(cache_data, dict):
             return [], ("empty",)
+        detector_payload_available = any(
+            bool(cache_data.get(key))
+            for key in (
+                "detector_picker_rows",
+                "detector_picker_source_rows",
+                "detector_picker_grouped_candidates",
+            )
+        )
         grouped = cache_data.get("grouped_candidates")
         signature_kind = "grouped"
-        if not grouped:
+        rows: list[dict[str, object]] = []
+        if detector_payload_available:
             manual_geometry_module = globals().get("gui_manual_geometry")
             if manual_geometry_module is None:
                 from ra_sim.gui import manual_geometry as manual_geometry_module
             runtime_state = globals().get("simulation_runtime_state")
-            grouped = manual_geometry_module.geometry_manual_detector_picker_grouped_candidates_from_cache(
+            detector_grouped = manual_geometry_module.geometry_manual_detector_picker_grouped_candidates_from_cache(
                 cache_data,
                 profile_cache=getattr(runtime_state, "profile_cache", {}),
             )
-            signature_kind = "detector_picker_grouped"
-        if not isinstance(grouped, dict):
+            detector_rows = _flatten_grouped_rows(detector_grouped)
+            if detector_rows:
+                grouped = detector_grouped
+                rows = detector_rows
+                signature_kind = "detector_picker_grouped"
+        if not rows:
+            rows = _flatten_grouped_rows(grouped)
+        if not rows and not isinstance(grouped, dict):
             return [], ("no_grouped_candidates",)
-        rows: list[dict[str, object]] = []
-        for entries in grouped.values():
-            if isinstance(entries, (list, tuple)):
-                rows.extend(dict(entry) for entry in entries if isinstance(entry, dict))
         signature = (
             signature_kind,
             cache_data.get("signature"),
@@ -11423,11 +11443,7 @@ def _hkl_pick_simulation_points_from_qr_picker_cache() -> object:
             raw_rows = []
         if isinstance(raw_rows, (list, tuple)):
             grouped_rows = pick_candidates_provider(raw_rows)
-            rows = []
-            if isinstance(grouped_rows, dict):
-                for entries in grouped_rows.values():
-                    if isinstance(entries, (list, tuple)):
-                        rows.extend(dict(entry) for entry in entries if isinstance(entry, dict))
+            rows = _flatten_grouped_rows(grouped_rows)
             signature = (
                 "provider",
                 (_normalized_signature_digest(param_set) if isinstance(param_set, dict) else None),
