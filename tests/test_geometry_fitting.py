@@ -4274,6 +4274,53 @@ def _point_only_projector_payload(
     }
 
 
+def _live_caked_qr_dataset_spec(
+    *,
+    measured: Mapping[str, object],
+    experimental_image: np.ndarray,
+    source_rows_builder,
+    projector,
+    image_builder_fail_message: str,
+) -> dict[str, object]:
+    return {
+        "dataset_index": 0,
+        "label": "bg0",
+        "theta_initial": 0.0,
+        "measured_peaks": [measured],
+        "experimental_image": experimental_image,
+        "fit_space_projector": projector,
+        "fit_space_projector_kind": "exact_caked_bundle",
+        "qr_fit_trial_source_rows_builder": source_rows_builder,
+        "qr_fit_trial_source_rows_builder_kind": "unit_test_dynamic_rows",
+        "sim_caked_image_builder": lambda *_args, **_kwargs: pytest.fail(
+            image_builder_fail_message
+        ),
+        "sim_caked_image_builder_kind": "must_not_call",
+    }
+
+
+def _live_caked_qr_refinement_config(
+    *,
+    point_only_projection: bool,
+) -> dict[str, object]:
+    return {
+        "solver": {
+            "manual_point_fit_mode": True,
+            "dynamic_point_geometry_fit": True,
+            "_qr_fit_point_only_projection": bool(point_only_projection),
+            "fixed_manual_prediction_preflight_guard": True,
+            "restarts": 0,
+            "weighted_matching": False,
+            "use_measurement_uncertainty": False,
+            "max_nfev": 1,
+        },
+        "single_ray": {"enabled": False},
+        "identifiability": {"enabled": False},
+        "full_beam_polish": {"enabled": False},
+        "image_refinement": {"enabled": False},
+    }
+
+
 def _load_new4_coordinate_audit_module():
     module_path = (
         Path(__file__).resolve().parents[1]
@@ -6111,21 +6158,13 @@ def test_fit_geometry_parameters_point_only_caked_objective_skips_locked_refinem
     image_size = 30
     experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
     dataset_specs = [
-        {
-            "dataset_index": 0,
-            "label": "bg0",
-            "theta_initial": 0.0,
-            "measured_peaks": [measured],
-            "experimental_image": experimental_image,
-            "fit_space_projector": projector,
-            "fit_space_projector_kind": "exact_caked_bundle",
-            "qr_fit_trial_source_rows_builder": source_rows_builder,
-            "qr_fit_trial_source_rows_builder_kind": "unit_test_dynamic_rows",
-            "sim_caked_image_builder": lambda *_args, **_kwargs: pytest.fail(
-                "point-only mode must not generate a caked image"
-            ),
-            "sim_caked_image_builder_kind": "must_not_call",
-        }
+        _live_caked_qr_dataset_spec(
+            measured=measured,
+            experimental_image=experimental_image,
+            source_rows_builder=source_rows_builder,
+            projector=projector,
+            image_builder_fail_message="point-only mode must not generate a caked image",
+        )
     ]
 
     result = opt.fit_geometry_parameters(
@@ -6137,22 +6176,7 @@ def test_fit_geometry_parameters_point_only_caked_objective_skips_locked_refinem
         var_names=["theta_initial"],
         experimental_image=experimental_image,
         dataset_specs=dataset_specs,
-        refinement_config={
-            "solver": {
-                "manual_point_fit_mode": True,
-                "dynamic_point_geometry_fit": True,
-                "_qr_fit_point_only_projection": True,
-                "fixed_manual_prediction_preflight_guard": True,
-                "restarts": 0,
-                "weighted_matching": False,
-                "use_measurement_uncertainty": False,
-                "max_nfev": 1,
-            },
-            "single_ray": {"enabled": False},
-            "identifiability": {"enabled": False},
-            "full_beam_polish": {"enabled": False},
-            "image_refinement": {"enabled": False},
-        },
+        refinement_config=_live_caked_qr_refinement_config(point_only_projection=True),
     )
 
     assert result.success
@@ -6226,21 +6250,13 @@ def test_fit_geometry_parameters_live_caked_objective_skips_locked_refinement_pr
     image_size = 30
     experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
     dataset_specs = [
-        {
-            "dataset_index": 0,
-            "label": "bg0",
-            "theta_initial": 0.0,
-            "measured_peaks": [measured],
-            "experimental_image": experimental_image,
-            "fit_space_projector": projector,
-            "fit_space_projector_kind": "exact_caked_bundle",
-            "qr_fit_trial_source_rows_builder": source_rows_builder,
-            "qr_fit_trial_source_rows_builder_kind": "unit_test_dynamic_rows",
-            "sim_caked_image_builder": lambda *_args, **_kwargs: pytest.fail(
-                "live caked objective must not generate a caked image"
-            ),
-            "sim_caked_image_builder_kind": "must_not_call",
-        }
+        _live_caked_qr_dataset_spec(
+            measured=measured,
+            experimental_image=experimental_image,
+            source_rows_builder=source_rows_builder,
+            projector=projector,
+            image_builder_fail_message="live caked objective must not generate a caked image",
+        )
     ]
 
     result = opt.fit_geometry_parameters(
@@ -6252,22 +6268,7 @@ def test_fit_geometry_parameters_live_caked_objective_skips_locked_refinement_pr
         var_names=["theta_initial"],
         experimental_image=experimental_image,
         dataset_specs=dataset_specs,
-        refinement_config={
-            "solver": {
-                "manual_point_fit_mode": True,
-                "dynamic_point_geometry_fit": True,
-                "_qr_fit_point_only_projection": False,
-                "fixed_manual_prediction_preflight_guard": True,
-                "restarts": 0,
-                "weighted_matching": False,
-                "use_measurement_uncertainty": False,
-                "max_nfev": 1,
-            },
-            "single_ray": {"enabled": False},
-            "identifiability": {"enabled": False},
-            "full_beam_polish": {"enabled": False},
-            "image_refinement": {"enabled": False},
-        },
+        refinement_config=_live_caked_qr_refinement_config(point_only_projection=False),
     )
 
     assert result.success
@@ -6330,21 +6331,13 @@ def test_fit_geometry_parameters_already_aligned_live_caked_objective_can_be_ins
     image_size = 30
     experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
     dataset_specs = [
-        {
-            "dataset_index": 0,
-            "label": "bg0",
-            "theta_initial": 0.0,
-            "measured_peaks": [measured],
-            "experimental_image": experimental_image,
-            "fit_space_projector": projector,
-            "fit_space_projector_kind": "exact_caked_bundle",
-            "qr_fit_trial_source_rows_builder": source_rows_builder,
-            "qr_fit_trial_source_rows_builder_kind": "unit_test_dynamic_rows",
-            "sim_caked_image_builder": lambda *_args, **_kwargs: pytest.fail(
-                "live caked objective must not generate a caked image"
-            ),
-            "sim_caked_image_builder_kind": "must_not_call",
-        }
+        _live_caked_qr_dataset_spec(
+            measured=measured,
+            experimental_image=experimental_image,
+            source_rows_builder=source_rows_builder,
+            projector=projector,
+            image_builder_fail_message="live caked objective must not generate a caked image",
+        )
     ]
 
     result = opt.fit_geometry_parameters(
@@ -6356,22 +6349,7 @@ def test_fit_geometry_parameters_already_aligned_live_caked_objective_can_be_ins
         var_names=["theta_initial"],
         experimental_image=experimental_image,
         dataset_specs=dataset_specs,
-        refinement_config={
-            "solver": {
-                "manual_point_fit_mode": True,
-                "dynamic_point_geometry_fit": True,
-                "_qr_fit_point_only_projection": False,
-                "fixed_manual_prediction_preflight_guard": True,
-                "restarts": 0,
-                "weighted_matching": False,
-                "use_measurement_uncertainty": False,
-                "max_nfev": 1,
-            },
-            "single_ray": {"enabled": False},
-            "identifiability": {"enabled": False},
-            "full_beam_polish": {"enabled": False},
-            "image_refinement": {"enabled": False},
-        },
+        refinement_config=_live_caked_qr_refinement_config(point_only_projection=False),
     )
 
     assert result.success
@@ -6439,21 +6417,13 @@ def test_fit_geometry_parameters_acceptable_live_caked_objective_can_be_insensit
     image_size = 30
     experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
     dataset_specs = [
-        {
-            "dataset_index": 0,
-            "label": "bg0",
-            "theta_initial": 0.0,
-            "measured_peaks": [measured],
-            "experimental_image": experimental_image,
-            "fit_space_projector": projector,
-            "fit_space_projector_kind": "exact_caked_bundle",
-            "qr_fit_trial_source_rows_builder": source_rows_builder,
-            "qr_fit_trial_source_rows_builder_kind": "unit_test_dynamic_rows",
-            "sim_caked_image_builder": lambda *_args, **_kwargs: pytest.fail(
-                "live caked objective must not generate a caked image"
-            ),
-            "sim_caked_image_builder_kind": "must_not_call",
-        }
+        _live_caked_qr_dataset_spec(
+            measured=measured,
+            experimental_image=experimental_image,
+            source_rows_builder=source_rows_builder,
+            projector=projector,
+            image_builder_fail_message="live caked objective must not generate a caked image",
+        )
     ]
 
     result = opt.fit_geometry_parameters(
@@ -6465,22 +6435,7 @@ def test_fit_geometry_parameters_acceptable_live_caked_objective_can_be_insensit
         var_names=["theta_initial"],
         experimental_image=experimental_image,
         dataset_specs=dataset_specs,
-        refinement_config={
-            "solver": {
-                "manual_point_fit_mode": True,
-                "dynamic_point_geometry_fit": True,
-                "_qr_fit_point_only_projection": False,
-                "fixed_manual_prediction_preflight_guard": True,
-                "restarts": 0,
-                "weighted_matching": False,
-                "use_measurement_uncertainty": False,
-                "max_nfev": 1,
-            },
-            "single_ray": {"enabled": False},
-            "identifiability": {"enabled": False},
-            "full_beam_polish": {"enabled": False},
-            "image_refinement": {"enabled": False},
-        },
+        refinement_config=_live_caked_qr_refinement_config(point_only_projection=False),
     )
 
     assert result.success
@@ -6547,21 +6502,13 @@ def test_fit_geometry_parameters_acceptable_insensitive_live_caked_objective_kee
     params = _base_params(image_size, optics_mode=1)
     experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
     dataset_specs = [
-        {
-            "dataset_index": 0,
-            "label": "bg0",
-            "theta_initial": 0.0,
-            "measured_peaks": [measured],
-            "experimental_image": experimental_image,
-            "fit_space_projector": projector,
-            "fit_space_projector_kind": "exact_caked_bundle",
-            "qr_fit_trial_source_rows_builder": source_rows_builder,
-            "qr_fit_trial_source_rows_builder_kind": "unit_test_dynamic_rows",
-            "sim_caked_image_builder": lambda *_args, **_kwargs: pytest.fail(
-                "live caked objective must not generate a caked image"
-            ),
-            "sim_caked_image_builder_kind": "must_not_call",
-        }
+        _live_caked_qr_dataset_spec(
+            measured=measured,
+            experimental_image=experimental_image,
+            source_rows_builder=source_rows_builder,
+            projector=projector,
+            image_builder_fail_message="live caked objective must not generate a caked image",
+        )
     ]
 
     result = opt.fit_geometry_parameters(
@@ -6573,22 +6520,7 @@ def test_fit_geometry_parameters_acceptable_insensitive_live_caked_objective_kee
         var_names=["theta_initial"],
         experimental_image=experimental_image,
         dataset_specs=dataset_specs,
-        refinement_config={
-            "solver": {
-                "manual_point_fit_mode": True,
-                "dynamic_point_geometry_fit": True,
-                "_qr_fit_point_only_projection": False,
-                "fixed_manual_prediction_preflight_guard": True,
-                "restarts": 0,
-                "weighted_matching": False,
-                "use_measurement_uncertainty": False,
-                "max_nfev": 1,
-            },
-            "single_ray": {"enabled": False},
-            "identifiability": {"enabled": False},
-            "full_beam_polish": {"enabled": False},
-            "image_refinement": {"enabled": False},
-        },
+        refinement_config=_live_caked_qr_refinement_config(point_only_projection=False),
     )
 
     assert result.success

@@ -1217,6 +1217,15 @@ Validation:
 Follow-up validation fix:
 - `python -m pytest tests/test_gui_runtime_import_safe.py::test_raw_only_full_update_restores_qr_and_hkl_picker_rows -ra` now passes after updating its stale source-signature assertion to the detector-picker path. The runtime behavior already returned `detector_picker_grouped`, matching the newer HKL picker tests and detector-picker row preference policy.
 
+Follow-up simplification and shipping status:
+- Bug/error status remains fixed for the GUI manual caked Qr/Qz handoff path. The follow-up change is behavior-preserving cleanup only.
+- The locked-Qr prediction resolver now names the live-caked objective authority and refinement policy once before writing the diagnostic payload, keeping the public diagnostic fields unchanged.
+- GUI manual-fit dataset building now streams candidate manual caked target points instead of allocating a temporary list while preserving the same target search order.
+- Live-caked QR geometry-fit tests now share the repeated dataset-spec and refinement-config setup, reducing duplicated fixture code without adding new files or dependencies.
+- Review status: approved for correctness, simplification, security, performance, and test quality; no avoidable new files or abstractions were found.
+- CI/shipping status: no CI configuration, deprecation path, migration, release version, or public workflow change is required for this cleanup. Rollback is the commit revert; the previously validated user-visible fix stays unchanged.
+- Validation: `python -m pytest tests/test_geometry_fitting.py -ra` -> `265 passed`; `python -m pytest tests/test_manual_geometry_selection_helpers.py::test_minus_1_0_10_fit_step_reduces_qr_residual -ra` -> `1 passed`; `python -m ra_sim.dev check` -> passed; `git diff --check` -> passed.
+
 ## Remaining work
 
 Next project: compare the real headless start-state/feature-toggle contract

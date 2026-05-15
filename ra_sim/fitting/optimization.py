@@ -20040,17 +20040,23 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 live_payload = [float(static_point[0]), float(static_point[1])]
                 live_source = str(static_payload.get("source") or "fit_prediction_caked_deg")
                 retained_static_caked_prediction = True
+        objective_authority = (
+            "fit_prediction_caked_deg"
+            if retained_static_caked_prediction
+            else "sim_visual_caked_deg"
+        )
+        refinement_policy = (
+            "static_locked_caked_prediction_retained"
+            if retained_static_caked_prediction
+            else "live_caked_source"
+        )
         out.update(
             {
                 "available": True,
                 "fit_prediction_caked_deg": list(live_payload),
                 "optimizer_simulated_source_two_theta_phi": list(live_payload),
                 "optimizer_source_source": live_source,
-                "objective_source_authority": (
-                    "fit_prediction_caked_deg"
-                    if retained_static_caked_prediction
-                    else "sim_visual_caked_deg"
-                ),
+                "objective_source_authority": objective_authority,
                 "source_authority_match": True,
                 "sim_nominal_caked_raw_deg": list(live_payload),
                 "sim_nominal_caked_deg": list(live_payload),
@@ -20059,15 +20065,11 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 "sim_refinement_delta_caked_deg": [0.0, 0.0],
                 "sim_refinement_delta_caked_norm_deg": 0.0,
                 "sim_refinement_status": (
-                    "static_locked_caked_prediction_retained"
+                    refinement_policy
                     if retained_static_caked_prediction
                     else "live_sim_visual_caked"
                 ),
-                "sim_refinement_policy": (
-                    "static_locked_caked_prediction_retained"
-                    if retained_static_caked_prediction
-                    else "live_caked_source"
-                ),
+                "sim_refinement_policy": refinement_policy,
                 "sim_refinement_caked_image_source": live_source,
                 "sim_refinement_subpixel": "no",
                 "sim_refinement_subpixel_status": "none",

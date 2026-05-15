@@ -13,7 +13,7 @@ import math
 import tempfile
 import threading
 from collections import Counter, defaultdict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from time import perf_counter
@@ -11580,7 +11580,9 @@ def build_geometry_manual_fit_dataset(
         return row
 
     def _caked_trial_rows_enabled() -> bool:
-        return bool(use_caked_display or geometry_manual_pairs_use_caked_fit_space(selected_entries))
+        return bool(
+            use_caked_display or geometry_manual_pairs_use_caked_fit_space(selected_entries)
+        )
 
     def _manual_target_caked_point(item: Mapping[str, object]) -> tuple[float, float] | None:
         for x_key, y_key in (
@@ -11597,6 +11599,20 @@ def build_geometry_manual_fit_dataset(
                 return float(point[0]), float(point[1])
         return None
 
+    def _iter_manual_target_caked_points(
+        target: Mapping[str, object],
+    ) -> Iterable[tuple[float, float]]:
+        target_point = _manual_target_caked_point(target)
+        if target_point is not None:
+            yield target_point
+        for selected_input in selected_entry_inputs:
+            for key in ("entry", "raw_saved_entry"):
+                raw_entry = selected_input.get(key)
+                if isinstance(raw_entry, Mapping):
+                    point = _manual_target_caked_point(raw_entry)
+                    if point is not None:
+                        yield point
+
     def _source_row_reuses_manual_caked_target(
         target: Mapping[str, object],
         row: Mapping[str, object],
@@ -11606,19 +11622,7 @@ def build_geometry_manual_fit_dataset(
         row_point = _manual_target_caked_point(row)
         if row_point is None:
             return False
-        manual_points: list[tuple[float, float]] = []
-        target_point = _manual_target_caked_point(target)
-        if target_point is not None:
-            manual_points.append(target_point)
-        for selected_input in selected_entry_inputs:
-            for key in ("entry", "raw_saved_entry"):
-                raw_entry = selected_input.get(key)
-                if not isinstance(raw_entry, Mapping):
-                    continue
-                point = _manual_target_caked_point(raw_entry)
-                if point is not None:
-                    manual_points.append(point)
-        for manual_point in manual_points:
+        for manual_point in _iter_manual_target_caked_points(target):
             delta_two_theta = float(row_point[0]) - float(manual_point[0])
             delta_phi = float(_wrapped_phi_delta_deg(row_point[1], manual_point[1]))
             if math.hypot(delta_two_theta, delta_phi) <= 1.0e-9:
