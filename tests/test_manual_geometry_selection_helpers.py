@@ -29444,20 +29444,21 @@ def _diag_result_target_predictions(result):
             continue
         if raw.get("simulated_two_theta_deg") is None or raw.get("simulated_phi_deg") is None:
             continue
-        predictions[int(branch)] = {
+        prediction = {
             "predicted_caked": (
                 float(raw["simulated_two_theta_deg"]),
                 float(raw["simulated_phi_deg"]),
-            ),
-            "predicted_detector_native": (
-                float(raw.get("simulated_x", np.nan)),
-                float(raw.get("simulated_y", np.nan)),
             ),
             "measured_caked": (
                 float(raw.get("measured_two_theta_deg", np.nan)),
                 float(raw.get("measured_phi_deg", np.nan)),
             ),
         }
+        simulated_x = float(raw.get("simulated_x", np.nan))
+        simulated_y = float(raw.get("simulated_y", np.nan))
+        if np.isfinite(simulated_x) and np.isfinite(simulated_y):
+            prediction["predicted_detector_native"] = (simulated_x, simulated_y)
+        predictions[int(branch)] = prediction
     return predictions
 
 
@@ -29471,7 +29472,10 @@ def _diag_after_records_from_fit_result(baseline_records, result):
             branch,
             observed_detector_native=before["observed_detector_native"],
             observed_caked=before["observed_caked"],
-            predicted_detector_native=prediction["predicted_detector_native"],
+            predicted_detector_native=prediction.get(
+                "predicted_detector_native",
+                before["predicted_detector_native"],
+            ),
             predicted_caked=prediction["predicted_caked"],
         )
         assert (

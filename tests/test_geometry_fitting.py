@@ -5970,6 +5970,78 @@ def test_qr_fit_point_only_projection_uses_detector_to_caked_projector_when_dyna
     assert prediction["point_only_detector_projection_used"] is True
 
 
+def test_dynamic_caked_source_row_uses_live_caked_prediction_without_point_only_mode() -> None:
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        return _locked_qr_source_rows_payload([_point_only_dynamic_qr_row(40.0, 35.0)])
+
+    def projector(*_args, **_kwargs):
+        pytest.fail("current caked-display source rows should not need detector projection")
+
+    prediction = opt._resolve_qr_fit_prediction_from_trial_params(
+        _locked_qr_fixed_source_entry(),
+        {"center_x": 0.0},
+        {
+            "dataset_ctx": _point_only_qr_dataset_ctx(source_rows_builder, projector),
+            "hit_tables": (),
+            "sim_buffer": np.zeros((30, 30), dtype=np.float64),
+            "image_size": 30,
+            "fit_center": [15.0, 15.0],
+            "detector_distance": 0.1,
+            "pixel_size": 1.0,
+            "prediction_source_rows_cache": {},
+            "_qr_fit_point_only_projection": False,
+        },
+        _locked_qr_fixed_source_entry(),
+    )
+
+    assert prediction["available"] is True
+    assert prediction["fit_prediction_caked_deg"] == pytest.approx([40.0, 35.0])
+    assert prediction["sim_refined_caked_deg"] == pytest.approx([40.0, 35.0])
+    assert prediction["sim_refinement_status"] == "live_sim_visual_caked"
+    assert prediction["objective_source_authority"] == "sim_visual_caked_deg"
+    assert prediction["detector_native_reprojection_used_for_objective"] is False
+
+
+def test_dynamic_caked_source_row_keeps_closer_saved_refined_sim_caked_prediction() -> None:
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        return _locked_qr_source_rows_payload([_point_only_dynamic_qr_row(40.0, 37.0)])
+
+    def projector(*_args, **_kwargs):
+        pytest.fail("current caked-display source rows should not need detector projection")
+
+    locked = _locked_qr_fixed_source_entry(
+        background_two_theta_deg=40.0,
+        background_phi_deg=35.0,
+        refined_sim_caked_x=40.2,
+        refined_sim_caked_y=35.3,
+    )
+
+    prediction = opt._resolve_qr_fit_prediction_from_trial_params(
+        _locked_qr_fixed_source_entry(),
+        {"center_x": 0.0},
+        {
+            "dataset_ctx": _point_only_qr_dataset_ctx(source_rows_builder, projector),
+            "hit_tables": (),
+            "sim_buffer": np.zeros((30, 30), dtype=np.float64),
+            "image_size": 30,
+            "fit_center": [15.0, 15.0],
+            "detector_distance": 0.1,
+            "pixel_size": 1.0,
+            "prediction_source_rows_cache": {},
+            "_qr_fit_point_only_projection": False,
+        },
+        locked,
+    )
+
+    assert prediction["available"] is True
+    assert prediction["fit_prediction_caked_deg"] == pytest.approx([40.2, 35.3])
+    assert prediction["static_locked_caked_prediction_retained"] is True
+    assert prediction["objective_source_authority"] == "fit_prediction_caked_deg"
+    assert prediction["detector_native_reprojection_used_for_objective"] is False
+
+
 def test_fit_geometry_parameters_point_only_caked_objective_skips_locked_refinement_preflight(
     monkeypatch,
 ) -> None:
@@ -6092,6 +6164,439 @@ def test_fit_geometry_parameters_point_only_caked_objective_skips_locked_refinem
     assert result.point_match_diagnostics[0]["sim_refinement_status"] == "live_sim_visual_caked"
     assert result.point_match_diagnostics[0]["optimizer_source_source"] == "sim_visual_caked_deg"
     assert result.point_match_diagnostics[0]["point_only_detector_projection_used"] is False
+
+
+def test_fit_geometry_parameters_live_caked_objective_skips_locked_refinement_preflight(
+    monkeypatch,
+) -> None:
+    process_calls = 0
+
+    def fake_process(*args, **_kwargs):
+        nonlocal process_calls
+        process_calls += 1
+        image_size = int(args[2])
+        return (
+            np.zeros((image_size, image_size), dtype=np.float64),
+            [],
+            np.empty((0, 0, 0)),
+            np.empty(0),
+            np.empty(0),
+            [],
+        )
+
+    def fake_least_squares(residual_fn, x0, **_kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    def source_rows_builder(*, local_params=None):
+        theta_initial = (
+            float(local_params.get("theta_initial", 0.0) or 0.0)
+            if isinstance(local_params, Mapping)
+            else 0.0
+        )
+        return _locked_qr_source_rows_payload(
+            [_point_only_dynamic_qr_row(40.0 + theta_initial, 35.0)]
+        )
+
+    def projector(*_args, **_kwargs):
+        pytest.fail("live caked objective must not require detector projection")
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    measured = _locked_qr_fixed_source_entry(
+        native_col=8.0,
+        native_row=9.0,
+        background_two_theta_deg=40.0,
+        background_phi_deg=35.0,
+        caked_x=40.0,
+        caked_y=35.0,
+        fit_space_anchor_override=True,
+        fit_space_anchor_source="manual_caked_click",
+    )
+    image_size = 30
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+    dataset_specs = [
+        {
+            "dataset_index": 0,
+            "label": "bg0",
+            "theta_initial": 0.0,
+            "measured_peaks": [measured],
+            "experimental_image": experimental_image,
+            "fit_space_projector": projector,
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "qr_fit_trial_source_rows_builder": source_rows_builder,
+            "qr_fit_trial_source_rows_builder_kind": "unit_test_dynamic_rows",
+            "sim_caked_image_builder": lambda *_args, **_kwargs: pytest.fail(
+                "live caked objective must not generate a caked image"
+            ),
+            "sim_caked_image_builder_kind": "must_not_call",
+        }
+    ]
+
+    result = opt.fit_geometry_parameters(
+        np.array([[2.0, 0.0, 0.0]], dtype=np.float64),
+        np.array([1.0], dtype=np.float64),
+        image_size,
+        _base_params(image_size, optics_mode=1),
+        measured_peaks=[measured],
+        var_names=["theta_initial"],
+        experimental_image=experimental_image,
+        dataset_specs=dataset_specs,
+        refinement_config={
+            "solver": {
+                "manual_point_fit_mode": True,
+                "dynamic_point_geometry_fit": True,
+                "_qr_fit_point_only_projection": False,
+                "fixed_manual_prediction_preflight_guard": True,
+                "restarts": 0,
+                "weighted_matching": False,
+                "use_measurement_uncertainty": False,
+                "max_nfev": 1,
+            },
+            "single_ray": {"enabled": False},
+            "identifiability": {"enabled": False},
+            "full_beam_polish": {"enabled": False},
+            "image_refinement": {"enabled": False},
+        },
+    )
+
+    assert result.success
+    assert process_calls > 0
+    assert result.geometry_fit_debug_summary["locked_mosaic_refinement_validation"] == (
+        "skipped_live_caked_source"
+    )
+    assert result.point_match_diagnostics[0]["sim_refinement_status"] == "live_sim_visual_caked"
+    assert result.point_match_diagnostics[0]["live_caked_source_used_for_objective"] is True
+    assert result.point_match_summary["raw_angular_rms_deg"] == pytest.approx(0.0)
+
+
+def test_fit_geometry_parameters_already_aligned_live_caked_objective_can_be_insensitive(
+    monkeypatch,
+) -> None:
+    def fake_process(*args, **_kwargs):
+        image_size = int(args[2])
+        return (
+            np.zeros((image_size, image_size), dtype=np.float64),
+            [],
+            np.empty((0, 0, 0)),
+            np.empty(0),
+            np.empty(0),
+            [],
+        )
+
+    def fake_least_squares(residual_fn, x0, **_kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        return _locked_qr_source_rows_payload([_point_only_dynamic_qr_row(40.0, 35.0)])
+
+    def projector(*_args, **_kwargs):
+        pytest.fail("live caked objective must not require detector projection")
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    measured = _locked_qr_fixed_source_entry(
+        native_col=8.0,
+        native_row=9.0,
+        background_two_theta_deg=40.0,
+        background_phi_deg=35.0,
+        caked_x=40.0,
+        caked_y=35.0,
+        fit_space_anchor_override=True,
+        fit_space_anchor_source="manual_caked_click",
+    )
+    image_size = 30
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+    dataset_specs = [
+        {
+            "dataset_index": 0,
+            "label": "bg0",
+            "theta_initial": 0.0,
+            "measured_peaks": [measured],
+            "experimental_image": experimental_image,
+            "fit_space_projector": projector,
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "qr_fit_trial_source_rows_builder": source_rows_builder,
+            "qr_fit_trial_source_rows_builder_kind": "unit_test_dynamic_rows",
+            "sim_caked_image_builder": lambda *_args, **_kwargs: pytest.fail(
+                "live caked objective must not generate a caked image"
+            ),
+            "sim_caked_image_builder_kind": "must_not_call",
+        }
+    ]
+
+    result = opt.fit_geometry_parameters(
+        np.array([[2.0, 0.0, 0.0]], dtype=np.float64),
+        np.array([1.0], dtype=np.float64),
+        image_size,
+        _base_params(image_size, optics_mode=1),
+        measured_peaks=[measured],
+        var_names=["theta_initial"],
+        experimental_image=experimental_image,
+        dataset_specs=dataset_specs,
+        refinement_config={
+            "solver": {
+                "manual_point_fit_mode": True,
+                "dynamic_point_geometry_fit": True,
+                "_qr_fit_point_only_projection": False,
+                "fixed_manual_prediction_preflight_guard": True,
+                "restarts": 0,
+                "weighted_matching": False,
+                "use_measurement_uncertainty": False,
+                "max_nfev": 1,
+            },
+            "single_ray": {"enabled": False},
+            "identifiability": {"enabled": False},
+            "full_beam_polish": {"enabled": False},
+            "image_refinement": {"enabled": False},
+        },
+    )
+
+    assert result.success
+    assert result.status == 1
+    assert result.point_match_summary["objective_param_sensitivity_status"] == (
+        "all_fit_vars_insensitive"
+    )
+    assert result.point_match_summary["dynamic_angular_failure_classification"] == (
+        "already_aligned"
+    )
+    assert result.point_match_summary["raw_angular_rms_deg"] == pytest.approx(0.0)
+    assert result.point_match_summary["raw_angular_max_deg"] == pytest.approx(0.0)
+    assert result.point_match_summary.get("first_acceptance_metric_divergence") != (
+        "dynamic_objective_not_sensitive_to_fit_variables"
+    )
+
+
+def test_fit_geometry_parameters_acceptable_live_caked_objective_can_be_insensitive(
+    monkeypatch,
+) -> None:
+    def fake_process(*args, **_kwargs):
+        image_size = int(args[2])
+        return (
+            np.zeros((image_size, image_size), dtype=np.float64),
+            [],
+            np.empty((0, 0, 0)),
+            np.empty(0),
+            np.empty(0),
+            [],
+        )
+
+    def fake_least_squares(residual_fn, x0, **_kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        return _locked_qr_source_rows_payload([_point_only_dynamic_qr_row(42.0, 35.0)])
+
+    def projector(*_args, **_kwargs):
+        pytest.fail("live caked objective must not require detector projection")
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    measured = _locked_qr_fixed_source_entry(
+        native_col=8.0,
+        native_row=9.0,
+        background_two_theta_deg=40.0,
+        background_phi_deg=35.0,
+        caked_x=40.0,
+        caked_y=35.0,
+        fit_space_anchor_override=True,
+        fit_space_anchor_source="manual_caked_click",
+    )
+    image_size = 30
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+    dataset_specs = [
+        {
+            "dataset_index": 0,
+            "label": "bg0",
+            "theta_initial": 0.0,
+            "measured_peaks": [measured],
+            "experimental_image": experimental_image,
+            "fit_space_projector": projector,
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "qr_fit_trial_source_rows_builder": source_rows_builder,
+            "qr_fit_trial_source_rows_builder_kind": "unit_test_dynamic_rows",
+            "sim_caked_image_builder": lambda *_args, **_kwargs: pytest.fail(
+                "live caked objective must not generate a caked image"
+            ),
+            "sim_caked_image_builder_kind": "must_not_call",
+        }
+    ]
+
+    result = opt.fit_geometry_parameters(
+        np.array([[2.0, 0.0, 0.0]], dtype=np.float64),
+        np.array([1.0], dtype=np.float64),
+        image_size,
+        _base_params(image_size, optics_mode=1),
+        measured_peaks=[measured],
+        var_names=["theta_initial"],
+        experimental_image=experimental_image,
+        dataset_specs=dataset_specs,
+        refinement_config={
+            "solver": {
+                "manual_point_fit_mode": True,
+                "dynamic_point_geometry_fit": True,
+                "_qr_fit_point_only_projection": False,
+                "fixed_manual_prediction_preflight_guard": True,
+                "restarts": 0,
+                "weighted_matching": False,
+                "use_measurement_uncertainty": False,
+                "max_nfev": 1,
+            },
+            "single_ray": {"enabled": False},
+            "identifiability": {"enabled": False},
+            "full_beam_polish": {"enabled": False},
+            "image_refinement": {"enabled": False},
+        },
+    )
+
+    assert result.success
+    assert result.point_match_summary["objective_param_sensitivity_status"] == (
+        "all_fit_vars_insensitive"
+    )
+    assert result.point_match_summary["dynamic_angular_failure_classification"] == (
+        "within_acceptance"
+    )
+    assert result.point_match_summary["raw_angular_rms_deg"] == pytest.approx(2.0)
+    assert result.point_match_summary.get("first_acceptance_metric_divergence") != (
+        "dynamic_objective_not_sensitive_to_fit_variables"
+    )
+
+
+def test_fit_geometry_parameters_acceptable_insensitive_live_caked_objective_keeps_initial_params(
+    monkeypatch,
+) -> None:
+    def fake_process(*args, **_kwargs):
+        image_size = int(args[2])
+        return (
+            np.zeros((image_size, image_size), dtype=np.float64),
+            [],
+            np.empty((0, 0, 0)),
+            np.empty(0),
+            np.empty(0),
+            [],
+        )
+
+    def fake_least_squares(residual_fn, x0, **_kwargs):
+        x = np.asarray(x0, dtype=float) + 3.0
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        return _locked_qr_source_rows_payload([_point_only_dynamic_qr_row(42.0, 35.0)])
+
+    def projector(*_args, **_kwargs):
+        pytest.fail("live caked objective must not require detector projection")
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    measured = _locked_qr_fixed_source_entry(
+        native_col=8.0,
+        native_row=9.0,
+        background_two_theta_deg=40.0,
+        background_phi_deg=35.0,
+        caked_x=40.0,
+        caked_y=35.0,
+        fit_space_anchor_override=True,
+        fit_space_anchor_source="manual_caked_click",
+    )
+    image_size = 30
+    params = _base_params(image_size, optics_mode=1)
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+    dataset_specs = [
+        {
+            "dataset_index": 0,
+            "label": "bg0",
+            "theta_initial": 0.0,
+            "measured_peaks": [measured],
+            "experimental_image": experimental_image,
+            "fit_space_projector": projector,
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "qr_fit_trial_source_rows_builder": source_rows_builder,
+            "qr_fit_trial_source_rows_builder_kind": "unit_test_dynamic_rows",
+            "sim_caked_image_builder": lambda *_args, **_kwargs: pytest.fail(
+                "live caked objective must not generate a caked image"
+            ),
+            "sim_caked_image_builder_kind": "must_not_call",
+        }
+    ]
+
+    result = opt.fit_geometry_parameters(
+        np.array([[2.0, 0.0, 0.0]], dtype=np.float64),
+        np.array([1.0], dtype=np.float64),
+        image_size,
+        params,
+        measured_peaks=[measured],
+        var_names=["theta_initial"],
+        experimental_image=experimental_image,
+        dataset_specs=dataset_specs,
+        refinement_config={
+            "solver": {
+                "manual_point_fit_mode": True,
+                "dynamic_point_geometry_fit": True,
+                "_qr_fit_point_only_projection": False,
+                "fixed_manual_prediction_preflight_guard": True,
+                "restarts": 0,
+                "weighted_matching": False,
+                "use_measurement_uncertainty": False,
+                "max_nfev": 1,
+            },
+            "single_ray": {"enabled": False},
+            "identifiability": {"enabled": False},
+            "full_beam_polish": {"enabled": False},
+            "image_refinement": {"enabled": False},
+        },
+    )
+
+    assert result.success
+    assert result.x == pytest.approx([params["theta_initial"]])
+    assert result.point_match_summary["objective_param_sensitivity_status"] == (
+        "all_fit_vars_insensitive"
+    )
+    assert result.point_match_summary["objective_param_sensitivity_noop_acceptance"] is True
 
 
 def test_rung3_objective_uses_cached_caked_targets_and_dynamic_sim_sources(
@@ -6409,6 +6914,7 @@ def _dynamic_point_only_sensitivity_result(
     monkeypatch,
     *,
     sensitive: bool,
+    base_two_theta_deg: float = 41.0,
     minimum_sensitive_step_deg: float = 0.0,
     source_rows_builder_records: list[dict[str, object]] | None = None,
     status_callback=None,
@@ -6441,7 +6947,7 @@ def _dynamic_point_only_sensitivity_result(
         params = local_params if isinstance(local_params, Mapping) else {}
         gamma = float(params.get("gamma", 0.0) or 0.0)
         gamma = gamma if sensitive and abs(gamma) >= float(minimum_sensitive_step_deg) else 0.0
-        return 41.0 + gamma, 0.0
+        return float(base_two_theta_deg) + gamma, 0.0
 
     def source_rows_builder(*, local_params=None):
         if source_rows_builder_records is not None:
@@ -6638,6 +7144,7 @@ def test_dynamic_objective_sensitivity_detects_real_threading_failure_at_five_de
     result = _dynamic_point_only_sensitivity_result(
         monkeypatch,
         sensitive=False,
+        base_two_theta_deg=46.0,
         status_callback=messages.append,
     )
     summary = result.point_match_summary

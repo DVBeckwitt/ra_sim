@@ -11579,6 +11579,52 @@ def build_geometry_manual_fit_dataset(
             row["sim_native_y"] = float(native_point[1])
         return row
 
+    def _caked_trial_rows_enabled() -> bool:
+        return bool(use_caked_display or geometry_manual_pairs_use_caked_fit_space(selected_entries))
+
+    def _manual_target_caked_point(item: Mapping[str, object]) -> tuple[float, float] | None:
+        for x_key, y_key in (
+            ("background_two_theta_deg", "background_phi_deg"),
+            ("manual_target_caked_x", "manual_target_caked_y"),
+            ("observed_two_theta_deg", "observed_phi_deg"),
+            ("caked_x", "caked_y"),
+        ):
+            try:
+                point = (float(item.get(x_key)), float(item.get(y_key)))
+            except Exception:
+                continue
+            if np.isfinite(point[0]) and np.isfinite(point[1]):
+                return float(point[0]), float(point[1])
+        return None
+
+    def _source_row_reuses_manual_caked_target(
+        target: Mapping[str, object],
+        row: Mapping[str, object],
+    ) -> bool:
+        if not _caked_trial_rows_enabled():
+            return False
+        row_point = _manual_target_caked_point(row)
+        if row_point is None:
+            return False
+        manual_points: list[tuple[float, float]] = []
+        target_point = _manual_target_caked_point(target)
+        if target_point is not None:
+            manual_points.append(target_point)
+        for selected_input in selected_entry_inputs:
+            for key in ("entry", "raw_saved_entry"):
+                raw_entry = selected_input.get(key)
+                if not isinstance(raw_entry, Mapping):
+                    continue
+                point = _manual_target_caked_point(raw_entry)
+                if point is not None:
+                    manual_points.append(point)
+        for manual_point in manual_points:
+            delta_two_theta = float(row_point[0]) - float(manual_point[0])
+            delta_phi = float(_wrapped_phi_delta_deg(row_point[1], manual_point[1]))
+            if math.hypot(delta_two_theta, delta_phi) <= 1.0e-9:
+                return True
+        return False
+
     def _augment_source_rows_with_provider_coverage(
         rows: Sequence[object] | None,
         diagnostics: Mapping[str, object] | None,
@@ -11789,6 +11835,8 @@ def build_geometry_manual_fit_dataset(
                 str(row.get("row_origin", "") or "") == "manual_picker_saved_source_coverage"
             ):
                 return None
+            if _source_row_reuses_manual_caked_target(target, row):
+                return None
             if not (
                 isinstance(target_key, tuple)
                 and len(target_key) >= 3
@@ -11917,6 +11965,8 @@ def build_geometry_manual_fit_dataset(
                 if bool(row.get("provider_backed_live_source_row", False)) or (
                     str(row.get("row_origin", "") or "") == "manual_picker_saved_source_coverage"
                 ):
+                    continue
+                if _source_row_reuses_manual_caked_target(target, row):
                     continue
                 matches.append((int(row_idx), row))
             if len(matches) <= 1:
@@ -12736,7 +12786,9 @@ def build_geometry_manual_fit_dataset(
             if target_key is None:
                 continue
             if any(
-                _trial_row_is_dynamic(row) and _trial_row_matches_target_key(row, target_key)
+                _trial_row_is_dynamic(row)
+                and _trial_row_matches_target_key(row, target_key)
+                and not _source_row_reuses_manual_caked_target(entry, row)
                 for row in current_rows
             ):
                 continue
@@ -24424,11 +24476,17 @@ def build_geometry_fit_progress_text(
         else "weighted_residual_rms_px"
     )
     weighted_rms = _geometry_fit_metric_float(getattr(result, weighted_source, np.nan))
+    if metric_name == "dynamic_angular_point_match" and not np.isfinite(weighted_rms):
+        weighted_rms = _geometry_fit_metric_float(
+            getattr(result, "weighted_residual_rms_px", np.nan)
+        )
     if metric_name == "dynamic_angular_point_match" and np.isfinite(weighted_rms):
         weighted_unit = str(getattr(result, "weighted_objective_rms_units", "px") or "px")
         base_summary_lines.append(f"Dynamic fit RMS = {float(weighted_rms):.2f} {weighted_unit}")
         if np.isfinite(float(rms)) and abs(float(rms) - float(weighted_rms)) > 1.0e-6:
-            base_summary_lines.append(f"Acceptance RMS = {float(rms):.2f} {str(rms_unit or 'px')}")
+            base_summary_lines.append(
+                f"Full-beam overlay RMS = {float(rms):.2f} {str(rms_unit or 'px')}"
+            )
     else:
         base_summary_lines.append(f"RMS residual = {float(rms):.2f} {str(rms_unit or 'px')}")
     base_summary_lines.append(

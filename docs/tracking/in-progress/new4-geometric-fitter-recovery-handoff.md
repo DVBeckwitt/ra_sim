@@ -1189,6 +1189,34 @@ not `frame_mismatch_detected`.
 
 Fixed behavior: failed optimizer-request capture leaves the optimizer request un-compared and reports the diagnostic-incomplete classification. Focused visual/backend, coordinate diagnostic, and `new4` visual/backend tests cover this path.
 
+## 2026-05-15 Manual Caked Qr/Qz Fit Handoff Fix
+
+Bug/error status: fixed for the targeted GUI manual caked Qr/Qz handoff path that rejected visually aligned points with large angular residuals and `dynamic_objective_not_sensitive_to_fit_variables`.
+
+Root cause:
+- Caked-display source rows that already carried current simulated `(2theta, phi)` were accepted only in point-only projection mode, so the non-point-only dynamic objective could fall back to stale locked prediction fields.
+- Manual observed/background caked rows could look like caked simulated source rows during trial source-row resolution.
+- When a live dynamic completion row was worse than the saved refined simulated caked prediction, the fitter could replace the better handoff prediction and still report success.
+- Acceptable-but-insensitive dynamic caked objectives could accept arbitrary parameter drift even though the Qr/Qz residual did not move.
+
+Fix:
+- The shared locked-Qr prediction resolver now consumes current caked simulated rows directly for dynamic caked objectives, without detector reprojection.
+- Source-row resolution filters out rows whose live caked point is the manual observed/background target.
+- The resolver retains closer saved refined simulated caked predictions when a live completion candidate would worsen the caked residual.
+- If the dynamic caked objective is already aligned or within the caked acceptance limits but insensitive to every fit variable, the fit is a no-op success and keeps the starting geometry instead of applying unrelated parameter movement.
+- The GUI progress text keeps separate dynamic-fit and full-beam overlay RMS lines for dynamic angular fits.
+
+Validation:
+- `python -m pytest tests/test_geometry_fitting.py -ra` -> `265 passed`.
+- `python -m pytest tests/test_manual_geometry_selection_helpers.py::test_minus_1_0_10_fit_prediction_source_is_explicit tests/test_manual_geometry_selection_helpers.py::test_minus_1_0_10_sim_refined_caked_uses_real_projection tests/test_manual_geometry_selection_helpers.py::test_minus_1_0_10_fit_handoff_audit_sim_refined_caked_uses_real_projection tests/test_manual_geometry_selection_helpers.py::test_minus_1_0_10_fit_step_reduces_qr_residual -ra` -> `4 passed`.
+- `python -m pytest tests/test_gui_runtime_import_safe.py::test_geometry_fit_progress_text_reports_dynamic_fit_rms_separately -ra` -> `1 passed`.
+- `python -m compileall ra_sim tests` -> passed.
+- `python -m ra_sim.dev check` -> passed.
+- `git diff --check` -> passed.
+
+Known unrelated validation note:
+- `python -m pytest tests/test_gui_runtime_import_safe.py::test_raw_only_full_update_restores_qr_and_hkl_picker_rows -ra` still fails in unmodified runtime-session picker code because the payload source signature is `detector_picker_grouped` while that older assertion expects `grouped`. Other tests in the same file already assert `detector_picker_grouped` for detector-picker rows.
+
 ## Remaining work
 
 Next project: compare the real headless start-state/feature-toggle contract
