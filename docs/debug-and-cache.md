@@ -275,6 +275,10 @@ Current status as of 2026-05-12:
   display window. PbI2 `HK=0` uses the material-specific defaults
   `L_min=1.5` and `theta_i=40°`; the marker editor and detector companion
   preview use the same HK=0 L bounds.
+- PbI2 manuscript figures default to
+  `C:\Users\Kenpo\OneDrive\Documents\GitHub\PhD Work\2D-Manuscript-Draft\figures\results_pbi2`.
+  Other samples keep the `results_ordered` default, and
+  `RA_SIM_ALL_BACKGROUND_FIGURE_OUT_DIR` remains the explicit override.
 - configured-hidden Qr-rod rows such as `HK=7` are omitted from the editor,
   support diagnostics, and final profile subplots without changing exported
   profile CSV contents.

@@ -4,7 +4,7 @@ Type: bug/feature
 Owner: -
 Issue: none
 Priority: p1
-Last updated: 2026-05-12
+Last updated: 2026-05-15
 Status: implemented locally, Qr-rod editor startup and L-bound callback crash
 fixed, detector label editing/import/export restored through a responsive Tk
 canvas popup, detector companion preview/deferred Delta Qr validation passing,
@@ -12,7 +12,7 @@ PbI2 HK=0/nonzero L defaults aligned across editor/preview/final plots, legacy
 notebook consumers migrated to the maintained `.py` diagnostic, HK=0 editor
 phase real-profile seeding restored, PbI2 compressed nonzero marker-L mapping
 guard added, PbI2 final HK=0 row restored, split editor persistence/cache
-guarded
+guarded, and PbI2 manuscript figures routed to `results_pbi2`
 
 ## Problem
 
@@ -206,6 +206,11 @@ to make the Qr rod detector and integration figures source-consistent:
   nonzero and `HK=0` phases, keeps edit-file writes until the final specular
   phase is accepted, carries the detector companion preview across both phases,
   and records specular editor L bounds in final-fit cache identity.
+- PbI2 manuscript figure outputs now default to
+  `C:\Users\Kenpo\OneDrive\Documents\GitHub\PhD Work\2D-Manuscript-Draft\figures\results_pbi2`.
+  Non-PbI2 samples still default to `results_ordered`, and
+  `RA_SIM_ALL_BACKGROUND_FIGURE_OUT_DIR` / `FIGURE_OUTPUT_DIR` remain explicit
+  overrides. Intermediate cache/output files under `OUT_DIR` are unchanged.
 
 ## Status
 
@@ -230,6 +235,10 @@ Bug/error status:
   detector and L3 star images are written.
 - Empty final Qr-rod profile rows are fixed by excluding rod entries whose
   branches have no drawable positive-L profile data.
+- PbI2 manuscript figure misrouting is fixed: when the active sample resolves
+  to a `pbi2` stem after state/CIF sample detection, final figure artifacts are
+  written under `results_pbi2`. Other samples keep `results_ordered`, and an
+  explicit figure-output override still wins.
 - Misleading PbI2 nonzero dashed overlays are fixed by plotting raw central rod
   data, adding the Qr sideband background back to available fits, and recording
   marker/L mapping or Qz-baseline cancellation as diagnostics instead of
@@ -465,6 +474,10 @@ Passing checks:
   integrated-profile refresh callback wiring, accepted profile-table handoff,
   sample-name override wiring, `HK=0` specular marker inclusion, and editor call
   ordering before the joint-fit cache lookup.
+- Targeted figure-output routing coverage verifies PbI2 samples default to
+  `results_pbi2`, non-PbI2 samples stay on `results_ordered`, explicit
+  figure-output overrides win, and figure-output refresh occurs after state/CIF
+  sample detection.
 - Targeted weak-peak regression coverage verifies a labeled HK=0 weak marker
   at `006`-like relative intensity remains present in the final joint-fit
   component list.

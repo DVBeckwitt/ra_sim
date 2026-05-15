@@ -2327,6 +2327,29 @@ def normalize_fit_backend(
     return backend
 
 
+def figure_output_dir_for_sample(
+    *,
+    sample_stem: object,
+    root: Path,
+    override: object = "",
+) -> Path:
+    configured = str(override).strip()
+    if configured:
+        output_dir = Path(configured)
+    elif str(sample_stem).strip().lower().startswith("pbi2"):
+        output_dir = Path(
+            r"C:\Users\Kenpo\OneDrive\Documents\GitHub\PhD Work\2D-Manuscript-Draft\figures\results_pbi2"
+        )
+    else:
+        output_dir = Path(
+            r"C:\Users\Kenpo\OneDrive\Documents\GitHub\PhD Work\2D-Manuscript-Draft\figures\results_ordered"
+        )
+    output_dir = output_dir.expanduser()
+    if not output_dir.is_absolute():
+        output_dir = Path(root) / output_dir
+    return output_dir
+
+
 STATE_PATH = Path(
     _setting_text("GUI_STATE_PATH", "RA_SIM_ALL_BACKGROUND_STATE", DEFAULT_STATE_PATH)
 ).expanduser()
@@ -2354,16 +2377,6 @@ OUT_DIR = Path(
 if not OUT_DIR.is_absolute():
     OUT_DIR = ROOT / OUT_DIR
 OUT_DIR.mkdir(parents=True, exist_ok=True)
-FIGURE_OUT_DIR = Path(
-    _setting_text(
-        "FIGURE_OUTPUT_DIR",
-        "RA_SIM_ALL_BACKGROUND_FIGURE_OUT_DIR",
-        r"C:\Users\Kenpo\OneDrive\Documents\GitHub\PhD Work\2D-Manuscript-Draft\figures\results_ordered",
-    )
-).expanduser()
-if not FIGURE_OUT_DIR.is_absolute():
-    FIGURE_OUT_DIR = ROOT / FIGURE_OUT_DIR
-FIGURE_OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 SAMPLE_NAME_OVERRIDE_TEXT = _setting_text(
     "SAMPLE_NAME_OVERRIDE", "RA_SIM_ALL_BACKGROUND_SAMPLE_NAME", ""
@@ -2371,6 +2384,14 @@ SAMPLE_NAME_OVERRIDE_TEXT = _setting_text(
 SAMPLE_NAME = SAMPLE_NAME_OVERRIDE_TEXT or _sample_name_from_path(STATE_PATH) or STATE_RUN_NAME
 SAMPLE_LABEL = _sample_label_from_name(SAMPLE_NAME)
 SAMPLE_STEM = _safe_run_name(SAMPLE_NAME).lower()
+FIGURE_OUTPUT_DIR_OVERRIDE_TEXT = _setting_text(
+    "FIGURE_OUTPUT_DIR", "RA_SIM_ALL_BACKGROUND_FIGURE_OUT_DIR", ""
+)
+FIGURE_OUT_DIR = figure_output_dir_for_sample(
+    sample_stem=SAMPLE_STEM,
+    root=ROOT,
+    override=FIGURE_OUTPUT_DIR_OVERRIDE_TEXT,
+)
 
 
 def refresh_figure_stems() -> None:
@@ -2387,6 +2408,17 @@ def refresh_figure_stems() -> None:
     USED_PEAKS_STEM = f"figure7_{SAMPLE_STEM}_used_peaks"
     ROI_EXAMPLES_STEM = f"figure7_{SAMPLE_STEM}_specular_roi_examples"
     BACKGROUND_VS_FIT_STEM_PREFIX = f"figure7_{SAMPLE_STEM}"
+
+
+def refresh_figure_output_dir() -> None:
+    global FIGURE_OUT_DIR
+
+    FIGURE_OUT_DIR = figure_output_dir_for_sample(
+        sample_stem=SAMPLE_STEM,
+        root=ROOT,
+        override=FIGURE_OUTPUT_DIR_OVERRIDE_TEXT,
+    )
+    FIGURE_OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 FALLBACK_TILT_BY_BACKGROUND = {0: 5.0, 1: 10.0, 2: 15.0}
@@ -2714,7 +2746,6 @@ mpl.rcParams.update(
 print(f"state={STATE_PATH}")
 print(f"run_name={STATE_RUN_NAME}")
 print(f"out={OUT_DIR}")
-print(f"figures={FIGURE_OUT_DIR}")
 print(
     f"cpu_count={CPU_COUNT} fit_workers={FIT_WORKERS} numba={NUMBA_AVAILABLE} numba_threads={get_num_threads()}"
 )
@@ -3669,6 +3700,8 @@ if detected_sample_name:
     SAMPLE_NAME = str(detected_sample_name)
     SAMPLE_LABEL = _sample_label_from_name(SAMPLE_NAME)
 refresh_figure_stems()
+refresh_figure_output_dir()
+print(f"figures={FIGURE_OUT_DIR}")
 ACTIVE_LATTICE = active_lattice_constants_from_state(state)
 ACTIVE_LATTICE_A = float(ACTIVE_LATTICE["a"])
 ACTIVE_LATTICE_C = float(ACTIVE_LATTICE["c"])

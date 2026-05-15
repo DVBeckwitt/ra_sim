@@ -2506,6 +2506,57 @@ def test_background_peak_fits_runner_exists_for_batch_state_reruns() -> None:
         assert token in source
 
 
+def test_parallel_script_routes_pbi2_figures_to_manuscript_pbi2_directory() -> None:
+    namespace = _script_functions("figure_output_dir_for_sample")
+    figure_output_dir_for_sample = namespace["figure_output_dir_for_sample"]
+    repo_root = Path(r"C:\repo")
+
+    assert figure_output_dir_for_sample(
+        sample_stem="pbi2",
+        root=repo_root,
+        override="",
+    ) == Path(
+        r"C:\Users\Kenpo\OneDrive\Documents\GitHub\PhD Work\2D-Manuscript-Draft\figures\results_pbi2"
+    )
+
+
+def test_parallel_script_keeps_non_pbi2_figures_in_ordered_manuscript_directory() -> None:
+    namespace = _script_functions("figure_output_dir_for_sample")
+    figure_output_dir_for_sample = namespace["figure_output_dir_for_sample"]
+    repo_root = Path(r"C:\repo")
+
+    assert figure_output_dir_for_sample(
+        sample_stem="bi2se3",
+        root=repo_root,
+        override="",
+    ) == Path(
+        r"C:\Users\Kenpo\OneDrive\Documents\GitHub\PhD Work\2D-Manuscript-Draft\figures\results_ordered"
+    )
+
+
+def test_parallel_script_figure_output_override_wins_for_all_samples() -> None:
+    namespace = _script_functions("figure_output_dir_for_sample")
+    figure_output_dir_for_sample = namespace["figure_output_dir_for_sample"]
+    repo_root = Path(r"C:\repo")
+
+    assert figure_output_dir_for_sample(
+        sample_stem="pbi2",
+        root=repo_root,
+        override="custom/figures",
+    ) == repo_root / "custom" / "figures"
+
+
+def test_parallel_script_refreshes_figure_output_after_state_sample_detection() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    sample_detection = source.index("detected_sample_name = (")
+    refresh_stems = source.index("refresh_figure_stems()", sample_detection)
+    refresh_output = source.index("refresh_figure_output_dir()", refresh_stems)
+    active_lattice = source.index("ACTIVE_LATTICE = active_lattice_constants_from_state(state)")
+
+    assert refresh_stems < refresh_output < active_lattice
+
+
 def test_background_peak_fits_runner_reads_python_diagnostic_source(tmp_path: Path) -> None:
     diagnostic_path = tmp_path / "diagnostic.py"
     diagnostic_path.write_text("print('script source executed')\n", encoding="utf-8")
