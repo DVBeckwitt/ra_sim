@@ -102,6 +102,7 @@
   - Fixed GUI saved-manual caked Qr geometry fits to default to the direct fixed-source solve used by headless runs instead of implicitly entering ladder multistart; explicit `ladder-multistart` seed policy remains available.
   - Fixed saved manual background origin replay so explicit detector-origin rows win over stale caked frame tokens, and new manual placements persist the matching origin/frame contract.
   - Fixed detector-origin manual background redraw in caked view so failed live detector-to-caked projection leaves the marker unresolved instead of falling back to stale saved caked fields.
+  - Fixed detector-origin manual Qr/Qz geometry-fit handoff so saved origin/frame metadata survives dataset orientation and exact caked reprojection replaces stale saved caked aliases before the optimizer and QR handoff audit consume the pair.
   - Hardened manual Qr/Qz simulated caked fit/cache resolution so bare `caked_x/y` is used only for explicit simulated caked projection rows, not background/replay-shaped rows.
   - Fixed beam-center defaults to keep PONI-derived centers in native row/col order in GUI startup, headless `fit-geometry`, and headless `simulate` paths, and kept beam-center picking out of the center-dependent caked wrapper.
   - Fixed beam-center picking to use the clicked detector-display point exactly, avoiding local peak snapping before applying the GUI contract `row = display_row`, `col = detector_width - display_col`.

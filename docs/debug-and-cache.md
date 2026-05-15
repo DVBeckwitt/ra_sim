@@ -674,6 +674,14 @@ Source-less or legacy projection tokens are not correctness keys for warm-cache
 reuse. Do not mutate simulation or caked image arrays in place without also
 bumping the corresponding simulation or projection signature.
 
+Status as of 2026-05-15: detector-origin manual Qr/Qz geometry-fit rows keep
+their saved `manual_background_input_origin` and frame through dataset
+orientation. The exact caked projector now replaces stale saved
+`background_two_theta_deg` / `background_phi_deg` aliases before
+`measured_for_fit`, the optimizer dataset spec, and QR handoff audit consume the
+pair. Bug/error status: fixed for the reported `(-1,0,10)` two-branch handoff
+where stale caked angles caused non-finite angular residual rejection.
+
 Status as of 2026-05-07: detector/caked manual background replay now preserves
 the saved origin/frame contract across detector -> caked -> detector view
 replays. Detector-origin rows no longer fall back to stale caked fields when the

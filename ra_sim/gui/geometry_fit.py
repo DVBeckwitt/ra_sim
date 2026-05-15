@@ -15202,6 +15202,9 @@ def build_geometry_manual_fit_dataset(
             initial_entry["q_group_key"] = raw_group_key
         elif isinstance(raw_group_key, list):
             initial_entry["q_group_key"] = tuple(raw_group_key)
+        for key in ("manual_background_input_origin", "manual_background_input_frame"):
+            if key in entry:
+                initial_entry[key] = entry.get(key)
         initial_entry["source_label"] = _geometry_fit_entry_source_label(entry)
         try:
             bg_coords = manual_dataset_bindings.geometry_manual_entry_display_coords(entry)
@@ -15635,6 +15638,8 @@ def build_geometry_manual_fit_dataset(
             "source_peak_index",
             "hkl",
             "normalized_hkl",
+            "manual_background_input_origin",
+            "manual_background_input_frame",
             "background_detector_x",
             "background_detector_y",
             "background_detector_input_frame",

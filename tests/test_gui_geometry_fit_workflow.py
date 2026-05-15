@@ -24761,12 +24761,18 @@ def test_build_geometry_manual_fit_dataset_exact_projector_uses_current_local_pa
 
 
 @pytest.mark.parametrize(
-    ("manual_overrides", "unrotated_native", "expected_detector_call"),
+    (
+        "manual_overrides",
+        "unrotated_native",
+        "expected_detector_call",
+        "strip_orientation_metadata",
+    ),
     [
         (
             {"detector_x": 3.0, "detector_y": 4.0},
             (13.0, 24.0),
             (13.0, 24.0),
+            False,
         ),
         (
             {
@@ -24778,15 +24784,31 @@ def test_build_geometry_manual_fit_dataset_exact_projector_uses_current_local_pa
             },
             (float("nan"), float("nan")),
             (30.0, 40.0),
+            False,
+        ),
+        (
+            {
+                "manual_background_input_frame": "detector_display",
+                "detector_x": 1087.278,
+                "detector_y": 1093.767,
+            },
+            (1083.0, 1915.0),
+            (1083.0, 1915.0),
+            True,
         ),
     ],
-    ids=["display-detector-alias", "non-native-background-detector-alias"],
+    ids=[
+        "display-detector-alias",
+        "non-native-background-detector-alias",
+        "orientation-metadata-loss",
+    ],
 )
 def test_build_geometry_manual_fit_dataset_reprojects_detector_origin_anchor_for_caked_fit(
     monkeypatch,
     manual_overrides,
     unrotated_native,
     expected_detector_call,
+    strip_orientation_metadata,
 ) -> None:
     bundle = _make_stub_caked_bundle(
         detector_shape=(64, 64),
@@ -24815,17 +24837,33 @@ def test_build_geometry_manual_fit_dataset_reprojects_detector_origin_anchor_for
     )
 
     source_row = {
-        "q_group_key": ("q", 1),
-        "source_table_index": 1,
-        "source_row_index": 2,
+        "q_group_key": ("q_group", "primary", 1, 10),
+        "source_table_index": 160,
+        "source_row_index": 42,
         "source_peak_index": 0,
         "source_branch_index": 0,
-        "hkl": (1, 1, 0),
+        "hkl": (-1, 0, 10),
         "sim_col": 5.0,
         "sim_row": 6.0,
         "sim_col_raw": 5.0,
         "sim_row_raw": 6.0,
     }
+
+    def _apply_orientation_to_entries(entries, shape, **kwargs):
+        if not strip_orientation_metadata:
+            return list(entries)
+        return [
+            {
+                "x": float(entry["x"]),
+                "y": float(entry["y"]),
+                "background_two_theta_deg": float(entry["background_two_theta_deg"]),
+                "background_phi_deg": float(entry["background_phi_deg"]),
+                "caked_x": float(entry["caked_x"]),
+                "caked_y": float(entry["caked_y"]),
+            }
+            for entry in entries
+        ]
+
     manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
         osc_files=["C:/tmp/bg0.osc"],
         current_background_index=0,
@@ -24833,12 +24871,12 @@ def test_build_geometry_manual_fit_dataset_reprojects_detector_origin_anchor_for
         display_rotate_k=0,
         geometry_manual_pairs_for_index=lambda idx: [
             {
-                "q_group_key": ("q", 1),
-                "source_table_index": 1,
-                "source_row_index": 2,
+                "q_group_key": ("q_group", "primary", 1, 10),
+                "source_table_index": 160,
+                "source_row_index": 42,
                 "source_peak_index": 0,
                 "source_branch_index": 0,
-                "hkl": (1, 1, 0),
+                "hkl": (-1, 0, 10),
                 "manual_background_input_origin": "detector",
                 "x": 30.0,
                 "y": 40.0,
@@ -24860,7 +24898,7 @@ def test_build_geometry_manual_fit_dataset_reprojects_detector_origin_anchor_for
         geometry_manual_simulated_peaks_for_params=(
             lambda params, *, prefer_cache: [dict(source_row)]
         ),
-        geometry_manual_simulated_lookup=lambda _simulated_peaks: {(1, 2): dict(source_row)},
+        geometry_manual_simulated_lookup=lambda _simulated_peaks: {(160, 42): dict(source_row)},
         geometry_manual_entry_display_coords=lambda entry: (30.0, 40.0),
         unrotate_display_peaks=lambda entries, shape, *, k: [
             dict(entry, x=float(unrotated_native[0]), y=float(unrotated_native[1]))
@@ -24878,7 +24916,7 @@ def test_build_geometry_manual_fit_dataset_reprojects_detector_origin_anchor_for
             },
             {"pairs": len(sim_pts)},
         ),
-        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        apply_orientation_to_entries=_apply_orientation_to_entries,
         orient_image_for_fit=lambda image, **kwargs: image,
         geometry_manual_project_peaks_for_background_view=_identity_geometry_project_rows,
         pick_uses_caked_space=lambda: False,
@@ -24911,7 +24949,12 @@ def test_build_geometry_manual_fit_dataset_reprojects_detector_origin_anchor_for
     assert initial["bg_caked_display"] == pytest.approx((22.5, -35.5))
     assert display["background_two_theta_deg"] == pytest.approx(22.5)
     assert display["background_phi_deg"] == pytest.approx(-35.5)
-    assert detector_calls == [tuple(expected_detector_call)]
+    assert dataset["spec"]["measured_peaks"][0]["background_two_theta_deg"] == pytest.approx(22.5)
+    assert dataset["spec"]["measured_peaks"][0]["background_phi_deg"] == pytest.approx(-35.5)
+    handoff_row = dataset["fit_handoff_audit_rows"][0]
+    assert handoff_row["observed_refined_caked_deg"] == pytest.approx((22.5, -35.5))
+    assert handoff_row["fit_observed_caked_deg"] == pytest.approx((22.5, -35.5))
+    assert detector_calls[0] == tuple(expected_detector_call)
 
 
 def test_copy_geometry_fit_dataset_spec_for_state_strips_fit_space_projector() -> None:
