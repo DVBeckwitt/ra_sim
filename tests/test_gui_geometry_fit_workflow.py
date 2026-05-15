@@ -24836,13 +24836,16 @@ def test_build_geometry_manual_fit_dataset_reprojects_detector_origin_anchor_for
         ),
     )
 
-    source_row = {
+    source_identity = {
         "q_group_key": ("q_group", "primary", 1, 10),
         "source_table_index": 160,
         "source_row_index": 42,
         "source_peak_index": 0,
         "source_branch_index": 0,
         "hkl": (-1, 0, 10),
+    }
+    source_row = {
+        **source_identity,
         "sim_col": 5.0,
         "sim_row": 6.0,
         "sim_col_raw": 5.0,
@@ -24871,12 +24874,7 @@ def test_build_geometry_manual_fit_dataset_reprojects_detector_origin_anchor_for
         display_rotate_k=0,
         geometry_manual_pairs_for_index=lambda idx: [
             {
-                "q_group_key": ("q_group", "primary", 1, 10),
-                "source_table_index": 160,
-                "source_row_index": 42,
-                "source_peak_index": 0,
-                "source_branch_index": 0,
-                "hkl": (-1, 0, 10),
+                **source_identity,
                 "manual_background_input_origin": "detector",
                 "x": 30.0,
                 "y": 40.0,

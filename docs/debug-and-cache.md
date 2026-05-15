@@ -681,6 +681,9 @@ orientation. The exact caked projector now replaces stale saved
 `measured_for_fit`, the optimizer dataset spec, and QR handoff audit consume the
 pair. Bug/error status: fixed for the reported `(-1,0,10)` two-branch handoff
 where stale caked angles caused non-finite angular residual rejection.
+Follow-up status: the regression fixture now shares one source-identity payload
+between the simulated row and manual pair setup, reducing duplicate test setup
+without changing the fitter contract or bug status.
 
 Status as of 2026-05-07: detector/caked manual background replay now preserves
 the saved origin/frame contract across detector -> caked -> detector view
