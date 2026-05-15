@@ -7527,7 +7527,7 @@ def test_raw_only_full_update_restores_qr_and_hkl_picker_rows(
     assert np.isfinite(float(selected_dist))
 
     payload = runtime_session._hkl_pick_simulation_points_from_qr_picker_cache()
-    assert payload["source_signature"][0] == "grouped"
+    assert payload["source_signature"][0] == "detector_picker_grouped"
     assert payload["candidates"]
     hkl_candidate = dict(payload["candidates"][0])
     _assert_detector_pixels(hkl_candidate)

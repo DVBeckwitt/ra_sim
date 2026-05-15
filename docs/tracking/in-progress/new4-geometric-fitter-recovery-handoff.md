@@ -1214,8 +1214,8 @@ Validation:
 - `python -m ra_sim.dev check` -> passed.
 - `git diff --check` -> passed.
 
-Known unrelated validation note:
-- `python -m pytest tests/test_gui_runtime_import_safe.py::test_raw_only_full_update_restores_qr_and_hkl_picker_rows -ra` still fails in unmodified runtime-session picker code because the payload source signature is `detector_picker_grouped` while that older assertion expects `grouped`. Other tests in the same file already assert `detector_picker_grouped` for detector-picker rows.
+Follow-up validation fix:
+- `python -m pytest tests/test_gui_runtime_import_safe.py::test_raw_only_full_update_restores_qr_and_hkl_picker_rows -ra` now passes after updating its stale source-signature assertion to the detector-picker path. The runtime behavior already returned `detector_picker_grouped`, matching the newer HKL picker tests and detector-picker row preference policy.
 
 ## Remaining work
 
