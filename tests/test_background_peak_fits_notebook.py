@@ -96,6 +96,9 @@ def _script_functions(*names: str) -> dict[str, object]:
         wanted.add("qr_rod_editor_phase_title")
         wanted.add("merge_qr_rod_editor_phase_table")
         wanted.add("qr_rod_editor_profile_rows_from_markers")
+        wanted.add("l_reference_rows")
+        wanted.add("qz_to_l_linear_coeff")
+        wanted.add("rod_profile_marker_l_mapping_is_valid")
     if wanted & {"l_reference_rows", "qz_values_to_l_axis", "qz_to_l_linear_coeff"}:
         wanted.add("rod_profile_marker_l_mapping_is_valid")
     tree = ast.parse(
@@ -2539,11 +2542,14 @@ def test_parallel_script_figure_output_override_wins_for_all_samples() -> None:
     figure_output_dir_for_sample = namespace["figure_output_dir_for_sample"]
     repo_root = Path(r"C:\repo")
 
-    assert figure_output_dir_for_sample(
-        sample_stem="pbi2",
-        root=repo_root,
-        override="custom/figures",
-    ) == repo_root / "custom" / "figures"
+    assert (
+        figure_output_dir_for_sample(
+            sample_stem="pbi2",
+            root=repo_root,
+            override="custom/figures",
+        )
+        == repo_root / "custom" / "figures"
+    )
 
 
 def test_parallel_script_refreshes_figure_output_after_state_sample_detection() -> None:
@@ -5043,7 +5049,8 @@ def test_parallel_script_qr_rod_peak_editor_uses_l_axis() -> None:
         )
     ]
 
-    assert "qz_l_linear_coeff_from_marker_rows(" in function_source
+    assert "qz_to_l_linear_coeff(" in function_source
+    assert "marker_source=edited" in function_source
     assert "qz_to_editor_l(" in function_source
     assert "editor_l_to_qz(" in function_source
     assert 'ax.set_xlabel("L"' in function_source
@@ -5371,7 +5378,9 @@ def test_parallel_script_qr_rod_peak_editor_hk4_minus_drag_preserves_panel_limit
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from matplotlib.axes import Axes
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
     from matplotlib.backend_bases import MouseEvent
+    from matplotlib.widgets import TextBox
 
     namespace = _script_functions(
         "as_float",
@@ -5395,13 +5404,36 @@ def test_parallel_script_qr_rod_peak_editor_hk4_minus_drag_preserves_panel_limit
     show_editor = namespace["show_qr_rod_peak_marker_popup"]
     observed: dict[str, object] = {}
     clear_calls: list[object] = []
+    draw_calls: list[object] = []
+    text_box_set_val_calls: list[object] = []
+    target_set_xlim_calls: list[object] = []
+    target_axis: dict[str, object] = {"ax": None, "record": False}
     original_clear = Axes.clear
+    original_draw = FigureCanvasAgg.draw
+    original_set_xlim = Axes.set_xlim
+    original_text_box_set_val = TextBox.set_val
 
     def counting_clear(self, *args, **kwargs):
         clear_calls.append(self)
         return original_clear(self, *args, **kwargs)
 
+    def counting_set_xlim(self, *args, **kwargs):
+        if bool(target_axis["record"]) and self is target_axis["ax"]:
+            target_set_xlim_calls.append((args, kwargs))
+        return original_set_xlim(self, *args, **kwargs)
+
+    def counting_draw(self, *args, **kwargs):
+        draw_calls.append(self)
+        return original_draw(self, *args, **kwargs)
+
+    def counting_text_box_set_val(self, *args, **kwargs):
+        text_box_set_val_calls.append(self)
+        return original_text_box_set_val(self, *args, **kwargs)
+
     monkeypatch.setattr(Axes, "clear", counting_clear)
+    monkeypatch.setattr(Axes, "set_xlim", counting_set_xlim)
+    monkeypatch.setattr(FigureCanvasAgg, "draw", counting_draw)
+    monkeypatch.setattr(TextBox, "set_val", counting_text_box_set_val)
 
     def emit_event(fig, ax, name: str, x_value: float, y_value: float) -> None:
         x_pixel, y_pixel = ax.transData.transform((float(x_value), float(y_value)))
@@ -5413,19 +5445,42 @@ def test_parallel_script_qr_rod_peak_editor_hk4_minus_drag_preserves_panel_limit
         fig = plt.gcf()
         panels = {ax.get_title(): ax for ax in fig.axes if ax.get_xlabel() == "L"}
         target = panels["HK=4 -"]
+        target_axis["ax"] = target
+        observed["initial_profile_x"] = np.asarray(target.lines[0].get_xdata(), dtype=np.float64)
         target.set_xlim(2.0, 2.8)
         target.set_ylim(0.0, 100.0)
         before_xlim = target.get_xlim()
         before_ylim = target.get_ylim()
+        title_box = next(
+            widget
+            for widget in getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets")
+            if type(widget).__name__ == "TextBox"
+            and getattr(getattr(widget, "label", None), "get_text", lambda: "")() == "Label"
+        )
         fig.canvas.draw()
         observed["initial_clear_count"] = len(clear_calls)
-        emit_event(fig, target, "button_press_event", 2.34, 25.0)
+        observed["initial_draw_count"] = len(draw_calls)
+        observed["initial_text_box_set_val_count"] = len(text_box_set_val_calls)
+        target_axis["record"] = True
+        emit_event(fig, target, "button_press_event", 2.68, 25.0)
+        observed["after_press_xlim"] = target.get_xlim()
         observed["after_press_clear_count"] = len(clear_calls)
-        for x_value in (2.35, 2.36, 2.37, 2.38):
+        observed["after_press_draw_count"] = len(draw_calls)
+        observed["after_press_text_box_set_val_count"] = len(text_box_set_val_calls)
+        observed["after_press_label_text"] = title_box.text
+        motion_xlims = []
+        for x_value in (2.69, 2.70, 2.71, 2.72):
             emit_event(fig, target, "motion_notify_event", x_value, 26.0)
+            motion_xlims.append(target.get_xlim())
+        observed["after_motion_xlims"] = motion_xlims
         observed["after_motion_clear_count"] = len(clear_calls)
-        emit_event(fig, target, "button_release_event", 2.38, 26.0)
+        observed["after_motion_draw_count"] = len(draw_calls)
+        observed["after_motion_text_box_set_val_count"] = len(text_box_set_val_calls)
+        emit_event(fig, target, "button_release_event", 2.72, 26.0)
+        observed["target_set_xlim_calls"] = list(target_set_xlim_calls)
         observed["after_release_clear_count"] = len(clear_calls)
+        observed["after_release_draw_count"] = len(draw_calls)
+        observed["after_release_text_box_set_val_count"] = len(text_box_set_val_calls)
         observed["before_xlim"] = before_xlim
         observed["before_ylim"] = before_ylim
         observed["after_xlim"] = target.get_xlim()
@@ -5461,11 +5516,31 @@ def test_parallel_script_qr_rod_peak_editor_hk4_minus_drag_preserves_panel_limit
     )
 
     assert accepted is True
+    assert observed["initial_profile_x"] == pytest.approx([0.5, 1.5, 2.7])
+    assert observed["after_press_xlim"] == pytest.approx(observed["before_xlim"])
+    for motion_xlim in observed["after_motion_xlims"]:
+        assert motion_xlim == pytest.approx(observed["before_xlim"])
     assert observed["after_xlim"] == pytest.approx(observed["before_xlim"])
     assert observed["after_ylim"] == pytest.approx(observed["before_ylim"])
+    assert observed["target_set_xlim_calls"] == []
     assert observed["after_press_clear_count"] == observed["initial_clear_count"]
     assert observed["after_motion_clear_count"] == observed["after_press_clear_count"]
-    assert observed["after_release_clear_count"] > observed["after_motion_clear_count"]
+    assert observed["after_release_clear_count"] == observed["after_motion_clear_count"]
+    assert observed["after_press_draw_count"] == observed["initial_draw_count"]
+    assert observed["after_motion_draw_count"] == observed["after_press_draw_count"]
+    assert observed["after_release_draw_count"] == observed["after_motion_draw_count"]
+    assert (
+        observed["after_press_text_box_set_val_count"] == observed["initial_text_box_set_val_count"]
+    )
+    assert (
+        observed["after_motion_text_box_set_val_count"]
+        == observed["after_press_text_box_set_val_count"]
+    )
+    assert (
+        observed["after_release_text_box_set_val_count"]
+        == observed["after_motion_text_box_set_val_count"]
+    )
+    assert observed["after_press_label_text"]
     assert region_state["delta_qr"] == pytest.approx(0.01)
     assert region_state["l_min"] == pytest.approx(0.5)
     assert region_state["l_max"] == pytest.approx(3.0)

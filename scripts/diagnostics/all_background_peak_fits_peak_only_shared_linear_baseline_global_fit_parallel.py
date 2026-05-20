@@ -1572,7 +1572,9 @@ def show_qr_rod_peak_marker_popup(
         return np.sort(values[np.isfinite(values)])
 
     def group_qz_l_coeff(m_value: int, branch_value: str) -> tuple[float, float]:
-        return qz_l_linear_coeff_from_marker_rows(group_marker_rows(m_value, branch_value))
+        return qz_to_l_linear_coeff(
+            m_value=int(m_value), branch_value=str(branch_value), marker_source=edited
+        )
 
     def qz_to_editor_l(m_value: int, branch_value: str, qz_values: object) -> np.ndarray:
         slope, intercept = group_qz_l_coeff(m_value, branch_value)
@@ -1596,10 +1598,45 @@ def show_qr_rod_peak_marker_popup(
         row = rows.iloc[int(index)]
         return int(row["_source_index"]), row
 
-    def sync_title_box() -> None:
+    def set_title_box_text(text: object) -> None:
         box = title_box_state.get("box")
         if box is None:
             return
+        title = str(text)
+        if getattr(box, "text", "") == title:
+            return
+        title_box_state["syncing"] = True
+        try:
+            if bool(getattr(box, "capturekeystrokes", False)):
+                box.set_val(title)
+                return
+            text_disp = getattr(box, "text_disp", None)
+            if text_disp is None:
+                box.set_val(title)
+                return
+            text_disp.set_text(title)
+            box.cursor_index = len(title)
+            cursor = getattr(box, "cursor", None)
+            if cursor is not None:
+                cursor.set_visible(False)
+        finally:
+            title_box_state["syncing"] = False
+
+    def suppress_inactive_text_box_stop_draw(box: object) -> None:
+        original_stop_typing = getattr(box, "stop_typing")
+
+        def stop_typing_only_when_active() -> None:
+            if bool(getattr(box, "capturekeystrokes", False)):
+                original_stop_typing()
+                return
+            cursor = getattr(box, "cursor", None)
+            if cursor is not None:
+                cursor.set_visible(False)
+            box.capturekeystrokes = False
+
+        box.stop_typing = stop_typing_only_when_active
+
+    def sync_title_box() -> None:
         selected_row = selected_marker_row()
         title = ""
         if selected_row is not None:
@@ -1607,11 +1644,7 @@ def show_qr_rod_peak_marker_popup(
             group = selected.get("group")
             if group is not None:
                 title = marker_row_title(row, int(group[0]))
-        title_box_state["syncing"] = True
-        try:
-            box.set_val(title)
-        finally:
-            title_box_state["syncing"] = False
+        set_title_box_text(title)
 
     def set_selected_marker_title(text: object, *, redraw_figure: bool = True) -> None:
         if bool(title_box_state.get("syncing", False)):
@@ -1765,7 +1798,9 @@ def show_qr_rod_peak_marker_popup(
             )
         return annotations
 
-    def update_group_marker_artists(group: tuple[int, str]) -> bool:
+    def update_group_marker_artists(
+        group: tuple[int, str], *, update_annotations: bool = True
+    ) -> bool:
         ax = axes_by_group.get(group)
         scatter = marker_scatter_by_group.get(group)
         if ax is None or scatter is None:
@@ -1781,19 +1816,20 @@ def show_qr_rod_peak_marker_popup(
         scatter.set_offsets(offsets)
         if offsets.shape[0] > 0:
             scatter.set_facecolors(marker_facecolors(group, finite))
-        for annotation in marker_annotations_by_group.get(group, []):
-            try:
-                annotation.remove()
-            except Exception:
-                pass
-        marker_annotations_by_group[group] = annotate_visible_markers(
-            ax,
-            group=group,
-            marker_l=marker_l,
-            y_markers=y_markers,
-            finite=finite,
-            marker_rows=marker_rows,
-        )
+        if update_annotations:
+            for annotation in marker_annotations_by_group.get(group, []):
+                try:
+                    annotation.remove()
+                except Exception:
+                    pass
+            marker_annotations_by_group[group] = annotate_visible_markers(
+                ax,
+                group=group,
+                marker_l=marker_l,
+                y_markers=y_markers,
+                finite=finite,
+                marker_rows=marker_rows,
+            )
         fig.canvas.draw_idle()
         return True
 
@@ -1814,6 +1850,42 @@ def show_qr_rod_peak_marker_popup(
             if group in axes_by_group:
                 update_group_marker_selection(group)
         fig.canvas.draw_idle()
+
+    def snapshot_group_axis_limits(
+        group: object,
+    ) -> tuple[tuple[int, str], tuple[float, float], tuple[float, float]] | None:
+        if group not in axes_by_group:
+            return None
+        ax = axes_by_group[group]
+        return (
+            group,
+            tuple(float(value) for value in ax.get_xlim()),
+            tuple(float(value) for value in ax.get_ylim()),
+        )
+
+    def restore_group_axis_limits(
+        snapshot: tuple[tuple[int, str], tuple[float, float], tuple[float, float]] | None,
+    ) -> None:
+        if snapshot is None:
+            return
+        group, x_limits, y_limits = snapshot
+        ax = axes_by_group.get(group)
+        if ax is None:
+            return
+        current_x = tuple(float(value) for value in ax.get_xlim())
+        current_y = tuple(float(value) for value in ax.get_ylim())
+        if (
+            current_x != x_limits
+            and all(np.isfinite(x_limits))
+            and float(x_limits[0]) != float(x_limits[1])
+        ):
+            ax.set_xlim(*x_limits)
+        if (
+            current_y != y_limits
+            and all(np.isfinite(y_limits))
+            and float(y_limits[0]) != float(y_limits[1])
+        ):
+            ax.set_ylim(*y_limits)
 
     def redraw(*, preserve_limits: bool = False) -> None:
         selected_group = selected.get("group")
@@ -1975,19 +2047,40 @@ def show_qr_rod_peak_marker_popup(
         select_nearest(group, float(x_value))
         redraw(preserve_limits=True)
 
+    def set_selected_marker_position(
+        m_value: int, branch_value: str, index: int, x_value: float
+    ) -> bool:
+        selected_rows = group_marker_rows(m_value, branch_value)
+        if int(index) < 0 or int(index) >= len(selected_rows):
+            return False
+        source_index = int(selected_rows.iloc[int(index)]["_source_index"])
+        qz_value = float(editor_l_to_qz(m_value, branch_value, [float(x_value)])[0])
+        if not np.isfinite(qz_value):
+            return False
+        nonlocal edited
+        edited.loc[source_index, "m"] = int(m_value)
+        edited.loc[source_index, "hk"] = int(m_value)
+        edited.loc[source_index, "branch"] = str(branch_value)
+        edited.loc[source_index, "qz_marker"] = float(qz_value)
+        edited.loc[source_index, "projected_qz_marker"] = float(qz_value)
+        edited.loc[source_index, "fit_l"] = float(x_value)
+        edited.loc[source_index, "display_l"] = float(x_value)
+        edited.loc[source_index, "l"] = float(x_value)
+        edited.loc[source_index, "marker_source"] = "manual_edit"
+        return True
+
     def move_selected(x_value: float) -> None:
         group = selected.get("group")
         index = selected.get("index")
         if group is None or index is None or not np.isfinite(x_value):
             return
         m_value, branch_value = group
-        markers = group_markers(m_value, branch_value).tolist()
-        if int(index) < 0 or int(index) >= len(markers):
+        if not set_selected_marker_position(
+            int(m_value), str(branch_value), int(index), float(x_value)
+        ):
             return
-        markers[int(index)] = float(editor_l_to_qz(m_value, branch_value, [float(x_value)])[0])
-        set_group_markers(m_value, branch_value, markers)
         select_nearest((int(m_value), str(branch_value)), float(x_value), sync_title=False)
-        if update_group_marker_artists((int(m_value), str(branch_value))):
+        if update_group_marker_artists((int(m_value), str(branch_value)), update_annotations=False):
             selected["drag_redraw_pending"] = True
         else:
             redraw(preserve_limits=True)
@@ -2064,18 +2157,23 @@ def show_qr_rod_peak_marker_popup(
     def on_press(event) -> None:
         if event.inaxes not in group_by_axes or event.xdata is None:
             return
-        previous_group = selected.get("group")
-        flush_title_box()
         group = group_by_axes[event.inaxes]
-        selected["group"] = group
-        selected["index"] = None
-        sync_title_box()
-        if getattr(event, "dblclick", False):
-            add_marker(group, float(event.xdata))
-            return
-        if select_nearest(group, float(event.xdata)):
-            selected["dragging"] = True
-        refresh_selection_artists(previous_group, group)
+        limits = snapshot_group_axis_limits(group)
+        try:
+            previous_group = selected.get("group")
+            flush_title_box()
+            selected["group"] = group
+            selected["index"] = None
+            if getattr(event, "dblclick", False):
+                sync_title_box()
+                add_marker(group, float(event.xdata))
+                return
+            if select_nearest(group, float(event.xdata), sync_title=False):
+                selected["dragging"] = True
+            sync_title_box()
+            refresh_selection_artists(previous_group, group)
+        finally:
+            restore_group_axis_limits(limits)
 
     def on_motion(event) -> None:
         if not selected.get("dragging") or event.xdata is None:
@@ -2084,14 +2182,26 @@ def show_qr_rod_peak_marker_popup(
             "group"
         ):
             return
-        move_selected(float(event.xdata))
+        limits = snapshot_group_axis_limits(selected.get("group"))
+        try:
+            move_selected(float(event.xdata))
+        finally:
+            restore_group_axis_limits(limits)
 
     def on_release(_event) -> None:
         needs_redraw = bool(selected.get("drag_redraw_pending", False))
+        limits = snapshot_group_axis_limits(selected.get("group")) if needs_redraw else None
         selected["dragging"] = False
         selected["drag_redraw_pending"] = False
-        if needs_redraw:
-            redraw(preserve_limits=True)
+        try:
+            if needs_redraw:
+                group = selected.get("group")
+                if group not in axes_by_group or not update_group_marker_artists(
+                    group, update_annotations=True
+                ):
+                    redraw(preserve_limits=True)
+        finally:
+            restore_group_axis_limits(limits)
         flush_region_profile_refresh()
 
     def on_key(event) -> None:
@@ -2145,6 +2255,8 @@ def show_qr_rod_peak_marker_popup(
         l_max_initial = f"{as_float(region_control_state.get('l_max'), 8.0):.6g}"
         l_min_box = TextBox(l_min_ax, "L Min", initial=l_min_initial)
         l_max_box = TextBox(l_max_ax, "L Max", initial=l_max_initial)
+        suppress_inactive_text_box_stop_draw(l_min_box)
+        suppress_inactive_text_box_stop_draw(l_max_box)
         delta_qr_slider.on_changed(set_region_delta_qr)
         l_min_box.on_submit(set_region_l_min)
         l_max_box.on_submit(set_region_l_max)
@@ -2159,6 +2271,7 @@ def show_qr_rod_peak_marker_popup(
         fig.add_axes([0.82, 0.035, 0.085, 0.05]),
     ]
     title_box = TextBox(fig.add_axes([0.08, 0.035, 0.34, 0.05]), "Label", textalignment="left")
+    suppress_inactive_text_box_stop_draw(title_box)
     title_box.on_submit(set_selected_marker_title)
     title_box_state["box"] = title_box
     text_input_widgets.append(title_box)
@@ -12423,8 +12536,15 @@ def qz_values_to_l_axis(
     return qz.copy()
 
 
-def qz_to_l_linear_coeff(*, m_value: int, branch_value: str) -> tuple[float, float]:
-    refs = l_reference_rows(m_value=int(m_value), branch_value=str(branch_value))
+def qz_to_l_linear_coeff(
+    *,
+    m_value: int,
+    branch_value: str,
+    marker_source: pd.DataFrame | None = None,
+) -> tuple[float, float]:
+    refs = l_reference_rows(
+        m_value=int(m_value), branch_value=str(branch_value), marker_source=marker_source
+    )
     if refs.empty:
         try:
             lattice_c = float(globals().get("ACTIVE_LATTICE_C", np.nan))

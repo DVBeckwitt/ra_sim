@@ -675,6 +675,18 @@ Passing checks:
   key, saved-state field, artifact schema, dependency, CI workflow, release
   version, migration, or ADR. Rollback is a normal git revert of the diagnostic
   script/test/doc changes.
+- 2026-05-20 HK=4 minus follow-up: the remaining editor-only range/scope
+  change was traced to the popup's local Qz-to-L conversion still using raw
+  marker-row regression, while the final/profile path already rejected the
+  compressed PbI2 `HK=4 -` mapping and fell back to the active lattice L axis.
+  The marker editor now uses the same validated `qz_to_l_linear_coeff(...,
+  marker_source=edited)` policy, and marker press/drag/release snapshots the
+  active panel limits so marker-only interactions cannot mutate the visible
+  panel range. Focused validation passed with
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "qr_rod_peak_editor or unified_editor or marker_group or qz_l_axis or marker_l_mapping" -ra`
+  (`29 passed`), scoped compileall, scoped Ruff format/check, and
+  `git diff --check`; full `python -m ra_sim.dev check` is blocked by an
+  unrelated dirty `ra_sim/gui/_runtime/runtime_session.py` format change.
 
 Known validation limits:
 
