@@ -120,12 +120,12 @@ def _safe_run_name(value: object) -> str:
 
 
 QR_ROD_PROFILE_CACHE_SCHEMA = "ra_sim.qr_rod_profile_cache.v1"
-QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_specular_theta_i0_l8_v9"
+QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_specular_theta_i0_l8_v10"
 PRE_EDITOR_CACHE_SCHEMA = "ra_sim.background_pre_editor_cache.v1"
 PRE_EDITOR_CACHE_SIGNATURE = "pre_qr_rod_marker_editor_inputs_v1"
 PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE = "background_peak_fit_results_v1"
 PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE = "profile_fit_cache_v1"
-PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_l_defaults_v8"
+PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_l_defaults_v9"
 
 
 def _cache_normalize_value(value: object) -> object:
@@ -567,6 +567,88 @@ def specular_qz_bounds_for_l_window(
     if not (np.isfinite(qz_lo) and np.isfinite(qz_hi)) or qz_hi <= qz_lo:
         return None
     return qz_lo, qz_hi
+
+
+def specular_qz_bounds_need_fallback(
+    strict_bounds: object,
+    fallback_bounds: object,
+    *,
+    tolerance: float = 1.0e-9,
+) -> bool:
+    def finite_bounds(bounds: object) -> tuple[float, float] | None:
+        if bounds is None:
+            return None
+        try:
+            values = np.asarray(bounds, dtype=np.float64).reshape(-1)
+        except Exception:
+            return None
+        if values.size < 2:
+            return None
+        lo, hi = sorted((float(values[0]), float(values[1])))
+        if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
+            return None
+        return float(lo), float(hi)
+
+    fallback = finite_bounds(fallback_bounds)
+    if fallback is None:
+        return False
+    strict = finite_bounds(strict_bounds)
+    if strict is None:
+        return True
+    strict_lo, strict_hi = strict
+    fallback_lo, fallback_hi = fallback
+    qz_tolerance = max(
+        abs(float(tolerance)),
+        abs(float(fallback_hi) - float(fallback_lo)) * 1.0e-9,
+        abs(float(fallback_lo)) * 1.0e-12,
+        abs(float(fallback_hi)) * 1.0e-12,
+    )
+    return bool(
+        strict_lo > fallback_lo + qz_tolerance or strict_hi < fallback_hi - qz_tolerance
+    )
+
+
+def qr_rod_profile_mask_visual_payload(
+    profile_mask_override: object,
+    *,
+    qz_map: object,
+    qz_min: object,
+    qz_max: object,
+    shape_mask: object,
+    signature: object | None = None,
+) -> dict[str, object] | None:
+    try:
+        override_mask = np.asarray(profile_mask_override, dtype=bool)
+        qz_values = np.asarray(qz_map, dtype=np.float64)
+        valid_shape = np.asarray(shape_mask, dtype=bool)
+        qz_lo, qz_hi = sorted((float(qz_min), float(qz_max)))
+    except Exception:
+        return None
+    if (
+        override_mask.ndim != 2
+        or qz_values.shape != override_mask.shape
+        or valid_shape.shape != override_mask.shape
+        or not (np.isfinite(qz_lo) and np.isfinite(qz_hi))
+        or qz_hi <= qz_lo
+    ):
+        return None
+    fill_mask = (
+        override_mask
+        & valid_shape
+        & np.isfinite(qz_values)
+        & (qz_values >= float(qz_lo))
+        & (qz_values <= float(qz_hi))
+    )
+    if not np.any(fill_mask):
+        return None
+    empty_mask = np.zeros(fill_mask.shape, dtype=bool)
+    return gui_qr_cylinder_overlay.compose_selected_qr_rod_band_visual_payload(
+        band_fill_mask=fill_mask,
+        centerline_mask=empty_mask,
+        band_boundary_inner=fill_mask,
+        band_boundary_outer=empty_mask,
+        signature=signature,
+    )
 
 
 def qr_rod_l_bounds_for_group(
@@ -12310,52 +12392,71 @@ specular_qz_bounds = specular_qz_bounds_for_l_window(
     lattice_c=ACTIVE_LATTICE_C,
     positive_qz_min=POSITIVE_QZ_MIN,
 )
+specular_profile_mask_override = None
+specular_fallback_region_mask = (
+    specular_detector_valid_q
+    & specular_detector_phi_mask
+    & np.isfinite(specular_detector_qr_map)
+    & np.isfinite(specular_detector_qz_map)
+    & np.isfinite(profile_detector_two_theta_map)
+    & (
+        np.asarray(profile_detector_two_theta_map, dtype=np.float64)
+        <= float(ROD_PROFILE_MAX_TWO_THETA_DEG)
+    )
+    & (specular_detector_qz_map > POSITIVE_QZ_MIN)
+)
+specular_fallback_qz_values = specular_detector_qz_map[
+    specular_fallback_region_mask & np.isfinite(specular_detector_qz_map)
+]
+specular_fallback_qz_bounds = specular_qz_bounds_for_l_window(
+    specular_fallback_qz_values,
+    specular_l_marker_table,
+    l_min=specular_profile_l_min,
+    l_max=specular_profile_l_max,
+    lattice_c=ACTIVE_LATTICE_C,
+    positive_qz_min=POSITIVE_QZ_MIN,
+)
+specular_use_fallback_qz_bounds = specular_qz_bounds_need_fallback(
+    specular_qz_bounds,
+    specular_fallback_qz_bounds,
+)
+if specular_use_fallback_qz_bounds:
+    specular_qz_bounds = specular_fallback_qz_bounds
+    specular_profile_mask_override = specular_fallback_region_mask
 if specular_qz_bounds is None:
     specular_qz_values = np.asarray([], dtype=np.float64)
 else:
     specular_qz_lo, specular_qz_hi = specular_qz_bounds
-    specular_detector_region_mask = specular_detector_region_mask & (
-        (specular_detector_qz_map >= float(specular_qz_lo))
-        & (specular_detector_qz_map <= float(specular_qz_hi))
-    )
-    specular_qz_values = specular_detector_qz_map[
-        specular_detector_region_mask & np.isfinite(specular_detector_qz_map)
-    ]
-specular_profile_mask_override = None
-if specular_qz_values.size < 2:
-    specular_fallback_region_mask = (
-        specular_detector_valid_q
-        & specular_detector_phi_mask
-        & np.isfinite(specular_detector_qr_map)
-        & np.isfinite(specular_detector_qz_map)
-        & np.isfinite(profile_detector_two_theta_map)
-        & (
-            np.asarray(profile_detector_two_theta_map, dtype=np.float64)
-            <= float(ROD_PROFILE_MAX_TWO_THETA_DEG)
+    if specular_profile_mask_override is None:
+        specular_detector_region_mask = specular_detector_region_mask & (
+            (specular_detector_qz_map >= float(specular_qz_lo))
+            & (specular_detector_qz_map <= float(specular_qz_hi))
         )
-        & (specular_detector_qz_map > POSITIVE_QZ_MIN)
-    )
-    specular_fallback_qz_values = specular_detector_qz_map[
-        specular_fallback_region_mask & np.isfinite(specular_detector_qz_map)
-    ]
-    specular_fallback_qz_bounds = specular_qz_bounds_for_l_window(
-        specular_fallback_qz_values,
-        specular_l_marker_table,
-        l_min=specular_profile_l_min,
-        l_max=specular_profile_l_max,
-        lattice_c=ACTIVE_LATTICE_C,
-        positive_qz_min=POSITIVE_QZ_MIN,
-    )
-    if specular_fallback_qz_bounds is not None:
-        specular_qz_lo, specular_qz_hi = specular_fallback_qz_bounds
         specular_qz_values = specular_detector_qz_map[
-            specular_fallback_region_mask
+            specular_detector_region_mask & np.isfinite(specular_detector_qz_map)
+        ]
+    else:
+        specular_qz_values = specular_detector_qz_map[
+            specular_profile_mask_override
             & np.isfinite(specular_detector_qz_map)
             & (specular_detector_qz_map >= float(specular_qz_lo))
             & (specular_detector_qz_map <= float(specular_qz_hi))
         ]
-        if specular_qz_values.size >= 2:
-            specular_profile_mask_override = specular_fallback_region_mask
+if (
+    specular_profile_mask_override is None
+    and specular_qz_values.size < 2
+    and specular_fallback_qz_bounds is not None
+):
+    specular_qz_bounds = specular_fallback_qz_bounds
+    specular_qz_lo, specular_qz_hi = specular_qz_bounds
+    specular_qz_values = specular_detector_qz_map[
+        specular_fallback_region_mask
+        & np.isfinite(specular_detector_qz_map)
+        & (specular_detector_qz_map >= float(specular_qz_lo))
+        & (specular_detector_qz_map <= float(specular_qz_hi))
+    ]
+    if specular_qz_values.size >= 2:
+        specular_profile_mask_override = specular_fallback_region_mask
 if not qr_rod_pre_editor_cache_hit:
     if specular_qz_values.size >= 2:
         specular_edges = np.linspace(
@@ -12846,6 +12947,12 @@ def recompute_qr_rod_region_profiles(
                 detector_two_theta_map=profile_detector_two_theta_map,
                 theta_initial_deg_used_for_q=specular_detector_theta_initial_deg,
                 delta_qr_override=delta_qr_value,
+                profile_mask_override=specular_profile_mask_override,
+                qr_integration_source_override=(
+                    "detector_specular_l_window_mask_per_qz_bin"
+                    if specular_profile_mask_override is not None
+                    else None
+                ),
             )
         elif m_int in rod_lookup and branch_text in branch_lookup:
             phi_min, phi_max, branch_label = branch_lookup[branch_text]
@@ -13080,6 +13187,7 @@ def build_qr_rod_detector_region_preview_figure() -> tuple[object, object] | Non
             color: str,
             fill_alpha: float = 0.11,
             boundary_alpha: float = 0.72,
+            profile_mask_override: object = None,
         ) -> None:
             visual = gui_qr_cylinder_overlay.build_detector_selected_qr_rod_band_visual_payload(
                 qr_map=qr_map,
@@ -13094,6 +13202,20 @@ def build_qr_rod_detector_region_preview_figure() -> tuple[object, object] | Non
                 phi_max=float(phi_max),
                 shape_mask=preview_shape_mask,
             )
+            if profile_mask_override is not None:
+                override_visual = qr_rod_profile_mask_visual_payload(
+                    profile_mask_override,
+                    qz_map=qz_map,
+                    qz_min=qz_min,
+                    qz_max=qz_max,
+                    shape_mask=preview_shape_mask,
+                    signature=(
+                        "qr_rod_preview_profile_mask_override",
+                        visual.get("signature") if isinstance(visual, dict) else None,
+                    ),
+                )
+                if override_visual is not None:
+                    visual = override_visual
             draw_preview_visual(
                 visual,
                 color,
@@ -13195,6 +13317,7 @@ def build_qr_rod_detector_region_preview_figure() -> tuple[object, object] | Non
                         color=OKABE_ITO["sky"],
                         fill_alpha=0.42,
                         boundary_alpha=1.0,
+                        profile_mask_override=specular_profile_mask_override,
                     )
             preview_fig.canvas.draw_idle()
 
@@ -15471,6 +15594,22 @@ if specular_visual_qz_bounds is not None:
             shape_mask=detector_region_shape_mask,
         )
     )
+    if specular_profile_mask_override is not None:
+        specular_override_visual = qr_rod_profile_mask_visual_payload(
+            specular_profile_mask_override,
+            qz_map=specular_detector_qz_map,
+            qz_min=specular_visual_qz_bounds[0],
+            qz_max=specular_visual_qz_bounds[1],
+            shape_mask=detector_region_shape_mask,
+            signature=(
+                "specular_profile_mask_override",
+                specular_delta_q_visual.get("signature")
+                if isinstance(specular_delta_q_visual, dict)
+                else None,
+            ),
+        )
+        if specular_override_visual is not None:
+            specular_delta_q_visual = specular_override_visual
     draw_detector_delta_q_region(
         specular_delta_q_visual,
         specular_color,

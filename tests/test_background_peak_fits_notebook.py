@@ -155,12 +155,12 @@ def _script_functions(*names: str) -> dict[str, object]:
         "ROD_QZ_NONLINEAR_LOG_RESIDUAL_WEIGHT": 1.0,
         "ROD_QZ_NONLINEAR_LOG_FLOOR_FRACTION": 0.05,
         "ROD_QZ_SHARED_LINEAR_BASELINE_ENABLED": True,
-        "QR_ROD_FINAL_FIT_CACHE_SIGNATURE": "joint_qz_labeled_marker_fit_specular_theta_i0_l8_v9",
+        "QR_ROD_FINAL_FIT_CACHE_SIGNATURE": "joint_qz_labeled_marker_fit_specular_theta_i0_l8_v10",
         "PRE_EDITOR_CACHE_SCHEMA": "ra_sim.background_pre_editor_cache.v1",
         "PRE_EDITOR_CACHE_SIGNATURE": "pre_qr_rod_marker_editor_inputs_v1",
         "PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE": "background_peak_fit_results_v1",
         "PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE": "profile_fit_cache_v1",
-        "PRE_EDITOR_QR_ROD_STAGE_SIGNATURE": "qr_rod_pre_marker_profiles_hk0_l_defaults_v8",
+        "PRE_EDITOR_QR_ROD_STAGE_SIGNATURE": "qr_rod_pre_marker_profiles_hk0_l_defaults_v9",
         "QR_ROD_BG_SIDE_BAND_INNER_SCALE": 1.30,
         "QR_ROD_BG_SIDE_BAND_OUTER_SCALE": 2.80,
         "QR_ROD_BG_MIN_SIDE_PIXELS": 8,
@@ -1950,6 +1950,42 @@ def test_parallel_script_specular_qz_bounds_falls_back_to_lattice_window() -> No
     assert bounds == pytest.approx((expected_lo, expected_hi))
 
 
+def test_parallel_script_specular_qz_bounds_need_fallback_when_strict_window_is_truncated() -> None:
+    namespace = _script_functions("specular_qz_bounds_need_fallback")
+    needs_fallback = namespace["specular_qz_bounds_need_fallback"]
+
+    assert needs_fallback((2.5, 3.0), (1.5, 3.0))
+    assert needs_fallback((1.5, 2.7), (1.5, 3.0))
+    assert needs_fallback(None, (1.5, 3.0))
+    assert not needs_fallback((1.5, 3.0), (1.5, 3.0))
+    assert not needs_fallback((1.5, 3.0), None)
+
+
+def test_parallel_script_specular_profile_uses_fallback_when_strict_qr_window_is_truncated() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    specular_profile_start = source.index(
+        "specular_all_qz_values = specular_detector_qz_map["
+    )
+    specular_profile_source = source[
+        specular_profile_start : source.index(
+            "if not qr_rod_pre_editor_cache_hit:", specular_profile_start
+        )
+    ]
+
+    fallback_mask = specular_profile_source.index("specular_fallback_region_mask = (")
+    fallback_bounds = specular_profile_source.index("specular_fallback_qz_bounds =")
+    fallback_decision = specular_profile_source.index(
+        "specular_use_fallback_qz_bounds = specular_qz_bounds_need_fallback("
+    )
+    fallback_apply = specular_profile_source.index(
+        "specular_profile_mask_override = specular_fallback_region_mask"
+    )
+
+    assert fallback_mask < fallback_bounds < fallback_decision < fallback_apply
+    assert "specular_qz_bounds = specular_fallback_qz_bounds" in specular_profile_source
+    assert "specular_qz_values.size < 2" in specular_profile_source
+
+
 def test_detector_region_centerlines_clip_to_visual_qz_bounds() -> None:
     namespace = _script_functions("clipped_detector_trace_to_qz_bounds")
     clip_trace = namespace["clipped_detector_trace_to_qz_bounds"]
@@ -2924,6 +2960,22 @@ def test_parallel_script_00l_region_uses_specular_editor_bounds_for_visual() -> 
     assert "specular_detector_qz_values.size >= 2" in detector_export
 
 
+def test_parallel_script_00l_visual_uses_profile_override_mask_when_specular_falls_back() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    detector_export = source[
+        source.index("specular_color = OKABE_ITO") : source.index(
+            "hk0_00l_region_path = FIGURE_OUT_DIR"
+        )
+    ]
+
+    assert "if specular_profile_mask_override is not None:" in detector_export
+    assert "specular_override_visual = qr_rod_profile_mask_visual_payload(" in detector_export
+    assert "qz_map=specular_detector_qz_map" in detector_export
+    assert "shape_mask=detector_region_shape_mask" in detector_export
+
+
 def test_parallel_script_detector_hk0_region_uses_prominent_specular_style() -> None:
     if not PARALLEL_SCRIPT_PATH.exists():
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
@@ -3518,7 +3570,7 @@ def test_parallel_script_qr_rod_marker_hash_changes_cache_key() -> None:
 
     assert cache_key(None) == {
         "mode": "last_cached",
-        "fit_signature": "joint_qz_labeled_marker_fit_specular_theta_i0_l8_v9",
+        "fit_signature": "joint_qz_labeled_marker_fit_specular_theta_i0_l8_v10",
     }
     assert cache_key(None, marker_table=markers, mode="popup") != cache_key(
         None, marker_table=shifted, mode="popup"
@@ -3552,7 +3604,7 @@ def test_parallel_script_marker_title_changes_cache_key() -> None:
 def test_parallel_script_qr_rod_final_cache_requires_fit_signature() -> None:
     namespace = _script_functions("qr_rod_profile_cache_has_final_fit")
     cache_has_final_fit = namespace["qr_rod_profile_cache_has_final_fit"]
-    final_fit_signature = "joint_qz_labeled_marker_fit_specular_theta_i0_l8_v9"
+    final_fit_signature = "joint_qz_labeled_marker_fit_specular_theta_i0_l8_v10"
     payload = {
         "final_rod_profile_table": pd.DataFrame(
             {"qz_center": [1.0, 2.0], "joint_fit_density": [0.1, 0.2]}
@@ -5275,6 +5327,8 @@ def test_parallel_script_detector_qr_preview_is_passed_to_unified_editor() -> No
     assert "preview_fig.canvas.draw_idle()" in preview_helper_section
     assert "l_bounds=qr_rod_l_bounds_for_group(" in preview_helper_section
     assert "prefer_fallback=l_bounds is not None" in preview_helper_section
+    assert "profile_mask_override=specular_profile_mask_override" in preview_helper_section
+    assert "override_visual = qr_rod_profile_mask_visual_payload(" in preview_helper_section
 
 
 def test_parallel_script_qr_rod_refresh_callbacks_filter_editor_phase() -> None:
@@ -5295,6 +5349,8 @@ def test_parallel_script_qr_rod_refresh_callbacks_filter_editor_phase() -> None:
     assert "editor_phase: object = None" in recompute_source
     assert "qr_rod_editor_phase_matches(m_int, editor_phase)" in recompute_source
     assert "round(float(delta_qr), 12),\n        str(editor_phase" in recompute_source
+    assert "profile_mask_override=specular_profile_mask_override" in recompute_source
+    assert "qr_integration_source_override=(" in recompute_source
     assert "editor_phase: object = None" in preview_helper_section
     assert "draw_nonzero_preview = qr_rod_editor_phase_matches(1, editor_phase)" in (
         preview_helper_section
@@ -5348,7 +5404,7 @@ def test_parallel_script_qz_l_axis_helper_is_defined_before_editor_l_window_setu
     assert "qr_rod_editor_initial_l_min = float(NONZERO_QR_ROD_L_MIN)" in source
     assert "qr_rod_editor_initial_l_max = float(NONZERO_QR_ROD_L_MAX)" in source
     assert (
-        'PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_l_defaults_v8"'
+        'PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_l_defaults_v9"'
         in source
     )
 
