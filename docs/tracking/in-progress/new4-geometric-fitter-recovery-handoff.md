@@ -9,6 +9,27 @@ Last updated: 2026-05-20
 
 ## Current status
 
+- 2026-05-20 shipping/status follow-up completed. The current branch contains
+  the detector-origin observed-caked projection fix and the follow-up regression
+  pinning commit. The cached live traces
+  `geometry_fit_trace_20260520_145342.jsonl` and
+  `geometry_fit_trace_20260520_155154.jsonl` still reproduce the broken
+  signature when checked, but both are pre-fix evidence; the newer cached trace
+  was written before the current fix commits. Bug/error status: fixed in the
+  source and regression suite for the caked-objective handoff path that reached
+  detector-pixel `central_point_match` with missing `fit_observed_caked_deg`.
+  Remaining runtime proof: rerun the real Tk GUI workflow after the current
+  commits and require either finite observed/predicted caked anchors with
+  `dynamic_angular_point_match` in degrees, or a preflight
+  `manual_caked_fit_space_missing` block before optimizer start. Feature
+  status: no GUI control, CLI flag, config key, saved-state field, artifact
+  schema, dependency, migration, deprecation, ADR, or version bump. CI/CD
+  status: no workflow change; local validation remains the project gate.
+  Validation status: focused handoff tests passed, the trace checker rejects
+  the known broken traces, `python -m ra_sim.dev check` passed, and the GUI
+  runtime/view/state tier passed on rerun after one non-repeatable Python
+  access violation. Shipping status: safe as an internal bug-fix slice with
+  rollback by git revert.
 - 2026-05-20 detector-origin observed caked projection follow-up completed.
   Detector-origin manual picks in explicit caked-required fits now project
   their observed detector anchor through the exact-caked projector during
