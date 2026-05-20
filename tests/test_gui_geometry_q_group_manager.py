@@ -2870,6 +2870,7 @@ def test_geometry_q_group_manager_collapses_degenerate_simulated_peaks() -> None
             },
         ],
         merge_radius_px=3.0,
+        one_per_q_group=True,
     )
 
     assert collapsed_count == 2
@@ -2878,7 +2879,8 @@ def test_geometry_q_group_manager_collapses_degenerate_simulated_peaks() -> None
     assert collapsed[0]["weight"] == 6.0
     assert collapsed[0]["degenerate_count"] == 3
     assert collapsed[0]["degenerate_hkls"] == [(1, 0, 0), (0, 1, 0), (1, 0, 1)]
-    assert collapsed[0]["selection_reason"] == "mosaic_top_per_branch"
+    assert collapsed[0]["selection_reason"] == "mosaic_top_per_q_group"
+    assert collapsed[0]["selection_scope"] == "q_group"
     assert collapsed[1]["weight"] == 4.0
 
 
@@ -4401,7 +4403,10 @@ def test_runtime_session_auto_refreshes_listed_qr_qz_after_simulation_update() -
         "if not need_hit_table_refresh and (\n"
         "        refresh_q_group_listing_requested or auto_q_group_list_refresh"
     )
-    consume_call = runtime_source.index("gui_controllers.consume_geometry_q_group_refresh_request")
+    consume_call = runtime_source.index(
+        "gui_controllers.consume_geometry_q_group_refresh_request",
+        capture_gate,
+    )
     assert consume_call > capture_gate
 
 
