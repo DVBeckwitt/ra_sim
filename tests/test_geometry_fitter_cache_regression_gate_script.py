@@ -6,12 +6,26 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "scripts/debug/run_geometry_fitter_cache_regression_gate.py"
+HANDOFF_CHECK_SCRIPT_PATH = REPO_ROOT / "scripts/diagnostics/check_geometry_fit_handoff.py"
 
 
 def _load_gate_module():
     spec = importlib.util.spec_from_file_location(
         "run_geometry_fitter_cache_regression_gate",
         SCRIPT_PATH,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_handoff_check_module():
+    spec = importlib.util.spec_from_file_location(
+        "check_geometry_fit_handoff",
+        HANDOFF_CHECK_SCRIPT_PATH,
     )
     assert spec is not None
     assert spec.loader is not None
@@ -75,3 +89,60 @@ def test_gate_uses_sys_executable_for_python_commands(tmp_path) -> None:
     runnable = [command for command in commands if not command.skipped]
     assert runnable
     assert all(command.command[0] == sys.executable for command in runnable)
+
+
+def test_geometry_fit_handoff_checker_rejects_broken_caked_signature(tmp_path) -> None:
+    checker = _load_handoff_check_module()
+    trace_path = tmp_path / "geometry_fit_trace_bad.jsonl"
+    trace_path.write_text(
+        "\n".join(
+            [
+                '{"record_type":"summary","live_runtime_cache_validation":'
+                '[["manual_caked_fit_space_required",false],'
+                '["validator_finite_caked_rows",0]]}',
+                '{"record_type":"run","final_metric_name":"central_point_match",'
+                '"point_match_summary":[["metric_unit","px"]],"nfev":1}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    violations = checker.violations_for_trace(trace_path)
+
+    assert any("broken signature present" in violation for violation in violations)
+
+
+def test_geometry_fit_handoff_checker_rejects_split_caked_objective_pixel_metric(
+    tmp_path,
+) -> None:
+    checker = _load_handoff_check_module()
+    trace_path = tmp_path / "geometry_fit_trace_split_bad.jsonl"
+    trace_path.write_text(
+        "\n".join(
+            [
+                '{"record_type":"audit","objective_space":"caked_deg"}',
+                '{"record_type":"run","final_metric_name":"central_point_match",'
+                '"point_match_summary":[["metric_unit","px"]],"nfev":1}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    violations = checker.violations_for_trace(trace_path)
+
+    assert any("objective_space=caked_deg used central_point_match" in v for v in violations)
+    assert any("objective_space=caked_deg used metric_unit=px" in v for v in violations)
+
+
+def test_geometry_fit_handoff_checker_allows_caked_preflight_failure(tmp_path) -> None:
+    checker = _load_handoff_check_module()
+    trace_path = tmp_path / "geometry_fit_trace_preflight.jsonl"
+    trace_path.write_text(
+        '{"record_type":"summary","objective_space":"caked_deg",'
+        '"manual_caked_fit_space_required":true,'
+        '"validator_finite_caked_rows":0,'
+        '"preflight_error":"manual_caked_fit_space_missing"}\n',
+        encoding="utf-8",
+    )
+
+    assert checker.violations_for_trace(trace_path) == []

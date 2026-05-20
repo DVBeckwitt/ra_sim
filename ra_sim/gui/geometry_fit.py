@@ -10856,6 +10856,7 @@ def build_geometry_manual_fit_dataset(
     base_fit_params: Mapping[str, object] | None,
     manual_dataset_bindings: GeometryFitRuntimeManualDatasetBindings,
     orientation_cfg: Mapping[str, object] | None = None,
+    manual_fit_requires_caked_space: bool = False,
     stage_callback: GeometryFitStageCallback | None = None,
 ) -> dict[str, object]:
     """Build one saved-manual-pair geometry dataset for the optimizer."""
@@ -11008,12 +11009,14 @@ def build_geometry_manual_fit_dataset(
             return None
         return float(2.0 * np.degrees(np.arcsin(arg)))
 
-    use_caked_display = False
+    use_caked_display = bool(manual_fit_requires_caked_space)
     if callable(manual_dataset_bindings.pick_uses_caked_space):
         try:
-            use_caked_display = bool(manual_dataset_bindings.pick_uses_caked_space())
+            use_caked_display = bool(
+                use_caked_display or manual_dataset_bindings.pick_uses_caked_space()
+            )
         except Exception:
-            use_caked_display = False
+            pass
 
     def _install_provider_simulated_point(
         initial_entry: dict[str, object],
@@ -16871,6 +16874,7 @@ def prepare_geometry_fit_run(
     require_active_background_in_selection: bool = True,
     include_all_selected_backgrounds: bool | None = None,
     manual_fit_pick_uses_caked_space: bool = False,
+    manual_fit_requires_caked_space: bool = False,
     stage_callback: GeometryFitStageCallback | None = None,
 ) -> GeometryFitPreparationResult:
     """Validate and assemble the manual-pair geometry-fit runtime inputs."""
@@ -17082,10 +17086,23 @@ def prepare_geometry_fit_run(
         pick_uses_caked_space=bool(manual_fit_pick_uses_caked_space),
         current_background_index=int(current_index),
     )
-    fit_space_error = manual_geometry_fit_space_preflight_error(
-        selected_manual_fit_space_by_background,
-        osc_files=osc_files,
+    explicit_caked_required_by_background = geometry_manual_caked_fit_space_required_by_background(
+        selected_background_indices,
+        objective_space="caked_deg" if bool(manual_fit_requires_caked_space) else None,
     )
+    selected_caked_required_indices = sorted(
+        {
+            int(idx)
+            for idx in selected_background_indices
+            if bool(explicit_caked_required_by_background.get(int(idx), False))
+        }
+    )
+    fit_space_error = None
+    if not selected_caked_required_indices:
+        fit_space_error = manual_geometry_fit_space_preflight_error(
+            selected_manual_fit_space_by_background,
+            osc_files=osc_files,
+        )
     if fit_space_error:
         return _failure_result(
             fit_space_error,
@@ -17100,18 +17117,22 @@ def prepare_geometry_fit_run(
             == "caked"
         }
     )
-    manual_pairs_use_caked_space = bool(selected_caked_background_indices)
+    required_caked_background_indices = sorted(
+        set(selected_caked_background_indices) | set(selected_caked_required_indices)
+    )
+    required_caked_background_set = set(required_caked_background_indices)
+    manual_pairs_use_caked_space = bool(required_caked_background_indices)
     if manual_pairs_use_caked_space:
         try:
             ensure_geometry_fit_caked_view()
         except Exception as exc:
             unavailable_backgrounds = ", ".join(
-                f"background {int(idx) + 1}" for idx in selected_caked_background_indices
+                f"background {int(idx) + 1}" for idx in required_caked_background_indices
             )
             error_text = (
                 "Geometry fit unavailable: exact caked fit-space projector could not be "
                 "prepared. Rebuild the caked/source cache and rerun the fit. "
-                "exact caked projector unavailable for caked-origin background pair "
+                "exact caked projector unavailable for caked-required background pair "
                 f"({unavailable_backgrounds})."
             )
             detail = str(exc).strip()
@@ -17140,18 +17161,26 @@ def prepare_geometry_fit_run(
             "base_fit_params": fit_params,
             "orientation_cfg": dict(orientation_cfg),
         }
-        if callable(stage_callback):
-            try:
-                signature = inspect.signature(build_dataset)
-            except (TypeError, ValueError):
-                signature = None
-            accepts_var_kwargs = bool(
-                signature is not None
-                and any(
-                    parameter.kind is inspect.Parameter.VAR_KEYWORD
-                    for parameter in signature.parameters.values()
-                )
+        try:
+            signature = inspect.signature(build_dataset)
+        except (TypeError, ValueError):
+            signature = None
+        accepts_var_kwargs = bool(
+            signature is not None
+            and any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in signature.parameters.values()
             )
+        )
+        if (
+            signature is None
+            or "manual_fit_requires_caked_space" in signature.parameters
+            or accepts_var_kwargs
+        ):
+            build_kwargs["manual_fit_requires_caked_space"] = bool(
+                int(dataset_index) in required_caked_background_set
+            )
+        if callable(stage_callback):
             if signature is None or "stage_callback" in signature.parameters or accepts_var_kwargs:
                 build_kwargs["stage_callback"] = stage_callback
         return build_dataset(
@@ -17497,6 +17526,27 @@ def geometry_manual_fit_space_by_background(
     return result
 
 
+def geometry_manual_caked_fit_space_required_by_background(
+    background_indices: Sequence[object] | None,
+    *,
+    objective_space: object | None = None,
+    requested_projection_view_mode: object | None = None,
+    explicit_fit_space: object | None = None,
+) -> dict[int, bool]:
+    """Return whether each background must run manual fitting in caked space."""
+
+    def _is_caked_space(value: object | None) -> bool:
+        text = str(value or "").strip().lower()
+        return text in {"caked", "caked_deg", "fit_space", "fit-space", "exact_caked_bundle"}
+
+    requires_caked = bool(
+        _is_caked_space(objective_space)
+        or _is_caked_space(requested_projection_view_mode)
+        or _is_caked_space(explicit_fit_space)
+    )
+    return {int(idx): bool(requires_caked) for idx in (background_indices or ())}
+
+
 def manual_geometry_fit_space_preflight_error(
     fit_space_by_background: Mapping[object, object] | None,
     *,
@@ -17608,7 +17658,7 @@ def manual_caked_geometry_fit_observed_anchor_preflight_error(
     if not missing_labels:
         return None
     return (
-        "Geometry fit unavailable: caked manual Qr/Qz fitting needs observed "
+        "Geometry fit unavailable: manual_caked_fit_space_missing: caked manual Qr/Qz fitting needs observed "
         "caked coordinates for every selected manual pair. Rebuild the exact "
         "caked projection and rerun the fit. Missing observed caked anchors: "
         + ", ".join(missing_labels)

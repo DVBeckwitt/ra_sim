@@ -42242,16 +42242,30 @@ def _build_geometry_fit_async_job(
         requested_signature_summaries.clear()
         for idx in required_indices:
             _record_background_fit_inputs(int(idx))
-    fit_space_error = gui_geometry_fit.manual_geometry_fit_space_preflight_error(
-        manual_fit_space_by_background,
-        osc_files=list(manual_dataset_bindings.osc_files or ()),
-    )
-    if fit_space_error:
-        raise RuntimeError(fit_space_error)
     manual_fit_uses_caked_space = any(
         str(kind) == "caked" for kind in manual_fit_space_by_background.values()
     )
-    if manual_fit_uses_caked_space:
+    targeted_projection_view_mode = _geometry_fit_targeted_projection_view_mode()
+    initial_projection_view_mode = (
+        "caked" if manual_fit_uses_caked_space else targeted_projection_view_mode
+    )
+    manual_caked_fit_space_required_by_background = (
+        gui_geometry_fit.geometry_manual_caked_fit_space_required_by_background(
+            required_indices,
+            requested_projection_view_mode=initial_projection_view_mode,
+        )
+    )
+    manual_fit_requires_caked_space = any(
+        bool(value) for value in manual_caked_fit_space_required_by_background.values()
+    )
+    if not manual_fit_requires_caked_space:
+        fit_space_error = gui_geometry_fit.manual_geometry_fit_space_preflight_error(
+            manual_fit_space_by_background,
+            osc_files=list(manual_dataset_bindings.osc_files or ()),
+        )
+        if fit_space_error:
+            raise RuntimeError(fit_space_error)
+    if manual_fit_requires_caked_space:
         if callable(prepare_bindings.ensure_geometry_fit_caked_view):
             prepare_bindings.ensure_geometry_fit_caked_view()
         pick_uses_caked_space = True
@@ -42263,7 +42277,7 @@ def _build_geometry_fit_async_job(
         base_geometry_runtime_cfg,
         joint_background_mode=joint_background_mode,
     )
-    if manual_fit_uses_caked_space:
+    if manual_fit_requires_caked_space:
         selected_manual_pair_rows = [
             dict(entry)
             for rows in manual_pairs_by_background.values()
@@ -42527,7 +42541,7 @@ def _build_geometry_fit_async_job(
     for background_idx, metadata in list(live_rows_cache_metadata_by_background.items()):
         metadata["live_rows_handoff_diagnostics"] = dict(live_rows_handoff_diagnostics)
         live_rows_cache_metadata_by_background[int(background_idx)] = metadata
-    if manual_fit_uses_caked_space and int(current_background_index) in set(required_indices):
+    if manual_fit_requires_caked_space and int(current_background_index) in set(required_indices):
         caked_view_payload = _geometry_fit_caked_view_for_index(int(current_background_index))
         if isinstance(caked_view_payload, Mapping):
             try:
@@ -42618,7 +42632,7 @@ def _build_geometry_fit_async_job(
             )
 
     projection_view_mode = (
-        "caked" if manual_fit_uses_caked_space else _geometry_fit_targeted_projection_view_mode()
+        "caked" if manual_fit_requires_caked_space else targeted_projection_view_mode
     )
     projection_view_signature_by_background: dict[int, dict[str, object]] = {}
     for idx in required_indices:
@@ -42819,6 +42833,9 @@ def _build_geometry_fit_async_job(
         "live_rows_handoff_diagnostics": live_rows_handoff_diagnostics,
         "manual_match_config": manual_match_config,
         "manual_fit_space_by_background": dict(manual_fit_space_by_background),
+        "manual_caked_fit_space_required_by_background": dict(
+            manual_caked_fit_space_required_by_background
+        ),
         "skipped_manual_pair_backgrounds": dict(skipped_manual_pair_backgrounds),
         "pick_uses_caked_space": bool(pick_uses_caked_space),
         "geometry_manual_simulated_lookup": (
@@ -45210,6 +45227,8 @@ def _run_async_geometry_fit_worker_job(
             base_mode = str(job_data.get("projection_view_mode") or "detector").strip().lower()
             if base_mode not in {"detector", "caked", "q_space"}:
                 base_mode = "detector"
+            if _worker_manual_caked_fit_space_required_for_background(int(background_idx)):
+                return "caked"
             manual_spaces = job_data.get("manual_fit_space_by_background")
             manual_space = ""
             if isinstance(manual_spaces, Mapping):
@@ -45238,13 +45257,16 @@ def _run_async_geometry_fit_worker_job(
             ):
                 return []
             normalized_mode = _trial_source_row_projection_mode()
+            caked_required = _worker_manual_caked_fit_space_required_for_background(
+                int(background_idx)
+            )
             projected_rows = _geometry_fit_rows_for_background(
                 int(background_idx),
                 _project_source_rows_for_background(
                     int(background_idx),
                     cached_bundle.stored_rows,
                     mode_override=normalized_mode,
-                    strict_caked_projection=False,
+                    strict_caked_projection=bool(caked_required),
                     params_override=param_set,
                 ),
             )
@@ -45254,6 +45276,8 @@ def _run_async_geometry_fit_worker_job(
                     background_index=int(background_idx),
                     mode=normalized_mode,
                 )
+            if caked_required:
+                return []
             return _bundle_rows(
                 cached_bundle,
                 mode_override=normalized_mode,
@@ -45657,6 +45681,14 @@ def _run_async_geometry_fit_worker_job(
 
     def _worker_manual_caked_fit_space_required_for_background(background_index: int) -> bool:
         background_idx = int(background_index)
+        required_by_background = job_data.get("manual_caked_fit_space_required_by_background")
+        if isinstance(required_by_background, Mapping):
+            raw_value = required_by_background.get(
+                background_idx,
+                required_by_background.get(str(background_idx)),
+            )
+            if raw_value is not None:
+                return bool(raw_value)
         manual_spaces = _worker_manual_fit_space_by_background()
         manual_space = str(manual_spaces.get(background_idx, "")).strip().lower()
         if manual_space == "caked":
@@ -45756,6 +45788,7 @@ def _run_async_geometry_fit_worker_job(
             int(background_idx)
             for background_idx, kind in manual_spaces.items()
             if str(kind) == "mixed"
+            and not _worker_manual_caked_fit_space_required_for_background(int(background_idx))
         ]
         if not mixed_backgrounds:
             return
@@ -45770,8 +45803,8 @@ def _run_async_geometry_fit_worker_job(
         _reject_worker_mixed_manual_fit_spaces(manual_spaces)
         caked_backgrounds = [
             int(background_idx)
-            for background_idx, kind in manual_spaces.items()
-            if str(kind) == "caked"
+            for background_idx in (job_data.get("required_indices", ()) or ())
+            if _worker_manual_caked_fit_space_required_for_background(int(background_idx))
         ]
         for background_idx in caked_backgrounds:
             if _worker_caked_view_payload_ready(int(background_idx)):
@@ -46022,13 +46055,14 @@ def _run_async_geometry_fit_worker_job(
             ),
             ensure_geometry_fit_caked_view=_ensure_worker_geometry_fit_caked_view,
             build_dataset=(
-                lambda background_index, *, theta_base, base_fit_params, orientation_cfg, stage_callback=None: (
+                lambda background_index, *, theta_base, base_fit_params, orientation_cfg, manual_fit_requires_caked_space=False, stage_callback=None: (
                     gui_geometry_fit.build_geometry_manual_fit_dataset(
                         background_index,
                         theta_base=theta_base,
                         base_fit_params=base_fit_params,
                         manual_dataset_bindings=worker_manual_dataset_bindings,
                         orientation_cfg=orientation_cfg,
+                        manual_fit_requires_caked_space=manual_fit_requires_caked_space,
                         stage_callback=stage_callback,
                     )
                 )
@@ -46039,6 +46073,12 @@ def _run_async_geometry_fit_worker_job(
                 )
             ),
             manual_fit_pick_uses_caked_space=bool(job_data.get("pick_uses_caked_space", False)),
+            manual_fit_requires_caked_space=any(
+                bool(value)
+                for value in dict(
+                    job_data.get("manual_caked_fit_space_required_by_background", {}) or {}
+                ).values()
+            ),
             stage_callback=_stage_callback,
         )
     except Exception as exc:

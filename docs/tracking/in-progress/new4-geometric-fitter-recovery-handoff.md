@@ -9,6 +9,37 @@ Last updated: 2026-05-20
 
 ## Current status
 
+- 2026-05-20 explicit caked-required handoff follow-up completed. The latest
+  GUI trace after the previous patch proved the invariant was still not fully
+  encoded: `manual_caked_fit_space_required=false`,
+  `validator_finite_caked_rows=0`, `exact_fit_space_projector_available=false`,
+  and the solver still completed as detector-pixel `central_point_match`.
+  Root cause: `manual_fit_space_by_background` was still being used as both
+  pick provenance and fit-space requirement, so detector-origin manual picks
+  could suppress the caked-objective guard. The handoff now carries an explicit
+  `manual_caked_fit_space_required_by_background` map derived from requested
+  caked projection/objective intent, while preserving detector-origin
+  provenance. Dataset preparation accepts `manual_fit_requires_caked_space`,
+  source-row validation fails closed when required caked rows are absent, and a
+  small trace checker rejects the broken signature
+  (`manual_caked_fit_space_required=false`, `validator_finite_caked_rows=0`,
+  `final_metric_name=central_point_match`, `metric_unit=px`). Bug/error
+  status: fixed for the circular caked-objective-to-pixel-central-match
+  fallback signature; remaining proof is a real GUI rerun showing either
+  `manual_caked_fit_space_missing` before optimizer start or
+  `dynamic_angular_point_match` in degrees with finite observed/predicted
+  caked anchors. Feature status: no GUI control, saved-state schema, CLI flag,
+  dependency, or version change.
+- 2026-05-20 review follow-up completed. The worker now also uses
+  `manual_fit_requires_caked_space` when copying the current exact caked
+  payload into the async job, and mixed detector/caked provenance is rejected
+  only for detector-space fits, not for explicit caked-required fits. The trace
+  checker now detects split-record contradictions where one trace row declares
+  `objective_space=caked_deg` and a later run row reports
+  `central_point_match` or `metric_unit=px`. Validation status: focused handoff
+  regressions pass, the known broken 20260520_145342 trace is rejected by the
+  checker, and `python -m ra_sim.dev check` passes. Live GUI rerun remains the
+  final operator smoke test.
 - 2026-05-20 caked handoff simplification pass completed. The follow-up
   refactor preserved behavior while reducing duplicate fit-space classification
   code: worker manual-pair extraction now flows through one local helper, and

@@ -5,6 +5,44 @@ on:
   pull_request:
 
 jobs:
+  geometry-fit-handoff:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Bootstrap dev environment
+        run: python -m ra_sim.dev bootstrap
+
+      - name: Geometry fit handoff regressions
+        env:
+          PYTHONPATH: .
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: |
+          python -m pytest -q \
+            tests/test_geometry_fit_manual_fit_space_classification.py \
+            tests/test_geometry_fitter_cache_regression_gate_script.py \
+            -ra
+
+      - name: Geometry fit handoff trace invariant
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          Path("geometry_fit_trace_ci_ok.jsonl").write_text(
+              '{"record_type":"summary","objective_space":"caked_deg",'
+              '"manual_caked_fit_space_required":true,'
+              '"validator_finite_caked_rows":0,'
+              '"preflight_error":"manual_caked_fit_space_missing"}\n',
+              encoding="utf-8",
+          )
+          PY
+          python scripts/diagnostics/check_geometry_fit_handoff.py geometry_fit_trace_ci_ok.jsonl
+
   test:
     runs-on: ubuntu-latest
     strategy:

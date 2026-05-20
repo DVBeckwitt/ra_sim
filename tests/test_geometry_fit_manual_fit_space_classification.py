@@ -22,6 +22,18 @@ def _detector_origin_pair() -> dict[str, object]:
     }
 
 
+def _detector_origin_pair_without_caked_anchor() -> dict[str, object]:
+    pair = dict(_detector_origin_pair())
+    for key in (
+        "background_two_theta_deg",
+        "background_phi_deg",
+        "caked_x",
+        "caked_y",
+    ):
+        pair.pop(key, None)
+    return pair
+
+
 def _caked_origin_pair() -> dict[str, object]:
     return {
         "pair_id": "caked-origin",
@@ -43,6 +55,7 @@ def _prepare_with_pair(
     projector_kind: str | None = None,
     projector=None,
     var_names: list[str] | None = None,
+    manual_fit_requires_caked_space: bool = False,
 ):
     def _build_dataset(background_index, **_kwargs):
         return {
@@ -84,6 +97,7 @@ def _prepare_with_pair(
         ensure_geometry_fit_caked_view=ensure_geometry_fit_caked_view,
         build_dataset=_build_dataset,
         build_runtime_config=lambda _params: {"solver": {"dynamic_point_geometry_fit": True}},
+        manual_fit_requires_caked_space=bool(manual_fit_requires_caked_space),
     )
 
 
@@ -138,6 +152,93 @@ def test_detector_origin_pair_with_backfilled_caked_fields_stays_detector_for_tw
     assert spaces == {0: "detector"}
 
 
+def test_caked_requirement_is_separate_from_detector_origin_provenance() -> None:
+    spaces = geometry_fit.geometry_manual_fit_space_by_background(
+        [0],
+        {0: [_detector_origin_pair()]},
+        pick_uses_caked_space=False,
+        current_background_index=0,
+        active_var_names=["gamma", "Gamma"],
+    )
+
+    required = geometry_fit.geometry_manual_caked_fit_space_required_by_background(
+        [0],
+        objective_space="caked_deg",
+        requested_projection_view_mode="detector",
+        explicit_fit_space=None,
+    )
+
+    assert spaces == {0: "detector"}
+    assert required == {0: True}
+
+
+def test_caked_requirement_overrides_mixed_pick_provenance_for_preflight() -> None:
+    pairs_by_background = {
+        0: [_detector_origin_pair()],
+        1: [_caked_origin_pair()],
+    }
+    build_calls: list[tuple[int, bool]] = []
+
+    def _build_dataset(background_index, **kwargs):
+        requires_caked = bool(kwargs.get("manual_fit_requires_caked_space", False))
+        build_calls.append((int(background_index), requires_caked))
+        pair = dict(pairs_by_background[int(background_index)][0])
+        return {
+            "dataset_index": int(background_index),
+            "label": f"bg{int(background_index)}.osc",
+            "pair_count": 1,
+            "group_count": 1,
+            "resolved_source_pair_count": 1,
+            "summary_line": f"bg[{int(background_index)}]",
+            "measured_for_fit": [pair],
+            "manual_point_pairs": [pair],
+            "spec": {
+                "dataset_index": int(background_index),
+                "label": f"bg{int(background_index)}.osc",
+                "measured_peaks": [pair],
+                "fit_space_projector": lambda cols, rows, **_kwargs: {
+                    "two_theta_deg": cols,
+                    "phi_deg": rows,
+                    "valid": True,
+                    "fit_space_projector_kind": "exact_caked_bundle",
+                },
+                "fit_space_projector_kind": "exact_caked_bundle",
+            },
+            "initial_pairs_display": [],
+            "native_background": None,
+        }
+
+    result = geometry_fit.prepare_geometry_fit_run(
+        params={"theta_initial": 0.0},
+        var_names=["gamma", "Gamma"],
+        fit_config={},
+        osc_files=["bg0.osc", "bg1.osc"],
+        current_background_index=0,
+        theta_initial=0.0,
+        preserve_live_theta=False,
+        apply_geometry_fit_background_selection=lambda **_kwargs: True,
+        current_geometry_fit_background_indices=lambda **_kwargs: [0, 1],
+        geometry_fit_uses_shared_theta_offset=lambda *_args, **_kwargs: False,
+        apply_background_theta_metadata=lambda **_kwargs: True,
+        current_background_theta_values=lambda **_kwargs: [0.0, 1.0],
+        current_geometry_theta_offset=lambda **_kwargs: 0.0,
+        geometry_manual_pairs_for_index=lambda idx: [dict(pairs_by_background[int(idx)][0])],
+        ensure_geometry_fit_caked_view=lambda: None,
+        build_dataset=_build_dataset,
+        build_runtime_config=lambda _params: {"solver": {"dynamic_point_geometry_fit": True}},
+        include_all_selected_backgrounds=True,
+        manual_fit_requires_caked_space=True,
+    )
+
+    assert result.error_text is None
+    assert result.prepared_run is not None
+    assert build_calls == [(0, True), (1, True)]
+    assert all(
+        spec["_manual_caked_fit_space_required"] is True
+        for spec in result.prepared_run.dataset_specs
+    )
+
+
 def test_detector_origin_pair_does_not_call_ensure_caked_view() -> None:
     result = _prepare_with_pair(
         _detector_origin_pair(),
@@ -185,6 +286,57 @@ def test_detector_origin_two_tilt_fit_uses_detector_manual_point_runtime() -> No
     assert "_qr_fit_point_only_projection" not in solver
     assert "_headless_accept_caked_angular_metric_without_pixel_threshold" not in solver
     assert "bounds" not in cfg
+
+
+def test_detector_origin_pair_requested_caked_objective_fails_without_observed_anchor() -> None:
+    calls: list[str] = []
+
+    result = _prepare_with_pair(
+        _detector_origin_pair_without_caked_anchor(),
+        ensure_geometry_fit_caked_view=lambda: calls.append("ensure"),
+        projector_kind=None,
+        projector=None,
+        var_names=["gamma", "Gamma"],
+        manual_fit_requires_caked_space=True,
+    )
+
+    assert calls == ["ensure"]
+    assert result.prepared_run is None
+    assert result.error_text is not None
+    assert "manual_caked_fit_space_missing" in result.error_text
+    assert "observed caked" in result.error_text
+
+
+def test_detector_origin_pair_requested_caked_objective_uses_dynamic_angular_runtime() -> None:
+    calls: list[str] = []
+
+    def _projector(cols, rows, **_kwargs):
+        return {
+            "two_theta_deg": cols,
+            "phi_deg": rows,
+            "valid": True,
+            "fit_space_projector_kind": "exact_caked_bundle",
+        }
+
+    result = _prepare_with_pair(
+        _detector_origin_pair(),
+        ensure_geometry_fit_caked_view=lambda: calls.append("ensure"),
+        projector_kind="exact_caked_bundle",
+        projector=_projector,
+        var_names=["gamma", "Gamma"],
+        manual_fit_requires_caked_space=True,
+    )
+
+    assert calls == ["ensure"]
+    assert result.error_text is None
+    assert result.prepared_run is not None
+    cfg = result.prepared_run.geometry_runtime_cfg
+    solver = cfg["solver"]
+    assert cfg["projection_view_mode"] == "caked"
+    assert solver["manual_point_fit_mode"] is True
+    assert solver["dynamic_point_geometry_fit"] is True
+    assert solver["_qr_fit_point_only_projection"] is True
+    assert result.prepared_run.dataset_specs[0]["_manual_caked_fit_space_required"] is True
 
 
 def test_caked_objective_missing_observed_anchor_fails_preflight() -> None:
