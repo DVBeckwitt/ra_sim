@@ -84,6 +84,13 @@ non-interactive path:
 
 ## Manual Geometry Status
 
+- Fixed: Qr/Qz group identity is now displayed and exported as `m,L`, where
+  `m = H^2 + H*K + K^2` and `L` is the Miller L index. Existing saved
+  `q_group/source/m/L` keys remain compatible. Locked manual Qr/Qz geometry
+  fits now accept current simulated rows with the same `m,L` identity even when
+  the signed HKL representative changes, so the `m=1, L=10` Bi2Se3 pair
+  `(-1,0,10)` / `(1,0,10)` does not fail as
+  `prediction_branch_source_switched`.
 - Fixed: caked-view Qr/Qz picking no longer lets an already saved placement intercept normal pick clicks. Move/edit behavior now requires the explicit drag-move tool, so selecting a later set such as `006` is not redirected to an earlier saved set such as `003`.
 - Fixed: detector-view manual Qr/Qz placements now save the projected caked `(2theta, phi)` cache values, and imported legacy GUI states missing those fields are backfilled when a caked transform is available.
 - Fixed: headless `fit-geometry` now performs the same legacy manual-pair caked-coordinate backfill before preparing the geometry fit and returns an updated saved-state snapshot when rows were repaired.

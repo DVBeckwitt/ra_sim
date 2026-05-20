@@ -9,6 +9,24 @@ Last updated: 2026-05-20
 
 ## Current status
 
+- 2026-05-20 same-`m,L` Qr/Qz identity slice completed. Qr/Qz selector rows
+  now expose the canonical `m=H^2+H*K+K^2, L` identity in helper contracts,
+  row labels, and exported rows while preserving the serialized
+  `("q_group", source, m, L)` saved-state key. Locked manual Qr/Qz source-row
+  resolution now treats signed-HK representatives from the same `m,L` family
+  as the same Q-group when branch identity still matches. Bug/error status:
+  fixed for the follow-up GUI rejection where a direct two-branch `m=1,L=10`
+  fit could run direct LSQ and then fail final acceptance with
+  `prediction_branch_source_switched` / `matched=0` after `(-1,0,10)` was
+  compared against an equivalent current row such as `(1,0,10)`. Feature
+  status: label/export clarity only; no new operator control. Compatibility
+  status: saved-state key shape, CLI flags, config keys, and artifact schemas
+  remain compatible; additive `m_index` and `l_index` fields are included in
+  Qr/Qz export rows beside legacy `gz_index`. CI/CD status: no workflow files
+  changed. Validation so far: focused q-group manager tests and locked-Qr
+  source-row resolver regressions passed. Remaining verification: rerun the
+  user's GUI default caked-mode `m=1,L=10` `gamma,Gamma` fit to confirm the
+  dialog no longer reports `prediction_branch_source_switched`.
 - 2026-05-20 detector-origin simplification slice completed. Manual Qr/Qz rows
   picked in detector view now stay on the fixed detector-pixel LSQ path,
   including `gamma,Gamma`, instead of being auto-promoted into the exact-caked

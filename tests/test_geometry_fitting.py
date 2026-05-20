@@ -7911,6 +7911,68 @@ def test_geometry_fit_correspondence_saved_detector_waits_for_row_proof() -> Non
     assert payload["source_row_preferred_over_branch_representative"] is True
 
 
+def test_geometry_fit_correspondence_accepts_same_ml_hkl_for_locked_q_group() -> None:
+    correspondence = _provider_local_singleton_entry(
+        hkl=(-1, 0, 10),
+        label="-1,0,10",
+        q_group_key=("q_group", "primary", 1, 10),
+        source_row_index=0,
+        source_branch_index=1,
+        source_peak_index=1,
+        resolved_peak_index=1,
+        provider_selected_source_identity_canonical={
+            "normalized_hkl": [-1, 0, 10],
+            "source_table_index": 99,
+            "source_row_index": 0,
+            "source_peak_index": 1,
+            "source_branch_index": 1,
+            "q_group_key": ["q_group", "primary", 1, 10],
+        },
+    )
+    hit_tables = [np.asarray([[1.0, 4.0, 4.0, 10.0, 1.0, 0.0, 10.0]], dtype=np.float64)]
+
+    point, payload = opt._geometry_fit_correspondence_simulated_point_payload(
+        correspondence,
+        hit_tables=hit_tables,
+        max_positions=np.zeros((1, 6), dtype=np.float64),
+    )
+
+    assert point == (4.0, 4.0)
+    assert payload["resolution_reason"] == "resolved_source_row"
+    assert payload["source_row_hkl_q_group_equivalent"] is True
+    assert payload["source_row_hkl_q_group_ml"] == (1, 10)
+    assert payload["resolved_sim_hkl"] == (1, 0, 10)
+    assert payload["resolution_reason"] != "prediction_branch_source_switched"
+
+
+def test_geometry_fit_correspondence_recovers_stale_same_ml_hkl_for_locked_q_group() -> None:
+    correspondence = _provider_local_singleton_entry(
+        hkl=(-1, 0, 10),
+        label="-1,0,10",
+        q_group_key=("q_group", "primary", 1, 10),
+        source_row_index=24,
+        source_branch_index=1,
+        source_peak_index=1,
+        resolved_peak_index=1,
+    )
+    hit_tables = [np.asarray([[1.0, 4.0, 4.0, 10.0, 1.0, 0.0, 10.0]], dtype=np.float64)]
+
+    point, payload = opt._geometry_fit_correspondence_simulated_point_payload(
+        correspondence,
+        hit_tables=hit_tables,
+        max_positions=np.zeros((1, 6), dtype=np.float64),
+    )
+
+    assert point == (4.0, 4.0)
+    assert payload["resolution_reason"] == (
+        "provider_local_stale_row_index_q_group_single_row_resolved"
+    )
+    assert payload["source_row_hkl_q_group_equivalent"] is True
+    assert payload["source_row_hkl_q_group_ml"] == (1, 10)
+    assert payload["resolved_sim_hkl"] == (1, 0, 10)
+    assert payload["resolution_reason"] != "prediction_branch_source_switched"
+
+
 def test_prediction_branch_source_switched_for_locked_qr_row_unavailable() -> None:
     point, payload = _saved_detector_waits_for_row_proof_payload()
 

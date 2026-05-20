@@ -83,6 +83,12 @@
     the fixed detector-pixel direct-LSQ path instead of inheriting seed
     multistart or being auto-promoted into the caked angular objective when
     `gamma,Gamma` are selected.
+  - Made Qr/Qz group identity explicit as `m=H^2+H*K+K^2, L` while preserving
+    the saved `("q_group", source, m, L)` key shape, updated selector/export
+    labels to expose `m` and `L`, and fixed locked manual Qr/Qz source-row
+    resolution so same-`m,L` HKL equivalents such as `(-1,0,10)` and
+    `(1,0,10)` do not reject the fitted solution as
+    `prediction_branch_source_switched`.
   - Changed GUI fit-background activation so multi-background geometry-fit
     sessions start with only the initial image selected; later backgrounds are
     added by saved enabled manual Qr/Qz pairs, and selected later backgrounds

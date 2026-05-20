@@ -50,6 +50,28 @@ def test_q_group_signature_value_handles_recursive_or_bad_sequence_values() -> N
     assert bad_signature[1] == "BadSequence"
 
 
+def test_geometry_q_group_ml_helpers_map_hexagonal_equivalents() -> None:
+    assert geometry_q_group_manager.geometry_q_group_m_from_hk(-1, 0) == 1
+    assert geometry_q_group_manager.geometry_q_group_m_from_hk(1, 1) == 3
+
+    equivalent_hkls = [(-1, 0, 10), (1, 0, 10), (0, -1, 10), (0, 1, 10)]
+    assert [
+        geometry_q_group_manager.geometry_q_group_ml_from_hkl(hkl)
+        for hkl in equivalent_hkls
+    ] == [(1, 10), (1, 10), (1, 10), (1, 10)]
+
+    key, _qr_val, _qz_val = geometry_q_group_manager.reflection_q_group_metadata(
+        (-1, 0, 10),
+        source_label="primary",
+        a_value=3.0,
+        c_value=5.0,
+    )
+    assert key == ("q_group", "primary", 1, 10)
+    assert geometry_q_group_manager.geometry_q_group_ml_from_key(key) == (1, 10)
+    assert geometry_q_group_manager.geometry_q_group_ml_from_key(("primary", 1, 10)) == (1, 10)
+    assert geometry_q_group_manager.geometry_q_group_ml_from_key((1, 0, 10)) is None
+
+
 def _make_runtime_q_group_bundle(
     runtime_state,
     *,
@@ -363,6 +385,8 @@ def test_geometry_q_group_entries_keep_explicit_group_without_hkl() -> None:
     assert entries[0]["key"] == group_key
     assert entries[0]["qr"] == 1.25
     assert entries[0]["qz"] == 2.5
+    assert entries[0]["m_index"] == 5
+    assert entries[0]["l_index"] == 2
     assert entries[0]["gz_index"] == 2
     assert entries[0]["peak_count"] == 1
     assert entries[0]["hkl_preview"] == []
@@ -3628,6 +3652,9 @@ def test_geometry_q_group_manager_formats_lines_and_builds_status_text() -> None
 
     assert "primary" in line
     assert "Qr=    1.25" in line
+    assert "m=   1" in line
+    assert "L=   0" in line
+    assert "Gz=" not in line
     assert "Qz=    0.50" in line
     assert "1.2500" not in line
     assert "0.5000" not in line
@@ -4563,7 +4590,13 @@ def test_geometry_q_group_manager_save_load_helpers_round_trip() -> None:
     assert payload["included_count"] == 1
     assert export_rows[0]["included"] is True
     assert export_rows[1]["included"] is False
+    assert export_rows[0]["m_index"] == 1
+    assert export_rows[0]["l_index"] == 0
+    assert export_rows[0]["gz_index"] == 0
     assert "Qr=" in export_rows[0]["display_label"]
+    assert "m=" in export_rows[0]["display_label"]
+    assert "L=" in export_rows[0]["display_label"]
+    assert "Gz=" not in export_rows[0]["display_label"]
     assert saved_state == {
         "saved_rows": {key1: True, key2: False},
         "disabled_qr_sets": [],

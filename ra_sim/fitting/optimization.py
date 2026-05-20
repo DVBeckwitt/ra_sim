@@ -3314,6 +3314,55 @@ pair_selected_qr_and_background_points = _mosaic_profiles.pair_selected_qr_and_b
 stack_centered_phi_profiles = _mosaic_profiles.stack_centered_phi_profiles
 
 
+def _q_group_key_component(value: object) -> int | float | None:
+    try:
+        numeric = float(value)
+    except Exception:
+        return None
+    if not np.isfinite(numeric):
+        return None
+    if abs(numeric - round(numeric)) <= 1.0e-6:
+        return int(round(numeric))
+    return round(float(numeric), 6)
+
+
+def _q_group_ml_from_hkl(value: object) -> tuple[int | float, int] | None:
+    hkl_key = _normalized_hkl_key(value)
+    if hkl_key is None:
+        return None
+    h_val, k_val, l_val = (int(hkl_key[0]), int(hkl_key[1]), int(hkl_key[2]))
+    m_component = _q_group_key_component(h_val * h_val + h_val * k_val + k_val * k_val)
+    if m_component is None:
+        return None
+    return m_component, int(l_val)
+
+
+def _q_group_ml_from_key(value: object) -> tuple[int | float, int] | None:
+    q_group_key = _normalized_q_group_key(value)
+    if q_group_key is None or len(q_group_key) < 4 or str(q_group_key[0]) != "q_group":
+        return None
+    m_component = _q_group_key_component(q_group_key[2])
+    if m_component is None:
+        return None
+    try:
+        l_numeric = float(q_group_key[3])
+    except Exception:
+        return None
+    if not np.isfinite(l_numeric):
+        return None
+    l_int = int(round(l_numeric))
+    if abs(l_numeric - float(l_int)) > 1.0e-6:
+        return None
+    return m_component, int(l_int)
+
+
+def _hkl_matches_q_group_ml(value: object, q_group_key: object) -> bool:
+    q_group_ml = _q_group_ml_from_key(q_group_key)
+    if q_group_ml is None:
+        return False
+    return _q_group_ml_from_hkl(value) == q_group_ml
+
+
 def focus_mosaic_profile_dataset_specs(
     dataset_specs: Sequence[Dict[str, object]],
     *,
@@ -13793,9 +13842,21 @@ def _resolve_exact_fixed_manual_source_row(
             else None,
         }
     )
+    source_row_q_group_equivalent = False
+    source_row_q_group_ml = None
     if requested_hkl is not None and tuple(source_row_hkl or ()) != tuple(requested_hkl):
-        payload["source_row_rejection_reason"] = "source_row_hkl_mismatch"
-        return None, payload, "source_row_hkl_mismatch"
+        source_row_q_group_ml = _q_group_ml_from_hkl(source_row_hkl)
+        if _hkl_matches_q_group_ml(source_row_hkl, entry.get("q_group_key")):
+            source_row_q_group_equivalent = True
+        else:
+            payload["source_row_hkl_q_group_ml"] = source_row_q_group_ml
+            payload["source_row_rejection_reason"] = "source_row_hkl_mismatch"
+            return None, payload, "source_row_hkl_mismatch"
+    if source_row_q_group_equivalent:
+        payload["source_row_hkl_q_group_equivalent"] = True
+        payload["source_row_hkl_q_group_ml"] = source_row_q_group_ml
+    else:
+        payload["source_row_hkl_q_group_equivalent"] = False
     branch_required = _provider_local_requires_branch_proof(entry)
     if branch_required and requested_branch in {0, 1} and source_row_branch not in {0, 1}:
         payload["source_row_rejection_reason"] = "source_row_branch_missing"
@@ -13981,8 +14042,10 @@ def _provider_local_resolve_stale_fixed_source_row(
     ]
     requested_branch = int(requested_branch_values[0]) if requested_branch_values else None
 
+    requested_q_group_ml = _q_group_ml_from_key(entry.get("q_group_key"))
     valid_records: List[Tuple[Mapping[str, object], np.ndarray, Optional[int]]] = []
     hkl_records: List[Tuple[Mapping[str, object], np.ndarray, Optional[int]]] = []
+    q_group_records: List[Tuple[Mapping[str, object], np.ndarray, Optional[int]]] = []
     for record in row_records:
         row_obj = record.get("row") if isinstance(record, Mapping) else None
         try:
@@ -14003,10 +14066,18 @@ def _provider_local_resolve_stale_fixed_source_row(
         valid_records.append((record, np.asarray(row[:7], dtype=float), row_branch))
         if row_hkl == requested_hkl:
             hkl_records.append((record, np.asarray(row[:7], dtype=float), row_branch))
+        elif (
+            requested_q_group_ml is not None
+            and _q_group_ml_from_hkl(row_hkl) == requested_q_group_ml
+        ):
+            q_group_records.append((record, np.asarray(row[:7], dtype=float), row_branch))
 
     payload["provider_local_valid_row_count"] = int(len(valid_records))
     payload["provider_local_hkl_row_count"] = int(len(hkl_records))
-    if not hkl_records:
+    payload["provider_local_q_group_equivalent_row_count"] = int(len(q_group_records))
+    matched_records = hkl_records if hkl_records else q_group_records
+    matched_by_q_group = bool(not hkl_records and q_group_records)
+    if not matched_records:
         payload["prediction_source_status"] = "unavailable"
         return None, payload, "provider_local_hkl_mismatch"
 
@@ -14017,10 +14088,12 @@ def _provider_local_resolve_stale_fixed_source_row(
         *,
         reason: str,
         single_row: bool,
+        q_group_equivalent: bool,
     ) -> Tuple[np.ndarray, Dict[str, object], str]:
         row_position = _nonnegative_index(record.get("row_position"))
         source_row_index = _nonnegative_index(record.get("source_row_index"))
         stale_row_idx = _nonnegative_index(entry.get("source_row_index"))
+        resolved_hkl = _hit_row_hkl(row) or requested_hkl
         resolved_peak_idx = requested_branch
         if resolved_peak_idx not in {0, 1} and row_branch in {0, 1}:
             resolved_peak_idx = int(row_branch)
@@ -14043,7 +14116,9 @@ def _provider_local_resolve_stale_fixed_source_row(
                     int(stale_row_idx) if stale_row_idx is not None else None
                 ),
                 "source_row_rejection_reason": None,
-                "resolved_sim_hkl": tuple(int(v) for v in requested_hkl),
+                "resolved_sim_hkl": tuple(int(v) for v in resolved_hkl),
+                "source_row_hkl_q_group_equivalent": bool(q_group_equivalent),
+                "source_row_hkl_q_group_ml": requested_q_group_ml if q_group_equivalent else None,
                 "provider_local_stale_row_index_single_row_table_resolved": bool(single_row),
                 "provider_local_stale_row_index_branch_resolved": bool(not single_row),
                 "provider_local_branch_match_row_count": 1 if not single_row else 0,
@@ -14052,13 +14127,19 @@ def _provider_local_resolve_stale_fixed_source_row(
         return np.asarray(row[:7], dtype=float), extra, str(reason)
 
     if len(row_records) == 1:
-        record, row, row_branch = hkl_records[0]
+        record, row, row_branch = matched_records[0]
+        reason = (
+            "provider_local_stale_row_index_q_group_single_row_resolved"
+            if matched_by_q_group
+            else "provider_local_stale_row_index_single_row_table_resolved"
+        )
         return _success_payload(
             record,
             row,
             row_branch,
-            reason="provider_local_stale_row_index_single_row_table_resolved",
+            reason=reason,
             single_row=True,
+            q_group_equivalent=matched_by_q_group,
         )
 
     if requested_branch not in {0, 1}:
@@ -14067,7 +14148,7 @@ def _provider_local_resolve_stale_fixed_source_row(
 
     branch_records = [
         (record, row, row_branch)
-        for record, row, row_branch in hkl_records
+        for record, row, row_branch in matched_records
         if row_branch in {0, 1} and int(row_branch) == int(requested_branch)
     ]
     payload["provider_local_branch_match_row_count"] = int(len(branch_records))
@@ -14081,12 +14162,18 @@ def _provider_local_resolve_stale_fixed_source_row(
         return None, payload, reason
 
     record, row, row_branch = branch_records[0]
+    reason = (
+        "provider_local_stale_row_index_q_group_branch_resolved"
+        if matched_by_q_group
+        else "provider_local_stale_row_index_branch_resolved"
+    )
     return _success_payload(
         record,
         row,
         row_branch,
-        reason="provider_local_stale_row_index_branch_resolved",
+        reason=reason,
         single_row=False,
+        q_group_equivalent=matched_by_q_group,
     )
 
 

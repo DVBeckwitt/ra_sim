@@ -778,12 +778,28 @@ def _geometry_hit_row_peak_indices(
     return assignments
 
 
-def _reflection_q_group_components(
+def geometry_q_group_m_from_hk(h_value: object, k_value: object) -> int | float | None:
+    """Return the stable hexagonal radial group component ``m`` for ``H,K``."""
+
+    try:
+        h_raw = float(h_value)
+        k_raw = float(k_value)
+    except Exception:
+        return None
+    if not (np.isfinite(h_raw) and np.isfinite(k_raw)):
+        return None
+    m_val = h_raw * h_raw + h_raw * k_raw + k_raw * k_raw
+    if not np.isfinite(m_val):
+        return None
+    return gui_manual_geometry.q_group_key_component(float(m_val))
+
+
+def geometry_q_group_ml_from_hkl(
     hkl_value: object,
     *,
     allow_nominal_hkl_indices: bool = False,
-) -> tuple[float, int] | None:
-    """Return the stable ``(m, l)`` components used for Qr/Qz grouping."""
+) -> tuple[int | float, int] | None:
+    """Return the stable ``(m, L)`` Qr/Qz group identity for one HKL value."""
 
     if not isinstance(hkl_value, (list, tuple, np.ndarray)) or len(hkl_value) < 3:
         return None
@@ -798,18 +814,63 @@ def _reflection_q_group_components(
         hkl_group = gui_geometry_overlay.normalize_hkl_key(hkl_value)
         if hkl_group is None:
             return None
-        h_group = float(hkl_group[0])
-        k_group = float(hkl_group[1])
+        h_value = hkl_group[0]
+        k_value = hkl_group[1]
         l_int = int(hkl_group[2])
     else:
-        h_group = float(h_raw)
-        k_group = float(k_raw)
+        h_value = h_raw
+        k_value = k_raw
         l_int = gui_manual_geometry.integer_gz_index(l_raw)
         if l_int is None:
             return None
 
-    m_val = h_group * h_group + h_group * k_group + k_group * k_group
-    return float(m_val), int(l_int)
+    m_component = geometry_q_group_m_from_hk(h_value, k_value)
+    if m_component is None:
+        return None
+    return m_component, int(l_int)
+
+
+def geometry_q_group_ml_from_key(
+    key_or_row: object,
+) -> tuple[int | float, int] | None:
+    """Return the stable ``(m, L)`` identity from a serialized Q-group key."""
+
+    candidate = key_or_row
+    if isinstance(key_or_row, Mapping):
+        candidate = key_or_row.get("q_group_key", key_or_row.get("key"))
+    if not isinstance(candidate, (list, tuple)):
+        return None
+
+    if len(candidate) >= 4 and str(candidate[0]) == "q_group":
+        m_value = candidate[2]
+        l_value = candidate[3]
+    elif len(candidate) >= 3 and isinstance(candidate[0], str):
+        m_value = candidate[1]
+        l_value = candidate[2]
+    else:
+        return None
+
+    try:
+        m_component = gui_manual_geometry.q_group_key_component(float(m_value))
+    except Exception:
+        return None
+    l_int = gui_manual_geometry.integer_gz_index(l_value)
+    if l_int is None:
+        return None
+    return m_component, int(l_int)
+
+
+def _reflection_q_group_components(
+    hkl_value: object,
+    *,
+    allow_nominal_hkl_indices: bool = False,
+) -> tuple[int | float, int] | None:
+    """Return the stable ``(m, l)`` components used for Qr/Qz grouping."""
+
+    return geometry_q_group_ml_from_hkl(
+        hkl_value,
+        allow_nominal_hkl_indices=allow_nominal_hkl_indices,
+    )
 
 
 def reflection_q_group_metadata(
@@ -1260,6 +1321,12 @@ def build_geometry_q_group_entries(
 
         entry = entries_by_key.get(lookup_key)
         if entry is None:
+            ml_components = geometry_q_group_ml_from_key(group_key)
+            if ml_components is None:
+                m_index = lookup_key[2]
+                l_index = lookup_key[3]
+            else:
+                m_index, l_index = ml_components
             entry = {
                 "key": lookup_key,
                 "source_label": str(source_label),
@@ -1267,6 +1334,8 @@ def build_geometry_q_group_entries(
                 "overlap_identity": identity,
                 "qr": float(qr_val),
                 "qz": float(qz_val),
+                "m_index": m_index,
+                "l_index": int(l_index),
                 "gz_index": int(lookup_key[3]),
                 "total_intensity": 0.0,
                 "peak_count": 0,
@@ -4175,11 +4244,12 @@ def format_geometry_q_group_line(entry: Mapping[str, object]) -> str:
     total_intensity = _coerce_float(entry.get("total_intensity", 0.0), 0.0)
     peak_count = _coerce_int(entry.get("peak_count", 0), 0)
     source_label = str(entry.get("source_label", ""))
-    gz_index = entry.get("gz_index")
-    if gz_index is None:
-        key = entry.get("key")
-        if isinstance(key, tuple) and len(key) >= 4:
-            gz_index = key[3]
+    ml_components = geometry_q_group_ml_from_key(entry)
+    if ml_components is None:
+        m_index = entry.get("m_index")
+        l_index = entry.get("l_index", entry.get("gz_index"))
+    else:
+        m_index, l_index = ml_components
     hkl_items = entry.get("hkl_preview", [])
     if isinstance(hkl_items, np.ndarray):
         hkl_items = list(hkl_items)
@@ -4190,11 +4260,25 @@ def format_geometry_q_group_line(entry: Mapping[str, object]) -> str:
     hkl_preview = ", ".join(str(hkl) for hkl in hkl_items[:3])
     if len(hkl_items) > 3:
         hkl_preview += ", ..."
-    gz_text = f"{int(gz_index):4d}" if gz_index is not None else " n/a"
+
+    def _component_text(value: object) -> str:
+        try:
+            numeric = float(value)
+        except Exception:
+            return " n/a"
+        if not np.isfinite(numeric):
+            return " n/a"
+        if abs(numeric - round(numeric)) <= 1.0e-6:
+            return f"{int(round(numeric)):4d}"
+        return f"{numeric:7.3f}"
+
+    m_text = _component_text(m_index)
+    l_text = _component_text(l_index)
     return (
         f"{source_label:<9}  "
         f"Qr={qr_val:8.2f}  "
-        f"Gz={gz_text}  "
+        f"m={m_text}  "
+        f"L={l_text}  "
         f"Qz={qz_val:8.2f}  "
         f"I={total_intensity:10.3f}  "
         f"hits={peak_count:4d}" + (f"  HKL={hkl_preview}" if hkl_preview else "")
@@ -4584,6 +4668,12 @@ def build_geometry_q_group_export_rows(
         serialized_key = geometry_q_group_key_to_jsonable(group_key)
         if serialized_key is None:
             continue
+        ml_components = geometry_q_group_ml_from_key(entry)
+        if ml_components is None:
+            m_index = serialized_key[2]
+            l_index = serialized_key[3]
+        else:
+            m_index, l_index = ml_components
         hkl_preview = []
         for hkl_value in entry.get("hkl_preview", [])[:8]:
             if not isinstance(hkl_value, (list, tuple, np.ndarray)) or len(hkl_value) < 3:
@@ -4598,6 +4688,8 @@ def build_geometry_q_group_export_rows(
             "source_label": str(entry.get("source_label", "")),
             "qr": geometry_q_group_float_for_json(entry.get("qr", np.nan)),
             "qz": geometry_q_group_float_for_json(entry.get("qz", np.nan)),
+            "m_index": m_index,
+            "l_index": int(l_index),
             "gz_index": int(entry.get("gz_index", serialized_key[3])),
             "total_intensity": geometry_q_group_float_for_json(
                 entry.get("total_intensity", np.nan)
