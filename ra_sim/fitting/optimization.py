@@ -2073,6 +2073,39 @@ def _dataset_specs_have_geometry_source_identities(
     return saw_dataset
 
 
+def _entry_has_caked_fit_space_anchor(entry: Mapping[str, object]) -> bool:
+    return any(
+        _finite_pair((entry.get(x_key), entry.get(y_key))) is not None
+        for x_key, y_key in (
+            ("background_two_theta_deg", "background_phi_deg"),
+            ("caked_x", "caked_y"),
+            ("raw_caked_x", "raw_caked_y"),
+        )
+    )
+
+
+def _dataset_specs_require_dynamic_caked_qr_fit(
+    dataset_specs: Optional[Sequence[object]],
+    measured_peaks: Optional[Sequence[object]],
+) -> bool:
+    for spec in _coerce_sequence_items(dataset_specs):
+        if not isinstance(spec, Mapping):
+            continue
+        if str(spec.get("fit_space_projector_kind", "") or "") != "exact_caked_bundle":
+            continue
+        if not callable(spec.get("fit_space_projector")):
+            continue
+        measured_entries = _coerce_sequence_items(spec.get("measured_peaks", measured_peaks))
+        for entry in measured_entries:
+            if (
+                isinstance(entry, Mapping)
+                and _fixed_manual_qr_pair_requires_shared_resolver(entry)
+                and _entry_has_caked_fit_space_anchor(entry)
+            ):
+                return True
+    return False
+
+
 def _measured_entry_sigma_px(
     entry: Dict[str, object],
     *,
@@ -22409,9 +22442,21 @@ def fit_geometry_parameters(
 
     missing_pair_penalty = float(solver_cfg.get("missing_pair_penalty_px", 20.0))
     missing_pair_penalty = max(0.0, missing_pair_penalty)
-    dynamic_point_geometry_fit = bool(solver_cfg.get("dynamic_point_geometry_fit", False))
+    dynamic_point_geometry_fit_requested = bool(solver_cfg.get("dynamic_point_geometry_fit", False))
+    dynamic_point_geometry_fit_auto_enabled = bool(
+        manual_point_fit_mode
+        and point_match_mode
+        and not dynamic_point_geometry_fit_requested
+        and _dataset_specs_require_dynamic_caked_qr_fit(dataset_spec_entries, measured_peaks)
+    )
+    dynamic_point_geometry_fit = bool(
+        dynamic_point_geometry_fit_requested or dynamic_point_geometry_fit_auto_enabled
+    )
     qr_fit_point_only_projection = bool(
-        solver_cfg.get("_qr_fit_point_only_projection", False)
+        (
+            solver_cfg.get("_qr_fit_point_only_projection", False)
+            or dynamic_point_geometry_fit_auto_enabled
+        )
         and manual_point_fit_mode
         and dynamic_point_geometry_fit
     )
@@ -25347,6 +25392,7 @@ def fit_geometry_parameters(
     geometry_fit_debug_summary: Dict[str, object] = {
         "point_match_mode": bool(point_match_mode),
         "dynamic_point_geometry_fit": bool(dynamic_point_geometry_fit),
+        "dynamic_point_geometry_fit_auto_enabled": bool(dynamic_point_geometry_fit_auto_enabled),
         "provider_local_saved_sim_offset_baseline_primed": bool(
             provider_local_saved_sim_offset_baseline_primed
         ),
@@ -25382,6 +25428,7 @@ def fit_geometry_parameters(
             "manual_fail_fast_probe_period": int(manual_fail_fast_probe_period),
             "manual_fail_fast_peak_rms_px": float(manual_fail_fast_peak_rms_px),
             "manual_fail_fast_min_bound_parameters": int(manual_fail_fast_min_bound_parameters),
+            "qr_fit_point_only_projection": bool(qr_fit_point_only_projection),
         },
         "parallelization": dict(parallelization_summary),
         "parameter_entries": parameter_debug_entries,

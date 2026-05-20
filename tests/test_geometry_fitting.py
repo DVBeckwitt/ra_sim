@@ -6871,7 +6871,11 @@ def test_point_only_qr_acceptance_rejects_mixed_display_native_detector_distance
     assert summary["acceptance_metric_space"] == "caked_deg"
 
 
-def _dynamic_point_only_fit_result_for_metric_tests(monkeypatch):
+def _dynamic_point_only_fit_result_for_metric_tests(
+    monkeypatch,
+    *,
+    configure_dynamic_solver: bool = True,
+):
     def fake_process(*args, **kwargs):
         image_size = int(args[2])
         return (
@@ -6936,6 +6940,22 @@ def _dynamic_point_only_fit_result_for_metric_tests(monkeypatch):
             "sim_caked_image_builder_kind": "must_not_call",
         }
     ]
+    solver_cfg: dict[str, object] = {
+        "manual_point_fit_mode": True,
+        "fixed_manual_prediction_preflight_guard": True,
+        "restarts": 0,
+        "weighted_matching": False,
+        "use_measurement_uncertainty": False,
+        "max_nfev": 1,
+    }
+    if configure_dynamic_solver:
+        solver_cfg.update(
+            {
+                "dynamic_point_geometry_fit": True,
+                "_qr_fit_point_only_projection": True,
+            }
+        )
+
     return opt.fit_geometry_parameters(
         np.array([[2.0, 0.0, 0.0]], dtype=np.float64),
         np.array([1.0], dtype=np.float64),
@@ -6946,16 +6966,7 @@ def _dynamic_point_only_fit_result_for_metric_tests(monkeypatch):
         experimental_image=experimental_image,
         dataset_specs=dataset_specs,
         refinement_config={
-            "solver": {
-                "manual_point_fit_mode": True,
-                "dynamic_point_geometry_fit": True,
-                "_qr_fit_point_only_projection": True,
-                "fixed_manual_prediction_preflight_guard": True,
-                "restarts": 0,
-                "weighted_matching": False,
-                "use_measurement_uncertainty": False,
-                "max_nfev": 1,
-            },
+            "solver": solver_cfg,
             "single_ray": {"enabled": False},
             "identifiability": {"enabled": False},
             "full_beam_polish": {"enabled": False},
@@ -7096,6 +7107,25 @@ def test_dynamic_angular_point_match_final_metric_uses_caked_deg_not_pixel_rms(
     assert result.point_match_summary["metric_unit"] == "deg"
     assert math.isfinite(result.rms_deg)
     assert not math.isfinite(result.rms_px)
+
+
+def test_manual_caked_qr_fit_auto_enables_dynamic_point_path(monkeypatch) -> None:
+    result = _dynamic_point_only_fit_result_for_metric_tests(
+        monkeypatch,
+        configure_dynamic_solver=False,
+    )
+
+    assert result.final_metric_name == "dynamic_angular_point_match"
+    assert result.final_metric_space == "caked_deg"
+    assert result.final_metric_units == "deg"
+    assert bool(result.geometry_fit_debug_summary["dynamic_point_geometry_fit"]) is True
+    assert (
+        bool(result.geometry_fit_debug_summary["dynamic_point_geometry_fit_auto_enabled"]) is True
+    )
+    assert bool(result.geometry_fit_debug_summary["solver"]["qr_fit_point_only_projection"]) is True
+    assert result.point_match_summary["objective_space"] == "caked_deg"
+    assert result.point_match_summary["qr_fit_expected_count"] == 1
+    assert result.point_match_summary["qr_fit_resolved_count"] == 1
 
 
 def test_final_summary_does_not_label_dynamic_objective_rms_as_px(monkeypatch) -> None:
@@ -7973,7 +8003,9 @@ def test_geometry_fit_correspondence_recovers_stale_same_ml_hkl_for_locked_q_gro
     assert payload["resolution_reason"] != "prediction_branch_source_switched"
 
 
-def test_geometry_fit_correspondence_uses_nested_full_reflection_identity_for_locked_q_group() -> None:
+def test_geometry_fit_correspondence_uses_nested_full_reflection_identity_for_locked_q_group() -> (
+    None
+):
     correspondence = _provider_local_singleton_entry(
         hkl=(-1, 0, 10),
         label="-1,0,10",
@@ -8021,7 +8053,9 @@ def test_geometry_fit_correspondence_uses_nested_full_reflection_identity_for_lo
     assert payload["resolution_reason"] != "prediction_branch_source_switched"
 
 
-def test_resolve_fixed_source_matches_uses_nested_full_reflection_identity_for_locked_q_group() -> None:
+def test_resolve_fixed_source_matches_uses_nested_full_reflection_identity_for_locked_q_group() -> (
+    None
+):
     entry = _provider_local_singleton_entry(
         hkl=(-1, 0, 10),
         label="-1,0,10",
@@ -8065,7 +8099,9 @@ def test_resolve_fixed_source_matches_uses_nested_full_reflection_identity_for_l
     assert resolved[0][1] == (1057.0, 1156.0)
     assert resolved[0][2] == (1, 0, 10)
     diag = resolution_lookup[id(entry)]
-    assert diag["resolution_reason"] == "provider_local_nested_full_identity_q_group_branch_resolved"
+    assert (
+        diag["resolution_reason"] == "provider_local_nested_full_identity_q_group_branch_resolved"
+    )
     assert diag["source_row_hkl_q_group_equivalent"] is True
     assert diag["resolution_reason"] != "prediction_branch_source_switched"
 

@@ -1335,6 +1335,52 @@ Follow-up simplification and shipping status:
 - CI/shipping status: no CI configuration, deprecation path, migration, release version, or public workflow change is required for this cleanup. Rollback is the commit revert; the previously validated user-visible fix stays unchanged.
 - Validation: `python -m pytest tests/test_geometry_fitting.py -ra` -> `265 passed`; `python -m pytest tests/test_manual_geometry_selection_helpers.py::test_minus_1_0_10_fit_step_reduces_qr_residual -ra` -> `1 passed`; `python -m ra_sim.dev check` -> passed; `git diff --check` -> passed.
 
+## 2026-05-20 Default Manual Caked Qr/Qz Dynamic Fit Fix
+
+Bug/error status: fixed for the reported default GUI `m=1,L=10` manual caked
+Qr/Qz fit rejection where the direct fixed-source solve reached the static
+`central_point_match` objective and reported `matched=0`.
+
+Root cause:
+- The default manual point-fit solver selected the pixel/static point-match
+  evaluator unless `dynamic_point_geometry_fit` was already set in runtime
+  config.
+- Exact-caked fixed-source manual Qr/Qz dataset rows already had the information
+  needed for the dynamic angular objective, but that dataset evidence was not
+  used when choosing the evaluator.
+
+Fix:
+- `fit_geometry_parameters(...)` now detects fixed-source manual Qr/Qz rows with
+  exact-caked fit-space anchors in `dataset_specs` and auto-enables the dynamic
+  angular point-match path for that solve.
+- The same auto-detected path enables the existing bounded Qr/Qz point-only
+  projection flag, matching the intended saved-manual-caked runtime policy
+  without adding GUI controls, config keys, dependencies, or new files.
+- Existing handoff diagnostics and optimizer prediction agreement were kept
+  unchanged after an attempted audit change failed the end-to-end handoff
+  regression.
+
+Validation:
+- `python -m pytest tests/test_geometry_fitting.py::test_manual_caked_qr_fit_auto_enables_dynamic_point_path -ra` -> passed.
+- `python -m pytest tests/test_geometry_fitting.py::test_manual_caked_qr_fit_auto_enables_dynamic_point_path tests/test_geometry_fitting.py::test_fit_geometry_parameters_manual_point_fit_with_cached_sources_defaults_to_central_point_match tests/test_geometry_fitting.py::test_dynamic_angular_point_match_final_metric_uses_caked_deg_not_pixel_rms -ra` -> `3 passed`.
+- `python -m pytest tests/test_geometry_fitting.py -ra` -> `272 passed`.
+- `python -m pytest tests/test_gui_geometry_fit_workflow.py::test_prepare_geometry_fit_run_caked_pairs_use_existing_exact_projector_no_recake tests/test_gui_geometry_fit_workflow.py::test_new4_ladder_lean_runtime_config_preserves_caked_manual_path tests/test_gui_geometry_fit_workflow.py::test_objective_rejects_pixel_residual_for_manual_caked_qr_fit tests/test_gui_geometry_fit_workflow.py::test_gui_dynamic_caked_metric_rejects_large_angular_residual -ra` -> `4 passed`.
+- `python -m pytest tests/test_gui_runtime_import_safe.py -ra` -> `450 passed`.
+- `python -m pytest tests/test_manual_geometry_selection_helpers.py::test_minus_1_0_10_optimizer_prediction_matches_fit_handoff_prediction tests/test_manual_geometry_selection_helpers.py::test_minus_1_0_10_fit_handoff_audit_sim_refined_caked_uses_real_projection tests/test_manual_geometry_selection_helpers.py::test_minus_1_0_10_fit_handoff_audit_fit_prediction_source_is_explicit tests/test_manual_geometry_selection_helpers.py::test_minus_1_0_10_fit_handoff_audit_no_caked_values_printed_as_detector_px -ra` -> `4 passed`.
+- `python -m compileall ra_sim tests` -> passed.
+- `python -m ra_sim.dev check` -> passed.
+- `git diff --check` -> passed.
+
+Shipping status:
+- Review completed across correctness, simplification, security, performance,
+  and test quality with no blocking findings.
+- No CI configuration, dependency, public API, saved-state schema, CLI, or GUI
+  control migration is required for this internal fitter-path selection fix.
+- No package version bump is required because this is not release prep; the
+  release-facing summary is tracked under `CHANGELOG.md` Unreleased.
+- Rollback plan is a normal commit revert. The pre-fix behavior is isolated to
+  the static point-match fallback for default exact-caked manual Qr/Qz rows.
+
 ## Remaining work
 
 Next project: compare the real headless start-state/feature-toggle contract

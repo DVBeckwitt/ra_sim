@@ -41,6 +41,10 @@
     still carried them; the matcher now recovers unique `m,L` branch rows from
     nested source identity instead of rejecting with
     `prediction_branch_source_switched`.
+  - Fixed default GUI/manual caked Qr/Qz geometry fits so exact-caked,
+    fixed-source manual `m,L` rows automatically use the dynamic angular
+    point-match objective and bounded point-only projection path instead of
+    falling back to static detector-pixel matching with `matched=0`.
   - Added opt-in exact manual-pair exclusion and dry-run parameter-combo
     sweeps for headless Bi2Se3 geometry recovery fits, including per-combo
     JSON/PNG artifacts, top-level sweep reports, fail-closed combo results,
