@@ -59,7 +59,9 @@
   - Fixed manual caked Qr/Qz geometry-fit handoff for detector-origin picks by
     projecting observed detector anchors into exact-caked fit space during
     dataset build and extending the trace checker to reject live text-log
-    caked/pixel fallback signatures.
+    caked/pixel fallback signatures, including split-record `matched=0`
+    optimizer runs under a caked objective; the GUI fit-space intent now also
+    follows the actual caked primary plot when shell state is stale.
   - Fixed PbI2 Qr-rod marker editor edits so `HK=4 -` marker
     add/move/delete/snap interactions preserve the current panel x/y limits;
     explicit Delta-Qr and L-window controls remain the scope-changing path.

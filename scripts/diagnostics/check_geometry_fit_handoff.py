@@ -117,6 +117,7 @@ def violations_for_trace(path: Path) -> list[str]:
     saw_preflight_ready = False
     saw_optimizer_run = False
     saw_central_point_match = False
+    saw_matched_zero = False
     saw_metric_px = False
     saw_px_rms = False
     saw_central_px = False
@@ -130,6 +131,7 @@ def violations_for_trace(path: Path) -> list[str]:
         metric_unit = str(record.get("metric_unit") or record.get("final_metric_units") or "")
         caked_required = record.get("manual_caked_fit_space_required")
         finite_caked_rows = _as_int(record.get("validator_finite_caked_rows"), default=-1)
+        matched_pair_count = _as_int(record.get("matched_pair_count"), default=-1)
         optimizer_started = (
             _as_int(record.get("nfev"), default=0) > 0
             or bool(record.get("stage_timing_s"))
@@ -151,6 +153,8 @@ def violations_for_trace(path: Path) -> list[str]:
             saw_preflight_ready = True
         if final_metric_name == "central_point_match":
             saw_central_point_match = True
+        if matched_pair_count == 0:
+            saw_matched_zero = True
         if metric_unit == "px":
             saw_metric_px = True
         if str(record.get("weighted_rms_unit") or "").strip().lower() == "px":
@@ -191,6 +195,8 @@ def violations_for_trace(path: Path) -> list[str]:
         violations.append(f"{path}: objective_space=caked_deg used metric_unit=px")
     if saw_caked_objective and saw_px_rms:
         violations.append(f"{path}: objective_space=caked_deg used weighted_rms in px")
+    if saw_caked_objective and saw_optimizer_run and saw_matched_zero:
+        violations.append(f"{path}: objective_space=caked_deg reached optimizer with matched=0")
     if saw_caked_objective and saw_missing_observed_caked and saw_preflight_ready:
         violations.append(
             f"{path}: missing observed caked coordinates reached preflight ready"

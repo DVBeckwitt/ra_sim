@@ -15205,6 +15205,17 @@ def test_runtime_impl_does_not_raw_preflight_detector_origin_caked_pairs() -> No
     assert "manual_fit_requires_caked_space=any(" in source
 
 
+def test_geometry_fit_targeted_projection_mode_uses_actual_caked_primary_view(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    monkeypatch.setattr(runtime_session, "_current_app_shell_view_mode", lambda: "detector")
+    monkeypatch.setattr(runtime_session, "_current_primary_figure_mode", lambda: "caked")
+
+    assert runtime_session._geometry_fit_targeted_projection_view_mode() == "caked"
+
+
 def test_manual_caked_runtime_override_defaults_two_tilt_saved_pairs_to_ladder_solve() -> None:
     geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
 
@@ -17604,6 +17615,73 @@ def test_runtime_session_explicit_caked_requirement_overrides_detector_provenanc
     assert "exact caked fit-space projection/storage unavailable for background 1" in (
         action_result.error_text
     )
+    assert "preflight_failure" in kinds
+
+
+def test_runtime_session_caked_projection_mode_overrides_false_requirement_map(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    job = _make_geometry_fit_worker_job(runtime_session)
+
+    job["var_names"] = ["gamma", "Gamma"]
+    job["projection_view_mode"] = "caked"
+    job["projection_view_signature"] = {"mode": "caked", "detector_shape": [4, 4]}
+    job["projection_view_signature_by_background"] = {
+        0: {"mode": "caked", "detector_shape": [4, 4]}
+    }
+    job["pick_uses_caked_space"] = False
+    job["manual_fit_space_by_background"] = {0: "detector"}
+    job["manual_caked_fit_space_required_by_background"] = {0: False}
+
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            geometry_fit_caking_ai_cache={},
+            analysis_preview_bins=(4, 4),
+            ai_cache={},
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_size", 4, raising=False)
+    monkeypatch.setattr(runtime_session, "DISPLAY_ROTATE_K", 0, raising=False)
+    monkeypatch.setattr(runtime_session, "_build_analysis_integrator", lambda _cfg: object())
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_fit_caked_roi_selection",
+        lambda *_args, **_kwargs: {
+            "enabled": False,
+            "valid": False,
+            "pixel_count": 0,
+            "fraction": 0.0,
+            "half_width_px": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "temporary_numba_thread_limit",
+        lambda *_args, **_kwargs: contextlib.nullcontext(),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "caking",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("cake boom")),
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_manual_fit_dataset",
+        lambda *_args, **_kwargs: pytest.fail(
+            "caked projection mode must override a stale false caked-requirement map"
+        ),
+    )
+
+    action_result = runtime_session._run_async_geometry_fit_worker_job(job)
+    events = _drain_geometry_fit_worker_events(job["event_queue"])
+    kinds = [str(event.get("kind")) for event in events]
+
+    assert action_result.error_text is not None
+    assert "exact caked projector unavailable for background 1" in action_result.error_text
     assert "preflight_failure" in kinds
 
 

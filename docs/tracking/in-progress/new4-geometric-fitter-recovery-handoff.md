@@ -30,6 +30,19 @@ Last updated: 2026-05-20
   runtime/view/state tier passed on rerun after one non-repeatable Python
   access violation. Shipping status: safe as an internal bug-fix slice with
   rollback by git revert.
+- 2026-05-20 trace-checker invariant follow-up completed. The diagnostic
+  checker now rejects split-record traces where a caked objective reaches the
+  optimizer and later reports `matched=0`, even if the same record does not
+  also carry `central_point_match` or `metric_unit=px`. Bug/error status:
+  tightened for the reported circular failure signature; this is a regression
+  gate update, not a new fitter behavior path. Feature/API status: unchanged.
+- 2026-05-20 live GUI intent localization completed. The remaining circular
+  path was localized to `_geometry_fit_targeted_projection_view_mode()`: it
+  trusted app-shell state even when the actual primary Matplotlib axes were
+  already caked. The resolver now treats an actual caked or Q-space primary
+  figure as the fit target, so detector-origin manual picks on the caked view
+  request caked fit-space before dataset build. Bug/error status: targeted
+  runtime handoff fixed; API/status unchanged.
 - 2026-05-20 detector-origin observed caked projection follow-up completed.
   Detector-origin manual picks in explicit caked-required fits now project
   their observed detector anchor through the exact-caked projector during

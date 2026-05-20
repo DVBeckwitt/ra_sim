@@ -134,6 +134,26 @@ def test_geometry_fit_handoff_checker_rejects_split_caked_objective_pixel_metric
     assert any("objective_space=caked_deg used metric_unit=px" in v for v in violations)
 
 
+def test_geometry_fit_handoff_checker_rejects_split_caked_objective_zero_matches(
+    tmp_path,
+) -> None:
+    checker = _load_handoff_check_module()
+    trace_path = tmp_path / "geometry_fit_trace_split_matched_zero.jsonl"
+    trace_path.write_text(
+        "\n".join(
+            [
+                '{"record_type":"audit","objective_space":"caked_deg"}',
+                '{"record_type":"run","point_match_summary":[["matched_pair_count",0]],"nfev":1}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    violations = checker.violations_for_trace(trace_path)
+
+    assert any("objective_space=caked_deg reached optimizer with matched=0" in v for v in violations)
+
+
 def test_geometry_fit_handoff_checker_rejects_live_text_log_signature(tmp_path) -> None:
     checker = _load_handoff_check_module()
     trace_path = tmp_path / "geometry_fit_bad_caked_handoff_17f00f25.log"

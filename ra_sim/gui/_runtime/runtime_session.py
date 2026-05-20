@@ -30534,6 +30534,13 @@ def _geometry_fit_targeted_projection_view_mode() -> str:
         view_mode = _current_app_shell_view_mode()
     except Exception:
         view_mode = None
+    try:
+        figure_mode = _current_primary_figure_mode()
+    except Exception:
+        figure_mode = None
+    normalized_figure_mode = str(figure_mode or "").strip().lower()
+    if normalized_figure_mode in {"caked", "q_space"}:
+        return normalized_figure_mode
     normalized_mode = str(view_mode or "").strip().lower()
     if normalized_mode not in {"detector", "caked", "q_space"}:
         return "detector"
