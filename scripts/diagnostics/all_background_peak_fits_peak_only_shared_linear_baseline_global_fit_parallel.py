@@ -572,9 +572,19 @@ def specular_qz_bounds_for_l_window(
 def qr_rod_l_bounds_for_group(
     m_value: int,
     fallback_bounds: tuple[float, float] | None = None,
+    *,
+    prefer_fallback: bool = False,
 ) -> tuple[float, float] | None:
     if int(m_value) != 0:
         return fallback_bounds
+    if prefer_fallback and fallback_bounds is not None:
+        fallback_lower, fallback_upper = fallback_bounds
+        if (
+            np.isfinite(fallback_lower)
+            and np.isfinite(fallback_upper)
+            and float(fallback_upper) > float(fallback_lower)
+        ):
+            return (float(fallback_lower), float(fallback_upper))
     lower = as_float(globals().get("SPECULAR_QR_ROD_L_MIN"), 0.0)
     upper_default = globals().get("SPECULAR_QR_ROD_L_MAX", 8.0)
     if bool(globals().get("IS_PBI2_SAMPLE_STEM", False)):
@@ -1344,6 +1354,7 @@ def show_qr_rod_peak_marker_popup(
         "path": "" if edit_path is None else str(edit_path).strip()
     }
     region_profile_refresh_pending = False
+    region_profile_refresh_sources: set[str] = set()
 
     def editor_debug_enabled() -> bool:
         os_module = globals().get("os")
@@ -1427,6 +1438,17 @@ def show_qr_rod_peak_marker_popup(
         if not np.isfinite(l_max_value) or l_max_value <= l_min_value:
             l_max_value = l_min_value + 1.0
         return tuple(sorted((float(l_min_value), float(l_max_value))))
+
+    def use_region_l_bounds_for_hk0() -> bool:
+        phase = str(editor_phase if editor_phase is not None else "all").strip().lower()
+        return phase in {"specular", "hk0", "00l"}
+
+    def editor_l_bounds_for_group(m_value: int) -> tuple[float, float] | None:
+        return qr_rod_l_bounds_for_group(
+            int(m_value),
+            current_l_bounds(),
+            prefer_fallback=use_region_l_bounds_for_hk0(),
+        )
 
     def refresh_region_profile_table() -> bool:
         nonlocal profiles, region_profile_refresh_pending
@@ -1512,16 +1534,18 @@ def show_qr_rod_peak_marker_popup(
         profiles = updated_table
         region_control_state["rod_profile_table"] = profiles.copy()
         region_profile_refresh_pending = False
+        region_profile_refresh_sources.clear()
         region_control_state.pop("profile_refresh_pending", None)
         region_control_state.pop("profile_update_error", None)
         editor_debug("profile_update.accepted", rows=int(profiles.shape[0]))
         return True
 
-    def mark_region_profile_refresh_pending() -> None:
+    def mark_region_profile_refresh_pending(source: str = "unknown") -> None:
         nonlocal region_profile_refresh_pending
         if not region_controls_enabled or not callable(profile_update_callback):
             return
         region_profile_refresh_pending = True
+        region_profile_refresh_sources.add(str(source))
         region_control_state["profile_refresh_pending"] = True
 
     def flush_region_profile_refresh(*, redraw_figure: bool = True) -> None:
@@ -1529,6 +1553,11 @@ def show_qr_rod_peak_marker_popup(
             return
         if refresh_region_profile_table() and redraw_figure:
             redraw()
+
+    def should_flush_region_profile_on_release() -> bool:
+        if not region_profile_refresh_pending:
+            return False
+        return not region_profile_refresh_sources or region_profile_refresh_sources == {"delta_qr"}
 
     def refresh_detector_region_preview() -> None:
         if not region_controls_enabled or not callable(region_preview_update_callback):
@@ -1751,7 +1780,7 @@ def show_qr_rod_peak_marker_popup(
         editor_log_y = int(m_value) == 0
         y_markers_plot = positive_log_plot_values(y_markers) if editor_log_y else y_markers
         finite = np.isfinite(marker_l) & np.isfinite(y_markers)
-        group_l_bounds = qr_rod_l_bounds_for_group(int(m_value), current_l_bounds())
+        group_l_bounds = editor_l_bounds_for_group(int(m_value))
         if group_l_bounds is not None:
             l_lo, l_hi = group_l_bounds
             finite = finite & (marker_l >= float(l_lo)) & (marker_l <= float(l_hi))
@@ -1851,6 +1880,22 @@ def show_qr_rod_peak_marker_popup(
                 update_group_marker_selection(group)
         fig.canvas.draw_idle()
 
+    def refresh_region_axis_limits() -> None:
+        if not region_controls_enabled:
+            return
+        l_bounds = current_l_bounds()
+        for group, ax in axes_by_group.items():
+            group_bounds = qr_rod_l_bounds_for_group(
+                int(group[0]), l_bounds, prefer_fallback=use_region_l_bounds_for_hk0()
+            )
+            if group_bounds is None:
+                continue
+            current_xlim = tuple(float(value) for value in ax.get_xlim())
+            target_xlim = tuple(float(value) for value in group_bounds)
+            if current_xlim != target_xlim:
+                ax.set_xlim(*target_xlim)
+        fig.canvas.draw_idle()
+
     def snapshot_group_axis_limits(
         group: object,
     ) -> tuple[tuple[int, str], tuple[float, float], tuple[float, float]] | None:
@@ -1907,7 +1952,7 @@ def show_qr_rod_peak_marker_popup(
             editor_log_y = int(m_value) == 0
             y_plot = positive_log_plot_values(y) if editor_log_y else y
             finite_profile = np.isfinite(x_l) & np.isfinite(y)
-            group_l_bounds = qr_rod_l_bounds_for_group(int(m_value), current_l_bounds())
+            group_l_bounds = editor_l_bounds_for_group(int(m_value))
             if group_l_bounds is not None:
                 l_lo, l_hi = group_l_bounds
                 finite_profile = finite_profile & (x_l >= float(l_lo)) & (x_l <= float(l_hi))
@@ -1987,11 +2032,25 @@ def show_qr_rod_peak_marker_popup(
         else:
             region_control_state.pop("redraw_error", None)
 
+    def refresh_deferred_region_controls() -> None:
+        refresh_detector_region_preview()
+        try:
+            refresh_region_axis_limits()
+        except Exception as exc:
+            region_control_state["redraw_error"] = str(exc)
+            editor_debug(
+                "redraw.error",
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+        else:
+            region_control_state.pop("redraw_error", None)
+
     def set_region_delta_qr(value: object) -> None:
         if not region_controls_enabled:
             return
         region_control_state["delta_qr"] = max(1.0e-9, as_float(value, 1.0e-3))
-        mark_region_profile_refresh_pending()
+        mark_region_profile_refresh_pending("delta_qr")
         refresh_detector_region_preview()
 
     def set_region_l_min(text: object) -> None:
@@ -2000,8 +2059,9 @@ def show_qr_rod_peak_marker_popup(
         value = as_float(text, region_control_state.get("l_min", 0.0))
         if np.isfinite(value):
             region_control_state["l_min"] = float(value)
+        mark_region_profile_refresh_pending("l_bounds")
         editor_debug("l_min.submit", text=text)
-        refresh_region_controls()
+        refresh_deferred_region_controls()
 
     def set_region_l_max(text: object) -> None:
         if not region_controls_enabled:
@@ -2009,8 +2069,9 @@ def show_qr_rod_peak_marker_popup(
         value = as_float(text, region_control_state.get("l_max", 8.0))
         if np.isfinite(value):
             region_control_state["l_max"] = float(value)
+        mark_region_profile_refresh_pending("l_bounds")
         editor_debug("l_max.submit", text=text)
-        refresh_region_controls()
+        refresh_deferred_region_controls()
 
     def select_nearest(
         group: tuple[int, str],
@@ -2202,7 +2263,8 @@ def show_qr_rod_peak_marker_popup(
                     redraw(preserve_limits=True)
         finally:
             restore_group_axis_limits(limits)
-        flush_region_profile_refresh()
+        if should_flush_region_profile_on_release():
+            flush_region_profile_refresh()
 
     def on_key(event) -> None:
         event_axes = getattr(event, "inaxes", None)
@@ -12986,7 +13048,9 @@ def build_qr_rod_detector_region_preview_figure() -> tuple[object, object] | Non
                     np.nanmax(preview_specular_qz_values),
                     m_value=0,
                     branch_value="qz",
-                    l_bounds=qr_rod_l_bounds_for_group(0, l_bounds),
+                    l_bounds=qr_rod_l_bounds_for_group(
+                        0, l_bounds, prefer_fallback=l_bounds is not None
+                    ),
                     marker_source=marker_source,
                 )
                 if specular_bounds is not None:

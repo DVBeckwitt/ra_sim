@@ -4352,13 +4352,16 @@ def test_parallel_script_unified_editor_region_controls_update_preview(
         (0.02, 0.5, 3.0),
         (0.02, 0.5, 2.5),
     ]
-    assert update_calls == [(0.02, 0.5, 3.0), (0.02, 0.5, 2.5)]
+    assert update_calls == []
+    assert region_state["profile_refresh_pending"] is True
     assert preview_calls[-1][3] == [1.0, 2.0]
 
 
 def test_parallel_script_unified_editor_l_bounds_reject_invalid_profile_refresh(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from matplotlib.backend_bases import KeyEvent
+
     namespace = _script_functions(
         "as_float",
         "qr_rod_peak_edit_runtime_mode",
@@ -4400,7 +4403,10 @@ def test_parallel_script_unified_editor_l_bounds_reject_invalid_profile_refresh(
                 widget.set_val("0.5")
             elif widget_type == "TextBox" and label == "L Max":
                 widget.set_val("2.5")
-        plt.close(fig)
+        fig.canvas.callbacks.process(
+            "key_press_event",
+            KeyEvent("key_press_event", fig.canvas, key="enter"),
+        )
 
     marker_table = pd.DataFrame(
         [
@@ -4427,7 +4433,7 @@ def test_parallel_script_unified_editor_l_bounds_reject_invalid_profile_refresh(
     )
 
     assert accepted is True
-    assert update_calls == [(0.01, 0.5, 3.0), (0.01, 0.5, 2.5)]
+    assert update_calls == [(0.01, 0.5, 2.5)]
     assert "profile_update_error" in region_state
     refreshed = pd.DataFrame(region_state["rod_profile_table"])
     assert refreshed["m"].tolist() == [1, 1]
@@ -4437,6 +4443,8 @@ def test_parallel_script_unified_editor_l_bounds_reject_invalid_profile_refresh(
 def test_parallel_script_unified_editor_l_bounds_keep_specular_rows_when_refresh_lacks_hk0(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from matplotlib.backend_bases import KeyEvent
+
     namespace = _script_functions(
         "as_float",
         "qr_rod_peak_edit_runtime_mode",
@@ -4478,7 +4486,10 @@ def test_parallel_script_unified_editor_l_bounds_keep_specular_rows_when_refresh
                 widget.set_val("1.6")
             elif widget_type == "TextBox" and label == "L Max":
                 widget.set_val("2.8")
-        plt.close(fig)
+        fig.canvas.callbacks.process(
+            "key_press_event",
+            KeyEvent("key_press_event", fig.canvas, key="enter"),
+        )
 
     marker_table = pd.DataFrame(
         [
@@ -4506,11 +4517,122 @@ def test_parallel_script_unified_editor_l_bounds_keep_specular_rows_when_refresh
     )
 
     assert accepted is True
-    assert update_calls == [(0.01, 1.6, 3.0), (0.01, 1.6, 2.8)]
+    assert update_calls == [(0.01, 1.6, 2.8)]
     assert "profile_update_error" in region_state
     refreshed = pd.DataFrame(region_state["rod_profile_table"])
     assert refreshed["m"].astype(int).tolist() == [0, 0, 0]
     assert refreshed["background_density"].tolist() == [4.0, 8.0, 5.0]
+
+
+def test_parallel_script_hk0_l_min_submit_defers_profile_refresh_until_accept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from matplotlib.axes import Axes
+    from matplotlib.backend_bases import KeyEvent
+
+    namespace = _script_functions(
+        "as_float",
+        "qr_rod_peak_edit_runtime_mode",
+        "show_qr_rod_peak_marker_popup",
+        "marker_table_with_specular_l_markers",
+        "qz_l_linear_coeff_from_marker_rows",
+        "marker_row_title",
+        "clean_marker_title",
+        "replace_qr_rod_marker_group_qz",
+        "positive_log_plot_values",
+        "apply_positive_log_y_axis",
+        "snap_qr_rod_markers_to_profile_peaks",
+        "l_tick_label",
+        "_safe_run_name",
+        "load_qr_rod_peak_edits",
+        "write_qr_rod_peak_edits",
+    )
+    show_editor = namespace["show_qr_rod_peak_marker_popup"]
+    region_state = {"delta_qr": 0.01, "l_min": 1.5, "l_max": 3.0}
+    update_calls: list[tuple[float, float, float]] = []
+    preview_calls: list[tuple[float, float, float]] = []
+    observed: dict[str, object] = {}
+    clear_calls: list[object] = []
+    original_clear = Axes.clear
+
+    def counting_clear(self, *args, **kwargs):
+        clear_calls.append(self)
+        return original_clear(self, *args, **kwargs)
+
+    def refresh_profiles(delta_qr: float, l_min: float, l_max: float) -> pd.DataFrame:
+        update_calls.append((float(delta_qr), float(l_min), float(l_max)))
+        return pd.DataFrame(
+            [
+                {"m": 0, "branch": "qz", "qz_center": 1.8, "background_density": 6.0},
+                {"m": 0, "branch": "qz", "qz_center": 2.4, "background_density": 9.0},
+                {"m": 0, "branch": "qz", "qz_center": 3.0, "background_density": 5.0},
+            ]
+        )
+
+    def update_preview(
+        *,
+        delta_qr: float,
+        l_min: float,
+        l_max: float,
+        marker_table: pd.DataFrame,
+    ) -> None:
+        preview_calls.append((float(delta_qr), float(l_min), float(l_max)))
+
+    def fake_show(*_args, **_kwargs) -> None:
+        fig = plt.gcf()
+        panels = {ax.get_title(): ax for ax in fig.axes if ax.get_xlabel() == "L"}
+        hk0 = panels["HK=0 qz"]
+        boxes = {
+            getattr(getattr(widget, "label", None), "get_text", lambda: "")(): widget
+            for widget in list(getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets"))
+            if type(widget).__name__ == "TextBox"
+        }
+        initial_clear_count = len(clear_calls)
+        boxes["L Min"].set_val("1.8")
+        observed["after_submit_xlim"] = hk0.get_xlim()
+        observed["clear_count_after_submit"] = len(clear_calls)
+        observed["update_calls_after_submit"] = list(update_calls)
+        fig.canvas.callbacks.process(
+            "key_press_event",
+            KeyEvent("key_press_event", fig.canvas, key="enter"),
+        )
+        observed["initial_clear_count"] = initial_clear_count
+
+    marker_table = pd.DataFrame(
+        [
+            {"m": 0, "branch": "qz", "qz_marker": 1.5, "fit_l": 1.5, "display_l": 1.5},
+            {"m": 0, "branch": "qz", "qz_marker": 3.0, "fit_l": 3.0, "display_l": 3.0},
+        ]
+    )
+    rod_profile_table = pd.DataFrame(
+        [
+            {"m": 0, "branch": "qz", "qz_center": 1.5, "background_density": 4.0},
+            {"m": 0, "branch": "qz", "qz_center": 2.2, "background_density": 8.0},
+            {"m": 0, "branch": "qz", "qz_center": 3.0, "background_density": 5.0},
+        ]
+    )
+
+    monkeypatch.setattr(Axes, "clear", counting_clear)
+    monkeypatch.setattr(plt, "show", fake_show)
+    _edited, accepted = show_editor(
+        marker_table,
+        rod_profile_table,
+        backend_name="TkAgg",
+        region_state=region_state,
+        profile_update_callback=refresh_profiles,
+        region_preview_update_callback=update_preview,
+        editor_phase="specular",
+    )
+
+    assert accepted is True
+    assert region_state["l_min"] == pytest.approx(1.8)
+    assert preview_calls == [(0.01, 1.8, 3.0)]
+    assert observed["after_submit_xlim"] == pytest.approx((1.8, 3.0))
+    assert observed["clear_count_after_submit"] == observed["initial_clear_count"]
+    assert observed["update_calls_after_submit"] == []
+    assert update_calls == [(0.01, 1.8, 3.0)]
+    refreshed = pd.DataFrame(region_state["rod_profile_table"])
+    assert refreshed["qz_center"].tolist() == pytest.approx([1.8, 2.4, 3.0])
 
 
 def test_parallel_script_unified_editor_l_bounds_keep_popup_on_redraw_error(
@@ -4589,7 +4711,7 @@ def test_parallel_script_unified_editor_l_bounds_keep_popup_on_redraw_error(
     )
 
     assert accepted is True
-    assert update_calls == [(0.01, 0.5, 3.0), (0.01, 0.5, 2.5)]
+    assert update_calls == []
     assert region_state["redraw_error"] == "draw failed"
 
 
@@ -4687,7 +4809,8 @@ def test_parallel_script_unified_editor_l_bound_enter_does_not_accept_editor(
 
     assert accepted is True
     assert close_calls_during_l_enter == []
-    assert update_calls[-1] == (0.01, 0.5, 2.5)
+    assert update_calls == []
+    assert region_state["profile_refresh_pending"] is True
     assert region_state["l_min"] == pytest.approx(0.5)
     assert region_state["l_max"] == pytest.approx(2.5)
 
@@ -4990,7 +5113,8 @@ def test_parallel_script_detector_qr_preview_is_passed_to_unified_editor() -> No
     assert "preview_overlay_artists" in preview_helper_section
     assert ".remove()" in preview_helper_section
     assert "preview_fig.canvas.draw_idle()" in preview_helper_section
-    assert "l_bounds=qr_rod_l_bounds_for_group(0, l_bounds)" in preview_helper_section
+    assert "l_bounds=qr_rod_l_bounds_for_group(" in preview_helper_section
+    assert "prefer_fallback=l_bounds is not None" in preview_helper_section
 
 
 def test_parallel_script_pre_editor_cache_is_checked_before_expensive_stages() -> None:
@@ -5030,7 +5154,8 @@ def test_parallel_script_qz_l_axis_helper_is_defined_before_editor_l_window_setu
     assert source.count("def qz_values_to_l_axis(") == 1
     assert helper_def < editor_l_window_setup
     assert "def qr_rod_l_bounds_for_group(" in source[:editor_l_window_setup]
-    assert "group_l_bounds = qr_rod_l_bounds_for_group(int(m_value), current_l_bounds())" in source
+    assert "def editor_l_bounds_for_group(m_value: int)" in source
+    assert "group_l_bounds = editor_l_bounds_for_group(int(m_value))" in source
     assert "qr_rod_editor_initial_l_min = float(NONZERO_QR_ROD_L_MIN)" in source
     assert "qr_rod_editor_initial_l_max = float(NONZERO_QR_ROD_L_MAX)" in source
     assert (

@@ -98,7 +98,8 @@ to make the Qr rod detector and integration figures source-consistent:
   Delta Qr slider movement updates the detector companion preview immediately
   and marks integrated profile rows dirty; the expensive detector Qr/Qz profile
   accumulator is run once on slider release or accept. `L Min` and `L Max`
-  submissions still refresh the preview and profile table once immediately.
+  submissions update the preview and visible L axis immediately, then defer the
+  expensive profile-table refresh until Accept.
   Accepted Delta Qr/L values are applied to the profile rows used by the final
   joint Qz fit and cache key.
 - Popup-mode Qr-rod marker editing now opens a read-only detector companion
@@ -687,6 +688,17 @@ Passing checks:
   (`29 passed`), scoped compileall, scoped Ruff format/check, and
   `git diff --check`; full `python -m ra_sim.dev check` is blocked by an
   unrelated dirty `ra_sim/gui/_runtime/runtime_session.py` format change.
+- 2026-05-20 HK=0 L Min follow-up: changing the specular `L Min` no longer
+  runs the detector Qr/Qz profile accumulator inside the textbox submit path.
+  The popup stores the new bound, refreshes the detector preview, updates the
+  visible HK=0 L axis, and marks the profile table dirty; Accept performs the
+  single expensive refresh so final rows, 00L visual bounds, and cache identity
+  still use the accepted specular L window. Focused validation passed with
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "l_bounds or l_bound or region_controls_update_preview or delta_qr_refreshes_profile_table_on_release or accept_flushes_pending_profile_refresh or hk0_uses_specular_l_bounds or 00l_region or specular_editor" -ra`
+  (`15 passed`) and the broader marker-editor selection
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "qr_rod_peak_editor or unified_editor or marker_group or qz_l_axis or marker_l_mapping" -ra`
+  (`29 passed`). No feature, dependency, CI, version, migration, public API,
+  saved-state, or artifact-schema change is required.
 
 Known validation limits:
 
