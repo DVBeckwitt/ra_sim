@@ -13160,6 +13160,11 @@ def build_geometry_manual_fit_dataset(
             )
         diagnostics = dict(diagnostics)
         if collect_diagnostics:
+            after_rebinding = trial_stages.get("source_rows_after_rebinding")
+            if isinstance(after_rebinding, Mapping):
+                diagnostics["missing_dynamic_trial_source_row_count"] = int(
+                    after_rebinding.get("missing_required_pair_count") or 0
+                ) + int(after_rebinding.get("stale_required_pair_count") or 0)
             diagnostics["geometry_fit_trial_source_rows_stages"] = trial_stages
         if supplemental_diag and collect_diagnostics:
             diagnostics["caked_click_pick_candidate_inventory"] = copy.deepcopy(
@@ -15691,8 +15696,17 @@ def build_geometry_manual_fit_dataset(
         if caked_two_theta is not None and caked_phi is not None:
             measured_entry["background_two_theta_deg"] = float(caked_two_theta)
             measured_entry["background_phi_deg"] = float(caked_phi)
-            measured_entry["fit_space_anchor_override"] = True
-            measured_entry["fit_space_anchor_source"] = "manual_caked_background_angles"
+            origin = (
+                str(measured_entry.get("manual_background_input_origin") or "")
+                .strip()
+                .lower()
+            )
+            if origin == "detector":
+                measured_entry.pop("fit_space_anchor_override", None)
+                measured_entry.pop("fit_space_anchor_source", None)
+            else:
+                measured_entry["fit_space_anchor_override"] = True
+                measured_entry["fit_space_anchor_source"] = "manual_caked_background_angles"
         _geometry_fit_apply_source_coverage_identity(measured_entry)
     for pair_idx, provider_pair in enumerate(provider_pairs):
         measured_entry = (
@@ -16587,120 +16601,6 @@ def build_geometry_manual_fit_dataset(
         else:
             fit_space_projector_unavailable_reason = "native_detector_shape_unavailable"
 
-    def _detector_origin_anchor_projection_input(
-        entry: Mapping[str, object] | None,
-    ) -> tuple[float, float, str] | None:
-        if not isinstance(entry, Mapping):
-            return None
-        if not geometry_fit_entry_is_auto_caked_detector_manual_qr(
-            entry,
-            require_observed_caked_anchor=False,
-        ):
-            return None
-        native_anchor = _native_detector_anchor(entry)
-        if native_anchor is not None:
-            return float(native_anchor[0]), float(native_anchor[1]), "native_detector"
-        fit_background_anchor = _background_detector_pair_for_frame(entry, "fit_detector")
-        if fit_background_anchor is not None:
-            return (
-                float(fit_background_anchor[0]),
-                float(fit_background_anchor[1]),
-                "fit_detector",
-            )
-        for x_key, y_key in (("fit_detector_x", "fit_detector_y"),):
-            col = _finite_float(entry.get(x_key))
-            row = _finite_float(entry.get(y_key))
-            if col is not None and row is not None:
-                return float(col), float(row), "fit_detector"
-        col = _finite_float(entry.get("detector_x"))
-        row = _finite_float(entry.get("detector_y"))
-        if (
-            col is not None
-            and row is not None
-            and _entry_frame(entry, "detector_input_frame") == "fit_detector"
-        ):
-            return float(col), float(row), "fit_detector"
-        return None
-
-    def _project_detector_origin_anchor_to_caked(
-        entry: Mapping[str, object] | None,
-    ) -> tuple[float, float, dict[str, object]] | None:
-        if str(fit_space_projector_kind or "") != "exact_caked_bundle" or not callable(
-            fit_space_projector
-        ):
-            return None
-        projection_input = _detector_origin_anchor_projection_input(entry)
-        if projection_input is None:
-            return None
-        col, row, input_frame = projection_input
-        try:
-            projected = fit_space_projector(
-                np.asarray([float(col)], dtype=np.float64),
-                np.asarray([float(row)], dtype=np.float64),
-                local_params=dict(params_i),
-                anchor_kind="measured",
-                input_frame=str(input_frame),
-            )
-        except Exception:
-            return None
-        if not isinstance(projected, Mapping) or not bool(projected.get("valid", False)):
-            return None
-        try:
-            two_theta_values = np.asarray(
-                projected.get("two_theta_deg"),
-                dtype=np.float64,
-            ).reshape(-1)
-            phi_values = np.asarray(
-                projected.get("phi_deg"),
-                dtype=np.float64,
-            ).reshape(-1)
-            two_theta = float(two_theta_values[0])
-            phi = float(phi_values[0])
-        except Exception:
-            return None
-        if not (np.isfinite(two_theta) and np.isfinite(phi)):
-            return None
-        return float(two_theta), float(phi), dict(projected)
-
-    def _apply_detector_origin_caked_anchor(
-        entry: dict[str, object],
-        projection: tuple[float, float, dict[str, object]],
-    ) -> None:
-        two_theta, phi, projected = projection
-        entry["background_two_theta_deg"] = float(two_theta)
-        entry["background_phi_deg"] = float(phi)
-        entry["caked_x"] = float(two_theta)
-        entry["caked_y"] = float(phi)
-        entry["bg_caked_display"] = (float(two_theta), float(phi))
-        entry["fit_space_anchor_override"] = True
-        entry["fit_space_anchor_source"] = "detector_origin_exact_caked_projection"
-        entry["fit_space_projector_kind"] = projected.get("fit_space_projector_kind")
-        entry["fit_space_source"] = projected.get("fit_space_source")
-        entry["caked_projection_source"] = projected.get("caked_projection_source")
-        entry["detector_native_reprojection_diagnostic_caked_deg"] = (
-            float(two_theta),
-            float(phi),
-        )
-
-    detector_origin_anchor_projections = [
-        _project_detector_origin_anchor_to_caked(measured_entry)
-        for measured_entry in measured_for_fit
-    ]
-    for projection, measured_entry, initial_entry, display_entry in zip(
-        detector_origin_anchor_projections,
-        measured_for_fit,
-        initial_pairs_display,
-        measured_display,
-    ):
-        if projection is None:
-            continue
-        if isinstance(measured_entry, dict):
-            _apply_detector_origin_caked_anchor(measured_entry, projection)
-        if isinstance(initial_entry, dict):
-            _apply_detector_origin_caked_anchor(initial_entry, projection)
-        if isinstance(display_entry, dict):
-            _apply_detector_origin_caked_anchor(display_entry, projection)
-
     label = (
         Path(str(manual_dataset_bindings.osc_files[background_idx])).name
         if 0 <= background_idx < len(manual_dataset_bindings.osc_files)
@@ -17163,7 +17063,6 @@ def prepare_geometry_fit_run(
         geometry_manual_pairs_for_index,
         pick_uses_caked_space=bool(manual_fit_pick_uses_caked_space),
         current_background_index=int(current_index),
-        active_var_names=selected_var_names,
     )
     fit_space_error = manual_geometry_fit_space_preflight_error(
         selected_manual_fit_space_by_background,
@@ -17285,10 +17184,7 @@ def prepare_geometry_fit_run(
     dataset_specs = build_geometry_fit_dataset_specs(dataset_infos)
     manual_fit_uses_caked_space = bool(
         manual_pairs_use_caked_space
-        or geometry_fit_datasets_use_caked_fit_space(
-            dataset_infos,
-            active_var_names=selected_var_names,
-        )
+        or geometry_fit_datasets_use_caked_fit_space(dataset_infos)
     )
     base_runtime_cfg = apply_joint_geometry_fit_runtime_safety_overrides(
         build_runtime_config(fit_params),
@@ -17448,15 +17344,6 @@ def _geometry_fit_finite_float(value: object) -> float | None:
     return float(out)
 
 
-def geometry_fit_active_vars_include_detector_tilts(
-    active_var_names: Sequence[object] | None,
-) -> bool:
-    """Return whether the two detector tilts are both active in one fit."""
-
-    active_names = {str(name) for name in (active_var_names or ())}
-    return {"gamma", "Gamma"}.issubset(active_names)
-
-
 def geometry_fit_entry_has_observed_caked_anchor(entry: object) -> bool:
     """Return whether one manual row has finite observed caked 2theta/phi."""
 
@@ -17483,54 +17370,6 @@ def geometry_fit_entry_has_observed_caked_anchor(entry: object) -> bool:
     return False
 
 
-def geometry_fit_entry_is_auto_caked_detector_manual_qr(
-    entry: object,
-    *,
-    require_observed_caked_anchor: bool = True,
-) -> bool:
-    """Return whether a detector-origin manual QR row can use caked objective."""
-
-    if not isinstance(entry, Mapping):
-        return False
-    origin = str(entry.get("manual_background_input_origin") or "").strip().lower()
-    if origin != "detector":
-        return False
-    has_qr_identity = bool(
-        entry.get("q_group_key") is not None
-        or entry.get("source_q_group_key") is not None
-        or entry.get("hkl") is not None
-        or entry.get("normalized_hkl") is not None
-        or entry.get("source_reflection_index") is not None
-        or entry.get("source_row_index") is not None
-        or entry.get("source_table_index") is not None
-    )
-    if not has_qr_identity:
-        return False
-    if bool(require_observed_caked_anchor) and not geometry_fit_entry_has_observed_caked_anchor(
-        entry
-    ):
-        return False
-    return True
-
-
-def geometry_fit_manual_pairs_have_auto_caked_detector_qr(
-    manual_pairs: object,
-    *,
-    require_observed_caked_anchor: bool = True,
-) -> bool:
-    """Return whether any selected manual pair is auto-caked detector QR eligible."""
-
-    if not isinstance(manual_pairs, Sequence) or isinstance(manual_pairs, (str, bytes)):
-        return False
-    return any(
-        geometry_fit_entry_is_auto_caked_detector_manual_qr(
-            entry,
-            require_observed_caked_anchor=require_observed_caked_anchor,
-        )
-        for entry in manual_pairs
-    )
-
-
 def _geometry_manual_entry_uses_caked_fit_space(entry: object) -> bool:
     if not isinstance(entry, Mapping):
         return False
@@ -17553,56 +17392,25 @@ def _geometry_manual_entry_uses_caked_fit_space(entry: object) -> bool:
     raw_caked_y = _geometry_fit_finite_float(entry.get("raw_caked_y"))
     if raw_caked_x is not None and raw_caked_y is not None:
         return True
-    has_detector_anchor = any(
-        _geometry_fit_finite_float(entry.get(x_key)) is not None
-        and _geometry_fit_finite_float(entry.get(y_key)) is not None
-        for x_key, y_key in (
-            ("detector_display_x", "detector_display_y"),
-            ("detector_native_x", "detector_native_y"),
-            ("detector_x", "detector_y"),
-            ("background_detector_x", "background_detector_y"),
-            ("x", "y"),
-        )
-    )
-    if has_detector_anchor:
-        return False
     return False
 
 
-def geometry_manual_pairs_use_caked_fit_space(
-    manual_pairs: object,
-    *,
-    auto_caked_detector_origin: bool = False,
-) -> bool:
+def geometry_manual_pairs_use_caked_fit_space(manual_pairs: object) -> bool:
     """Return whether saved manual pairs carry caked fit-space anchors."""
 
     if not isinstance(manual_pairs, Sequence) or isinstance(manual_pairs, (str, bytes)):
         return False
-    return any(
-        _geometry_manual_entry_uses_caked_fit_space(entry)
-        or (
-            bool(auto_caked_detector_origin)
-            and geometry_fit_entry_is_auto_caked_detector_manual_qr(entry)
-        )
-        for entry in manual_pairs
-    )
+    return any(_geometry_manual_entry_uses_caked_fit_space(entry) for entry in manual_pairs)
 
 
-def _geometry_manual_pair_fit_space_kinds(
-    manual_pairs: object,
-    *,
-    auto_caked_detector_origin: bool = False,
-) -> set[str]:
+def _geometry_manual_pair_fit_space_kinds(manual_pairs: object) -> set[str]:
     if not isinstance(manual_pairs, Sequence) or isinstance(manual_pairs, (str, bytes)):
         return set()
     kinds: set[str] = set()
     for entry in manual_pairs:
         if not isinstance(entry, Mapping):
             continue
-        if _geometry_manual_entry_uses_caked_fit_space(entry) or (
-            bool(auto_caked_detector_origin)
-            and geometry_fit_entry_is_auto_caked_detector_manual_qr(entry)
-        ):
+        if _geometry_manual_entry_uses_caked_fit_space(entry):
             kinds.add("caked")
         else:
             kinds.add("detector")
@@ -17614,14 +17422,10 @@ def geometry_manual_pairs_fit_space_kind(
     *,
     pick_uses_caked_space: bool = False,
     pick_applies_to_background: bool = False,
-    auto_caked_detector_origin: bool = False,
 ) -> str:
     """Classify one manual-pair set as missing, detector-pixel, or caked fit-space."""
 
-    pair_kinds = _geometry_manual_pair_fit_space_kinds(
-        manual_pairs,
-        auto_caked_detector_origin=bool(auto_caked_detector_origin),
-    )
+    pair_kinds = _geometry_manual_pair_fit_space_kinds(manual_pairs)
     if len(pair_kinds) > 1:
         return "mixed"
     if pair_kinds == {"caked"}:
@@ -17643,7 +17447,6 @@ def geometry_manual_fit_space_by_background(
 
     indices = [int(idx) for idx in (background_indices or ())]
     result: dict[int, str] = {}
-    auto_caked_detector_origin = geometry_fit_active_vars_include_detector_tilts(active_var_names)
     for idx in indices:
         if callable(pairs_for_index):
             pairs = pairs_for_index(int(idx))
@@ -17654,16 +17457,7 @@ def geometry_manual_fit_space_by_background(
         pairs = [
             entry for entry in (pairs or ()) if geometry_manual_pair_enabled_for_geometry_fit(entry)
         ]
-        pick_applies = bool(pick_uses_caked_space) and (
-            len(indices) == 1
-            or (current_background_index is not None and int(idx) == int(current_background_index))
-        )
-        result[int(idx)] = geometry_manual_pairs_fit_space_kind(
-            pairs,
-            pick_uses_caked_space=bool(pick_uses_caked_space),
-            pick_applies_to_background=bool(pick_applies),
-            auto_caked_detector_origin=bool(auto_caked_detector_origin),
-        )
+        result[int(idx)] = geometry_manual_pairs_fit_space_kind(pairs)
     return result
 
 
@@ -17726,7 +17520,6 @@ def geometry_fit_datasets_use_caked_fit_space(
 ) -> bool:
     """Classify prepared manual datasets before applying runtime overrides."""
 
-    auto_caked_detector_origin = geometry_fit_active_vars_include_detector_tilts(active_var_names)
     for info in dataset_infos or ():
         if not isinstance(info, Mapping):
             continue
@@ -17739,17 +17532,11 @@ def geometry_fit_datasets_use_caked_fit_space(
             "manual_picker_truth_pairs",
             "manual_point_pairs",
         ):
-            if geometry_manual_pairs_use_caked_fit_space(
-                info.get(key),
-                auto_caked_detector_origin=bool(auto_caked_detector_origin),
-            ):
+            if geometry_manual_pairs_use_caked_fit_space(info.get(key)):
                 return True
         spec = info.get("spec")
         if isinstance(spec, Mapping):
-            if geometry_manual_pairs_use_caked_fit_space(
-                spec.get("measured_peaks"),
-                auto_caked_detector_origin=bool(auto_caked_detector_origin),
-            ):
+            if geometry_manual_pairs_use_caked_fit_space(spec.get("measured_peaks")):
                 return True
     return False
 

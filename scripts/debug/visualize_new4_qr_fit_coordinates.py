@@ -2173,6 +2173,14 @@ def _single_step_checks(
             )
     row_count = int(len(rows))
     plotted_count = int(len(plotted))
+    if row_count <= 0:
+        detector_panel_status = "not_evaluated"
+    elif plotted_count <= 0:
+        detector_panel_status = "not_plotted"
+    elif plotted_count < row_count:
+        detector_panel_status = "partial"
+    else:
+        detector_panel_status = "complete"
     mismatch_rows = [
         row
         for row in rows
@@ -2303,6 +2311,9 @@ def _single_step_checks(
         "invalid_reasons_by_count": dict(invalid_reasons_by_count),
         "plotted_row_count": plotted_count,
         "row_count": row_count,
+        "proof_scope": "caked_space_contract",
+        "detector_panel_status": detector_panel_status,
+        "detector_panel_scope": "diagnostic_only",
         "visual_objective_surface_match_all_rows": surface_match_all,
         "max_visual_vs_objective_base_norm_deg": max(base_norms) if base_norms else None,
         "max_visual_vs_objective_trial_norm_deg": max(trial_norms) if trial_norms else None,
@@ -2835,7 +2846,10 @@ def run_coordinate_audit(
                 checks.get("source_authority_mismatch_reasons_by_count", {}) or {}
             ),
             "proof_status": checks.get("proof_status"),
+            "proof_scope": checks.get("proof_scope"),
             "proof_failure_reason": checks.get("proof_failure_reason"),
+            "detector_panel_status": checks.get("detector_panel_status"),
+            "detector_panel_scope": checks.get("detector_panel_scope"),
             "json_authoritative": True,
             "png_diagnostic_only": True,
             "csv_path": _artifact_path_string(csv_path),
@@ -2853,7 +2867,8 @@ def run_coordinate_audit(
             f"delta Gamma={float(trial_payload.get('delta_Gamma_deg', 0.0) or 0.0):.6g} "
             f"max angle step={float(max_angle_step_deg):.6g} deg "
             f"rows={int(len(rows))} single-step={trial_payload.get('single_step_status')} "
-            f"proof={checks.get('proof_status')}"
+            f"caked proof={checks.get('proof_status')} "
+            f"detector panel={checks.get('detector_panel_status')}"
         )
         _plot_single_step_rows(plot_path, rows, title=title)
         return report

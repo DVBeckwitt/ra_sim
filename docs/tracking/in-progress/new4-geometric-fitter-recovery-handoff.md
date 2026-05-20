@@ -5,10 +5,45 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-05-14
+Last updated: 2026-05-20
 
 ## Current status
 
+- 2026-05-20 detector-origin simplification slice completed. Manual Qr/Qz rows
+  picked in detector view now stay on the fixed detector-pixel LSQ path,
+  including `gamma,Gamma`, instead of being auto-promoted into the exact-caked
+  angular objective. Explicit caked-origin rows still require the exact caked
+  projector and fail closed when it is unavailable. Bug/error status: fixed for
+  the GUI rejection where a simple two-branch detector-origin fit could report
+  optimizer failure, non-finite caked angular residuals, and no matched fitted
+  peak pairs even though the detector-space manual pairs were present. Feature
+  status: no new operator control; this removes the internal auto-caked
+  detector-origin path and preserves public helper signatures for compatibility.
+  Migration/deprecation status: no saved-state schema, CLI flag, config key, or
+  artifact schema changed; saved caked aliases on detector-origin rows remain
+  display/replay cache data. CI/CD status: no workflow files changed; the local
+  quality gate is the existing project gate. Validation: focused detector/caked
+  fit-space and GUI runtime tests passed, a runtime probe showed detector-origin
+  rows do not request caked projection while caked-origin rows still do, and
+  `python -m ra_sim.dev check` passed. Shipping status: ready as a bug-fix
+  commit with rollback by git revert; the full real-data New4 excluded-row
+  proof remains outside this slice.
+- 2026-05-16 reporting hardening slice completed. Caked click-pick QR trial
+  source-row diagnostics now treat merged live caked candidate rows as final
+  dynamic coverage, so `missing_dynamic_trial_source_row_count` reports the
+  post-rebinding count instead of a stale pre-supplement count. The New4
+  single-step QR audit now labels `proof_status` with
+  `proof_scope="caked_space_contract"` and reports detector-panel scope/status
+  separately, so `proof_status=pass` with zero detector-panel plotted rows is
+  explicitly caked-space-only proof. The skipped-background OSC-name runtime
+  regression was rechecked locally and is green in this checkout, so no runtime
+  label code changed. Status: this fixes reporting diagnostics only; it does
+  not prove the full 82-row Bi2Se3 fit or regenerate accepted excluded-row
+  artifacts. A direct excluded `gamma,Gamma` rerun wrote
+  `artifacts/geometry_fit_recovery/bi2se3_headless_gamma_gamma/direct_00_gamma_gamma_20260516/`
+  and resolved 79/79 QR rows at `0.7688782306077002 deg` RMS, but the strict
+  caked-space single-step proof failed with nonzero source-authority/surface
+  mismatches and `detector_panel_status="not_plotted"`.
 - 2026-05-14 Bi2Se3 first-image caked manual fit fail-closed slice completed.
   QR handoff audit rows now keep caked observed targets in
   `fit_observed_caked_deg` and reconstruct `fit_observed_detector_display_px`

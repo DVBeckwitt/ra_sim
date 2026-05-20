@@ -446,16 +446,25 @@ near-critical-angle transport matters more than speed.
 <details>
 <summary>Manual geometry-fit behavior</summary>
 
-The GUI manual geometry-fit workflow keeps one objective throughout the solve:
+The GUI manual geometry-fit workflow keeps one fit-space contract throughout
+the solve:
 
-- manual picks keep a detector-native background anchor plus the chosen simulated source identity
-- saved or restored runs rebuild missing source rows from live caches, retained intersection caches, or a fresh simulation before failing
-- source identity stays pinned to the saved source row or peak when possible, then falls back through q-group or HKL rebinding when reflection ordering changes
-- refinement recomputes observed and simulated points in the same flat detector-derived angular space and minimizes residuals in `(2theta, phi)`
-- geometry, lattice, wavelength, and shared-theta updates re-anchor both simulated source rows and measured/background maxima during the solve
-- beam center, detector distance, and pixel geometry move both sides of the comparison; detector `gamma/Gamma` tilts are intentionally ignored in the detector-to-angle remap
-- shared sample-rotation variables move only the simulated side
-- rematching, robust reweighting, and post-polish stages are disabled for this path so it stays on the manual correspondence workflow
+- detector-origin manual Qr/Qz picks fit fixed simulated/source rows to the
+  saved detector-pixel background anchors, including `gamma,Gamma` tilt fits
+- explicit caked-origin manual Qr/Qz picks fit in `(2theta, phi)` and require
+  the exact per-background caked projector before the optimizer starts
+- saved caked aliases on detector-origin rows are replay/display cache data,
+  not fit anchors
+- saved or restored runs rebuild missing source rows from live caches, retained
+  intersection caches, or a fresh simulation before failing
+- source identity stays pinned to the saved source row or peak when possible,
+  then falls back through q-group or HKL rebinding when reflection ordering
+  changes
+- geometry, lattice, wavelength, and shared-theta updates re-anchor simulated
+  source rows during the solve; detector-origin measured anchors remain the
+  operator-selected background pixels
+- rematching, robust reweighting, and post-polish stages are disabled for this
+  path so it stays on the manual correspondence workflow
 
 </details>
 

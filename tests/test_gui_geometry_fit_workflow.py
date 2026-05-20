@@ -24803,7 +24803,7 @@ def test_build_geometry_manual_fit_dataset_exact_projector_uses_current_local_pa
         "orientation-metadata-loss",
     ],
 )
-def test_build_geometry_manual_fit_dataset_reprojects_detector_origin_anchor_for_caked_fit(
+def test_build_geometry_manual_fit_dataset_keeps_detector_origin_anchor_in_detector_space(
     monkeypatch,
     manual_overrides,
     unrotated_native,
@@ -24938,21 +24938,17 @@ def test_build_geometry_manual_fit_dataset_reprojects_detector_origin_anchor_for
     initial = dataset["initial_pairs_display"][0]
     display = dataset["measured_display"][0]
 
-    assert measured["background_two_theta_deg"] == pytest.approx(22.5)
-    assert measured["background_phi_deg"] == pytest.approx(-35.5)
-    assert measured["fit_space_anchor_override"] is True
-    assert measured["fit_space_anchor_source"] == "detector_origin_exact_caked_projection"
-    assert initial["background_two_theta_deg"] == pytest.approx(22.5)
-    assert initial["background_phi_deg"] == pytest.approx(-35.5)
-    assert initial["bg_caked_display"] == pytest.approx((22.5, -35.5))
-    assert display["background_two_theta_deg"] == pytest.approx(22.5)
-    assert display["background_phi_deg"] == pytest.approx(-35.5)
-    assert dataset["spec"]["measured_peaks"][0]["background_two_theta_deg"] == pytest.approx(22.5)
-    assert dataset["spec"]["measured_peaks"][0]["background_phi_deg"] == pytest.approx(-35.5)
-    handoff_row = dataset["fit_handoff_audit_rows"][0]
-    assert handoff_row["observed_refined_caked_deg"] == pytest.approx((22.5, -35.5))
-    assert handoff_row["fit_observed_caked_deg"] == pytest.approx((22.5, -35.5))
-    assert detector_calls[0] == tuple(expected_detector_call)
+    assert measured["background_two_theta_deg"] == pytest.approx(999.0)
+    assert measured["background_phi_deg"] == pytest.approx(-999.0)
+    assert "fit_space_anchor_override" not in measured
+    assert "fit_space_anchor_source" not in measured
+    assert initial["background_two_theta_deg"] == pytest.approx(999.0)
+    assert initial["background_phi_deg"] == pytest.approx(-999.0)
+    assert display["background_two_theta_deg"] == pytest.approx(999.0)
+    assert display["background_phi_deg"] == pytest.approx(-999.0)
+    assert dataset["spec"]["measured_peaks"][0]["background_two_theta_deg"] == pytest.approx(999.0)
+    assert dataset["spec"]["measured_peaks"][0]["background_phi_deg"] == pytest.approx(-999.0)
+    assert tuple(expected_detector_call) not in detector_calls
 
 
 def test_copy_geometry_fit_dataset_spec_for_state_strips_fit_space_projector() -> None:

@@ -42176,75 +42176,11 @@ def _build_geometry_fit_async_job(
     except Exception:
         pick_uses_caked_space = False
 
-    active_vars_include_detector_tilts = (
-        gui_geometry_fit.geometry_fit_active_vars_include_detector_tilts(var_names)
-    )
-    detector_qr_rows_need_auto_caked_backfill = bool(
-        active_vars_include_detector_tilts
-        and any(
-            gui_geometry_fit.geometry_fit_manual_pairs_have_auto_caked_detector_qr(
-                [
-                    entry
-                    for entry in (rows or ())
-                    if gui_geometry_fit.geometry_manual_pair_enabled_for_geometry_fit(entry)
-                ],
-                require_observed_caked_anchor=False,
-            )
-            for rows in manual_pairs_by_background.values()
-        )
-    )
-    if detector_qr_rows_need_auto_caked_backfill:
-        if callable(prepare_bindings.ensure_geometry_fit_caked_view):
-            try:
-                prepare_bindings.ensure_geometry_fit_caked_view()
-            except Exception as exc:
-                detail = str(exc).strip()
-                message = (
-                    "Geometry fit unavailable: detector-origin gamma/Gamma manual "
-                    "Qr/Qz pairs need exact caked projection before angular fitting. "
-                    "Rebuild the caked/source cache and rerun the fit."
-                )
-                if detail:
-                    message = f"{message} Details: {detail}"
-                raise RuntimeError(message) from exc
-        changed_backfill_count = 0
-        try:
-            changed_backfill_count = int(_backfill_geometry_manual_pair_caked_coordinate_cache())
-        except Exception:
-            changed_backfill_count = 0
-        if changed_backfill_count > 0:
-            for idx in required_indices:
-                manual_pairs_by_background[int(idx)] = [
-                    dict(entry)
-                    for entry in (
-                        manual_dataset_bindings.geometry_manual_pairs_for_index(int(idx)) or ()
-                    )
-                    if isinstance(entry, Mapping)
-                ]
-        caked_anchor_error = (
-            gui_geometry_fit.manual_caked_geometry_fit_observed_anchor_preflight_error(
-                [
-                    {
-                        "label": background_labels.get(int(idx), f"background {int(idx) + 1}"),
-                        "measured_for_fit": [
-                            entry
-                            for entry in manual_pairs_by_background.get(int(idx), ())
-                            if gui_geometry_fit.geometry_manual_pair_enabled_for_geometry_fit(entry)
-                        ],
-                    }
-                    for idx in required_indices
-                ]
-            )
-        )
-        if caked_anchor_error:
-            raise RuntimeError(caked_anchor_error)
-
     manual_fit_space_by_background = gui_geometry_fit.geometry_manual_fit_space_by_background(
         required_indices,
         manual_pairs_by_background,
         pick_uses_caked_space=bool(pick_uses_caked_space),
         current_background_index=int(current_background_index),
-        active_var_names=var_names,
     )
     has_usable_manual_pair_background = any(
         str(kind).strip().lower() != "missing" for kind in manual_fit_space_by_background.values()
@@ -45697,7 +45633,6 @@ def _run_async_geometry_fit_worker_job(
             ],
             pick_uses_caked_space=bool(job_data.get("pick_uses_caked_space", False)),
             current_background_index=int(job_data.get("current_background_index", 0)),
-            active_var_names=job_data.get("var_names", ()),
         )
 
     def _worker_caked_view_payload_ready(background_index: int) -> bool:

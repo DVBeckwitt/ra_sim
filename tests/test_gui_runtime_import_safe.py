@@ -15191,17 +15191,11 @@ def test_runtime_impl_source_cache_build_ready_no_longer_inlines_caked_store() -
     assert '"source_cache_caked_view_timeout"' in source
 
 
-def test_runtime_impl_backfills_detector_origin_two_tilt_pairs_before_fit_space() -> None:
+def test_runtime_impl_does_not_auto_backfill_detector_origin_two_tilt_pairs() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
-    marker = "detector_qr_rows_need_auto_caked_backfill"
-    backfill_call = "_backfill_geometry_manual_pair_caked_coordinate_cache()"
-    classifier_call = "geometry_manual_fit_space_by_background("
-
-    assert marker in source
-    assert source.index(marker) < source.index(classifier_call)
-    assert source.index(backfill_call) < source.index(classifier_call)
-    assert "geometry_fit_active_vars_include_detector_tilts(var_names)" in source
+    assert "detector_qr_rows_need_auto_caked_backfill" not in source
+    assert "geometry_fit_active_vars_include_detector_tilts(var_names)" not in source
     assert "manual_caked_geometry_fit_observed_anchor_preflight_error" in source
 
 

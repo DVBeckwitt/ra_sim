@@ -192,6 +192,16 @@ closed with native child return code `3221225477`, while
 combo remains `00_gamma_Gamma`, and no real GUI geometry is updated by the dry
 run.
 
+2026-05-16 rerun note: a direct excluded `gamma,Gamma` headless run from the
+current code wrote
+`artifacts/geometry_fit_recovery/bi2se3_headless_gamma_gamma/direct_00_gamma_gamma_20260516/`.
+The fit resolved 79/79 QR rows with `raw_angular_rms_deg=0.7688782306077002`
+and `raw_angular_max_deg=2.5981580333851113`, but the strict single-step audit
+reported `proof_status="fail"`, `proof_scope="caked_space_contract"`,
+`detector_panel_status="not_plotted"`, and nonzero source-authority/surface
+mismatches. Treat this as low-RMS fit evidence, not accepted proof that the
+points fit cleanly.
+
 ## Background Peak-Fit Diagnostic Caches
 
 The parallel background peak-fit diagnostic script
@@ -678,6 +688,19 @@ Source-less or legacy projection tokens are not correctness keys for warm-cache
 reuse. Do not mutate simulation or caked image arrays in place without also
 bumping the corresponding simulation or projection signature.
 
+Status as of 2026-05-20: detector-origin manual Qr/Qz geometry-fit rows are
+kept in detector-pixel fit space, including `gamma,Gamma` two-tilt solves.
+Saved caked aliases on those rows remain replay/display cache data and no
+longer promote the row into the exact-caked angular objective. Explicit
+caked-origin rows still require the exact per-background projector and fail
+closed if it is unavailable. Bug/error status: fixed for the reported GUI
+`Geometry Fit Rejected` path where a simple two-point detector-origin fit could
+be rejected by stale or axis-mismatched caked residuals. Migration status: no
+saved-state schema, CLI flag, config key, or artifact field changed; the removed
+path is the internal detector-origin auto-caked promotion compatibility layer.
+Shipping status: ready as a normal bug-fix slice after local focused tests and
+`python -m ra_sim.dev check`; rollback is a git revert.
+
 Status as of 2026-05-15: detector-origin manual Qr/Qz geometry-fit rows keep
 their saved `manual_background_input_origin` and frame through dataset
 orientation. The exact caked projector now replaces stale saved
@@ -949,6 +972,11 @@ contract status always reports `proof_status="fail"` with
 `proof_failure_reason="qr_fit_point_surface_contract_failed"`. Surface-only
 divergence without a contract failure reports
 `proof_failure_reason="visual_simulation_surface_differs_from_objective_surface"`.
+The proof scope is `caked_space_contract`: detector-panel plotting remains
+diagnostic evidence, and the JSON reports `detector_panel_status` as
+`complete`, `partial`, `not_plotted`, or `not_evaluated`. A caked-space
+contract pass can therefore coexist with `plotted_row_count=0` only when the
+report and PNG title explicitly mark the detector panel as diagnostic.
 The caked panel plots objective base/trial simulation points as square/triangle
 markers, and plots divergent GUI visual points separately as diagnostic
 diamond/x markers. Use `--allow-visual-objective-surface-divergence` only for

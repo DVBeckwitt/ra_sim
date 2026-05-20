@@ -4630,6 +4630,128 @@ def test_single_step_qr_visual_audit_reports_invalid_detector_rows() -> None:
     assert checks["invalid_detector_display_row_count"] == 1
     assert checks["valid_plotted_fraction"] == pytest.approx(0.5)
     assert checks["invalid_reasons_by_count"] == {"mixed_display_native_detector_px": 1}
+    assert checks["proof_scope"] == "caked_space_contract"
+    assert checks["detector_panel_status"] == "partial"
+
+
+def test_single_step_qr_visual_audit_scopes_pass_when_detector_panel_has_no_rows() -> None:
+    module = _load_new4_coordinate_audit_module()
+    rows = [
+        {
+            "detector_display_frame_valid": False,
+            "caked_frame_valid": True,
+            "detector_display_invalid_reasons": ["caked_degrees_not_detector_display_px"],
+            "visual_objective_base_surface_match": True,
+            "visual_objective_trial_surface_match": True,
+            "objective_source_authority": "sim_visual_caked_deg",
+            "dynamic_source_source": "sim_visual_caked_deg",
+            "source_authority_match": True,
+            "qr_fit_contract_status": "pass",
+        }
+    ]
+
+    checks = module._single_step_checks(
+        rows,
+        delta_gamma_deg=0.0,
+        delta_Gamma_deg=0.0,
+        max_angle_step_deg=5.0,
+    )
+
+    assert checks["proof_status"] == "pass"
+    assert checks["proof_scope"] == "caked_space_contract"
+    assert checks["detector_panel_status"] == "not_plotted"
+
+
+def test_single_step_qr_visual_audit_report_scopes_json_and_plot_title(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    module = _load_new4_coordinate_audit_module()
+    state_path = tmp_path / "state.json"
+    state_path.write_text("{}\n", encoding="utf-8")
+    request = _single_step_qr_request()
+    rows = [
+        {
+            "pair_id": "pair-1",
+            "detector_display_frame_valid": False,
+            "caked_frame_valid": True,
+            "detector_display_invalid_reasons": ["caked_degrees_not_detector_display_px"],
+            "visual_objective_base_surface_match": True,
+            "visual_objective_trial_surface_match": True,
+            "objective_source_authority": "sim_visual_caked_deg",
+            "dynamic_source_source": "sim_visual_caked_deg",
+            "source_authority_match": True,
+            "qr_fit_contract_status": "pass",
+            "saved_sim_refined_caked_used": False,
+            "objective_surface_used_for_residual": True,
+            "visual_surface_used_for_residual": False,
+            "identity_same_before_after": True,
+            "q_group_same_before_after": True,
+            "hkl_same_before_after": True,
+            "branch_same_before_after": True,
+            "original_sim_caked_matches_fit_prediction_caked_deg": True,
+        }
+    ]
+    written_json: dict[str, dict[str, object]] = {}
+    plot_call: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        module.preflight,
+        "_run_point_provider_report_only",
+        lambda *_args, **_kwargs: {"provider_pair_count": 1},
+    )
+    monkeypatch.setattr(
+        module.ladder,
+        "_capture_solver_context",
+        lambda *_args, **_kwargs: {
+            "prepared_run": SimpleNamespace(fit_params=request.params, dataset_infos=None)
+        },
+    )
+    monkeypatch.setattr(
+        module.ladder,
+        "build_solver_request",
+        lambda _context, _active_names, **_kwargs: request,
+    )
+    monkeypatch.setattr(module.reprojection, "_provider_pair_count", lambda _report: 1)
+
+    def fake_trial(*_args, **_kwargs):
+        return {
+            "rows": rows,
+            "delta_gamma_deg": 0.0,
+            "delta_Gamma_deg": 0.0,
+            "single_step_status": "ok",
+        }
+
+    def capture_json(path, payload):
+        written_json[path.name] = dict(payload)
+
+    def capture_plot(_path, plot_rows, *, title):
+        plot_call["rows"] = list(plot_rows)
+        plot_call["title"] = str(title)
+
+    monkeypatch.setattr(module, "_single_step_detector_angle_trial", fake_trial)
+    monkeypatch.setattr(module, "_write_json", capture_json)
+    monkeypatch.setattr(module, "_write_csv", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(module, "_plot_single_step_rows", capture_plot)
+
+    report = module.run_coordinate_audit(
+        state_path=state_path,
+        background_index=0,
+        output_root=tmp_path / "out",
+        single_step_detector_angle_audit=True,
+    )
+    saved_report = written_json[module.SINGLE_STEP_REPORT_NAME]
+
+    assert report["proof_status"] == "pass"
+    assert report["proof_scope"] == "caked_space_contract"
+    assert report["detector_panel_status"] == "not_plotted"
+    assert report["detector_panel_scope"] == "diagnostic_only"
+    assert report["png_diagnostic_only"] is True
+    assert saved_report["proof_scope"] == "caked_space_contract"
+    assert saved_report["detector_panel_status"] == "not_plotted"
+    assert plot_call["rows"] == rows
+    assert "caked proof=pass" in plot_call["title"]
+    assert "detector panel=not_plotted" in plot_call["title"]
 
 
 def _single_step_surface_row(

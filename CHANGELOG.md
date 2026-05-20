@@ -75,6 +75,13 @@
     closed when any row has a failing or missing QR fit surface contract, and so
     the diagnostic visual/objective surface-divergence flag cannot mask
     non-surface failures.
+  - Fixed caked click-pick QR trial source-row diagnostics so the public
+    `missing_dynamic_trial_source_row_count` is recomputed after live caked
+    candidate rows are merged, and scoped New4 single-step `proof_status=pass`
+    as a caked-space contract proof when the detector panel is diagnostic only.
+  - Simplified GUI manual Qr/Qz geometry fits so detector-origin picks stay on
+    the fixed detector-pixel LSQ path instead of being auto-promoted into the
+    caked angular objective when `gamma,Gamma` are selected.
   - Changed GUI fit-background activation so multi-background geometry-fit
     sessions start with only the initial image selected; later backgrounds are
     added by saved enabled manual Qr/Qz pairs, and selected later backgrounds

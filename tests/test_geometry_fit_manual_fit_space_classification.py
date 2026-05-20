@@ -126,7 +126,7 @@ def test_missing_pairs_are_reported_before_mixed_fit_spaces() -> None:
     assert "mix detector-pixel and caked fit-space" not in error
 
 
-def test_detector_origin_pair_with_backfilled_caked_fields_can_auto_cake_for_two_tilts() -> None:
+def test_detector_origin_pair_with_backfilled_caked_fields_stays_detector_for_two_tilts() -> None:
     spaces = geometry_fit.geometry_manual_fit_space_by_background(
         [0],
         {0: [_detector_origin_pair()]},
@@ -135,7 +135,7 @@ def test_detector_origin_pair_with_backfilled_caked_fields_can_auto_cake_for_two
         active_var_names=["gamma", "Gamma"],
     )
 
-    assert spaces == {0: "caked"}
+    assert spaces == {0: "detector"}
 
 
 def test_detector_origin_pair_does_not_call_ensure_caked_view() -> None:
@@ -151,7 +151,7 @@ def test_detector_origin_pair_does_not_call_ensure_caked_view() -> None:
     assert result.prepared_run.geometry_runtime_cfg.get("projection_view_mode") != "caked"
 
 
-def test_auto_caked_detector_origin_two_tilt_fit_defaults_to_ladder_runtime() -> None:
+def test_detector_origin_two_tilt_fit_uses_detector_manual_point_runtime() -> None:
     calls: list[str] = []
 
     def _projector(cols, rows, **_kwargs):
@@ -170,18 +170,18 @@ def test_auto_caked_detector_origin_two_tilt_fit_defaults_to_ladder_runtime() ->
         var_names=["gamma", "Gamma"],
     )
 
-    assert calls == ["ensure"]
+    assert calls == []
     assert result.error_text is None
     assert result.prepared_run is not None
     cfg = result.prepared_run.geometry_runtime_cfg
-    assert cfg["projection_view_mode"] == "caked"
-    assert cfg["solver"]["max_nfev"] == 60
-    assert cfg["solver"]["seed_multistart"] is True
-    assert cfg["solver"]["seed_multistart_enabled"] is True
-    assert cfg["solver"]["_qr_fit_point_only_projection"] is True
-    assert cfg["solver"]["_headless_accept_caked_angular_metric_without_pixel_threshold"] is True
-    assert cfg["bounds"]["gamma"] == [-90.0, 90.0]
-    assert cfg["bounds"]["Gamma"] == [-90.0, 90.0]
+    assert cfg.get("projection_view_mode") != "caked"
+    assert cfg["solver"]["manual_point_fit_mode"] is True
+    assert cfg["solver"].get("dynamic_point_geometry_fit") is not True
+    assert "seed_multistart" not in cfg["solver"]
+    assert "seed_multistart_enabled" not in cfg["solver"]
+    assert "_qr_fit_point_only_projection" not in cfg["solver"]
+    assert "_headless_accept_caked_angular_metric_without_pixel_threshold" not in cfg["solver"]
+    assert "bounds" not in cfg
 
 
 def test_caked_objective_missing_observed_anchor_fails_preflight() -> None:
