@@ -9,6 +9,19 @@ Last updated: 2026-05-20
 
 ## Current status
 
+- 2026-05-20 same-`m,L` resolver cleanup completed. Bug/error status remains
+  fixed for the locked manual Qr/Qz `prediction_branch_source_switched`
+  rejection described below. The follow-up code change is behavior-preserving:
+  it removes the single-use `_hkl_matches_q_group_ml` wrapper, keeps the same
+  explicit `m,L` comparison in the fixed-source resolver, and reuses the
+  already-sliced simulated row head during stale-row matching. Feature status:
+  no new GUI control, CLI flag, config key, artifact schema, or saved-state
+  field. Deprecation/migration status: none required because public interfaces
+  remain stable. CI/CD status: no workflow files changed; the existing local
+  quality gates remain the merge signal. Validation: focused same-`m,L`
+  geometry-fit regressions passed, the Qr/Qz manager file passed, `python -m
+  ra_sim.dev check` passed, and `git diff --check` passed. Shipping status:
+  ready as an internal cleanup with rollback by git revert.
 - 2026-05-20 same-`m,L` Qr/Qz identity slice completed. Qr/Qz selector rows
   now expose the canonical `m=H^2+H*K+K^2, L` identity in helper contracts,
   row labels, and exported rows while preserving the serialized

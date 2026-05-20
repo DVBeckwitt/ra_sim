@@ -3356,13 +3356,6 @@ def _q_group_ml_from_key(value: object) -> tuple[int | float, int] | None:
     return m_component, int(l_int)
 
 
-def _hkl_matches_q_group_ml(value: object, q_group_key: object) -> bool:
-    q_group_ml = _q_group_ml_from_key(q_group_key)
-    if q_group_ml is None:
-        return False
-    return _q_group_ml_from_hkl(value) == q_group_ml
-
-
 def focus_mosaic_profile_dataset_specs(
     dataset_specs: Sequence[Dict[str, object]],
     *,
@@ -13842,21 +13835,22 @@ def _resolve_exact_fixed_manual_source_row(
             else None,
         }
     )
-    source_row_q_group_equivalent = False
-    source_row_q_group_ml = None
     if requested_hkl is not None and tuple(source_row_hkl or ()) != tuple(requested_hkl):
         source_row_q_group_ml = _q_group_ml_from_hkl(source_row_hkl)
-        if _hkl_matches_q_group_ml(source_row_hkl, entry.get("q_group_key")):
-            source_row_q_group_equivalent = True
-        else:
+        requested_q_group_ml = _q_group_ml_from_key(entry.get("q_group_key"))
+        source_row_q_group_equivalent = (
+            requested_q_group_ml is not None and source_row_q_group_ml == requested_q_group_ml
+        )
+        if not source_row_q_group_equivalent:
             payload["source_row_hkl_q_group_ml"] = source_row_q_group_ml
             payload["source_row_rejection_reason"] = "source_row_hkl_mismatch"
             return None, payload, "source_row_hkl_mismatch"
-    if source_row_q_group_equivalent:
-        payload["source_row_hkl_q_group_equivalent"] = True
-        payload["source_row_hkl_q_group_ml"] = source_row_q_group_ml
     else:
-        payload["source_row_hkl_q_group_equivalent"] = False
+        source_row_q_group_equivalent = False
+        source_row_q_group_ml = None
+    payload["source_row_hkl_q_group_equivalent"] = bool(source_row_q_group_equivalent)
+    if source_row_q_group_equivalent:
+        payload["source_row_hkl_q_group_ml"] = source_row_q_group_ml
     branch_required = _provider_local_requires_branch_proof(entry)
     if branch_required and requested_branch in {0, 1} and source_row_branch not in {0, 1}:
         payload["source_row_rejection_reason"] = "source_row_branch_missing"
@@ -14063,14 +14057,15 @@ def _provider_local_resolve_stale_fixed_source_row(
             continue
         row_hkl = _hit_row_hkl(row)
         row_branch = source_branch_index_from_phi_deg(row[3])
-        valid_records.append((record, np.asarray(row[:7], dtype=float), row_branch))
+        row_head = np.asarray(row[:7], dtype=float)
+        valid_records.append((record, row_head, row_branch))
         if row_hkl == requested_hkl:
-            hkl_records.append((record, np.asarray(row[:7], dtype=float), row_branch))
+            hkl_records.append((record, row_head, row_branch))
         elif (
             requested_q_group_ml is not None
             and _q_group_ml_from_hkl(row_hkl) == requested_q_group_ml
         ):
-            q_group_records.append((record, np.asarray(row[:7], dtype=float), row_branch))
+            q_group_records.append((record, row_head, row_branch))
 
     payload["provider_local_valid_row_count"] = int(len(valid_records))
     payload["provider_local_hkl_row_count"] = int(len(hkl_records))
