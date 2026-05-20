@@ -43,6 +43,16 @@ Last updated: 2026-05-20
   figure as the fit target, so detector-origin manual picks on the caked view
   request caked fit-space before dataset build. Bug/error status: targeted
   runtime handoff fixed; API/status unchanged.
+- 2026-05-20 review/simplification follow-up completed. Removed one redundant
+  worker-level regression that duplicated existing explicit caked-requirement
+  coverage and did not reproduce the live resolver failure. Kept the actual
+  stale-shell/actual-caked-primary-view regression plus trace-checker
+  `matched=0` coverage. Bug/error status: unchanged from the runtime handoff
+  fix; this is test-suite bloat reduction only. Feature/API status: unchanged.
+  CI/CD status: no workflow change; local focused tests and `git diff --check`
+  remain the gate. Deprecation/migration status: deleted redundant test code
+  only; no user migration. Shipping status: safe internal cleanup, rollback by
+  git revert.
 - 2026-05-20 detector-origin observed caked projection follow-up completed.
   Detector-origin manual picks in explicit caked-required fits now project
   their observed detector anchor through the exact-caked projector during
