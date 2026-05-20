@@ -45627,6 +45627,13 @@ def _run_async_geometry_fit_worker_job(
                         f"background {int(background_idx) + 1}"
                     )
 
+    def _worker_manual_pairs_for_background(background_index: int) -> list[dict[str, object]]:
+        pairs_by_background = job_data.get("manual_pairs_by_background")
+        if not isinstance(pairs_by_background, Mapping):
+            return []
+        pairs = pairs_by_background.get(int(background_index), ())
+        return [dict(entry) for entry in pairs or () if isinstance(entry, Mapping)]
+
     def _worker_manual_fit_space_by_background() -> dict[int, str]:
         required_indices = [int(idx) for idx in (job_data.get("required_indices", ()) or ())]
         stored_spaces = job_data.get("manual_fit_space_by_background")
@@ -45643,17 +45650,7 @@ def _run_async_geometry_fit_worker_job(
                 return normalized
         return gui_geometry_fit.geometry_manual_fit_space_by_background(
             required_indices,
-            lambda idx: [
-                dict(entry)
-                for entry in (
-                    dict(job_data.get("manual_pairs_by_background", {}) or {}).get(
-                        int(idx),
-                        (),
-                    )
-                    or ()
-                )
-                if isinstance(entry, Mapping)
-            ],
+            _worker_manual_pairs_for_background,
             pick_uses_caked_space=bool(job_data.get("pick_uses_caked_space", False)),
             current_background_index=int(job_data.get("current_background_index", 0)),
         )
@@ -45664,16 +45661,12 @@ def _run_async_geometry_fit_worker_job(
         manual_space = str(manual_spaces.get(background_idx, "")).strip().lower()
         if manual_space == "caked":
             return True
-        pairs_by_background = job_data.get("manual_pairs_by_background")
-        if isinstance(pairs_by_background, Mapping):
-            pairs = pairs_by_background.get(background_idx, ())
-        else:
-            pairs = ()
+        pairs = _worker_manual_pairs_for_background(background_idx)
         explicit_detector_origin = any(
             isinstance(entry, Mapping)
             and gui_geometry_fit.geometry_manual_pair_enabled_for_geometry_fit(entry)
             and str(entry.get("manual_background_input_origin") or "").strip().lower() == "detector"
-            for entry in pairs or ()
+            for entry in pairs
         )
         if bool(job_data.get("pick_uses_caked_space", False)):
             try:
@@ -45688,9 +45681,7 @@ def _run_async_geometry_fit_worker_job(
             return False
         projection_mode = str(job_data.get("projection_view_mode") or "").strip().lower()
         if projection_mode == "caked":
-            for entry in pairs or ():
-                if not isinstance(entry, Mapping):
-                    continue
+            for entry in pairs:
                 if not gui_geometry_fit.geometry_manual_pair_enabled_for_geometry_fit(entry):
                     continue
                 origin = str(entry.get("manual_background_input_origin") or "").strip().lower()

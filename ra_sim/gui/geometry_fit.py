@@ -15718,11 +15718,7 @@ def build_geometry_manual_fit_dataset(
         if caked_two_theta is not None and caked_phi is not None:
             measured_entry["background_two_theta_deg"] = float(caked_two_theta)
             measured_entry["background_phi_deg"] = float(caked_phi)
-            origin = (
-                str(measured_entry.get("manual_background_input_origin") or "")
-                .strip()
-                .lower()
-            )
+            origin = str(measured_entry.get("manual_background_input_origin") or "").strip().lower()
             if origin == "detector":
                 measured_entry.pop("fit_space_anchor_override", None)
                 measured_entry.pop("fit_space_anchor_source", None)
@@ -17205,8 +17201,7 @@ def prepare_geometry_fit_run(
 
     dataset_specs = build_geometry_fit_dataset_specs(dataset_infos)
     manual_fit_uses_caked_space = bool(
-        manual_pairs_use_caked_space
-        or geometry_fit_datasets_use_caked_fit_space(dataset_infos)
+        manual_pairs_use_caked_space or geometry_fit_datasets_use_caked_fit_space(dataset_infos)
     )
     if manual_fit_uses_caked_space:
         for spec in dataset_specs:
@@ -17405,18 +17400,15 @@ def _geometry_manual_entry_uses_caked_fit_space(entry: object) -> bool:
         return False
     if origin == "caked":
         return True
-    two_theta = _geometry_fit_finite_float(entry.get("background_two_theta_deg"))
-    phi = _geometry_fit_finite_float(entry.get("background_phi_deg"))
-    if two_theta is not None and phi is not None:
-        return True
-    caked_x = _geometry_fit_finite_float(entry.get("caked_x"))
-    caked_y = _geometry_fit_finite_float(entry.get("caked_y"))
-    if caked_x is not None and caked_y is not None:
-        return True
-    raw_caked_x = _geometry_fit_finite_float(entry.get("raw_caked_x"))
-    raw_caked_y = _geometry_fit_finite_float(entry.get("raw_caked_y"))
-    if raw_caked_x is not None and raw_caked_y is not None:
-        return True
+    for x_key, y_key in (
+        ("background_two_theta_deg", "background_phi_deg"),
+        ("caked_x", "caked_y"),
+        ("raw_caked_x", "raw_caked_y"),
+    ):
+        x_value = _geometry_fit_finite_float(entry.get(x_key))
+        y_value = _geometry_fit_finite_float(entry.get(y_key))
+        if x_value is not None and y_value is not None:
+            return True
     return False
 
 
@@ -17464,8 +17456,7 @@ def geometry_manual_pairs_fit_space_kind(
                 and geometry_manual_pair_enabled_for_geometry_fit(entry)
             ]
             has_explicit_detector_origin = any(
-                str(entry.get("manual_background_input_origin") or "").strip().lower()
-                == "detector"
+                str(entry.get("manual_background_input_origin") or "").strip().lower() == "detector"
                 for entry in entries
             )
             if not has_explicit_detector_origin:
@@ -17500,8 +17491,7 @@ def geometry_manual_fit_space_by_background(
             pairs,
             pick_uses_caked_space=bool(pick_uses_caked_space),
             pick_applies_to_background=(
-                current_background_index is not None
-                and int(idx) == int(current_background_index)
+                current_background_index is not None and int(idx) == int(current_background_index)
             ),
         )
     return result

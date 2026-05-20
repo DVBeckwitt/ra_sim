@@ -9,6 +9,16 @@ Last updated: 2026-05-20
 
 ## Current status
 
+- 2026-05-20 caked handoff simplification pass completed. The follow-up
+  refactor preserved behavior while reducing duplicate fit-space classification
+  code: worker manual-pair extraction now flows through one local helper, and
+  manual caked-coordinate detection uses one finite-coordinate loop instead of
+  repeated per-field branches. Bug/error status: the manual caked Qr/Qz fallback
+  loop remains fixed; this pass only reduced maintenance risk around the guard.
+  Feature status: unchanged. CI/CD status: no workflow change; local
+  `ra_sim.dev check` remains the quality gate. Deprecation/migration status:
+  none required. Shipping status: safe as an internal refactor with rollback by
+  reverting the refactor commit.
 - 2026-05-20 manual caked fit-space handoff gate completed. Root cause for the
   latest GUI loop was upstream of the optimizer: a selected caked Qr/Qz fit
   could still accept detector-only/live `peak_records` source rows, time out
