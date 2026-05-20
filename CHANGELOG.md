@@ -45,6 +45,13 @@
     fixed-source manual `m,L` rows automatically use the dynamic angular
     point-match objective and bounded point-only projection path instead of
     falling back to static detector-pixel matching with `matched=0`.
+  - Blocked detector-only source-cache fallback for manual caked Qr/Qz fits:
+    active caked intent now requires matched finite caked fit-space rows and
+    exact projection/storage before dataset build, with an optimizer guard that
+    rejects missing exact-caked handoff instead of running `central_point_match`.
+  - Fixed PbI2 Qr-rod marker editor edits so `HK=4 -` marker
+    add/move/delete/snap interactions preserve the current panel x/y limits;
+    explicit Delta-Qr and L-window controls remain the scope-changing path.
   - Added opt-in exact manual-pair exclusion and dry-run parameter-combo
     sweeps for headless Bi2Se3 geometry recovery fits, including per-combo
     JSON/PNG artifacts, top-level sweep reports, fail-closed combo results,

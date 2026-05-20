@@ -4,7 +4,7 @@ Type: bug/feature
 Owner: -
 Issue: none
 Priority: p1
-Last updated: 2026-05-15
+Last updated: 2026-05-20
 Status: implemented locally, Qr-rod editor startup and L-bound callback crash
 fixed, detector label editing/import/export restored through a responsive Tk
 canvas popup, detector companion preview/deferred Delta Qr validation passing,
@@ -12,7 +12,8 @@ PbI2 HK=0/nonzero L defaults aligned across editor/preview/final plots, legacy
 notebook consumers migrated to the maintained `.py` diagnostic, HK=0 editor
 phase real-profile seeding restored, PbI2 compressed nonzero marker-L mapping
 guard added, PbI2 final HK=0 row restored, split editor persistence/cache
-guarded, and PbI2 manuscript figures routed to `results_pbi2`
+guarded, PbI2 manuscript figures routed to `results_pbi2`, and HK=4 minus
+marker edits preserve the active editor panel range
 
 ## Problem
 
@@ -90,6 +91,9 @@ to make the Qr rod detector and integration figures source-consistent:
 - The editor plots each rod panel on fitted `L` coordinates instead of raw Qz,
   with integer x-axis ticks. Dragging/clicking still saves marker positions as
   Qz through the panel's Qz-to-L mapping.
+- Marker add, drag, delete, and snap operations preserve the active Matplotlib
+  panel x/y limits. Explicit Delta Qr, `L Min`, and `L Max` controls remain the
+  only marker-editor controls that intentionally change detector/profile scope.
 - The same Qr-rod editor now includes Delta Qr, `L Min`, and `L Max` controls.
   Delta Qr slider movement updates the detector companion preview immediately
   and marks integrated profile rows dirty; the expensive detector Qr/Qz profile
@@ -311,6 +315,10 @@ Bug/error status:
   L-bound submits, rejected profile refreshes, accepted profile refreshes, and
   redraw errors. These diagnostics are off by default and do not change fitting
   inputs or artifact schemas.
+- PbI2 `HK=4 -` marker edits no longer change the visible panel range/scope.
+  The fix is display-only inside the diagnostic marker popup: marker edits
+  preserve the current axis limits, while accepted marker coordinates and final
+  fit inputs still update exactly as before.
 - Existing unrelated non-parallel notebook test failures remain out of scope.
 
 Feature status:
@@ -660,6 +668,13 @@ Passing checks:
   config schema change, saved-state migration, or artifact schema migration is
   required. Rollback is a normal git revert of the diagnostic script/test/doc
   changes.
+- 2026-05-20 HK=4 minus marker-range closeout passed:
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "hk4_minus_drag_preserves_panel_limits or qr_rod_peak_editor_click_preserves_panel_limits" -ra`
+  with `2 passed`. Bug/error status: fixed for the observed marker-editor
+  range/scope mutation. Feature status: no new operator control, CLI/config
+  key, saved-state field, artifact schema, dependency, CI workflow, release
+  version, migration, or ADR. Rollback is a normal git revert of the diagnostic
+  script/test/doc changes.
 
 Known validation limits:
 

@@ -5367,6 +5367,96 @@ def test_parallel_script_qr_rod_peak_editor_click_preserves_panel_limits(
     assert observed["after_ylim"] == pytest.approx(observed["before_ylim"])
 
 
+def test_parallel_script_qr_rod_peak_editor_hk4_minus_drag_preserves_panel_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from matplotlib.backend_bases import MouseEvent
+
+    namespace = _script_functions(
+        "as_float",
+        "qr_rod_peak_edit_runtime_mode",
+        "show_qr_rod_peak_marker_popup",
+        "marker_table_with_specular_l_markers",
+        "qz_l_linear_coeff_from_marker_rows",
+        "marker_row_title",
+        "clean_marker_title",
+        "replace_qr_rod_marker_group_qz",
+        "positive_log_plot_values",
+        "apply_positive_log_y_axis",
+        "snap_qr_rod_markers_to_profile_peaks",
+        "l_tick_label",
+        "_safe_run_name",
+        "load_qr_rod_peak_edits",
+        "write_qr_rod_peak_edits",
+    )
+    namespace["ACTIVE_LATTICE_C"] = 2.0 * np.pi
+    namespace["SAMPLE_STEM"] = "pbi2"
+    show_editor = namespace["show_qr_rod_peak_marker_popup"]
+    observed: dict[str, object] = {}
+
+    def emit_event(fig, ax, name: str, x_value: float, y_value: float) -> None:
+        x_pixel, y_pixel = ax.transData.transform((float(x_value), float(y_value)))
+        event = MouseEvent(name, fig.canvas, x_pixel, y_pixel, button=1)
+        event.inaxes = ax
+        fig.canvas.callbacks.process(name, event)
+
+    def fake_show(*_args, **_kwargs) -> None:
+        fig = plt.gcf()
+        panels = {ax.get_title(): ax for ax in fig.axes if ax.get_xlabel() == "L"}
+        target = panels["HK=4 -"]
+        target.set_xlim(2.0, 2.8)
+        target.set_ylim(0.0, 100.0)
+        before_xlim = target.get_xlim()
+        before_ylim = target.get_ylim()
+        fig.canvas.draw()
+        emit_event(fig, target, "button_press_event", 2.34, 25.0)
+        emit_event(fig, target, "motion_notify_event", 2.38, 26.0)
+        emit_event(fig, target, "button_release_event", 2.38, 26.0)
+        observed["before_xlim"] = before_xlim
+        observed["before_ylim"] = before_ylim
+        observed["after_xlim"] = target.get_xlim()
+        observed["after_ylim"] = target.get_ylim()
+        plt.close(fig)
+
+    marker_table = pd.DataFrame(
+        [
+            {"m": 4, "branch": "-", "qz_marker": 0.478292, "fit_l": 2.166717},
+            {"m": 4, "branch": "-", "qz_marker": 1.358040, "fit_l": 2.342622},
+            {"m": 4, "branch": "-", "qz_marker": 2.681896, "fit_l": 2.607324},
+            {"m": 1, "branch": "+", "qz_marker": 1.0, "fit_l": 2.0},
+            {"m": 1, "branch": "+", "qz_marker": 2.0, "fit_l": 3.0},
+        ]
+    )
+    rod_profile_table = pd.DataFrame(
+        [
+            {"m": 4, "branch": "-", "qz_center": 0.5, "background_density": 12.0},
+            {"m": 4, "branch": "-", "qz_center": 1.5, "background_density": 28.0},
+            {"m": 4, "branch": "-", "qz_center": 2.7, "background_density": 18.0},
+            {"m": 1, "branch": "+", "qz_center": 1.0, "background_density": 5.0},
+            {"m": 1, "branch": "+", "qz_center": 2.0, "background_density": 8.0},
+        ]
+    )
+    region_state = {"delta_qr": 0.01, "l_min": 0.5, "l_max": 3.0}
+
+    monkeypatch.setattr(plt, "show", fake_show)
+    edited, accepted = show_editor(
+        marker_table,
+        rod_profile_table,
+        backend_name="TkAgg",
+        region_state=region_state,
+    )
+
+    assert accepted is True
+    assert observed["after_xlim"] == pytest.approx(observed["before_xlim"])
+    assert observed["after_ylim"] == pytest.approx(observed["before_ylim"])
+    assert region_state["delta_qr"] == pytest.approx(0.01)
+    assert region_state["l_min"] == pytest.approx(0.5)
+    assert region_state["l_max"] == pytest.approx(3.0)
+    edited_table = pd.DataFrame(edited)
+    unchanged = edited_table[(edited_table["m"] == 1) & (edited_table["branch"] == "+")]
+    assert unchanged["qz_marker"].tolist() == pytest.approx([1.0, 2.0])
+
+
 def test_parallel_script_qr_rod_plots_hide_hk7() -> None:
     if not PARALLEL_SCRIPT_PATH.exists():
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")

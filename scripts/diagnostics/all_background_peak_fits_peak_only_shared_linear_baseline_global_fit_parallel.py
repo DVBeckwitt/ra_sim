@@ -1877,7 +1877,7 @@ def show_qr_rod_peak_marker_popup(
         markers.append(qz_value)
         set_group_markers(group[0], group[1], markers)
         select_nearest(group, float(x_value))
-        redraw()
+        redraw(preserve_limits=True)
 
     def move_selected(x_value: float) -> None:
         group = selected.get("group")
@@ -1891,7 +1891,7 @@ def show_qr_rod_peak_marker_popup(
         markers[int(index)] = float(editor_l_to_qz(m_value, branch_value, [float(x_value)])[0])
         set_group_markers(m_value, branch_value, markers)
         select_nearest((int(m_value), str(branch_value)), float(x_value))
-        redraw()
+        redraw(preserve_limits=True)
 
     def delete_selected() -> None:
         group = selected.get("group")
@@ -1906,7 +1906,7 @@ def show_qr_rod_peak_marker_popup(
         set_group_markers(m_value, branch_value, markers)
         selected["index"] = None
         sync_title_box()
-        redraw()
+        redraw(preserve_limits=True)
 
     def snap_selected_group() -> None:
         group = selected.get("group")
@@ -1929,7 +1929,7 @@ def show_qr_rod_peak_marker_popup(
         if selected_marker is not None:
             selected_l = float(qz_to_editor_l(m_value, branch_value, [selected_marker])[0])
             select_nearest((int(m_value), str(branch_value)), selected_l)
-        redraw()
+        redraw(preserve_limits=True)
 
     def import_peak_edits(_event) -> None:
         nonlocal edited

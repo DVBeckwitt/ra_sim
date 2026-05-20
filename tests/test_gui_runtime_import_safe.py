@@ -3894,8 +3894,10 @@ def test_runtime_impl_worker_geometry_fit_rebuilds_source_rows_on_demand() -> No
     assert "def _rebuild_source_rows_for_background_worker(" in source
     assert "geometry_manual_rebuild_source_rows_for_background=(" in source
     assert "_rebuild_source_rows_for_background_worker" in source
-    assert helper_source.count("raise RuntimeError(") == 3
+    assert helper_source.count("raise RuntimeError(") == 5
     assert "exact caked projector unavailable" in helper_source
+    assert "exact caked fit-space projection/storage unavailable" in helper_source
+    assert "exact caked fit-space projection/storage timed out" in helper_source
     assert "mixed detector/caked manual fit spaces are not supported" in helper_source
     assert "Geometry fit preflight timed out" in helper_source
 
@@ -9220,11 +9222,13 @@ def test_manual_geometry_undo_reconciles_fit_background_selection(monkeypatch) -
     monkeypatch.setattr(
         runtime_session,
         "_current_geometry_fit_background_indices",
-        lambda strict=False: runtime_session.gui_background_theta.current_geometry_fit_background_indices(
-            osc_files=["bg0.osc", "bg1.osc"],
-            current_background_index=0,
-            geometry_fit_background_selection_var=selection_var,
-            strict=bool(strict),
+        lambda strict=False: (
+            runtime_session.gui_background_theta.current_geometry_fit_background_indices(
+                osc_files=["bg0.osc", "bg1.osc"],
+                current_background_index=0,
+                geometry_fit_background_selection_var=selection_var,
+                strict=bool(strict),
+            )
         ),
         raising=False,
     )
@@ -15306,6 +15310,31 @@ def test_manual_fit_space_classifier_rejects_mixed_backgrounds() -> None:
     assert "detector.osc=detector" in error
 
 
+def test_manual_fit_space_classifier_uses_active_caked_intent_without_relabeling_detector_origin() -> (
+    None
+):
+    geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
+
+    spaces = geometry_fit.geometry_manual_fit_space_by_background(
+        [0, 1],
+        {
+            0: [{"pair_id": "active-caked", "x": 10.0, "y": 20.0}],
+            1: [
+                {
+                    "pair_id": "detector-origin",
+                    "x": 30.0,
+                    "y": 40.0,
+                    "manual_background_input_origin": "detector",
+                }
+            ],
+        },
+        pick_uses_caked_space=True,
+        current_background_index=0,
+    )
+
+    assert spaces == {0: "caked", 1: "detector"}
+
+
 def test_prepare_caked_manual_fit_requires_exact_projector() -> None:
     geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
     trace_pairs = [
@@ -17368,6 +17397,110 @@ def test_runtime_session_source_cache_caked_timeout_does_not_hide_row_cache_succ
     assert "source_cache_build_ready" in kinds
     assert "source_cache_caked_view_timeout" in kinds
     assert kinds.index("source_cache_build_ready") < kinds.index("source_cache_caked_view_timeout")
+
+
+def test_runtime_session_manual_caked_source_cache_timeout_fails_before_dataset_build(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    job = _make_geometry_fit_worker_job(runtime_session)
+    caked_row = dict(
+        _geometry_fit_worker_live_row(),
+        background_index=0,
+        background_two_theta_deg=1.0,
+        background_phi_deg=2.0,
+        caked_x=1.0,
+        caked_y=2.0,
+    )
+    caked_pair = dict(
+        _geometry_fit_worker_required_pair(),
+        background_index=0,
+    )
+    perf_lock = threading.Lock()
+    perf_state = {"value": 0.0}
+
+    def _fake_perf_counter() -> float:
+        with perf_lock:
+            perf_state["value"] += 0.25
+            return float(perf_state["value"])
+
+    job["projection_view_mode"] = "caked"
+    job["projection_view_signature"] = {
+        "mode": "caked",
+        "available": True,
+        "background_index": 0,
+        "current_background_index": 0,
+        "detector_shape": [4, 4],
+        "projection_payload_digest": "projection-digest",
+    }
+    job["projection_view_signature_by_background"] = {0: dict(job["projection_view_signature"])}
+    job["projection_payload_by_background"] = {
+        0: _geometry_fit_worker_caked_payload(
+            runtime_session,
+            background_value=1.0,
+            radial_values=[1.0, 2.0],
+            azimuth_values=[3.0, 4.0],
+        )
+    }
+    job["pick_uses_caked_space"] = True
+    job["manual_fit_space_by_background"] = {0: "detector"}
+    job["manual_pairs_by_background"] = {0: [caked_pair]}
+    job["live_rows_by_background"] = {0: [caked_row]}
+    job["live_rows_signature_by_background"] = {0: ("sig", 0)}
+
+    monkeypatch.setattr(runtime_session, "perf_counter", _fake_perf_counter)
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            geometry_fit_caking_ai_cache={},
+            analysis_preview_bins=(4, 4),
+            ai_cache={},
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_size", 4, raising=False)
+    monkeypatch.setattr(runtime_session, "DISPLAY_ROTATE_K", 0, raising=False)
+    monkeypatch.setattr(runtime_session, "_build_analysis_integrator", lambda _cfg: object())
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_fit_caked_roi_selection",
+        lambda *_args, **_kwargs: {
+            "enabled": False,
+            "valid": False,
+            "pixel_count": 0,
+            "fraction": 0.0,
+            "half_width_px": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "temporary_numba_thread_limit",
+        lambda *_args, **_kwargs: contextlib.nullcontext(),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "caking",
+        lambda *_args, **_kwargs: threading.Event().wait(1.0) or object(),
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_manual_fit_dataset",
+        lambda *_args, **_kwargs: pytest.fail(
+            "manual caked fit must not build dataset after caked storage timeout"
+        ),
+    )
+
+    action_result = runtime_session._run_async_geometry_fit_worker_job(job)
+    events = _drain_geometry_fit_worker_events(job["event_queue"])
+    kinds = [str(event.get("kind")) for event in events]
+
+    assert action_result.error_text is not None
+    assert "exact caked fit-space projection/storage timed out for background 1" in (
+        action_result.error_text
+    )
+    assert "source_cache_caked_view_timeout" in kinds
+    assert "preflight_failure" in kinds
 
 
 def test_worker_caked_manual_prepare_fails_closed_before_dataset_build(

@@ -7128,6 +7128,61 @@ def test_manual_caked_qr_fit_auto_enables_dynamic_point_path(monkeypatch) -> Non
     assert result.point_match_summary["qr_fit_resolved_count"] == 1
 
 
+def test_manual_caked_qr_fit_required_flag_rejects_missing_exact_projector(monkeypatch) -> None:
+    monkeypatch.setattr(
+        opt,
+        "_process_peaks_parallel_safe",
+        lambda *_args, **_kwargs: pytest.fail(
+            "manual caked fit-space guard must reject before simulation"
+        ),
+    )
+    image_size = 24
+    params = _base_params(image_size, optics_mode=1)
+    measured = _locked_qr_fixed_source_entry(
+        native_col=8.0,
+        native_row=9.0,
+        background_two_theta_deg=40.0,
+        background_phi_deg=179.8,
+        fit_space_anchor_override=True,
+        fit_space_anchor_source="manual_caked_click",
+    )
+    result = opt.fit_geometry_parameters(
+        np.array([[2.0, 0.0, 0.0]], dtype=np.float64),
+        np.array([1.0], dtype=np.float64),
+        image_size,
+        params,
+        measured_peaks=[measured],
+        var_names=["gamma", "Gamma"],
+        experimental_image=np.zeros((image_size, image_size), dtype=np.float64),
+        dataset_specs=[
+            {
+                "label": "bg0.osc",
+                "measured_peaks": [measured],
+                "_manual_caked_fit_space_required": True,
+                "fit_space_projector_kind": None,
+                "fit_space_projector_unavailable_reason": "missing_exact_caked_bundle",
+            }
+        ],
+        refinement_config={
+            "solver": {
+                "manual_point_fit_mode": True,
+                "dynamic_point_geometry_fit": False,
+                "restarts": 0,
+            },
+            "single_ray": {"enabled": False},
+            "identifiability": {"enabled": False},
+            "full_beam_polish": {"enabled": False},
+            "image_refinement": {"enabled": False},
+        },
+    )
+
+    assert not result.success
+    assert result.status == -10
+    assert result.final_metric_name == "manual_caked_fit_space_missing"
+    assert "manual caked fit-space requires exact caked anchors/projector" in result.message
+    assert result.point_match_summary["reason"] == "manual_caked_fit_space_missing"
+
+
 def test_final_summary_does_not_label_dynamic_objective_rms_as_px(monkeypatch) -> None:
     result = _dynamic_point_only_fit_result_for_metric_tests(monkeypatch)
 

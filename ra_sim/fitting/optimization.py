@@ -2106,6 +2106,15 @@ def _dataset_specs_require_dynamic_caked_qr_fit(
     return False
 
 
+def _dataset_specs_require_manual_caked_fit_space(
+    dataset_specs: Optional[Sequence[object]],
+) -> bool:
+    for spec in _coerce_sequence_items(dataset_specs):
+        if isinstance(spec, Mapping) and bool(spec.get("_manual_caked_fit_space_required", False)):
+            return True
+    return False
+
+
 def _measured_entry_sigma_px(
     entry: Dict[str, object],
     *,
@@ -22443,11 +22452,18 @@ def fit_geometry_parameters(
     missing_pair_penalty = float(solver_cfg.get("missing_pair_penalty_px", 20.0))
     missing_pair_penalty = max(0.0, missing_pair_penalty)
     dynamic_point_geometry_fit_requested = bool(solver_cfg.get("dynamic_point_geometry_fit", False))
+    manual_caked_fit_space_required = _dataset_specs_require_manual_caked_fit_space(
+        dataset_spec_entries
+    )
+    manual_caked_fit_space_ready = _dataset_specs_require_dynamic_caked_qr_fit(
+        dataset_spec_entries,
+        measured_peaks,
+    )
     dynamic_point_geometry_fit_auto_enabled = bool(
         manual_point_fit_mode
         and point_match_mode
         and not dynamic_point_geometry_fit_requested
-        and _dataset_specs_require_dynamic_caked_qr_fit(dataset_spec_entries, measured_peaks)
+        and manual_caked_fit_space_ready
     )
     dynamic_point_geometry_fit = bool(
         dynamic_point_geometry_fit_requested or dynamic_point_geometry_fit_auto_enabled
@@ -22875,6 +22891,72 @@ def fit_geometry_parameters(
     params.setdefault("center_x", center_row_default)
     params.setdefault("center_y", center_col_default)
     params.setdefault("theta_offset", 0.0)
+
+    if manual_caked_fit_space_required and not manual_caked_fit_space_ready:
+
+        def _initial_value_for_var(name: object) -> float:
+            key = str(name)
+            try:
+                if key == "center_x":
+                    value = params.get("center_x", params.get("center", [0.0, 0.0])[0])
+                elif key == "center_y":
+                    value = params.get("center_y", params.get("center", [0.0, 0.0])[1])
+                else:
+                    value = params.get(key, 0.0)
+                value_f = float(value)
+            except Exception:
+                value_f = 0.0
+            return float(value_f) if np.isfinite(value_f) else 0.0
+
+        reason = "manual_caked_fit_space_missing"
+        message = (
+            "manual caked fit-space requires exact caked anchors/projector; "
+            "refusing detector-pixel central_point_match fallback"
+        )
+        result = OptimizeResult(
+            x=np.asarray([_initial_value_for_var(name) for name in var_names], dtype=float),
+            fun=np.array([], dtype=float),
+            success=False,
+            status=-10,
+            message=message,
+            nfev=0,
+            active_mask=np.zeros(len(var_names), dtype=int),
+            optimality=float("nan"),
+        )
+        result.cost = float("nan")
+        result.robust_cost = float("nan")
+        result.weighted_objective_rms = float("nan")
+        result.weighted_objective_rms_units = "deg"
+        result.weighted_residual_rms_px = float("nan")
+        result.rms_px = float("nan")
+        result.rms_deg = float("nan")
+        result.max_deg = float("nan")
+        result.final_metric_name = "manual_caked_fit_space_missing"
+        result.final_metric_space = "caked_deg"
+        result.final_metric_units = "deg"
+        result.point_match_summary = {
+            "reason": reason,
+            "metric_name": "manual_caked_fit_space_missing",
+            "objective_space": "caked_deg",
+            "manual_caked_fit_space_required": True,
+            "exact_fit_space_projector_available": False,
+            "dynamic_point_geometry_fit": False,
+        }
+        result.geometry_fit_debug_summary = {
+            "point_match_mode": bool(point_match_mode),
+            "manual_point_fit_mode": bool(manual_point_fit_mode),
+            "manual_caked_fit_space_required": True,
+            "manual_caked_fit_space_ready": False,
+            "dynamic_point_geometry_fit": False,
+            "dynamic_point_geometry_fit_auto_enabled": False,
+            "rejection_reason": reason,
+            "solver": {
+                "manual_point_fit_mode": bool(manual_point_fit_mode),
+                "dynamic_point_geometry_fit": bool(dynamic_point_geometry_fit),
+                "qr_fit_point_only_projection": bool(qr_fit_point_only_projection),
+            },
+        }
+        return result
 
     dataset_contexts = _build_geometry_fit_dataset_contexts(
         miller,

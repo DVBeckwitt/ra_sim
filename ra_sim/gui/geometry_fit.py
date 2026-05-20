@@ -5580,6 +5580,7 @@ def validate_geometry_fit_live_source_rows(
     *,
     required_pairs: Sequence[Mapping[str, object]] | None = None,
     require_canonical_required_pairs: bool = False,
+    require_caked_fit_space: bool = False,
 ) -> dict[str, object]:
     """Validate whether live/source rows can satisfy active geometry-fit pairs."""
 
@@ -6009,6 +6010,26 @@ def validate_geometry_fit_live_source_rows(
                 )
             )
             continue
+        if require_caked_fit_space:
+            caked_candidates = [
+                dict(candidate)
+                for candidate in finite_candidates
+                if _caked_point(candidate) is not None
+            ]
+            if not caked_candidates:
+                pair_failures.append(
+                    _failure_payload(
+                        entry,
+                        pair_id=pair_id,
+                        reason="missing_required_caked_fit_space",
+                        candidate_count_total=candidate_count_total,
+                        candidate_count_after_hkl_filter=candidate_count_after_hkl_filter,
+                        candidate_count_after_branch_filter=candidate_count_after_branch_filter,
+                        branch_candidates=branch_candidates,
+                    )
+                )
+                continue
+            finite_candidates = caked_candidates
         if len(finite_candidates) > 1:
             pair_failures.append(
                 _failure_payload(
@@ -7503,6 +7524,7 @@ def rebuild_geometry_fit_source_rows(
                 live_rows,
                 required_pairs=required_pairs,
                 require_canonical_required_pairs=True,
+                require_caked_fit_space=bool(normalized_projection_view_mode == "caked"),
             )
             live_cache_validation = dict(live_cache_validation)
             live_signature_match = bool(
@@ -17186,6 +17208,9 @@ def prepare_geometry_fit_run(
         manual_pairs_use_caked_space
         or geometry_fit_datasets_use_caked_fit_space(dataset_infos)
     )
+    if manual_fit_uses_caked_space:
+        for spec in dataset_specs:
+            spec["_manual_caked_fit_space_required"] = True
     base_runtime_cfg = apply_joint_geometry_fit_runtime_safety_overrides(
         build_runtime_config(fit_params),
         joint_background_mode=joint_background_mode,
@@ -17431,6 +17456,20 @@ def geometry_manual_pairs_fit_space_kind(
     if pair_kinds == {"caked"}:
         return "caked"
     if pair_kinds == {"detector"}:
+        if bool(pick_uses_caked_space and pick_applies_to_background):
+            entries = [
+                entry
+                for entry in (manual_pairs or ())
+                if isinstance(entry, Mapping)
+                and geometry_manual_pair_enabled_for_geometry_fit(entry)
+            ]
+            has_explicit_detector_origin = any(
+                str(entry.get("manual_background_input_origin") or "").strip().lower()
+                == "detector"
+                for entry in entries
+            )
+            if not has_explicit_detector_origin:
+                return "caked"
         return "detector"
     return "missing"
 
@@ -17457,7 +17496,14 @@ def geometry_manual_fit_space_by_background(
         pairs = [
             entry for entry in (pairs or ()) if geometry_manual_pair_enabled_for_geometry_fit(entry)
         ]
-        result[int(idx)] = geometry_manual_pairs_fit_space_kind(pairs)
+        result[int(idx)] = geometry_manual_pairs_fit_space_kind(
+            pairs,
+            pick_uses_caked_space=bool(pick_uses_caked_space),
+            pick_applies_to_background=(
+                current_background_index is not None
+                and int(idx) == int(current_background_index)
+            ),
+        )
     return result
 
 

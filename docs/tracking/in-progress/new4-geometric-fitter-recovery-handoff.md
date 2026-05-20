@@ -9,6 +9,29 @@ Last updated: 2026-05-20
 
 ## Current status
 
+- 2026-05-20 manual caked fit-space handoff gate completed. Root cause for the
+  latest GUI loop was upstream of the optimizer: a selected caked Qr/Qz fit
+  could still accept detector-only/live `peak_records` source rows, time out
+  caked view storage, and then reach the solver as detector-pixel
+  `central_point_match`. The handoff now treats active caked intent from
+  `projection_view_mode`, `pick_uses_caked_space`, or
+  `manual_fit_space_by_background` as a hard requirement for exact caked
+  fit-space rows. Detector-origin rows with explicit detector provenance remain
+  detector-space fits. Runtime source-cache validation rejects required matches
+  whose matched candidate lacks finite caked coordinates, manual caked preflight
+  fails on caked projection/storage timeout, prepared dataset specs carry an
+  internal manual-caked-required flag, and the optimizer returns
+  `manual_caked_fit_space_missing` instead of silently falling back to
+  `central_point_match` if the GUI handoff regresses. Bug/error status: fixed
+  for the caked-mode fallback loop; remaining proof is an actual Tk GUI rerun
+  of default `m=1,L=10`, `gamma,Gamma` with finite caked rows. Feature status:
+  no new GUI control, CLI flag, config key, saved-state schema, artifact
+  schema, dependency, or version bump. CI/CD status: no workflow changes; local
+  focused pytest and diff hygiene are the quality gate for this slice.
+  Deprecation/migration status: none required because no public interface or
+  stored schema changed. ADR status: no ADR needed for this private validation
+  boundary hardening. Validation: focused rebuild, runtime, optimizer, matched
+  caked-row validator, and detector/caked compatibility regressions passed.
 - 2026-05-20 nested full-identity simplification reviewed and ready to ship.
   Behavior is unchanged: full-reflection trust detection now uses one private
   predicate, and fixed-source matching uses one local row-record cache helper

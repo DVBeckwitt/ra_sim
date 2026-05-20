@@ -26660,6 +26660,155 @@ def test_rebuild_geometry_fit_source_rows_emits_stage_callback_for_accepted_live
     assert accepted_payload["validated_pair_count"] == 1
 
 
+def test_rebuild_geometry_fit_source_rows_rejects_detector_only_live_cache_for_caked_fit_space() -> (
+    None
+):
+    live_rows = [
+        _targeted_source_row(
+            hkl=(1, 0, 10),
+            branch_index=0,
+            q_group_key=("q_group", "primary", 1, 10),
+            sim_col=1080.0,
+            sim_row=1900.0,
+        )
+    ]
+    rebuilt_rows = [
+        {
+            **live_rows[0],
+            "background_two_theta_deg": 33.063,
+            "background_phi_deg": 130.754,
+            "caked_x": 33.063,
+            "caked_y": 130.754,
+        }
+    ]
+    required_pair = _targeted_required_pair(
+        pair_id="bg0:m1l10:branch0",
+        hkl=(1, 0, 10),
+        branch_index=0,
+        q_group_key=("q_group", "primary", 1, 10),
+        extra={
+            "background_index": 0,
+            "manual_background_input_origin": "caked",
+            "background_two_theta_deg": 33.063,
+            "background_phi_deg": 130.754,
+        },
+    )
+    stage_events: list[tuple[str, dict[str, object]]] = []
+
+    result = geometry_fit.rebuild_geometry_fit_source_rows(
+        background_index=0,
+        background_label="bg0.osc",
+        params_local={"a": 4.143, "c": 28.64},
+        consumer="geometry_fit_dataset",
+        prior_diagnostics={"status": "snapshot_hit"},
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        can_use_live_runtime_cache=True,
+        build_live_rows=lambda: {
+            "rows": list(live_rows),
+            "cache_metadata": {
+                "background_index": 0,
+                "projection_view_mode": "caked",
+                "live_rows_signature_match": True,
+            },
+        },
+        get_memory_intersection_cache=lambda: [],
+        load_logged_intersection_cache_metadata=lambda: None,
+        load_logged_intersection_cache=lambda: ([], None),
+        logged_cache_matches_params=lambda _meta, _params: {
+            "matches": False,
+            "mismatch_reason": "empty_cache",
+            "heavy_hit_table_load_attempted": False,
+        },
+        build_source_rows_from_hit_tables=lambda _tables, **_kwargs: (
+            list(rebuilt_rows),
+            None,
+            None,
+            None,
+        ),
+        simulate_hit_tables=lambda _params, **_kwargs: [object()],
+        last_runtime_simulation_diagnostics=lambda: {"status": "success"},
+        project_rows_for_background_view=lambda rows: list(rows or ()),
+        required_pairs=[required_pair],
+        required_manual_fit_targets=geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+            [required_pair],
+            background_index=0,
+        ),
+        preflight_mode="manual_geometry_targeted",
+        projection_view_mode="caked",
+        projection_view_signature={
+            "mode": "caked",
+            "available": True,
+            "background_index": 0,
+            "current_background_index": 0,
+            "projection_payload_digest": "projection-digest",
+        },
+        projection_payload={
+            "transform_bundle": _workflow_test_cake_bundle(),
+            "detector_shape": (2, 2),
+        },
+        live_cache_inventory={"source_snapshot_count": 1},
+        stage_callback=lambda stage, payload: stage_events.append((str(stage), dict(payload))),
+    )
+
+    assert result.rebuild_source == "fresh_simulation"
+    assert isinstance(result.metadata, dict)
+    validation = result.metadata["live_runtime_cache_validation"]
+    assert validation["valid"] is False
+    assert validation["reason"] == "missing_required_caked_fit_space"
+    kinds = [stage for stage, _payload in stage_events]
+    assert "source_cache_live_runtime_cache_rejected" in kinds
+    assert "source_cache_live_runtime_cache_accepted" not in kinds
+
+
+def test_live_source_row_validation_requires_caked_coords_on_matched_pair() -> None:
+    required_pair = _targeted_required_pair(
+        pair_id="bg0:m1l10:branch0",
+        hkl=(1, 0, 10),
+        branch_index=0,
+        q_group_key=("q_group", "primary", 1, 10),
+        extra={"background_index": 0},
+    )
+    matching_detector_only = _targeted_source_row(
+        hkl=(1, 0, 10),
+        branch_index=0,
+        q_group_key=("q_group", "primary", 1, 10),
+        sim_col=1080.0,
+        sim_row=1900.0,
+    )
+    unrelated_caked = {
+        **_targeted_source_row(
+            hkl=(2, 0, 20),
+            branch_index=0,
+            q_group_key=("q_group", "primary", 2, 20),
+            sim_col=100.0,
+            sim_row=200.0,
+        ),
+        "background_two_theta_deg": 33.063,
+        "background_phi_deg": 130.754,
+        "caked_x": 33.063,
+        "caked_y": 130.754,
+    }
+
+    detector_validation = geometry_fit.validate_geometry_fit_live_source_rows(
+        [matching_detector_only, unrelated_caked],
+        required_pairs=[required_pair],
+        require_canonical_required_pairs=True,
+    )
+    caked_validation = geometry_fit.validate_geometry_fit_live_source_rows(
+        [matching_detector_only, unrelated_caked],
+        required_pairs=[required_pair],
+        require_canonical_required_pairs=True,
+        require_caked_fit_space=True,
+    )
+
+    assert detector_validation["valid"] is True
+    assert caked_validation["valid"] is False
+    assert caked_validation["reason"] == "missing_required_caked_fit_space"
+    assert caked_validation["validator_finite_caked_rows"] == 1
+    assert caked_validation["pair_failures"][0]["pair_id"] == "bg0:m1l10:branch0"
+
+
 def test_validate_geometry_fit_live_source_rows_rejection_counts_follow_hkl_then_branch() -> None:
     validation = geometry_fit.validate_geometry_fit_live_source_rows(
         [

@@ -44742,9 +44742,10 @@ def _run_async_geometry_fit_worker_job(
         snapshot_signature = snapshot.get("simulation_signature")
         snapshot_rows = _copy_source_rows(snapshot.get("rows"))
         snapshot_validation = (
-            gui_geometry_fit.validate_geometry_fit_live_source_rows(
+            _worker_validate_required_source_rows_for_fit_space(
                 snapshot_rows,
                 required_pairs=required_pairs,
+                background_index=int(background_idx),
             )
             if required_pairs
             else {}
@@ -45370,10 +45371,16 @@ def _run_async_geometry_fit_worker_job(
                 live_cache_inventory=live_cache_inventory,
             )
             return []
+        validation_rows = (
+            projected_rows
+            if _worker_manual_caked_fit_space_required_for_background(int(background_idx))
+            else bundle.stored_rows
+        )
         bundle_validation = (
-            gui_geometry_fit.validate_geometry_fit_live_source_rows(
-                bundle.stored_rows,
+            _worker_validate_required_source_rows_for_fit_space(
+                validation_rows,
                 required_pairs=required_pairs,
+                background_index=int(background_idx),
             )
             if required_pairs
             else {}
@@ -45580,6 +45587,9 @@ def _run_async_geometry_fit_worker_job(
                 stage_callback=_stage_callback,
             )
             caked_outcome = await_caked_result(float(caked_view_timeout_s))
+            caked_required = _worker_manual_caked_fit_space_required_for_background(
+                int(background_idx)
+            )
             if isinstance(caked_outcome, Mapping):
                 resolved_caked_outcome = dict(caked_outcome)
                 event_kind = (
@@ -45594,6 +45604,14 @@ def _run_async_geometry_fit_worker_job(
                     started_at=caked_started_at,
                     payload=resolved_caked_outcome,
                 )
+                if caked_required and not bool(
+                    resolved_caked_outcome.get("caked_view_stored", False)
+                ):
+                    raise RuntimeError(
+                        "exact caked fit-space projection/storage unavailable for "
+                        f"background {int(background_idx) + 1} "
+                        f"(status={str(resolved_caked_outcome.get('status', 'failed'))})"
+                    )
             else:
                 _emit_source_cache_caked_view_event(
                     "source_cache_caked_view_timeout",
@@ -45603,6 +45621,11 @@ def _run_async_geometry_fit_worker_job(
                     payload={"status": "timeout"},
                 )
                 announce_caked_timeout()
+                if caked_required:
+                    raise RuntimeError(
+                        "exact caked fit-space projection/storage timed out for "
+                        f"background {int(background_idx) + 1}"
+                    )
 
     def _worker_manual_fit_space_by_background() -> dict[int, str]:
         required_indices = [int(idx) for idx in (job_data.get("required_indices", ()) or ())]
@@ -45634,6 +45657,80 @@ def _run_async_geometry_fit_worker_job(
             pick_uses_caked_space=bool(job_data.get("pick_uses_caked_space", False)),
             current_background_index=int(job_data.get("current_background_index", 0)),
         )
+
+    def _worker_manual_caked_fit_space_required_for_background(background_index: int) -> bool:
+        background_idx = int(background_index)
+        manual_spaces = _worker_manual_fit_space_by_background()
+        manual_space = str(manual_spaces.get(background_idx, "")).strip().lower()
+        if manual_space == "caked":
+            return True
+        pairs_by_background = job_data.get("manual_pairs_by_background")
+        if isinstance(pairs_by_background, Mapping):
+            pairs = pairs_by_background.get(background_idx, ())
+        else:
+            pairs = ()
+        explicit_detector_origin = any(
+            isinstance(entry, Mapping)
+            and gui_geometry_fit.geometry_manual_pair_enabled_for_geometry_fit(entry)
+            and str(entry.get("manual_background_input_origin") or "").strip().lower() == "detector"
+            for entry in pairs or ()
+        )
+        if bool(job_data.get("pick_uses_caked_space", False)):
+            try:
+                pick_applies_to_background = background_idx == int(
+                    job_data.get("current_background_index", background_idx),
+                )
+            except Exception:
+                pick_applies_to_background = True
+            if pick_applies_to_background and not explicit_detector_origin:
+                return True
+        if manual_space in {"detector", "mixed"}:
+            return False
+        projection_mode = str(job_data.get("projection_view_mode") or "").strip().lower()
+        if projection_mode == "caked":
+            for entry in pairs or ():
+                if not isinstance(entry, Mapping):
+                    continue
+                if not gui_geometry_fit.geometry_manual_pair_enabled_for_geometry_fit(entry):
+                    continue
+                origin = str(entry.get("manual_background_input_origin") or "").strip().lower()
+                if origin == "detector":
+                    continue
+                if origin == "caked":
+                    return True
+                if gui_geometry_fit.geometry_manual_pairs_fit_space_kind([entry]) == "caked":
+                    return True
+        return False
+
+    def _worker_validate_required_source_rows_for_fit_space(
+        rows: Sequence[object] | None,
+        *,
+        required_pairs: Sequence[Mapping[str, object]] | None,
+        background_index: int,
+    ) -> dict[str, object]:
+        caked_required = _worker_manual_caked_fit_space_required_for_background(
+            int(background_index)
+        )
+        validation = dict(
+            gui_geometry_fit.validate_geometry_fit_live_source_rows(
+                rows,
+                required_pairs=required_pairs,
+                require_caked_fit_space=bool(caked_required),
+            )
+        )
+        validation["manual_caked_fit_space_required"] = bool(caked_required)
+        if caked_required:
+            validation["manual_caked_required_pair_count"] = int(
+                validation.get("required_pair_count")
+                or len(
+                    gui_geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+                        required_pairs,
+                        background_index=int(background_index),
+                    )
+                )
+                or len(required_pairs or ())
+            )
+        return validation
 
     def _worker_caked_view_payload_ready(background_index: int) -> bool:
         background_payload = dict(
