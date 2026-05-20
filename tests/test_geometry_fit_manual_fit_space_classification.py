@@ -357,7 +357,8 @@ def test_caked_objective_missing_observed_anchor_fails_preflight() -> None:
     )
 
     assert error is not None
-    assert "needs observed caked coordinates" in error
+    assert "blocked before optimization" in error
+    assert "could not be projected into caked fit-space" in error
     assert "bg0.osc (1 missing)" in error
 
 

@@ -13,7 +13,9 @@ notebook consumers migrated to the maintained `.py` diagnostic, HK=0 editor
 phase real-profile seeding restored, PbI2 compressed nonzero marker-L mapping
 guard added, PbI2 final HK=0 row restored, split editor persistence/cache
 guarded, PbI2 manuscript figures routed to `results_pbi2`, and HK=4 minus
-marker edits preserve the active editor panel range
+marker edits preserve the active editor panel range, HK=0/specular editor
+refreshes are phase-scoped, and PbI2 `m=7` Qr-rod rows are hidden before
+artifacts
 
 ## Problem
 
@@ -115,6 +117,13 @@ to make the Qr rod detector and integration figures source-consistent:
 - Delta Qr drag now updates only the companion detector overlays until the
   slider is released or the editor is accepted. This keeps the high-frequency
   UI path responsive while preserving final profile/fitting correctness.
+- HK=0/specular editor refresh callbacks now carry the active editor phase.
+  Specular Delta Qr and L-window changes redraw only the HK=0 detector band and
+  rebuild only specular profile rows, so nonzero Qr rods keep their accepted
+  Delta Qr and L bounds.
+- PbI2 configured-hidden Qr-rod rows are filtered before editor/cache/final
+  artifact tables and plots. The current hidden set removes `m=7`, so that rod
+  no longer appears in PbI2 Qr-rod outputs.
 - The marker editor now explicitly calls `show(warn=False)` on companion
   figures before entering the blocking Matplotlib event loop, so the detector
   preview window is mapped as well as redrawn.
@@ -699,6 +708,17 @@ Passing checks:
   `python -m pytest tests/test_background_peak_fits_notebook.py -k "qr_rod_peak_editor or unified_editor or marker_group or qz_l_axis or marker_l_mapping" -ra`
   (`29 passed`). No feature, dependency, CI, version, migration, public API,
   saved-state, or artifact-schema change is required.
+- 2026-05-20 HK=0 phase-isolation/PbI2-hidden-rod closeout: changing the HK=0
+  Qr-rod marker editor controls now updates only HK=0/specular preview/profile
+  state, and PbI2 `m=7` rows are filtered before artifacts. Focused validation
+  passed with
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "hk0 or specular or qr_rod_peak_editor or region_preview or final_profile_l_filter or detector_hk0 or 00l_region or unified_editor or pbi2_hidden_rods" -ra`
+  (`56 passed`), scoped compileall, `git diff --check`, and
+  `python -m ra_sim.dev check` (`294 passed`). Bug/error status: fixed for
+  HK=0 editor edits mutating nonzero rod scope and for PbI2 `m=7` appearing in
+  Qr-rod outputs. Feature status: no new operator control, dependency, config
+  key, saved-state field, artifact schema, CI workflow, version bump, ADR, or
+  migration. Rollback is a normal git revert.
 
 Known validation limits:
 

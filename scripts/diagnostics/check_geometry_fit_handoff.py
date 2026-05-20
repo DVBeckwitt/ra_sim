@@ -46,6 +46,47 @@ def _as_int(value: object, default: int = 0) -> int:
         return int(default)
 
 
+def _record_from_text_line(text: str, line_number: int, parse_error: str) -> dict[str, object]:
+    lowered = text.strip().lower()
+    record: dict[str, object] = {
+        "record_type": "text_log_line",
+        "_line_number": int(line_number),
+        "_text_line": text,
+        "parse_error": parse_error,
+    }
+    if "objective_space=caked_deg" in lowered:
+        record["objective_space"] = "caked_deg"
+    if (
+        "fit_observed_caked_deg=<unavailable" in lowered
+        or "observed_caked_deg=<unavailable" in lowered
+    ):
+        record["fit_observed_caked_unavailable"] = True
+    if "detector_to_caked_unavailable=true" in lowered:
+        record["detector_to_caked_unavailable"] = True
+    if "preflight: ready to solve geometry fit" in lowered:
+        record["preflight_ready"] = True
+    if "geometry fit: setup" in lowered or "optimizer_started=true" in lowered:
+        record["optimizer_started"] = True
+    if "weighted_rms=" in lowered and " px" in lowered:
+        record["weighted_rms_unit"] = "px"
+    if (
+        "metric=central_point_match" in lowered
+        or "final_metric_name=central_point_match" in lowered
+    ):
+        record["final_metric_name"] = "central_point_match"
+    if "metric_unit=px" in lowered:
+        record["metric_unit"] = "px"
+    if "manual_caked_fit_space_required=false" in lowered:
+        record["manual_caked_fit_space_required"] = False
+    if "manual_caked_fit_space_required=true" in lowered:
+        record["manual_caked_fit_space_required"] = True
+    if "validator_finite_caked_rows=0" in lowered:
+        record["validator_finite_caked_rows"] = 0
+    if "matched=0" in lowered:
+        record["matched_pair_count"] = 0
+    return record
+
+
 def _read_records(path: Path) -> list[dict[str, object]]:
     records: list[dict[str, object]] = []
     with path.open("r", encoding="utf-8") as handle:
@@ -56,13 +97,7 @@ def _read_records(path: Path) -> list[dict[str, object]]:
             try:
                 payload = json.loads(text)
             except json.JSONDecodeError as exc:
-                records.append(
-                    {
-                        "record_type": "parse_error",
-                        "line_number": int(line_number),
-                        "parse_error": str(exc),
-                    }
-                )
+                records.append(_record_from_text_line(text, line_number, str(exc)))
                 continue
             if isinstance(payload, Mapping):
                 row = dict(payload)
@@ -78,9 +113,12 @@ def violations_for_trace(path: Path) -> list[str]:
     saw_caked_required_missing_rows = False
     saw_caked_not_required_missing_rows = False
     saw_caked_objective = False
+    saw_missing_observed_caked = False
+    saw_preflight_ready = False
     saw_optimizer_run = False
     saw_central_point_match = False
     saw_metric_px = False
+    saw_px_rms = False
     saw_central_px = False
 
     for record in records:
@@ -92,20 +130,39 @@ def violations_for_trace(path: Path) -> list[str]:
         metric_unit = str(record.get("metric_unit") or record.get("final_metric_units") or "")
         caked_required = record.get("manual_caked_fit_space_required")
         finite_caked_rows = _as_int(record.get("validator_finite_caked_rows"), default=-1)
-        optimizer_started = _as_int(record.get("nfev"), default=0) > 0 or bool(
-            record.get("stage_timing_s")
+        optimizer_started = (
+            _as_int(record.get("nfev"), default=0) > 0
+            or bool(record.get("stage_timing_s"))
+            or _is_true(record.get("optimizer_started"))
         )
 
         if objective_space == "caked_deg":
             saw_caked_objective = True
+        if (
+            _is_true(record.get("fit_observed_caked_unavailable"))
+            or _is_true(record.get("detector_to_caked_unavailable"))
+            or str(record.get("fit_observed_caked_deg") or "")
+            .strip()
+            .lower()
+            .startswith("<unavailable")
+        ):
+            saw_missing_observed_caked = True
+        if _is_true(record.get("preflight_ready")):
+            saw_preflight_ready = True
         if final_metric_name == "central_point_match":
             saw_central_point_match = True
         if metric_unit == "px":
             saw_metric_px = True
+        if str(record.get("weighted_rms_unit") or "").strip().lower() == "px":
+            saw_px_rms = True
         if objective_space == "caked_deg" and metric_unit == "px":
             violations.append(f"{path}:{line}: objective_space=caked_deg used metric_unit=px")
         if objective_space == "caked_deg" and final_metric_name == "central_point_match":
             violations.append(f"{path}:{line}: objective_space=caked_deg used central_point_match")
+        if objective_space == "caked_deg" and str(
+            record.get("weighted_rms_unit") or ""
+        ).strip().lower() == "px":
+            violations.append(f"{path}:{line}: objective_space=caked_deg used weighted_rms in px")
         if objective_space == "caked_deg" and _is_false(caked_required):
             violations.append(
                 f"{path}:{line}: objective_space=caked_deg has manual_caked_fit_space_required=false"
@@ -132,6 +189,12 @@ def violations_for_trace(path: Path) -> list[str]:
         violations.append(f"{path}: objective_space=caked_deg used central_point_match")
     if saw_caked_objective and saw_metric_px:
         violations.append(f"{path}: objective_space=caked_deg used metric_unit=px")
+    if saw_caked_objective and saw_px_rms:
+        violations.append(f"{path}: objective_space=caked_deg used weighted_rms in px")
+    if saw_caked_objective and saw_missing_observed_caked and saw_preflight_ready:
+        violations.append(
+            f"{path}: missing observed caked coordinates reached preflight ready"
+        )
     if saw_caked_not_required_missing_rows and saw_central_px:
         violations.append(
             f"{path}: broken signature present: manual_caked_fit_space_required=false, "

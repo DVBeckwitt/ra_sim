@@ -42285,23 +42285,6 @@ def _build_geometry_fit_async_job(
             if isinstance(entry, Mapping)
             and gui_geometry_fit.geometry_manual_pair_enabled_for_geometry_fit(entry)
         ]
-        caked_anchor_error = (
-            gui_geometry_fit.manual_caked_geometry_fit_observed_anchor_preflight_error(
-                [
-                    {
-                        "label": background_labels.get(int(idx), f"background {int(idx) + 1}"),
-                        "measured_for_fit": [
-                            entry
-                            for entry in manual_pairs_by_background.get(int(idx), ())
-                            if gui_geometry_fit.geometry_manual_pair_enabled_for_geometry_fit(entry)
-                        ],
-                    }
-                    for idx in required_indices
-                ]
-            )
-        )
-        if caked_anchor_error:
-            raise RuntimeError(caked_anchor_error)
         geometry_runtime_cfg = (
             gui_geometry_fit.apply_manual_caked_point_geometry_fit_runtime_overrides(
                 geometry_runtime_cfg,

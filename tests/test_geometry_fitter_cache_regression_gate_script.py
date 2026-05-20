@@ -134,6 +134,34 @@ def test_geometry_fit_handoff_checker_rejects_split_caked_objective_pixel_metric
     assert any("objective_space=caked_deg used metric_unit=px" in v for v in violations)
 
 
+def test_geometry_fit_handoff_checker_rejects_live_text_log_signature(tmp_path) -> None:
+    checker = _load_handoff_check_module()
+    trace_path = tmp_path / "geometry_fit_bad_caked_handoff_17f00f25.log"
+    trace_path.write_text(
+        "\n".join(
+            [
+                "[geometry] manual_geometry_live_code_path git_commit=17f00f25",
+                "[geometry] Placed peak 1 of 2 detector_to_caked_unavailable=true",
+                "[geometry-fit] fit_observed_caked_deg=<unavailable reason=missing>",
+                "[geometry-fit] fit_prediction_caked_deg=(32.931, 129.250)",
+                "[geometry-fit] objective_space=caked_deg",
+                "[geometry] preflight: ready to solve geometry fit (1 dataset)",
+                "[geometry-fit] Geometry fit: identity fixed manual pairs eval=1 "
+                "cost=433.320000 best_cost=433.320000 weighted_rms=12.0183 px",
+                "[geometry-fit] Geometry fit: complete "
+                "(cost=433.320000, rms=12.0183px, metric=central_point_match, matched=0)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    violations = checker.violations_for_trace(trace_path)
+
+    assert any("missing observed caked coordinates reached preflight ready" in v for v in violations)
+    assert any("objective_space=caked_deg used central_point_match" in v for v in violations)
+    assert any("objective_space=caked_deg used weighted_rms in px" in v for v in violations)
+
+
 def test_geometry_fit_handoff_checker_allows_caked_preflight_failure(tmp_path) -> None:
     checker = _load_handoff_check_module()
     trace_path = tmp_path / "geometry_fit_trace_preflight.jsonl"

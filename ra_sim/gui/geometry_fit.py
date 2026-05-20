@@ -3122,6 +3122,7 @@ def _geometry_fit_audit_project_native_to_caked(
     *,
     fit_space_projector: object,
     base_fit_params: Mapping[str, object] | None,
+    anchor_kind: str = "simulated",
 ) -> tuple[tuple[float, float] | None, str]:
     if native_point is None:
         return None, "sim_refined_detector_native_px_unavailable"
@@ -3132,7 +3133,7 @@ def _geometry_fit_audit_project_native_to_caked(
             np.asarray([float(native_point[0])], dtype=np.float64),
             np.asarray([float(native_point[1])], dtype=np.float64),
             local_params=dict(base_fit_params or {}),
-            anchor_kind="simulated",
+            anchor_kind=str(anchor_kind or "simulated"),
             input_frame="native_detector",
         )
     except Exception as exc:
@@ -3558,6 +3559,19 @@ def build_geometry_fit_qr_handoff_audit_rows(
             (fit_entry, initial_entry),
             (("background_two_theta_deg", "background_phi_deg"),),
         )
+        fit_observed_caked_projection_reason = ""
+        if fit_observed_caked is None and fit_observed_native is not None:
+            projected_observed_caked, projected_observed_reason = (
+                _geometry_fit_audit_project_native_to_caked(
+                    fit_observed_native,
+                    fit_space_projector=fit_space_projector,
+                    base_fit_params=dict(base_fit_params or {}),
+                    anchor_kind="measured",
+                )
+            )
+            fit_observed_caked_projection_reason = str(projected_observed_reason)
+            if projected_observed_caked is not None:
+                fit_observed_caked = projected_observed_caked
         fit_observed_display_unavailable_reason = None
         if fit_observed_native is not None:
             (
@@ -3811,6 +3825,7 @@ def build_geometry_fit_qr_handoff_audit_rows(
             ),
             "fit_observed_detector_native_px": fit_observed_native,
             "fit_observed_caked_deg": fit_observed_caked,
+            "fit_observed_caked_projection_reason": fit_observed_caked_projection_reason,
             "fit_prediction_source": fit_prediction_source,
             "fit_prediction_resolver_function": str(
                 resolved_prediction_payload.get(
@@ -16622,6 +16637,104 @@ def build_geometry_manual_fit_dataset(
         else:
             fit_space_projector_unavailable_reason = "native_detector_shape_unavailable"
 
+    def _observed_detector_anchor_for_caked_projection(
+        entry: Mapping[str, object] | None,
+    ) -> tuple[tuple[float, float], str, str] | None:
+        native_anchor = _native_detector_anchor_with_provenance(entry)
+        if native_anchor is not None:
+            anchor, provenance = native_anchor
+            return anchor, "native_detector", str(provenance)
+        fit_anchor = _finite_pair(entry, "fit_detector_x", "fit_detector_y")
+        if fit_anchor is not None:
+            return fit_anchor, "fit_detector", "fit_detector_coords"
+        detector_anchor = _finite_pair(entry, "detector_x", "detector_y")
+        if (
+            detector_anchor is not None
+            and _entry_frame(entry, "detector_input_frame") == "fit_detector"
+        ):
+            return detector_anchor, "fit_detector", "detector_fit_frame"
+        return None
+
+    def _project_observed_detector_anchors_to_caked_fit_space() -> None:
+        if not bool(manual_fit_requires_caked_space):
+            return
+        if (
+            not callable(fit_space_projector)
+            or str(fit_space_projector_kind or "") != "exact_caked_bundle"
+        ):
+            return
+        for measured_entry in measured_for_fit:
+            if not isinstance(measured_entry, dict):
+                continue
+            if geometry_fit_entry_has_observed_caked_anchor(measured_entry):
+                continue
+            anchor_payload = _observed_detector_anchor_for_caked_projection(measured_entry)
+            if anchor_payload is None:
+                measured_entry["observed_caked_projection_unavailable_reason"] = (
+                    "missing_observed_detector_anchor"
+                )
+                continue
+            (detector_col, detector_row), input_frame, provenance = anchor_payload
+            try:
+                projected = fit_space_projector(
+                    np.asarray([float(detector_col)], dtype=np.float64),
+                    np.asarray([float(detector_row)], dtype=np.float64),
+                    local_params=dict(params_i),
+                    anchor_kind="measured",
+                    input_frame=str(input_frame),
+                )
+            except Exception as exc:
+                measured_entry["observed_caked_projection_unavailable_reason"] = (
+                    f"fit_space_projector_exception:{type(exc).__name__}"
+                )
+                continue
+            if not isinstance(projected, Mapping):
+                measured_entry["observed_caked_projection_unavailable_reason"] = (
+                    "fit_space_projector_returned_non_mapping"
+                )
+                continue
+            try:
+                two_theta_values = np.asarray(
+                    projected.get("two_theta_deg", []),
+                    dtype=np.float64,
+                ).reshape(-1)
+                phi_values = np.asarray(projected.get("phi_deg", []), dtype=np.float64).reshape(
+                    -1
+                )
+                two_theta = float(two_theta_values[0])
+                phi = float(phi_values[0])
+            except Exception:
+                measured_entry["observed_caked_projection_unavailable_reason"] = (
+                    "fit_space_projector_returned_no_caked_point"
+                )
+                continue
+            if (
+                projected.get("valid") is False
+                or not np.isfinite(two_theta)
+                or not np.isfinite(phi)
+            ):
+                measured_entry["observed_caked_projection_unavailable_reason"] = str(
+                    projected.get("invalid_reason") or "nonfinite_observed_caked_projection"
+                )
+                continue
+            measured_entry["background_two_theta_deg"] = float(two_theta)
+            measured_entry["background_phi_deg"] = float(phi)
+            measured_entry["caked_x"] = float(two_theta)
+            measured_entry["caked_y"] = float(phi)
+            measured_entry["caked_projection_source"] = str(
+                projected.get("caked_projection_source") or "fit_space_projector_native_detector"
+            )
+            measured_entry["observed_caked_projection_source"] = (
+                "fit_space_projector_native_detector"
+            )
+            measured_entry["observed_caked_projection_input_frame"] = str(input_frame)
+            measured_entry["observed_caked_projection_detector_provenance"] = str(provenance)
+            measured_entry.pop("observed_caked_projection_unavailable_reason", None)
+            measured_entry.pop("fit_space_anchor_override", None)
+            measured_entry.pop("fit_space_anchor_source", None)
+
+    _project_observed_detector_anchors_to_caked_fit_space()
+
     label = (
         Path(str(manual_dataset_bindings.osc_files[background_idx])).name
         if 0 <= background_idx < len(manual_dataset_bindings.osc_files)
@@ -17658,9 +17771,10 @@ def manual_caked_geometry_fit_observed_anchor_preflight_error(
     if not missing_labels:
         return None
     return (
-        "Geometry fit unavailable: manual_caked_fit_space_missing: caked manual Qr/Qz fitting needs observed "
-        "caked coordinates for every selected manual pair. Rebuild the exact "
-        "caked projection and rerun the fit. Missing observed caked anchors: "
+        "Geometry fit blocked before optimization. manual_caked_fit_space_missing: "
+        "the requested Qr/Qz fit requires caked coordinates, but one or more "
+        "manual observed peaks could not be projected into caked fit-space. "
+        "No geometry parameters were changed. Missing observed caked anchors: "
         + ", ".join(missing_labels)
         + "."
     )

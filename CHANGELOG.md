@@ -56,9 +56,17 @@
     `central_point_match`/`metric_unit=px`; the runtime worker now uses the
     same caked-required flag for caked payload handoff and mixed-provenance
     preflight, and CI checks trace logs for impossible caked/pixel states.
+  - Fixed manual caked Qr/Qz geometry-fit handoff for detector-origin picks by
+    projecting observed detector anchors into exact-caked fit space during
+    dataset build and extending the trace checker to reject live text-log
+    caked/pixel fallback signatures.
   - Fixed PbI2 Qr-rod marker editor edits so `HK=4 -` marker
     add/move/delete/snap interactions preserve the current panel x/y limits;
     explicit Delta-Qr and L-window controls remain the scope-changing path.
+  - Fixed PbI2 HK=0 Qr-rod editor phase isolation so specular Delta-Qr/L
+    changes rebuild only HK=0 previews and profiles, leave nonzero rods'
+    L minima unchanged, and filter configured-hidden `m=7` rows before
+    artifact tables and plots.
   - Added opt-in exact manual-pair exclusion and dry-run parameter-combo
     sweeps for headless Bi2Se3 geometry recovery fits, including per-combo
     JSON/PNG artifacts, top-level sweep reports, fail-closed combo results,

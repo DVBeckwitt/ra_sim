@@ -9,6 +9,22 @@ Last updated: 2026-05-20
 
 ## Current status
 
+- 2026-05-20 detector-origin observed caked projection follow-up completed.
+  Detector-origin manual picks in explicit caked-required fits now project
+  their observed detector anchor through the exact-caked projector during
+  dataset build, so the caked objective receives finite observed caked rows
+  without treating stale saved caked aliases as truth. The async runtime no
+  longer performs the duplicate observed-caked preflight before dataset
+  projection can run, and the handoff checker now parses live text logs for
+  missing observed-caked anchors, pixel RMS, and caked/pixel fallback
+  signatures. Bug/error status: fixed for the detector-origin caked-required
+  handoff loop reaching `central_point_match` with unavailable observed caked
+  coordinates. Feature status: no GUI control, CLI flag, config key,
+  saved-state field, artifact schema, dependency, or version change.
+  CI/CD status: no workflow change; local `ra_sim.dev check` remains the
+  shipping gate. Deprecation/migration status: none required. ADR status: no
+  ADR needed for this private validation-boundary fix. Shipping status: safe
+  as an internal bug fix with rollback by git revert.
 - 2026-05-20 explicit caked-required handoff follow-up completed. The latest
   GUI trace after the previous patch proved the invariant was still not fully
   encoded: `manual_caked_fit_space_required=false`,

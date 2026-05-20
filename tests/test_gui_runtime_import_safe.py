@@ -15848,6 +15848,39 @@ def test_async_geometry_fit_job_preserves_caked_runtime_fields(monkeypatch, tmp_
 
     manual_pairs[:] = [
         {
+            "pair_id": "detector-0",
+            "manual_background_input_origin": "detector",
+            "background_detector_x": 10.0,
+            "background_detector_y": 20.0,
+            "background_detector_input_frame": "native_detector",
+        }
+    ]
+    ensure_calls.clear()
+    execution_bindings.simulation_runtime_state.geometry_fit_job_counter = 0
+    with monkeypatch.context() as caked_context:
+        caked_context.setattr(
+            runtime_session,
+            "_geometry_fit_targeted_projection_view_mode",
+            lambda: "caked",
+            raising=False,
+        )
+        caked_context.setattr(
+            runtime_session,
+            "_geometry_fit_caked_view_for_index",
+            lambda _idx: dict(caked_payload),
+            raising=False,
+        )
+        caked_detector_job = runtime_session._build_geometry_fit_async_job(bindings)
+
+    assert ensure_calls == ["ensure"]
+    assert caked_detector_job["manual_fit_space_by_background"] == {0: "detector"}
+    assert caked_detector_job["manual_caked_fit_space_required_by_background"] == {0: True}
+    assert caked_detector_job["pick_uses_caked_space"] is True
+    assert caked_detector_job["projection_view_mode"] == "caked"
+    assert caked_detector_job["geometry_runtime_cfg"]["solver"]["dynamic_point_geometry_fit"] is True
+
+    manual_pairs[:] = [
+        {
             "pair_id": "caked-0",
             "background_two_theta_deg": 10.0,
             "background_phi_deg": 1.0,
