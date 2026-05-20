@@ -691,15 +691,19 @@ bumping the corresponding simulation or projection signature.
 Status as of 2026-05-20: detector-origin manual Qr/Qz geometry-fit rows are
 kept in detector-pixel fit space, including `gamma,Gamma` two-tilt solves.
 Saved caked aliases on those rows remain replay/display cache data and no
-longer promote the row into the exact-caked angular objective. Explicit
-caked-origin rows still require the exact per-background projector and fail
-closed if it is unavailable. Bug/error status: fixed for the reported GUI
-`Geometry Fit Rejected` path where a simple two-point detector-origin fit could
-be rejected by stale or axis-mismatched caked residuals. Migration status: no
-saved-state schema, CLI flag, config key, or artifact field changed; the removed
-path is the internal detector-origin auto-caked promotion compatibility layer.
-Shipping status: ready as a normal bug-fix slice after local focused tests and
-`python -m ra_sim.dev check`; rollback is a git revert.
+longer promote the row into the exact-caked angular objective. The manual
+point-fit runtime also disables seed multistart for detector-origin rows, so a
+simple picked-point fit reaches the direct LSQ solver instead of being rejected
+when seed prescoring selects no candidates. Explicit caked-origin rows still
+require the exact per-background projector and fail closed if it is unavailable.
+Bug/error status: fixed for the reported GUI `Geometry Fit Rejected` paths where
+a simple two-point detector-origin fit could be rejected by stale or
+axis-mismatched caked residuals, or by `selected=0` in seed multistart before
+the direct solver ran. Migration status: no saved-state schema, CLI flag,
+config key, or artifact field changed; the removed path is internal
+detector-origin auto-caked promotion plus unnecessary seed search in the GUI
+manual-point profile. Shipping status: ready as a normal bug-fix slice after
+local focused tests and `python -m ra_sim.dev check`; rollback is a git revert.
 
 Status as of 2026-05-15: detector-origin manual Qr/Qz geometry-fit rows keep
 their saved `manual_background_input_origin` and frame through dataset

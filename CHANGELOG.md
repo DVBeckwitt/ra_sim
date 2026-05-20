@@ -80,8 +80,9 @@
     candidate rows are merged, and scoped New4 single-step `proof_status=pass`
     as a caked-space contract proof when the detector panel is diagnostic only.
   - Simplified GUI manual Qr/Qz geometry fits so detector-origin picks stay on
-    the fixed detector-pixel LSQ path instead of being auto-promoted into the
-    caked angular objective when `gamma,Gamma` are selected.
+    the fixed detector-pixel direct-LSQ path instead of inheriting seed
+    multistart or being auto-promoted into the caked angular objective when
+    `gamma,Gamma` are selected.
   - Changed GUI fit-background activation so multi-background geometry-fit
     sessions start with only the initial image selected; later backgrounds are
     added by saved enabled manual Qr/Qz pairs, and selected later backgrounds

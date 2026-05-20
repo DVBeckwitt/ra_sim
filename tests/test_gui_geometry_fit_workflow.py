@@ -32695,6 +32695,7 @@ def test_apply_manual_point_geometry_fit_runtime_overrides_forces_single_model_p
     assert "reparameterize_pairs" not in changed["solver"]
     assert changed["optimizer"] == changed["solver"]
     assert changed["seed_search"] == {
+        "enabled": False,
         "prescore_top_k": 1,
         "n_global": 0,
         "n_jitter": 0,

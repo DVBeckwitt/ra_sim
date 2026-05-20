@@ -174,13 +174,16 @@ def test_detector_origin_two_tilt_fit_uses_detector_manual_point_runtime() -> No
     assert result.error_text is None
     assert result.prepared_run is not None
     cfg = result.prepared_run.geometry_runtime_cfg
+    solver = cfg["solver"]
+    seed_search = cfg["seed_search"]
     assert cfg.get("projection_view_mode") != "caked"
-    assert cfg["solver"]["manual_point_fit_mode"] is True
-    assert cfg["solver"].get("dynamic_point_geometry_fit") is not True
-    assert "seed_multistart" not in cfg["solver"]
-    assert "seed_multistart_enabled" not in cfg["solver"]
-    assert "_qr_fit_point_only_projection" not in cfg["solver"]
-    assert "_headless_accept_caked_angular_metric_without_pixel_threshold" not in cfg["solver"]
+    assert solver["manual_point_fit_mode"] is True
+    assert solver.get("dynamic_point_geometry_fit") is not True
+    assert solver["seed_multistart"] is False
+    assert solver["seed_multistart_enabled"] is False
+    assert seed_search["enabled"] is False
+    assert "_qr_fit_point_only_projection" not in solver
+    assert "_headless_accept_caked_angular_metric_without_pixel_threshold" not in solver
     assert "bounds" not in cfg
 
 

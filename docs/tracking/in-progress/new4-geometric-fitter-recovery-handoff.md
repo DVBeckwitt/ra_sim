@@ -12,13 +12,17 @@ Last updated: 2026-05-20
 - 2026-05-20 detector-origin simplification slice completed. Manual Qr/Qz rows
   picked in detector view now stay on the fixed detector-pixel LSQ path,
   including `gamma,Gamma`, instead of being auto-promoted into the exact-caked
-  angular objective. Explicit caked-origin rows still require the exact caked
-  projector and fail closed when it is unavailable. Bug/error status: fixed for
-  the GUI rejection where a simple two-branch detector-origin fit could report
-  optimizer failure, non-finite caked angular residuals, and no matched fitted
-  peak pairs even though the detector-space manual pairs were present. Feature
-  status: no new operator control; this removes the internal auto-caked
-  detector-origin path and preserves public helper signatures for compatibility.
+  angular objective. The GUI manual-point runtime now disables seed multistart
+  for these detector-origin rows, so a two-branch fit reaches the direct LSQ
+  solver instead of failing at seed prescore with `selected=0`. Explicit
+  caked-origin rows still require the exact caked projector and fail closed when
+  it is unavailable. Bug/error status: fixed for the GUI rejection where a
+  simple two-branch detector-origin fit could report optimizer failure,
+  non-finite caked angular residuals, seed-search candidate rejection, and no
+  matched fitted peak pairs even though the detector-space manual pairs were
+  present. Feature status: no new operator control; this removes the internal
+  auto-caked detector-origin path and unnecessary GUI manual-point seed search
+  while preserving public helper signatures for compatibility.
   Migration/deprecation status: no saved-state schema, CLI flag, config key, or
   artifact schema changed; saved caked aliases on detector-origin rows remain
   display/replay cache data. CI/CD status: no workflow files changed; the local

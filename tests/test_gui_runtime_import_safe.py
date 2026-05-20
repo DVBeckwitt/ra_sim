@@ -15276,6 +15276,9 @@ def test_manual_caked_runtime_override_defaults_two_tilt_saved_pairs_to_ladder_s
 
     assert detector_cfg["solver"]["manual_point_fit_mode"] is True
     assert detector_cfg["solver"].get("dynamic_point_geometry_fit") is None
+    assert detector_cfg["solver"]["seed_multistart"] is False
+    assert detector_cfg["solver"]["seed_multistart_enabled"] is False
+    assert detector_cfg["seed_search"]["enabled"] is False
     assert detector_cfg.get("projection_view_mode") != "caked"
 
 

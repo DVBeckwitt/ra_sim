@@ -17788,11 +17788,12 @@ def _apply_saved_manual_caked_geometry_fit_lean_runtime(
     max_nfev: int,
     seed_multistart: bool,
 ) -> None:
+    seed_multistart_enabled = bool(seed_multistart)
     solver = _geometry_fit_runtime_solver_mapping(runtime_cfg)
     solver["manual_point_fit_mode"] = True
     solver["dynamic_point_geometry_fit"] = True
-    solver["seed_multistart"] = bool(seed_multistart)
-    solver["seed_multistart_enabled"] = bool(seed_multistart)
+    solver["seed_multistart"] = seed_multistart_enabled
+    solver["seed_multistart_enabled"] = seed_multistart_enabled
     solver[GEOMETRY_FIT_POINT_ONLY_PROJECTION_FLAG] = True
     solver["max_nfev"] = int(max_nfev)
     solver["min_max_nfev"] = 1
@@ -17811,7 +17812,7 @@ def _apply_saved_manual_caked_geometry_fit_lean_runtime(
     runtime_cfg["optimizer"] = dict(solver)
     seed_search_cfg = runtime_cfg.get("seed_search")
     seed_search = dict(seed_search_cfg) if isinstance(seed_search_cfg, Mapping) else {}
-    seed_search["enabled"] = bool(seed_multistart)
+    seed_search["enabled"] = seed_multistart_enabled
     runtime_cfg["seed_search"] = seed_search
     runtime_cfg["projection_view_mode"] = "caked"
     runtime_cfg["use_numba"] = bool(runtime_cfg.get("use_numba", False))
@@ -17943,7 +17944,13 @@ def apply_manual_point_geometry_fit_runtime_overrides(
         "reparameterize_pairs",
     ):
         optimizer_cfg.pop(key, None)
-    optimizer_cfg["manual_point_fit_mode"] = True
+    optimizer_cfg.update(
+        {
+            "manual_point_fit_mode": True,
+            "seed_multistart": False,
+            "seed_multistart_enabled": False,
+        }
+    )
     optimizer_cfg["missing_pair_penalty_px"] = float(
         optimizer_cfg.get("missing_pair_penalty_px", 20.0)
     )
@@ -17988,11 +17995,16 @@ def apply_manual_point_geometry_fit_runtime_overrides(
 
     seed_search_cfg_raw = cfg.get("seed_search", {})
     seed_search_cfg = dict(seed_search_cfg_raw) if isinstance(seed_search_cfg_raw, Mapping) else {}
-    # Manual point fits are interactive; keep the normalized-u solver on one
-    # trusted seed instead of inheriting the heavier global multistart budget.
-    seed_search_cfg["prescore_top_k"] = 1
-    seed_search_cfg["n_global"] = 0
-    seed_search_cfg["n_jitter"] = 0
+    # Manual point fits are interactive; run one direct least-squares solve
+    # instead of inheriting the heavier normalized-u multistart budget.
+    seed_search_cfg.update(
+        {
+            "enabled": False,
+            "prescore_top_k": 1,
+            "n_global": 0,
+            "n_jitter": 0,
+        }
+    )
     cfg["seed_search"] = seed_search_cfg
     cfg["use_numba"] = bool(cfg.get("use_numba", False))
     cfg["allow_unsafe_runtime"] = bool(unsafe_runtime_enabled)
