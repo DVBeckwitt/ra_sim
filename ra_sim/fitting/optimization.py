@@ -13054,30 +13054,29 @@ _SOURCE_IDENTITY_CANONICAL_KEYS = (
 )
 
 
+def _identity_names_full_reflection(identity: Mapping[str, object]) -> bool:
+    if _nonnegative_index(identity.get("source_reflection_index")) is None:
+        return False
+    namespace = str(identity.get("source_reflection_namespace", "") or "").strip().lower()
+    return namespace in {"full", "full_reflection", "miller"} or bool(
+        identity.get("source_reflection_is_full", False)
+    )
+
+
 def _trusted_full_reflection_identity_payload(
     entry: Mapping[str, object],
 ) -> Optional[Mapping[str, object]]:
     if not isinstance(entry, Mapping):
         return None
 
-    reflection_idx = _nonnegative_index(entry.get("source_reflection_index"))
-    if reflection_idx is not None:
-        namespace = str(entry.get("source_reflection_namespace", "") or "").strip().lower()
-        if namespace in {"full", "full_reflection", "miller"}:
-            return entry
-        return entry if bool(entry.get("source_reflection_is_full", False)) else None
+    if _nonnegative_index(entry.get("source_reflection_index")) is not None:
+        return entry if _identity_names_full_reflection(entry) else None
 
     for key in _SOURCE_IDENTITY_CANONICAL_KEYS:
         identity = entry.get(key)
         if not isinstance(identity, Mapping):
             continue
-        reflection_idx = _nonnegative_index(identity.get("source_reflection_index"))
-        if reflection_idx is None:
-            continue
-        namespace = str(identity.get("source_reflection_namespace", "") or "").strip().lower()
-        if namespace in {"full", "full_reflection", "miller"}:
-            return identity
-        if bool(identity.get("source_reflection_is_full", False)):
+        if _identity_names_full_reflection(identity):
             return identity
     return None
 
@@ -14640,6 +14639,16 @@ def _resolve_fixed_source_matches(
             seam="_resolve_fixed_source_matches",
         )
 
+    def _row_records_for_table(table_idx: int) -> List[Dict[str, object]]:
+        table_idx = int(table_idx)
+        if table_idx not in filtered_rows_cache:
+            filtered_rows_cache[table_idx] = (
+                _valid_hit_row_records(hit_tables[table_idx])
+                if 0 <= table_idx < len(hit_tables)
+                else []
+            )
+        return filtered_rows_cache.get(table_idx, [])
+
     def _recover_nested_full_identity_branch(
         entry: Mapping[str, object],
     ) -> Tuple[Optional[int], Optional[np.ndarray], Dict[str, object], str]:
@@ -14663,11 +14672,7 @@ def _resolve_fixed_source_matches(
         matches: List[Tuple[int, Mapping[str, object], np.ndarray, bool]] = []
         valid_row_count = 0
         for table_candidate in range(len(hit_tables)):
-            if table_candidate not in filtered_rows_cache:
-                filtered_rows_cache[table_candidate] = _valid_hit_row_records(
-                    hit_tables[table_candidate]
-                )
-            for record in filtered_rows_cache.get(table_candidate, []):
+            for record in _row_records_for_table(table_candidate):
                 row_obj = record.get("row") if isinstance(record, Mapping) else None
                 try:
                     row = np.asarray(row_obj, dtype=float).reshape(-1)
@@ -14831,13 +14836,7 @@ def _resolve_fixed_source_matches(
             continue
 
         table_idx = int(source_key[1])
-        if table_idx not in filtered_rows_cache:
-            if table_idx < 0 or table_idx >= len(hit_tables):
-                filtered_rows_cache[table_idx] = []
-            else:
-                filtered_rows_cache[table_idx] = _valid_hit_row_records(hit_tables[table_idx])
-
-        row_records = filtered_rows_cache.get(table_idx, [])
+        row_records = _row_records_for_table(table_idx)
         rows = [np.asarray(record["row"], dtype=float) for record in row_records]
         resolved_from_peak = False
         sim_col = float("nan")

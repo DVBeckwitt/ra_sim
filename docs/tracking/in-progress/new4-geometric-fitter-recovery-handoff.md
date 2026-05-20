@@ -9,6 +9,24 @@ Last updated: 2026-05-20
 
 ## Current status
 
+- 2026-05-20 nested full-identity simplification reviewed and ready to ship.
+  Behavior is unchanged: full-reflection trust detection now uses one private
+  predicate, and fixed-source matching uses one local row-record cache helper
+  instead of repeating the same cache-loading branch. Bug/error status: the
+  GUI/default `m=1,L=10`, `gamma,Gamma` `prediction_branch_source_switched`
+  failure remains fixed. Feature status: no user-facing feature change.
+  Compatibility status: no public API, GUI control, CLI flag, config key,
+  saved-state field, artifact schema, dependency, or version change. CI/CD
+  status: no workflow changes; local quality gates remain the merge signal.
+  Deprecation/migration status: none required because no public behavior or
+  storage contract changed. ADR status: no ADR needed for this private
+  behavior-preserving refactor. Validation: targeted locked-Qr regressions
+  passed (`5 passed`), `tests/test_geometry_fitting.py` passed (`271 passed`),
+  `python -m ra_sim.dev check` passed (`294 passed` plus ruff/mypy), actual Tk
+  GUI startup reached `Simulation ready.`, and the saved Bi2Se3 GUI-state fit
+  with `--active-vars gamma,Gamma` still resolved `15/15` fixed pairs with
+  `prediction_branch_source_switched_count=0`. Shipping status: ready as an
+  internal cleanup with rollback by git revert.
 - 2026-05-20 nested full-identity fixed-source recovery completed. The
   `m=1,L=10` locked manual Qr/Qz pair no longer loses its source authority when
   final fit correspondence rows retain the full reflection identity only inside
