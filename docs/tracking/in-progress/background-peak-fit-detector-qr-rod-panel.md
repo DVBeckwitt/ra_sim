@@ -719,24 +719,24 @@ Passing checks:
   Qr-rod outputs. Feature status: no new operator control, dependency, config
   key, saved-state field, artifact schema, CI workflow, version bump, ADR, or
   migration. Rollback is a normal git revert.
-- 2026-05-20 HK=0 lower-L support closeout: HK=0/specular profile integration
-  now compares the strict Qr-band qz bounds against the broader valid
-  specular support and uses the existing fallback support mask when the strict
-  band would silently start above the accepted L window. The marker-editor
-  detector preview and final `00L_region` detector figure draw that same
-  fallback mask, so the region no longer collapses into a strange line while
-  the calculated profile omits lower L. Cache signatures were advanced to
-  `PRE_EDITOR_QR_ROD_STAGE_SIGNATURE=v9` and
-  `QR_ROD_FINAL_FIT_CACHE_SIGNATURE=v10` so stale truncated profiles/fits are
-  recomputed automatically. Validation passed with
+- 2026-05-20 HK=0 lower-L support follow-up: the broad blue dashed region was
+  traced to the previous fallback-mask workaround being drawn as the HK=0
+  detector region. HK=0/specular qz bounds now come from the accepted L-window
+  marker/lattice mapping without clipping to the selected pixel min/max, while
+  profile integration, editor preview, and the final `00L_region` detector
+  figure stay on the strict `Qr=0` Delta-Qr band. The normal
+  `specular_profile_mask_override` and broad fallback-mask path were removed.
+  Cache signatures were advanced to `PRE_EDITOR_QR_ROD_STAGE_SIGNATURE=v10` and
+  `QR_ROD_FINAL_FIT_CACHE_SIGNATURE=v11` so stale truncated or broad-fallback
+  profiles/fits are recomputed automatically. Validation passed with
   `python -m pytest tests/test_background_peak_fits_notebook.py -ra`
   (`170 passed, 8 skipped`), `python -m ra_sim.dev check` (`294 passed`),
   scoped compileall, and `git diff --check`. Bug/error status: fixed for HK=0
   integrated-region calculations not extending below the observed cutoff and
-  fixed for the HK=0 detector region rendering as a line. Feature status: no
-  new operator control, dependency, config key, saved-state field, artifact
-  schema, CI workflow, version bump, ADR, or user migration is required.
-  Rollback is a normal git revert.
+  fixed for the HK=0 detector region rendering as a broad fallback wedge.
+  Feature status: no new operator control, dependency, config key, saved-state
+  field, artifact schema, CI workflow, version bump, ADR, or user migration is
+  required. Rollback is a normal git revert.
 
 Known validation limits:
 

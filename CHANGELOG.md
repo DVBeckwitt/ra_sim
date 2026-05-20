@@ -67,10 +67,10 @@
     changes rebuild only HK=0 previews and profiles, leave nonzero rods'
     L minima unchanged, and filter configured-hidden `m=7` rows before
     artifact tables and plots.
-  - Fixed PbI2 HK=0/specular Qr-rod lower-L truncation so profile integration,
-    editor preview, and `00L_region` detector figures use the broader
-    specular support mask when the strict Qr band would silently start above
-    the accepted L window.
+  - Fixed PbI2 HK=0/specular Qr-rod lower-L truncation so qz bounds come from
+    the accepted L window while profile integration, editor preview, and
+    `00L_region` detector figures stay on the strict `Qr=0` Delta-Qr band
+    instead of a broad specular fallback mask.
   - Added opt-in exact manual-pair exclusion and dry-run parameter-combo
     sweeps for headless Bi2Se3 geometry recovery fits, including per-combo
     JSON/PNG artifacts, top-level sweep reports, fail-closed combo results,
