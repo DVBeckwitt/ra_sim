@@ -5370,6 +5370,7 @@ def test_parallel_script_qr_rod_peak_editor_click_preserves_panel_limits(
 def test_parallel_script_qr_rod_peak_editor_hk4_minus_drag_preserves_panel_limits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from matplotlib.axes import Axes
     from matplotlib.backend_bases import MouseEvent
 
     namespace = _script_functions(
@@ -5393,6 +5394,14 @@ def test_parallel_script_qr_rod_peak_editor_hk4_minus_drag_preserves_panel_limit
     namespace["SAMPLE_STEM"] = "pbi2"
     show_editor = namespace["show_qr_rod_peak_marker_popup"]
     observed: dict[str, object] = {}
+    clear_calls: list[object] = []
+    original_clear = Axes.clear
+
+    def counting_clear(self, *args, **kwargs):
+        clear_calls.append(self)
+        return original_clear(self, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "clear", counting_clear)
 
     def emit_event(fig, ax, name: str, x_value: float, y_value: float) -> None:
         x_pixel, y_pixel = ax.transData.transform((float(x_value), float(y_value)))
@@ -5409,9 +5418,14 @@ def test_parallel_script_qr_rod_peak_editor_hk4_minus_drag_preserves_panel_limit
         before_xlim = target.get_xlim()
         before_ylim = target.get_ylim()
         fig.canvas.draw()
+        observed["initial_clear_count"] = len(clear_calls)
         emit_event(fig, target, "button_press_event", 2.34, 25.0)
-        emit_event(fig, target, "motion_notify_event", 2.38, 26.0)
+        observed["after_press_clear_count"] = len(clear_calls)
+        for x_value in (2.35, 2.36, 2.37, 2.38):
+            emit_event(fig, target, "motion_notify_event", x_value, 26.0)
+        observed["after_motion_clear_count"] = len(clear_calls)
         emit_event(fig, target, "button_release_event", 2.38, 26.0)
+        observed["after_release_clear_count"] = len(clear_calls)
         observed["before_xlim"] = before_xlim
         observed["before_ylim"] = before_ylim
         observed["after_xlim"] = target.get_xlim()
@@ -5449,6 +5463,9 @@ def test_parallel_script_qr_rod_peak_editor_hk4_minus_drag_preserves_panel_limit
     assert accepted is True
     assert observed["after_xlim"] == pytest.approx(observed["before_xlim"])
     assert observed["after_ylim"] == pytest.approx(observed["before_ylim"])
+    assert observed["after_press_clear_count"] == observed["initial_clear_count"]
+    assert observed["after_motion_clear_count"] == observed["after_press_clear_count"]
+    assert observed["after_release_clear_count"] > observed["after_motion_clear_count"]
     assert region_state["delta_qr"] == pytest.approx(0.01)
     assert region_state["l_min"] == pytest.approx(0.5)
     assert region_state["l_max"] == pytest.approx(3.0)

@@ -1338,8 +1338,6 @@ def show_qr_rod_peak_marker_popup(
     selected: dict[str, object] = {"group": None, "index": None, "dragging": False}
     title_box_state: dict[str, object] = {"box": None, "syncing": False}
     text_input_widgets: list[object] = []
-    marker_scatter_by_group: dict[tuple[int, str], object | None] = {}
-    marker_annotations_by_group: dict[tuple[int, str], list[object]] = {}
     edit_file_state: dict[str, object] = {
         "path": "" if edit_path is None else str(edit_path).strip()
     }
@@ -1707,116 +1705,9 @@ def show_qr_rod_peak_marker_popup(
             qz_values=values,
         )
 
-    def marker_plot_arrays(
-        m_value: int, branch_value: str
-    ) -> tuple[np.ndarray, pd.DataFrame, np.ndarray, np.ndarray, np.ndarray]:
-        x_qz, y = profile_xy(m_value, branch_value)
-        markers = group_markers(m_value, branch_value)
-        marker_l = qz_to_editor_l(m_value, branch_value, markers)
-        marker_rows = group_marker_rows(m_value, branch_value)
-        y_markers = marker_y_values(markers, x_qz, y)
-        editor_log_y = int(m_value) == 0
-        y_markers_plot = positive_log_plot_values(y_markers) if editor_log_y else y_markers
-        finite = np.isfinite(marker_l) & np.isfinite(y_markers)
-        group_l_bounds = qr_rod_l_bounds_for_group(int(m_value), current_l_bounds())
-        if group_l_bounds is not None:
-            l_lo, l_hi = group_l_bounds
-            finite = finite & (marker_l >= float(l_lo)) & (marker_l <= float(l_hi))
-        return marker_l, marker_rows, y_markers, y_markers_plot, finite
-
-    def marker_facecolors(group: tuple[int, str], finite: np.ndarray) -> list[str]:
-        colors = ["white"] * int(np.count_nonzero(finite))
-        selected_index = selected.get("index")
-        if selected.get("group") == group and selected_index is not None:
-            finite_indices = np.flatnonzero(finite)
-            try:
-                colors[list(finite_indices).index(int(selected_index))] = "#d95f02"
-            except ValueError:
-                pass
-        return colors
-
-    def annotate_visible_markers(
-        ax: object,
-        *,
-        group: tuple[int, str],
-        marker_l: np.ndarray,
-        y_markers: np.ndarray,
-        finite: np.ndarray,
-        marker_rows: pd.DataFrame,
-    ) -> list[object]:
-        annotations: list[object] = []
-        visible_rows = marker_rows.loc[finite].reset_index(drop=True)
-        for marker_x, marker_y, marker_row in zip(
-            marker_l[finite], y_markers[finite], visible_rows.to_dict("records")
-        ):
-            annotations.append(
-                ax.annotate(
-                    marker_row_title(marker_row, int(group[0])),
-                    xy=(float(marker_x), float(marker_y)),
-                    xytext=(0.0, 7.0),
-                    textcoords="offset points",
-                    ha="center",
-                    va="bottom",
-                    fontsize=6.5,
-                    color="black",
-                    annotation_clip=True,
-                    zorder=6,
-                )
-            )
-        return annotations
-
-    def update_group_marker_artists(group: tuple[int, str]) -> bool:
-        ax = axes_by_group.get(group)
-        scatter = marker_scatter_by_group.get(group)
-        if ax is None or scatter is None:
-            return False
-        marker_l, marker_rows, y_markers, y_markers_plot, finite = marker_plot_arrays(
-            int(group[0]), str(group[1])
-        )
-        offsets = (
-            np.column_stack([marker_l[finite], y_markers_plot[finite]])
-            if np.any(finite)
-            else np.empty((0, 2), dtype=np.float64)
-        )
-        scatter.set_offsets(offsets)
-        if offsets.shape[0] > 0:
-            scatter.set_facecolors(marker_facecolors(group, finite))
-        for annotation in marker_annotations_by_group.get(group, []):
-            try:
-                annotation.remove()
-            except Exception:
-                pass
-        marker_annotations_by_group[group] = annotate_visible_markers(
-            ax,
-            group=group,
-            marker_l=marker_l,
-            y_markers=y_markers,
-            finite=finite,
-            marker_rows=marker_rows,
-        )
-        fig.canvas.draw_idle()
-        return True
-
-    def update_group_marker_selection(group: tuple[int, str]) -> None:
-        scatter = marker_scatter_by_group.get(group)
-        if scatter is None:
-            return
-        marker_l, _marker_rows, _y_markers, _y_markers_plot, finite = marker_plot_arrays(
-            int(group[0]), str(group[1])
-        )
-        if marker_l.size:
-            scatter.set_facecolors(marker_facecolors(group, finite))
-
-    def refresh_selection_artists(*groups: object) -> None:
-        for group, ax in axes_by_group.items():
-            ax.title.set_color("#d95f02" if selected.get("group") == group else "black")
-        for group in groups:
-            if group in axes_by_group:
-                update_group_marker_selection(group)
-        fig.canvas.draw_idle()
-
     def redraw(*, preserve_limits: bool = False) -> None:
         selected_group = selected.get("group")
+        selected_index = selected.get("index")
         preserved_limits = (
             {
                 group: (tuple(ax.get_xlim()), tuple(ax.get_ylim()))
@@ -1828,8 +1719,6 @@ def show_qr_rod_peak_marker_popup(
         for group, ax in axes_by_group.items():
             m_value, branch_value = group
             ax.clear()
-            marker_scatter_by_group[group] = None
-            marker_annotations_by_group[group] = []
             x_qz, y = profile_xy(m_value, branch_value)
             x_l = qz_to_editor_l(m_value, branch_value, x_qz)
             editor_log_y = int(m_value) == 0
@@ -1847,29 +1736,50 @@ def show_qr_rod_peak_marker_popup(
                     color="0.25",
                     linewidth=0.9,
                 )
-            marker_l, marker_rows, y_markers, y_markers_plot, finite = marker_plot_arrays(
-                m_value, branch_value
-            )
+            markers = group_markers(m_value, branch_value)
+            marker_l = qz_to_editor_l(m_value, branch_value, markers)
+            marker_rows = group_marker_rows(m_value, branch_value)
+            y_markers = marker_y_values(markers, x_qz, y)
+            y_markers_plot = positive_log_plot_values(y_markers) if editor_log_y else y_markers
+            finite = np.isfinite(marker_l) & np.isfinite(y_markers)
+            if group_l_bounds is not None:
+                l_lo, l_hi = group_l_bounds
+                finite = finite & (marker_l >= float(l_lo)) & (marker_l <= float(l_hi))
             if np.any(finite):
-                scatter = ax.scatter(
+                colors = ["white"] * int(np.count_nonzero(finite))
+                if selected_group == group and selected_index is not None:
+                    finite_indices = np.flatnonzero(finite)
+                    try:
+                        color_index = list(finite_indices).index(int(selected_index))
+                        colors[color_index] = "#d95f02"
+                    except ValueError:
+                        pass
+                ax.scatter(
                     marker_l[finite],
                     y_markers_plot[finite],
                     s=24.0,
                     marker="o",
-                    facecolors=marker_facecolors(group, finite),
+                    facecolors=colors,
                     edgecolors="black",
                     linewidths=0.7,
                     zorder=5,
                 )
-                marker_scatter_by_group[group] = scatter
-                marker_annotations_by_group[group] = annotate_visible_markers(
-                    ax,
-                    group=group,
-                    marker_l=marker_l,
-                    y_markers=y_markers,
-                    finite=finite,
-                    marker_rows=marker_rows,
-                )
+                visible_rows = marker_rows.loc[finite].reset_index(drop=True)
+                for marker_x, marker_y, marker_row in zip(
+                    marker_l[finite], y_markers[finite], visible_rows.to_dict("records")
+                ):
+                    ax.annotate(
+                        marker_row_title(marker_row, int(m_value)),
+                        xy=(float(marker_x), float(marker_y)),
+                        xytext=(0.0, 7.0),
+                        textcoords="offset points",
+                        ha="center",
+                        va="bottom",
+                        fontsize=6.5,
+                        color="black",
+                        annotation_clip=True,
+                        zorder=6,
+                    )
             title_color = "#d95f02" if selected_group == group else "black"
             ax.set_title(f"HK={m_value} {branch_value}", fontsize=9, color=title_color)
             ax.set_xlabel("L", fontsize=8)
@@ -1940,12 +1850,7 @@ def show_qr_rod_peak_marker_popup(
         editor_debug("l_max.submit", text=text)
         refresh_region_controls()
 
-    def select_nearest(
-        group: tuple[int, str],
-        x_value: float,
-        *,
-        sync_title: bool = True,
-    ) -> bool:
+    def select_nearest(group: tuple[int, str], x_value: float) -> bool:
         markers = group_markers(group[0], group[1])
         if markers.size == 0 or not np.isfinite(x_value):
             return False
@@ -1963,8 +1868,7 @@ def show_qr_rod_peak_marker_popup(
             return False
         selected["group"] = group
         selected["index"] = nearest_index
-        if sync_title:
-            sync_title_box()
+        sync_title_box()
         return True
 
     def add_marker(group: tuple[int, str], x_value: float) -> None:
@@ -1973,7 +1877,7 @@ def show_qr_rod_peak_marker_popup(
         markers.append(qz_value)
         set_group_markers(group[0], group[1], markers)
         select_nearest(group, float(x_value))
-        redraw(preserve_limits=True)
+        redraw()
 
     def move_selected(x_value: float) -> None:
         group = selected.get("group")
@@ -1986,11 +1890,8 @@ def show_qr_rod_peak_marker_popup(
             return
         markers[int(index)] = float(editor_l_to_qz(m_value, branch_value, [float(x_value)])[0])
         set_group_markers(m_value, branch_value, markers)
-        select_nearest((int(m_value), str(branch_value)), float(x_value), sync_title=False)
-        if update_group_marker_artists((int(m_value), str(branch_value))):
-            selected["drag_redraw_pending"] = True
-        else:
-            redraw(preserve_limits=True)
+        select_nearest((int(m_value), str(branch_value)), float(x_value))
+        redraw()
 
     def delete_selected() -> None:
         group = selected.get("group")
@@ -2005,7 +1906,7 @@ def show_qr_rod_peak_marker_popup(
         set_group_markers(m_value, branch_value, markers)
         selected["index"] = None
         sync_title_box()
-        redraw(preserve_limits=True)
+        redraw()
 
     def snap_selected_group() -> None:
         group = selected.get("group")
@@ -2028,7 +1929,7 @@ def show_qr_rod_peak_marker_popup(
         if selected_marker is not None:
             selected_l = float(qz_to_editor_l(m_value, branch_value, [selected_marker])[0])
             select_nearest((int(m_value), str(branch_value)), selected_l)
-        redraw(preserve_limits=True)
+        redraw()
 
     def import_peak_edits(_event) -> None:
         nonlocal edited
@@ -2064,7 +1965,6 @@ def show_qr_rod_peak_marker_popup(
     def on_press(event) -> None:
         if event.inaxes not in group_by_axes or event.xdata is None:
             return
-        previous_group = selected.get("group")
         flush_title_box()
         group = group_by_axes[event.inaxes]
         selected["group"] = group
@@ -2075,7 +1975,7 @@ def show_qr_rod_peak_marker_popup(
             return
         if select_nearest(group, float(event.xdata)):
             selected["dragging"] = True
-        refresh_selection_artists(previous_group, group)
+        redraw(preserve_limits=True)
 
     def on_motion(event) -> None:
         if not selected.get("dragging") or event.xdata is None:
@@ -2087,11 +1987,7 @@ def show_qr_rod_peak_marker_popup(
         move_selected(float(event.xdata))
 
     def on_release(_event) -> None:
-        needs_redraw = bool(selected.get("drag_redraw_pending", False))
         selected["dragging"] = False
-        selected["drag_redraw_pending"] = False
-        if needs_redraw:
-            redraw(preserve_limits=True)
         flush_region_profile_refresh()
 
     def on_key(event) -> None:
