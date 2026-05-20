@@ -9,6 +9,27 @@ Last updated: 2026-05-20
 
 ## Current status
 
+- 2026-05-20 nested full-identity fixed-source recovery completed. The
+  `m=1,L=10` locked manual Qr/Qz pair no longer loses its source authority when
+  final fit correspondence rows retain the full reflection identity only inside
+  `provider_selected_source_identity_canonical`. The fixed-source matcher now
+  recovers a unique branch row from the current reduced hit tables using the
+  nested full identity plus the `m=H^2+H*K+K^2,L` Q-group identity, and final
+  correspondence resolution uses the same nested identity when top-level
+  `source_reflection_*` fields were stripped. Bug/error status: fixed for the
+  GUI/default `gamma,Gamma` two-tilt rejection path that reported
+  `prediction_branch_source_switched`, `matched=0`, and no available matched
+  peak pairs after preflight had resolved the manual points. Feature status:
+  no GUI control, CLI flag, config key, saved-state schema, artifact schema, or
+  dependency change. Deprecation/migration status: none required; existing
+  saved manual-pick payloads remain compatible. CI/CD status: no workflow files
+  changed. Validation: `tests/test_geometry_fitting.py` passed (`271 passed`),
+  GUI/runtime smoke tests passed (`528 passed`), `python -m ra_sim.dev check`
+  passed (`294 passed` plus ruff/mypy), actual Tk GUI startup reached
+  `Simulation ready.`, and the saved Bi2Se3 GUI-state fit with
+  `--active-vars gamma,Gamma` resolved `15/15` fixed pairs with
+  `prediction_branch_source_switched_count=0` and weighted RMS `1.2063 deg`.
+  Shipping status: ready as a normal bug-fix slice with rollback by git revert.
 - 2026-05-20 same-`m,L` resolver cleanup completed. Bug/error status remains
   fixed for the locked manual Qr/Qz `prediction_branch_source_switched`
   rejection described below. The follow-up code change is behavior-preserving:

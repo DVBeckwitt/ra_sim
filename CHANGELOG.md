@@ -36,6 +36,11 @@
   - Updated `load_tilt_hint` to return converted simulation-space tilt/center/distance hints.
 
 - **Fitting and optimization**
+  - Fixed locked manual Qr/Qz geometry fits whose reduced hit-table rows lost
+    top-level full-reflection fields even though the canonical provider identity
+    still carried them; the matcher now recovers unique `m,L` branch rows from
+    nested source identity instead of rejecting with
+    `prediction_branch_source_switched`.
   - Added opt-in exact manual-pair exclusion and dry-run parameter-combo
     sweeps for headless Bi2Se3 geometry recovery fits, including per-combo
     JSON/PNG artifacts, top-level sweep reports, fail-closed combo results,

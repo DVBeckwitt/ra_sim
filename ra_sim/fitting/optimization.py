@@ -13047,16 +13047,43 @@ def _measured_source_table_index(entry: Mapping[str, object]) -> Optional[int]:
     return _nonnegative_index(entry.get("source_table_index"))
 
 
-def _entry_trusted_full_reflection_identity(entry: Mapping[str, object]) -> bool:
+_SOURCE_IDENTITY_CANONICAL_KEYS = (
+    "provider_selected_source_identity_canonical",
+    "selected_source_identity_canonical",
+    "manual_picker_selected_source_identity_canonical",
+)
+
+
+def _trusted_full_reflection_identity_payload(
+    entry: Mapping[str, object],
+) -> Optional[Mapping[str, object]]:
     if not isinstance(entry, Mapping):
-        return False
+        return None
+
     reflection_idx = _nonnegative_index(entry.get("source_reflection_index"))
-    if reflection_idx is None:
-        return False
-    namespace = str(entry.get("source_reflection_namespace", "") or "").strip().lower()
-    if namespace in {"full", "full_reflection", "miller"}:
-        return True
-    return bool(entry.get("source_reflection_is_full", False))
+    if reflection_idx is not None:
+        namespace = str(entry.get("source_reflection_namespace", "") or "").strip().lower()
+        if namespace in {"full", "full_reflection", "miller"}:
+            return entry
+        return entry if bool(entry.get("source_reflection_is_full", False)) else None
+
+    for key in _SOURCE_IDENTITY_CANONICAL_KEYS:
+        identity = entry.get(key)
+        if not isinstance(identity, Mapping):
+            continue
+        reflection_idx = _nonnegative_index(identity.get("source_reflection_index"))
+        if reflection_idx is None:
+            continue
+        namespace = str(identity.get("source_reflection_namespace", "") or "").strip().lower()
+        if namespace in {"full", "full_reflection", "miller"}:
+            return identity
+        if bool(identity.get("source_reflection_is_full", False)):
+            return identity
+    return None
+
+
+def _entry_trusted_full_reflection_identity(entry: Mapping[str, object]) -> bool:
+    return _trusted_full_reflection_identity_payload(entry) is not None
 
 
 def _diagnostic_source_table_index(entry: Mapping[str, object]) -> Optional[int]:
@@ -13155,9 +13182,19 @@ def _copy_source_identity_payload(entry: Mapping[str, object]) -> Dict[str, obje
     normalized_hkl = _normalized_hkl_key(entry.get("hkl"))
     source_branch_index = _nonnegative_index(entry.get("source_branch_index"))
     source_peak_index = _nonnegative_index(entry.get("source_peak_index"))
+    trusted_identity = _trusted_full_reflection_identity_payload(entry)
     source_reflection_index = _nonnegative_index(entry.get("source_reflection_index"))
+    if source_reflection_index is None and isinstance(trusted_identity, Mapping):
+        source_reflection_index = _nonnegative_index(
+            trusted_identity.get("source_reflection_index")
+        )
     source_reflection_namespace = entry.get("source_reflection_namespace")
-    trusted_full_reflection = _entry_trusted_full_reflection_identity(entry)
+    if source_reflection_namespace in (None, "") and isinstance(trusted_identity, Mapping):
+        source_reflection_namespace = trusted_identity.get("source_reflection_namespace")
+    source_reflection_is_full = entry.get("source_reflection_is_full")
+    if source_reflection_is_full in (None, "") and isinstance(trusted_identity, Mapping):
+        source_reflection_is_full = trusted_identity.get("source_reflection_is_full")
+    trusted_full_reflection = trusted_identity is not None
 
     reflection_namespace_label = source_reflection_namespace
     if reflection_namespace_label in (None, ""):
@@ -13191,7 +13228,7 @@ def _copy_source_identity_payload(entry: Mapping[str, object]) -> Dict[str, obje
         ),
         "source_reflection_index": source_reflection_index,
         "source_reflection_namespace": source_reflection_namespace,
-        "source_reflection_is_full": entry.get("source_reflection_is_full"),
+        "source_reflection_is_full": source_reflection_is_full,
         "source_reflection_index_namespace": str(reflection_namespace_label or "unset"),
         "source_table_index": entry.get("source_table_index"),
         "resolved_table_index": entry.get("resolved_table_index"),
@@ -13463,10 +13500,7 @@ def _dynamic_reanchor_pair_trace_record(
 def _entry_explicit_trusted_full_reflection_identity(
     entry: Mapping[str, object],
 ) -> bool:
-    if not isinstance(entry, Mapping):
-        return False
-    namespace = str(entry.get("source_reflection_namespace", "") or "").strip().lower()
-    return namespace == "full_reflection" and bool(entry.get("source_reflection_is_full", False))
+    return _trusted_full_reflection_identity_payload(entry) is not None
 
 
 def _assert_source_identity_bridge_invariant(
@@ -14606,6 +14640,115 @@ def _resolve_fixed_source_matches(
             seam="_resolve_fixed_source_matches",
         )
 
+    def _recover_nested_full_identity_branch(
+        entry: Mapping[str, object],
+    ) -> Tuple[Optional[int], Optional[np.ndarray], Dict[str, object], str]:
+        if _trusted_full_reflection_identity_payload(entry) is None:
+            return None, None, {}, "nested_full_identity_missing"
+        requested_hkl = _normalized_hkl_key(entry.get("hkl"))
+        requested_q_group_ml = _q_group_ml_from_key(entry.get("q_group_key"))
+        requested_branch_values = [
+            int(value)
+            for value in (
+                _nonnegative_index(entry.get("source_branch_index")),
+                _nonnegative_index(entry.get("source_peak_index")),
+                _nonnegative_index(entry.get("resolved_peak_index")),
+            )
+            if value in {0, 1}
+        ]
+        if not requested_branch_values or len(set(requested_branch_values)) > 1:
+            return None, None, {}, "nested_full_identity_branch_missing"
+        requested_branch = int(requested_branch_values[0])
+
+        matches: List[Tuple[int, Mapping[str, object], np.ndarray, bool]] = []
+        valid_row_count = 0
+        for table_candidate in range(len(hit_tables)):
+            if table_candidate not in filtered_rows_cache:
+                filtered_rows_cache[table_candidate] = _valid_hit_row_records(
+                    hit_tables[table_candidate]
+                )
+            for record in filtered_rows_cache.get(table_candidate, []):
+                row_obj = record.get("row") if isinstance(record, Mapping) else None
+                try:
+                    row = np.asarray(row_obj, dtype=float).reshape(-1)
+                except Exception:
+                    continue
+                if row.shape[0] < 7:
+                    continue
+                valid_row_count += 1
+                row_hkl = _hit_row_hkl(row)
+                exact_hkl = bool(requested_hkl is not None and row_hkl == requested_hkl)
+                q_group_equivalent = bool(
+                    not exact_hkl
+                    and requested_q_group_ml is not None
+                    and _q_group_ml_from_hkl(row_hkl) == requested_q_group_ml
+                )
+                if not exact_hkl and not q_group_equivalent:
+                    continue
+                row_branch = source_branch_index_from_phi_deg(row[3])
+                if row_branch not in {0, 1} or int(row_branch) != int(requested_branch):
+                    continue
+                matches.append(
+                    (
+                        int(table_candidate),
+                        record,
+                        np.asarray(row[:7], dtype=float),
+                        bool(q_group_equivalent),
+                    )
+                )
+
+        payload: Dict[str, object] = {
+            "nested_full_identity_branch_recovery_attempted": True,
+            "nested_full_identity_valid_row_count": int(valid_row_count),
+            "nested_full_identity_branch_match_count": int(len(matches)),
+            "requested_branch_index": int(requested_branch),
+        }
+        if len(matches) != 1:
+            status = (
+                "nested_full_identity_branch_ambiguous"
+                if len(matches) > 1
+                else "nested_full_identity_branch_missing"
+            )
+            payload["prediction_source_status"] = (
+                "unavailable_ambiguous" if len(matches) > 1 else "unavailable"
+            )
+            return None, None, payload, status
+
+        table_idx, record, row, q_group_equivalent = matches[0]
+        row_position = _nonnegative_index(record.get("row_position"))
+        source_row_index = _nonnegative_index(record.get("source_row_index"))
+        reason = (
+            "provider_local_nested_full_identity_q_group_branch_resolved"
+            if q_group_equivalent
+            else "provider_local_nested_full_identity_branch_resolved"
+        )
+        payload.update(
+            {
+                "resolution_kind": "fixed_source",
+                "resolution_reason": reason,
+                "prediction_source_status": "available",
+                "resolved_table_index": int(table_idx),
+                "resolved_peak_index": int(requested_branch),
+                "resolved_source_row_position": (
+                    int(row_position) if row_position is not None else None
+                ),
+                "resolved_source_row_index": (
+                    int(source_row_index) if source_row_index is not None else None
+                ),
+                "source_row_rejection_reason": None,
+                "source_row_hkl_q_group_equivalent": bool(q_group_equivalent),
+                "source_row_hkl_q_group_ml": (requested_q_group_ml if q_group_equivalent else None),
+                "provider_local_stale_row_proof_available": True,
+                "provider_local_stale_row_proof_reason": reason,
+                "provider_local_saved_sim_detector_diagnostic_only": True,
+                "provider_local_saved_sim_detector_branch_resolved": True,
+                "provider_local_saved_sim_detector_uses_canonical_projection": False,
+                "source_row_preferred_over_branch_representative": True,
+                "locked_manual_qr_resolver_required": True,
+            }
+        )
+        return int(table_idx), row, payload, reason
+
     for match_input_index, entry in enumerate(measured_entries):
         overlay_match_index = _overlay_index(entry, match_input_index)
         base_diag = {
@@ -14809,8 +14952,53 @@ def _resolve_fixed_source_matches(
                     valid_row_count = _nonnegative_index(
                         stale_payload.get("provider_local_valid_row_count")
                     )
-                    if rejected_reason != "provider_local_hkl_mismatch" or (
-                        valid_row_count is not None and int(valid_row_count) > 0
+                    (
+                        recovered_table_idx,
+                        recovered_row,
+                        recovered_payload,
+                        recovered_reason,
+                    ) = _recover_nested_full_identity_branch(entry)
+                    if recovered_row is not None and recovered_table_idx is not None:
+                        try:
+                            sim_col = float(recovered_row[1])
+                            sim_row = float(recovered_row[2])
+                            sim_hkl = tuple(
+                                int(v) for v in (_hit_row_hkl(recovered_row) or (0, 0, 0))
+                            )
+                        except Exception:
+                            _store_resolution_diag(
+                                entry,
+                                {
+                                    **base_diag,
+                                    **dict(exact_payload),
+                                    **dict(stale_payload),
+                                    **dict(recovered_payload),
+                                    "resolution_kind": "fixed_source",
+                                    "resolution_reason": "prediction_branch_source_switched",
+                                    "resolution_subreason": "source_row_parse_failed",
+                                    "source_row_count": int(len(row_records)),
+                                    "locked_manual_qr_resolver_required": True,
+                                },
+                            )
+                            continue
+                        source_key = (
+                            "peak",
+                            int(recovered_table_idx),
+                            int(recovered_payload.get("resolved_peak_index", 0)),
+                        )
+                        resolved_from_peak = True
+                        resolved_diag_reason = str(recovered_reason)
+                        resolved_diag_extra = {
+                            **dict(exact_payload),
+                            **dict(stale_payload),
+                            **dict(recovered_payload),
+                            "fit_prediction_resolver_function": (
+                                "_resolve_fixed_manual_qr_fit_prediction"
+                            ),
+                            "prediction_source": f"locked_manual_qr:{recovered_reason}",
+                        }
+                    elif recovered_payload.get("prediction_source_status") == (
+                        "unavailable_ambiguous"
                     ):
                         _store_resolution_diag(
                             entry,
@@ -14818,6 +15006,30 @@ def _resolve_fixed_source_matches(
                                 **base_diag,
                                 **dict(exact_payload),
                                 **dict(stale_payload),
+                                **dict(recovered_payload),
+                                "resolution_kind": "fixed_source",
+                                "resolution_reason": str(recovered_reason),
+                                "resolution_subreason": str(recovered_reason),
+                                "provider_local_saved_sim_detector_fallback_rejected_reason": (
+                                    str(recovered_reason)
+                                ),
+                                "source_row_count": int(len(row_records)),
+                                "locked_manual_qr_resolver_required": True,
+                                "provider_local_saved_sim_detector_diagnostic_only": True,
+                            },
+                        )
+                        continue
+                    if not resolved_from_peak and (
+                        rejected_reason != "provider_local_hkl_mismatch"
+                        or (valid_row_count is not None and int(valid_row_count) > 0)
+                    ):
+                        _store_resolution_diag(
+                            entry,
+                            {
+                                **base_diag,
+                                **dict(exact_payload),
+                                **dict(stale_payload),
+                                **dict(recovered_payload),
                                 "resolution_kind": "fixed_source",
                                 "resolution_reason": "prediction_branch_source_switched",
                                 "resolution_subreason": rejected_reason,
@@ -14830,21 +15042,28 @@ def _resolve_fixed_source_matches(
                             },
                         )
                         continue
-                    resolved_diag_reason = "provider_local_branch_representative"
-                    resolved_diag_extra = {
-                        **dict(exact_payload),
-                        **dict(stale_payload),
-                        "fit_prediction_resolver_function": "_resolve_fixed_manual_qr_fit_prediction",
-                        "prediction_source": "locked_manual_qr:provider_local_branch_representative",
-                        "resolution_subreason": rejected_reason,
-                        "source_row_preferred_over_branch_representative": True,
-                        "locked_manual_qr_resolver_required": True,
-                        "provider_local_saved_sim_detector_diagnostic_only": True,
-                        "provider_local_saved_sim_detector_branch_resolved": True,
-                        "provider_local_saved_sim_detector_uses_canonical_projection": False,
-                        "provider_local_saved_sim_detector_fallback_rejected_reason": rejected_reason,
-                        "exact_source_row_was_available": False,
-                    }
+                    if not resolved_from_peak:
+                        resolved_diag_reason = "provider_local_branch_representative"
+                        resolved_diag_extra = {
+                            **dict(exact_payload),
+                            **dict(stale_payload),
+                            "fit_prediction_resolver_function": (
+                                "_resolve_fixed_manual_qr_fit_prediction"
+                            ),
+                            "prediction_source": (
+                                "locked_manual_qr:provider_local_branch_representative"
+                            ),
+                            "resolution_subreason": rejected_reason,
+                            "source_row_preferred_over_branch_representative": True,
+                            "locked_manual_qr_resolver_required": True,
+                            "provider_local_saved_sim_detector_diagnostic_only": True,
+                            "provider_local_saved_sim_detector_branch_resolved": True,
+                            "provider_local_saved_sim_detector_uses_canonical_projection": False,
+                            "provider_local_saved_sim_detector_fallback_rejected_reason": (
+                                rejected_reason
+                            ),
+                            "exact_source_row_was_available": False,
+                        }
         if requires_exact_source_row and not resolved_from_peak and not requires_shared_qr_resolver:
             exact_row, exact_payload, exact_reason = _resolve_exact_fixed_manual_source_row(
                 entry,
@@ -15116,20 +15335,31 @@ def _resolve_fixed_source_matches(
             if measured_hkl_key is not None and sim_hkl is None:
                 sim_hkl = tuple(int(v) for v in measured_hkl_key)
             if measured_hkl_key is not None and sim_hkl is not None and measured_hkl_key != sim_hkl:
-                _store_resolution_diag(
-                    entry,
-                    {
-                        **base_diag,
-                        "resolution_kind": (
-                            "fixed_source" if trusted_full_reflection else "hkl_fallback"
-                        ),
-                        "resolution_reason": "source_hkl_mismatch",
-                        "resolved_sim_hkl": tuple(int(v) for v in sim_hkl),
-                    },
-                )
-                if not trusted_full_reflection:
-                    fallback_entries.append(entry)
-                continue
+                requested_q_group_ml = _q_group_ml_from_key(entry.get("q_group_key"))
+                if (
+                    requested_q_group_ml is not None
+                    and _q_group_ml_from_hkl(sim_hkl) == requested_q_group_ml
+                ):
+                    resolved_diag_extra.setdefault("source_row_hkl_q_group_equivalent", True)
+                    resolved_diag_extra.setdefault(
+                        "source_row_hkl_q_group_ml",
+                        requested_q_group_ml,
+                    )
+                else:
+                    _store_resolution_diag(
+                        entry,
+                        {
+                            **base_diag,
+                            "resolution_kind": (
+                                "fixed_source" if trusted_full_reflection else "hkl_fallback"
+                            ),
+                            "resolution_reason": "source_hkl_mismatch",
+                            "resolved_sim_hkl": tuple(int(v) for v in sim_hkl),
+                        },
+                    )
+                    if not trusted_full_reflection:
+                        fallback_entries.append(entry)
+                    continue
 
         resolved.append((entry, (sim_col, sim_row), tuple(int(v) for v in sim_hkl or (0, 0, 0))))
         _store_resolution_diag(
@@ -15545,7 +15775,8 @@ def _resolve_geometry_fit_correspondence(
         )
         return row, payload, "provider_local_branch_identity_unique"
 
-    trusted_full_reflection = _entry_trusted_full_reflection_identity(correspondence)
+    trusted_full_identity = _trusted_full_reflection_identity_payload(correspondence)
+    trusted_full_reflection = trusted_full_identity is not None
     prefer_source_row_resolution = _geometry_fit_prefers_source_row_resolution(correspondence)
     frozen_kind = str(correspondence.get("frozen_locator_kind", "") or "").strip().lower()
     frozen_namespace = str(correspondence.get("frozen_table_namespace", "") or "").strip().lower()
@@ -15716,7 +15947,11 @@ def _resolve_geometry_fit_correspondence(
         else:
             return None, _payload("invalid_frozen_locator")
     elif trusted_full_reflection:
-        table_idx = _nonnegative_index(correspondence.get("source_reflection_index"))
+        table_idx = _nonnegative_index(
+            trusted_full_identity.get("source_reflection_index")
+            if isinstance(trusted_full_identity, Mapping)
+            else correspondence.get("source_reflection_index")
+        )
         if table_idx is None:
             return None, _payload("missing_source_table_index")
         table_idx, remap_payload = _maybe_remap_trusted_full_reflection_index(
@@ -15731,13 +15966,29 @@ def _resolve_geometry_fit_correspondence(
         )
         if prefer_source_row_resolution:
             row_idx = _nonnegative_index(correspondence.get("source_row_index"))
+            if row_idx is None and isinstance(trusted_full_identity, Mapping):
+                row_idx = _nonnegative_index(trusted_full_identity.get("source_row_index"))
             if row_idx is None:
                 return None, _payload("missing_source_row_index", table_idx=table_idx)
             frozen_kind = "trusted_row"
         else:
             peak_idx = _measured_source_peak_index(correspondence)
+            if (
+                peak_idx not in {0, 1}
+                and isinstance(trusted_full_identity, Mapping)
+                and trusted_full_identity is not correspondence
+            ):
+                peak_idx = _nonnegative_index(
+                    trusted_full_identity.get(
+                        "source_branch_index",
+                        trusted_full_identity.get("source_peak_index"),
+                    )
+                )
             if peak_idx not in {0, 1}:
                 return None, _payload("missing_source_peak_index", table_idx=table_idx)
+            row_idx = _nonnegative_index(correspondence.get("source_row_index"))
+            if row_idx is None and isinstance(trusted_full_identity, Mapping):
+                row_idx = _nonnegative_index(trusted_full_identity.get("source_row_index"))
             frozen_kind = "trusted_branch"
     else:
         resolved_table_idx = _nonnegative_index(correspondence.get("resolved_table_index"))

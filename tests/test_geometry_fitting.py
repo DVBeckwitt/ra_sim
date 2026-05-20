@@ -7973,6 +7973,103 @@ def test_geometry_fit_correspondence_recovers_stale_same_ml_hkl_for_locked_q_gro
     assert payload["resolution_reason"] != "prediction_branch_source_switched"
 
 
+def test_geometry_fit_correspondence_uses_nested_full_reflection_identity_for_locked_q_group() -> None:
+    correspondence = _provider_local_singleton_entry(
+        hkl=(-1, 0, 10),
+        label="-1,0,10",
+        q_group_key=("q_group", "primary", 1, 10),
+        source_table_index=160,
+        resolved_table_index=1,
+        source_row_index=120,
+        source_branch_index=1,
+        source_peak_index=1,
+        resolved_peak_index=1,
+        provider_selected_source_identity_canonical={
+            "normalized_hkl": [-1, 0, 10],
+            "q_group_key": ["q_group", "primary", 1, 10],
+            "source_table_index": 160,
+            "source_row_index": 120,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "source_reflection_index": 160,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+        },
+    )
+    hit_tables = [
+        np.asarray(
+            [
+                [1.0, 1080.0, 1900.0, -10.0, -1.0, 0.0, 10.0],
+                [1.0, 1057.0, 1156.0, 10.0, -1.0, 0.0, 10.0],
+            ],
+            dtype=np.float64,
+        ),
+        np.asarray([[1.0, 999.0, 999.0, 10.0, 3.0, 0.0, 0.0]], dtype=np.float64),
+    ]
+
+    point, payload = opt._geometry_fit_correspondence_simulated_point_payload(
+        correspondence,
+        hit_tables=hit_tables,
+        max_positions=np.zeros((2, 6), dtype=np.float64),
+        trusted_full_reflection_local_index_map={160: 0},
+    )
+
+    assert point == (1057.0, 1156.0)
+    assert payload["resolution_reason"] == "provider_local_stale_row_index_branch_resolved"
+    assert int(payload["resolved_table_index"]) == 0
+    assert bool(payload["trusted_full_reflection_remapped"]) is True
+    assert payload["resolution_reason"] != "prediction_branch_source_switched"
+
+
+def test_resolve_fixed_source_matches_uses_nested_full_reflection_identity_for_locked_q_group() -> None:
+    entry = _provider_local_singleton_entry(
+        hkl=(-1, 0, 10),
+        label="-1,0,10",
+        q_group_key=("q_group", "primary", 1, 10),
+        source_table_index=160,
+        resolved_table_index=1,
+        source_row_index=120,
+        source_branch_index=1,
+        source_peak_index=1,
+        resolved_peak_index=1,
+        provider_selected_source_identity_canonical={
+            "normalized_hkl": [-1, 0, 10],
+            "q_group_key": ["q_group", "primary", 1, 10],
+            "source_table_index": 160,
+            "source_row_index": 120,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "source_reflection_index": 160,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+        },
+    )
+    hit_tables = [
+        np.asarray(
+            [
+                [1.0, 1080.0, 1900.0, -10.0, 1.0, 0.0, 10.0],
+                [1.0, 1057.0, 1156.0, 10.0, 1.0, 0.0, 10.0],
+            ],
+            dtype=np.float64,
+        ),
+        np.asarray([[1.0, 999.0, 999.0, 10.0, 3.0, 0.0, 0.0]], dtype=np.float64),
+    ]
+
+    resolved, fallback_entries, resolution_lookup = opt._resolve_fixed_source_matches(
+        [entry],
+        hit_tables,
+    )
+
+    assert fallback_entries == []
+    assert len(resolved) == 1
+    assert resolved[0][1] == (1057.0, 1156.0)
+    assert resolved[0][2] == (1, 0, 10)
+    diag = resolution_lookup[id(entry)]
+    assert diag["resolution_reason"] == "provider_local_nested_full_identity_q_group_branch_resolved"
+    assert diag["source_row_hkl_q_group_equivalent"] is True
+    assert diag["resolution_reason"] != "prediction_branch_source_switched"
+
+
 def test_prediction_branch_source_switched_for_locked_qr_row_unavailable() -> None:
     point, payload = _saved_detector_waits_for_row_proof_payload()
 
