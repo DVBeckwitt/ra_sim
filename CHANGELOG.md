@@ -62,15 +62,14 @@
     caked/pixel fallback signatures, including split-record `matched=0`
     optimizer runs under a caked objective; the GUI fit-space intent now also
     follows the actual caked primary plot when shell state is stale.
-  - Fixed the follow-up manual caked Qr/Qz optimizer routing case where finite
-    observed and predicted caked anchors could still be classified as missing
-    fit-space and avoid the caked angular evaluator. Tuple-style
-    `fit_observed_caked_deg` anchors now count as caked fit-space readiness,
-    the optimizer logs an explicit manual-caked route check, final metrics stay
-    in degrees, and the trace checker rejects finite-anchor caked fits that
-    fall back to pixel `central_point_match`; caked dynamic progress and debug
-    summaries now label the weighted objective in `weighted_deg` instead of
-    stale `weighted_rms_px` text.
+  - Fixed the follow-up manual Tk caked Qr/Qz optimizer routing case where two
+    finite observed/predicted caked anchor pairs could still enter
+    detector-pixel point matching. The caked objective now routes ready manual
+    pairs to degree metrics, fails missing fit-space before optimization, blocks
+    `central_point_match`/pixel finalization, logs the two-pair
+    `manual_caked_route_check`, and shows a caked-route rejection message
+    instead of "No matched peak pairs"; the trace checker rejects the exact
+    finite-anchor `f761e78f` fallback signature.
   - Fixed PbI2 Qr-rod marker editor edits so `HK=4 -` marker
     add/move/delete/snap interactions preserve the current panel x/y limits;
     explicit Delta-Qr and L-window controls remain the scope-changing path.

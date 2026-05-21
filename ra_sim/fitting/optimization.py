@@ -22539,9 +22539,17 @@ def fit_geometry_parameters(
     manual_caked_fit_pair_count = int(
         manual_caked_fit_space_readiness.get("expected_pair_count", 0) or 0
     )
+    manual_caked_observed_count = int(
+        manual_caked_fit_space_readiness.get("observed_caked_count", 0) or 0
+    )
+    manual_caked_predicted_count = int(
+        manual_caked_fit_space_readiness.get("predicted_caked_count", 0) or 0
+    )
+    manual_caked_missing_reasons = list(
+        manual_caked_fit_space_readiness.get("missing_reasons", ()) or ()
+    )
     dynamic_point_geometry_fit_auto_enabled = bool(
-        manual_point_fit_mode
-        and point_match_mode
+        point_match_mode
         and not dynamic_point_geometry_fit_requested
         and manual_caked_fit_space_ready
     )
@@ -22986,17 +22994,19 @@ def fit_geometry_parameters(
             f"ready={str(bool(manual_caked_fit_space_ready)).lower()} "
             "observed_caked={observed} predicted_caked={predicted} "
             "evaluator={evaluator} unit={unit}".format(
-                observed=int(manual_caked_fit_space_readiness.get("observed_caked_count", 0) or 0),
-                predicted=int(
-                    manual_caked_fit_space_readiness.get("predicted_caked_count", 0) or 0
-                ),
+                observed=manual_caked_observed_count,
+                predicted=manual_caked_predicted_count,
                 evaluator=route_evaluator,
                 unit=route_unit,
             )
         )
 
-    if manual_caked_fit_space_required and not manual_caked_fit_space_ready:
-
+    def _manual_caked_preflight_failure_result(
+        *,
+        reason: str,
+        message: str,
+        status: int,
+    ) -> OptimizeResult:
         def _initial_value_for_var(name: object) -> float:
             key = str(name)
             try:
@@ -23011,16 +23021,11 @@ def fit_geometry_parameters(
                 value_f = 0.0
             return float(value_f) if np.isfinite(value_f) else 0.0
 
-        reason = "manual_caked_fit_space_missing"
-        message = (
-            "manual caked fit-space requires exact caked anchors/projector; "
-            "refusing detector-pixel central_point_match fallback"
-        )
         result = OptimizeResult(
             x=np.asarray([_initial_value_for_var(name) for name in var_names], dtype=float),
             fun=np.array([], dtype=float),
             success=False,
-            status=-10,
+            status=int(status),
             message=message,
             nfev=0,
             active_mask=np.zeros(len(var_names), dtype=int),
@@ -23034,48 +23039,39 @@ def fit_geometry_parameters(
         result.rms_px = float("nan")
         result.rms_deg = float("nan")
         result.max_deg = float("nan")
-        result.final_metric_name = "manual_caked_fit_space_missing"
+        result.final_metric_name = str(reason)
         result.final_metric_space = "caked_deg"
         result.final_metric_units = "deg"
         result.point_match_summary = {
             "reason": reason,
-            "metric_name": "manual_caked_fit_space_missing",
+            "metric_name": str(reason),
             "metric_unit": "deg",
             "objective_space": "caked_deg",
             "manual_caked_fit_space_required": True,
             "exact_fit_space_projector_available": bool(
                 manual_caked_fit_space_readiness.get("exact_projector_available", False)
             ),
-            "dynamic_point_geometry_fit": False,
-            "manual_caked_fit_space_ready": False,
+            "dynamic_point_geometry_fit": bool(dynamic_point_geometry_fit),
+            "manual_caked_fit_space_ready": bool(manual_caked_fit_space_ready),
+            "preflight_error": str(reason),
             "manual_caked_fit_pair_count": int(manual_caked_fit_pair_count),
-            "manual_caked_fit_observed_caked_count": int(
-                manual_caked_fit_space_readiness.get("observed_caked_count", 0) or 0
-            ),
-            "manual_caked_fit_predicted_caked_count": int(
-                manual_caked_fit_space_readiness.get("predicted_caked_count", 0) or 0
-            ),
-            "manual_caked_fit_missing_reasons": list(
-                manual_caked_fit_space_readiness.get("missing_reasons", ()) or ()
-            ),
+            "manual_caked_fit_observed_caked_count": int(manual_caked_observed_count),
+            "manual_caked_fit_predicted_caked_count": int(manual_caked_predicted_count),
+            "manual_caked_fit_missing_reasons": list(manual_caked_missing_reasons),
         }
         result.geometry_fit_debug_summary = {
             "point_match_mode": bool(point_match_mode),
             "manual_point_fit_mode": bool(manual_point_fit_mode),
             "manual_caked_fit_space_required": True,
-            "manual_caked_fit_space_ready": False,
+            "manual_caked_fit_space_ready": bool(manual_caked_fit_space_ready),
             "manual_caked_fit_pair_count": int(manual_caked_fit_pair_count),
-            "manual_caked_fit_observed_caked_count": int(
-                manual_caked_fit_space_readiness.get("observed_caked_count", 0) or 0
+            "manual_caked_fit_observed_caked_count": int(manual_caked_observed_count),
+            "manual_caked_fit_predicted_caked_count": int(manual_caked_predicted_count),
+            "manual_caked_fit_missing_reasons": list(manual_caked_missing_reasons),
+            "dynamic_point_geometry_fit": bool(dynamic_point_geometry_fit),
+            "dynamic_point_geometry_fit_auto_enabled": bool(
+                dynamic_point_geometry_fit_auto_enabled
             ),
-            "manual_caked_fit_predicted_caked_count": int(
-                manual_caked_fit_space_readiness.get("predicted_caked_count", 0) or 0
-            ),
-            "manual_caked_fit_missing_reasons": list(
-                manual_caked_fit_space_readiness.get("missing_reasons", ()) or ()
-            ),
-            "dynamic_point_geometry_fit": False,
-            "dynamic_point_geometry_fit_auto_enabled": False,
             "rejection_reason": reason,
             "solver": {
                 "manual_point_fit_mode": bool(manual_point_fit_mode),
@@ -23084,6 +23080,30 @@ def fit_geometry_parameters(
             },
         }
         return result
+
+    if manual_caked_fit_space_required and not manual_caked_fit_space_ready:
+        return _manual_caked_preflight_failure_result(
+            reason="manual_caked_fit_space_missing",
+            message=(
+                "manual caked fit-space requires exact caked anchors/projector; "
+                "refusing detector-pixel central_point_match fallback"
+            ),
+            status=-10,
+        )
+
+    if (
+        (manual_caked_fit_space_required or manual_caked_fit_space_ready)
+        and point_match_mode
+        and not dynamic_point_geometry_fit
+    ):
+        return _manual_caked_preflight_failure_result(
+            reason="manual_caked_route_invariant_violation",
+            message=(
+                "manual caked fit-space requires a caked angular evaluator; "
+                "refusing detector-pixel central_point_match fallback"
+            ),
+            status=-11,
+        )
 
     dataset_contexts = _build_geometry_fit_dataset_contexts(
         miller,
@@ -25605,15 +25625,9 @@ def fit_geometry_parameters(
         "manual_caked_fit_space_required": bool(manual_caked_fit_space_required),
         "manual_caked_fit_space_ready": bool(manual_caked_fit_space_ready),
         "manual_caked_fit_pair_count": int(manual_caked_fit_pair_count),
-        "manual_caked_fit_observed_caked_count": int(
-            manual_caked_fit_space_readiness.get("observed_caked_count", 0) or 0
-        ),
-        "manual_caked_fit_predicted_caked_count": int(
-            manual_caked_fit_space_readiness.get("predicted_caked_count", 0) or 0
-        ),
-        "manual_caked_fit_missing_reasons": list(
-            manual_caked_fit_space_readiness.get("missing_reasons", ()) or ()
-        ),
+        "manual_caked_fit_observed_caked_count": int(manual_caked_observed_count),
+        "manual_caked_fit_predicted_caked_count": int(manual_caked_predicted_count),
+        "manual_caked_fit_missing_reasons": list(manual_caked_missing_reasons),
         "provider_local_saved_sim_offset_baseline_primed": bool(
             provider_local_saved_sim_offset_baseline_primed
         ),
@@ -34906,6 +34920,60 @@ def fit_geometry_parameters(
                 == "dynamic_angular_point_match"
                 else float(weighted_residual_rms)
             )
+
+    if manual_caked_fit_space_required or manual_caked_fit_space_ready:
+        point_summary = (
+            result.point_match_summary
+            if isinstance(getattr(result, "point_match_summary", None), Mapping)
+            else {}
+        )
+        result_metric_name = str(
+            getattr(result, "final_metric_name", "")
+            or point_summary.get("metric_name")
+            or point_summary.get("final_metric_name")
+            or ""
+        ).strip()
+        result_metric_unit = str(
+            getattr(result, "final_metric_units", "")
+            or point_summary.get("metric_unit")
+            or point_summary.get("final_metric_units")
+            or ""
+        ).strip()
+        result_metric_space = str(
+            getattr(result, "final_metric_space", "")
+            or point_summary.get("acceptance_metric_space")
+            or ""
+        ).strip()
+        if (
+            result_metric_name == "central_point_match"
+            or result_metric_unit == "px"
+            or result_metric_space == "detector_px"
+        ):
+            result.success = False
+            result.status = -11
+            result.message = "manual_caked_route_invariant_violation"
+            result.final_metric_name = "manual_caked_route_invariant_violation"
+            result.final_metric_space = "caked_deg"
+            result.final_metric_units = "deg"
+            result.weighted_objective_rms = float("nan")
+            result.weighted_objective_rms_units = "deg"
+            result.weighted_residual_rms_px = float("nan")
+            result.rms_px = float("nan")
+            result.rms_deg = float("nan")
+            result.max_deg = float("nan")
+            repaired_summary = dict(point_summary)
+            repaired_summary.update(
+                {
+                    "reason": "manual_caked_route_invariant_violation",
+                    "metric_name": "manual_caked_route_invariant_violation",
+                    "metric_unit": "deg",
+                    "objective_space": "caked_deg",
+                    "acceptance_metric_space": "caked_deg",
+                    "manual_caked_fit_space_required": bool(manual_caked_fit_space_required),
+                    "manual_caked_fit_space_ready": bool(manual_caked_fit_space_ready),
+                }
+            )
+            result.point_match_summary = repaired_summary
 
     bound_threshold_fraction = 0.01
     bound_entries: List[Dict[str, object]] = []

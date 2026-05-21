@@ -5,10 +5,38 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-05-20
+Last updated: 2026-05-21
 
 ## Current status
 
+- 2026-05-21 live manual Tk caked route fix completed in source and automated
+  gates. The exact `f761e78f` two-pair live failure shape is now encoded in the
+  existing handoff checker tests: finite `fit_observed_caked_deg` and
+  `fit_prediction_caked_deg` anchors followed by `setup mode=point-match`,
+  `weighted_rms=... px`, `metric=central_point_match`, and `matched=0` is
+  rejected across whole text logs and JSONL traces. The optimizer now treats a
+  requested caked objective as the routing source of truth, separate from
+  detector-origin provenance: ready manual pairs route to the caked degree
+  evaluator with `manual_caked_route_check ... observed_caked=2
+  predicted_caked=2 ... unit=deg`, missing fit-space fails closed before
+  optimization with `manual_caked_fit_space_missing`, and any caked objective
+  that leaks toward detector-pixel finalization is converted to
+  `manual_caked_route_invariant_violation`. The GUI rejection copy now names the
+  caked route block instead of telling the operator that no matched peak pairs
+  were available. Bug/error status: fixed in the source path and regression
+  suite for the reported two-pair manual Tk route. Feature/API status: no GUI
+  control, CLI flag, config key, saved-state field, artifact schema, dependency,
+  migration, or version bump. Deprecation/migration status: the retired behavior
+  is the internal caked-objective access to detector-pixel point matching; no
+  user migration is required. CI/CD status: no workflow change; local project
+  gates remain the release signal. Validation status: focused geometry/checker
+  tests passed, GUI runtime/view/state tests passed, `python -m ra_sim.dev
+  check` passed, `git diff --check` passed, and cached New4 logs still pass the
+  checker while cached pre-fix Bi2Se3 logs are rejected. Shipping status:
+  commit-ready as a bug-fix slice with rollback by git revert. Remaining
+  operator proof before release acceptance: rerun the actual Tk GUI Bi2Se3
+  workflow and check the newly written live log for degree metrics or the
+  fail-closed caked preflight.
 - 2026-05-20 code-simplification and quality-gate follow-up completed. The
   caked dynamic debug-line formatter now uses one local weighted-metric helper
   for main seed, solve-progress, and solve-progress trace labels, preserving the

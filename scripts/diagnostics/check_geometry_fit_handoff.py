@@ -87,6 +87,10 @@ def _record_from_text_line(text: str, line_number: int, parse_error: str) -> dic
         record["detector_to_caked_unavailable"] = True
     if "preflight: ready to solve geometry fit" in lowered:
         record["preflight_ready"] = True
+    if "manual_caked_route_check" in lowered:
+        record["manual_caked_route_check"] = True
+    if "geometry fit: setup" in lowered and "mode=point-match" in lowered:
+        record["setup_point_match"] = True
     if "geometry fit: setup" in lowered or "optimizer_started=true" in lowered:
         record["optimizer_started"] = True
     if ("weighted_rms=" in lowered and "px" in lowered) or "weighted_rms_px" in lowered:
@@ -145,6 +149,8 @@ def violations_for_trace(path: Path) -> list[str]:
     saw_central_px = False
     saw_finite_observed_caked = False
     saw_finite_predicted_caked = False
+    saw_setup_point_match = False
+    saw_manual_caked_route_check = False
 
     for record in records:
         line = int(record.get("_line_number", 0) or 0)
@@ -183,6 +189,10 @@ def violations_for_trace(path: Path) -> list[str]:
             saw_finite_predicted_caked = True
         if _is_true(record.get("preflight_ready")):
             saw_preflight_ready = True
+        if _is_true(record.get("setup_point_match")):
+            saw_setup_point_match = True
+        if _is_true(record.get("manual_caked_route_check")):
+            saw_manual_caked_route_check = True
         if final_metric_name == "central_point_match":
             saw_central_point_match = True
         if matched_pair_count == 0:
@@ -222,13 +232,23 @@ def violations_for_trace(path: Path) -> list[str]:
         violations.append(
             f"{path}: manual_caked_fit_space_required=true with zero caked rows reached optimizer"
         )
+    if saw_caked_objective and saw_setup_point_match:
+        violations.append(f"{path}: objective_space=caked_deg used point-match setup")
     if saw_caked_objective and saw_central_point_match:
         violations.append(f"{path}: objective_space=caked_deg used central_point_match")
     if saw_caked_objective and saw_metric_px:
         violations.append(f"{path}: objective_space=caked_deg used metric_unit=px")
     if saw_caked_objective and saw_px_rms:
         violations.append(f"{path}: objective_space=caked_deg used weighted_rms in px")
+    if saw_caked_objective and (
+        saw_setup_point_match or saw_central_point_match or saw_metric_px or saw_px_rms
+    ):
+        violations.append(f"{path}: caked objective used detector-pixel fallback")
     if saw_caked_objective and saw_finite_observed_caked and saw_finite_predicted_caked:
+        if not saw_manual_caked_route_check:
+            violations.append(
+                f"{path}: finite caked manual anchors missing manual_caked_route_check"
+            )
         if saw_central_point_match:
             violations.append(f"{path}: finite caked manual anchors used central_point_match")
         if saw_px_rms:

@@ -23163,6 +23163,25 @@ def build_geometry_fit_rejection_reason_lines(
             and fallback_row_count == 0
         )
 
+    route_failure_reason = ""
+    if isinstance(point_match_summary, Mapping):
+        route_failure_reason = str(
+            point_match_summary.get("reason")
+            or point_match_summary.get("metric_name")
+            or point_match_summary.get("final_metric_name")
+            or ""
+        ).strip()
+    if not route_failure_reason:
+        route_failure_reason = str(getattr(result, "final_metric_name", "") or "").strip()
+    if metric_space == "caked_deg" and route_failure_reason == (
+        "manual_caked_route_invariant_violation"
+    ):
+        return [
+            "Geometry fit blocked before optimization.",
+            "The requested Qr/Qz fit could not select a caked angular evaluator.",
+            "No geometry parameters were changed.",
+        ]
+
     early_stop_reason = getattr(result, "early_stop_reason", None)
     if not early_stop_reason:
         geometry_fit_progress = getattr(result, "geometry_fit_progress", None)

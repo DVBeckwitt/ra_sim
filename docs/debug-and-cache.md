@@ -690,6 +690,28 @@ Source-less or legacy projection tokens are not correctness keys for warm-cache
 reuse. Do not mutate simulation or caked image arrays in place without also
 bumping the corresponding simulation or projection signature.
 
+Status as of 2026-05-21: `objective_space=caked_deg` is now the fit-space
+requirement source of truth for manual Qr/Qz geometry fits, even when the manual
+pick provenance remains detector-origin. If every manual pair has finite
+observed and predicted caked anchors, the optimizer routes to a caked degree
+evaluator and logs `manual_caked_route_check ... observed_caked=2
+predicted_caked=2 ... unit=deg` for the live two-pair path. If required caked
+fit-space is missing, the fit fails before optimization with
+`manual_caked_fit_space_missing`. A caked objective is not allowed to finalize as
+`central_point_match`, `metric_unit=px`, or pixel `weighted_rms`; that invariant
+fails closed as `manual_caked_route_invariant_violation`. The handoff checker
+rejects the reported `f761e78f` text-log signature across whole-file state, and
+the GUI rejection copy names the caked route block instead of reporting "No
+matched peak pairs" for a caked manual-pair fit. Bug/error status: fixed in
+source and automated regression tests for the live two-pair manual Tk failure
+shape. Migration status: no saved-state schema, CLI flag, config key, artifact
+field, dependency, or user workflow migration changed; the removed path is only
+the internal caked-objective fall-through to detector-pixel point matching.
+Shipping status: local focused tests, GUI safety tests, `python -m ra_sim.dev
+check`, and `git diff --check` pass; rollback is a git revert. Remaining
+acceptance proof before release: rerun the actual Tk Bi2Se3 workflow and check
+the new live log.
+
 Status as of 2026-05-20: detector-origin manual Qr/Qz geometry-fit rows are
 kept in detector-pixel fit space, including `gamma,Gamma` two-tilt solves.
 Saved caked aliases on those rows remain replay/display cache data and no

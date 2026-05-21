@@ -7128,7 +7128,7 @@ def test_manual_caked_qr_fit_auto_enables_dynamic_point_path(monkeypatch) -> Non
     assert result.point_match_summary["qr_fit_resolved_count"] == 1
 
 
-def test_caked_manual_fixed_pairs_with_finite_anchors_do_not_route_to_pixel_central_match(
+def test_manual_tk_two_pair_caked_objective_with_finite_anchors_cannot_route_to_pixel_central_match(
     monkeypatch,
 ) -> None:
     def fake_process(*args, **kwargs):
@@ -7164,7 +7164,7 @@ def test_caked_manual_fixed_pairs_with_finite_anchors_do_not_route_to_pixel_cent
             "source_peak_index": 0,
             "source_reflection_index": 910,
             "observed": (33.063, 130.754),
-            "predicted": (32.773, 129.750),
+            "predicted": (32.696, 129.750),
         },
         {
             "branch": 1,
@@ -7174,7 +7174,7 @@ def test_caked_manual_fixed_pairs_with_finite_anchors_do_not_route_to_pixel_cent
             "source_peak_index": 1,
             "source_reflection_index": 911,
             "observed": (37.566, 39.750),
-            "predicted": (38.041, 41.750),
+            "predicted": (38.124, 41.281),
         },
     ]
 
@@ -7275,6 +7275,7 @@ def test_caked_manual_fixed_pairs_with_finite_anchors_do_not_route_to_pixel_cent
 
     image_size = 40
     experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+    status_messages: list[str] = []
     result = opt.fit_geometry_parameters(
         np.array([[2.0, 0.0, 0.0]], dtype=np.float64),
         np.array([1.0], dtype=np.float64),
@@ -7301,6 +7302,7 @@ def test_caked_manual_fixed_pairs_with_finite_anchors_do_not_route_to_pixel_cent
                 "sim_caked_image_builder_kind": "must_not_call",
             }
         ],
+        status_callback=status_messages.append,
         refinement_config={
             "solver": {
                 "manual_point_fit_mode": True,
@@ -7329,11 +7331,18 @@ def test_caked_manual_fixed_pairs_with_finite_anchors_do_not_route_to_pixel_cent
     assert result.point_match_summary["matched_pair_count"] == 2
     assert bool(result.geometry_fit_debug_summary["manual_caked_fit_space_required"]) is True
     assert bool(result.geometry_fit_debug_summary["manual_caked_fit_space_ready"]) is True
+    assert result.geometry_fit_debug_summary["manual_caked_fit_pair_count"] == 2
     assert bool(result.geometry_fit_debug_summary["dynamic_point_geometry_fit"]) is True
     assert (
         bool(result.geometry_fit_debug_summary["dynamic_point_geometry_fit_auto_enabled"]) is True
     )
     assert result.point_match_summary["raw_angular_row_count"] == 2
+    route_lines = [line for line in status_messages if "manual_caked_route_check" in line]
+    assert route_lines == [
+        "manual_caked_route_check objective_space=caked_deg required=true ready=true "
+        "observed_caked=2 predicted_caked=2 evaluator=dynamic_angular_point_match unit=deg"
+    ]
+    assert any("Geometry fit: setup mode=dynamic-angle" in line for line in status_messages)
 
 
 def test_manual_caked_qr_fit_required_flag_rejects_missing_exact_projector(monkeypatch) -> None:
@@ -7493,6 +7502,38 @@ def test_manual_caked_rejection_text_does_not_suggest_missing_detector_matches()
     assert "No matched peak pairs" not in progress_text
     assert "Add more manual points" not in progress_text
     assert "No geometry parameters were changed." in progress_text
+
+
+def test_manual_caked_route_invariant_rejection_text_names_caked_route_block() -> None:
+    from ra_sim.gui import geometry_fit as gui_geometry_fit
+
+    result = SimpleNamespace(
+        success=False,
+        final_metric_name="manual_caked_route_invariant_violation",
+        final_metric_space="caked_deg",
+        final_metric_units="deg",
+        rms_deg=float("nan"),
+        max_deg=float("nan"),
+        point_match_summary={
+            "reason": "manual_caked_route_invariant_violation",
+            "metric_name": "manual_caked_route_invariant_violation",
+            "metric_unit": "deg",
+            "matched_pair_count": 0,
+            "manual_caked_fit_pair_count": 2,
+        },
+    )
+
+    rejection_reasons = gui_geometry_fit.build_geometry_fit_rejection_reason_lines(
+        result,
+        rms=float("nan"),
+    )
+
+    assert rejection_reasons == [
+        "Geometry fit blocked before optimization.",
+        "The requested Qr/Qz fit could not select a caked angular evaluator.",
+        "No geometry parameters were changed.",
+    ]
+    assert "No matched peak pairs were available for the fitted solution." not in rejection_reasons
 
 
 def test_final_summary_does_not_label_dynamic_objective_rms_as_px(monkeypatch) -> None:

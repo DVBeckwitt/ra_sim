@@ -215,6 +215,39 @@ def test_geometry_fit_handoff_checker_rejects_finite_anchor_pixel_fallback(
     assert any("finite caked manual anchors used weighted_rms in px" in v for v in violations)
 
 
+def test_checker_rejects_manual_tk_finite_caked_anchors_that_fall_back_to_pixel_match(
+    tmp_path,
+) -> None:
+    checker = _load_handoff_check_module()
+    trace_path = tmp_path / "geometry_fit_bad_manual_tk_f761e78f.log"
+    trace_path.write_text(
+        "\n".join(
+            [
+                "git_commit=f761e78f",
+                "fit_observed_caked_deg=(33.063, 130.754)",
+                "fit_prediction_caked_deg=(32.696, 129.750)",
+                "fit_observed_caked_deg=(37.566, 39.750)",
+                "fit_prediction_caked_deg=(38.124, 41.281)",
+                "objective_space=caked_deg",
+                "objective_residual_units=deg",
+                "Geometry fit: setup mode=point-match",
+                "Geometry fit: running fixed-manual-pair direct least-squares solve",
+                "weighted_rms=12.0183 px",
+                "Geometry fit: complete "
+                "(cost=433.320000, rms=12.0183px, metric=central_point_match, matched=0)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    violations = checker.violations_for_trace(trace_path)
+
+    assert checker.main([str(trace_path)]) == 1
+    assert any("caked objective used detector-pixel fallback" in v for v in violations)
+    assert any("objective_space=caked_deg used central_point_match" in v for v in violations)
+    assert any("objective_space=caked_deg used weighted_rms in px" in v for v in violations)
+
+
 def test_geometry_fit_handoff_checker_rejects_split_text_dynamic_px_rms(tmp_path) -> None:
     checker = _load_handoff_check_module()
     trace_path = tmp_path / "geometry_fit_bad_dynamic_px_rms.log"
@@ -237,6 +270,29 @@ def test_geometry_fit_handoff_checker_rejects_split_text_dynamic_px_rms(tmp_path
     violations = checker.violations_for_trace(trace_path)
 
     assert any("objective_space=caked_deg used weighted_rms in px" in v for v in violations)
+
+
+def test_geometry_fit_handoff_checker_allows_clean_manual_caked_route_check(
+    tmp_path,
+) -> None:
+    checker = _load_handoff_check_module()
+    trace_path = tmp_path / "geometry_fit_clean_manual_caked_route.log"
+    trace_path.write_text(
+        "\n".join(
+            [
+                "manual_caked_route_check objective_space=caked_deg required=true "
+                "ready=true observed_caked=2 predicted_caked=2 "
+                "evaluator=dynamic_angular_point_match unit=deg",
+                "Geometry fit: setup mode=dynamic-angle datasets=1",
+                "Geometry fit: complete "
+                "(cost=0.500000, rms=0.5000deg, "
+                "metric=dynamic_angular_point_match, matched=2)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert checker.violations_for_trace(trace_path) == []
 
 
 def test_geometry_fit_handoff_checker_allows_caked_preflight_failure(tmp_path) -> None:
