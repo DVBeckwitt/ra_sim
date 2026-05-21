@@ -17,8 +17,13 @@ marker edits preserve the active editor panel range, HK=0/specular editor
 refreshes are phase-scoped, and PbI2 `m=7` Qr-rod rows are hidden before
 artifacts; real HK=0/qz profile rebuilding is restored from active 00L markers,
 active L bounds, detector Q maps, and Delta-Qr independent of cached base rows;
-optional pre-fit radial detector background reduction is implemented with
-cache-explicit diagnostics and raw detector preservation
+optional pre-fit central-phi caked plane background reduction is implemented with
+cache-explicit diagnostics and raw detector preservation; PbI2 now defaults the
+active Qr-rod editor Delta Qr to `0.13`, and saved marker edit files are
+rejected when their stored background/profile policy no longer matches the
+current prefit subtraction settings; Qr-rod peak marker editing now coalesces
+Delta Qr preview refreshes and caches per-panel plot inputs for smoother marker
+dragging
 
 ## Problem
 
@@ -84,14 +89,27 @@ to make the Qr rod detector and integration figures source-consistent:
   The crop uses the detector colormap with log intensity scaling, isolated to
   this image. Missing marker, beam, or crop inputs skip the image without
   failing the run.
-- Optional pre-fit radial detector background reduction now runs before caking,
-  peak fitting, and Qr-rod profile extraction when enabled through
+- Optional pre-fit central-phi caked plane background reduction now runs before
+  caking, peak fitting, and Qr-rod profile extraction when enabled through
   `RA_SIM_RADIAL_BACKGROUND_SUBTRACTION_*` overrides or the popup. The raw
-  detector image remains available, the radial model and corrected detector are
-  saved as diagnostics, and the pre-editor/final Qr-rod cache signatures include
-  the radial policy. The radial editor uses a Tk/Pillow canvas popup instead of
-  Matplotlib widgets, previews raw/model/corrected caked `2theta` images rather
-  than detector images, and keeps scale changes on the cached radial model.
+  detector image remains available, the detector-evaluated plane model and
+  corrected detector are saved as diagnostics, and the pre-editor/final Qr-rod
+  cache signatures include the subtraction policy. The editor uses a Tk/Pillow
+  canvas popup instead of Matplotlib widgets, fits a 2D linear plane in caked
+  `(phi, 2theta)` space using only `-90 <= phi <= 90`, shows labeled
+  raw/model/corrected previews cropped to that phi band, and keeps scale changes
+  on the cached plane model.
+- PbI2 Qr-rod marker editing now starts with active Delta Qr `0.13` when the
+  saved state still carries the old generic default source value. Saved
+  Qr-rod peak edit JSON now records the active lattice, Q-group, rod-reference,
+  and background/profile policy signature, and automatic loading rejects stale
+  files instead of placing old marker points on newly background-corrected
+  profiles.
+- The Qr-rod marker editor now keeps the high-frequency UI path lighter:
+  Delta Qr slider movement marks the detector companion preview dirty and
+  flushes one latest-state redraw on mouse release or Accept, marker/profile
+  arrays are cached per editor panel, and detector-preview callback errors are
+  stored in editor state without closing the popup.
 - The generated `.py` diagnostic opens the Qr-rod peak marker editor by default
   before the final joint Qz fit. `RA_SIM_QR_ROD_PEAK_EDIT_MODE=skip` disables
   the popup for unattended runs, `popup` is the default-on mode, and accepted
@@ -125,7 +143,7 @@ to make the Qr rod detector and integration figures source-consistent:
   the unified editor's Delta Qr slider or `L Min` / `L Max` controls change.
   The detector image remains static; only the existing overlay artists are
   removed and redrawn with the current Delta Qr and marker-derived L window.
-- Delta Qr drag now updates only the companion detector overlays until the
+- Delta Qr drag now queues one companion detector overlay redraw until the
   slider is released or the editor is accepted. This keeps the high-frequency
   UI path responsive while preserving final profile/fitting correctness.
 - HK=0/specular editor refresh callbacks now carry the active editor phase.
@@ -558,13 +576,12 @@ Passing checks:
   Qr-rod cache signatures, and makes the plot policy compare raw
   `background_density` to full `joint_fit_density` without data-minus-baseline
   subtraction.
-- Radial pre-fit detector background coverage verifies lower-percentile annulus
-  modeling ignores bright peaks, scale-zero is a true no-op, scale-one reduces a
-  synthetic radial halo, negative-value clipping is optional, the popup is wired
-  before background preparation, scale changes reuse the cached model, caking
-  and Qr-rod profiles consume the corrected detector image, raw detector data is
-  preserved, diagnostics are saved, and pre-editor/final Qr-rod cache keys
-  change with the radial policy.
+- Pre-fit background coverage verifies the legacy lower-percentile annulus
+  fallback, the central-phi caked plane fit, scale-zero no-op behavior,
+  scale-one subtraction, optional negative-value clipping, popup wiring before
+  background preparation, cached model reuse on scale changes, corrected caking
+  and Qr-rod profile inputs, raw detector preservation, saved diagnostics, and
+  pre-editor/final Qr-rod cache keys that change with the subtraction policy.
 - Focused PbI2 acceptance command passed:
   `python -m pytest tests/test_background_peak_fits_notebook.py -k "qr_rod_peak_editor_is_wired_before_joint_fit_cache or qr_rod_peak_edit_runtime_mode_respects_headless or qr_sideband or pbi2_plot_policy or pbi2_debug or background_debug_policy or final_profile_plot_uses_model_decisions or pbi2_rod_profile_l_axis or pbi2_final_profile or shared_nonzero_rod_profile_y_axis_limits" -ra`
   with `16 passed`, including the no-background debug flag and default-auto
@@ -800,13 +817,13 @@ Passing checks:
   `python -m pytest tests/test_background_peak_fits_notebook.py -k "qr_rod_peak_editor or hk0 or specular or final_profile_l_filter or final_cache" -ra`
   (`55 passed, 133 deselected`). Bug/error status: fixed for the nonzero-HK
   import path appearing to hang after the HK=0 marker-table plumbing change.
-- 2026-05-21 radial pre-fit background feature closeout: the parallel
-  diagnostic now has a separate pre-fit radial detector background reducer,
-  independent from the existing post-fit/sideband background flags. It is off by
-  default, can be previewed in a Tk/Pillow popup, accepts environment
-  overrides for mode/scale/percentile/smoothing/clip behavior, preserves the raw
-  detector image, saves radial model/corrected detector arrays, and invalidates
-  peak-fit/Qr-rod caches when the radial policy changes. Focused validation
+- 2026-05-21 pre-fit background feature closeout: the parallel diagnostic now
+  has a separate pre-fit background reducer independent from the existing
+  post-fit/sideband background flags. It is off by default, can be previewed in
+  a Tk/Pillow popup, accepts environment overrides for mode/scale and legacy
+  radial policy fields, preserves the raw detector image, saves plane
+  model/corrected detector arrays, and invalidates peak-fit/Qr-rod caches when
+  the subtraction policy changes. Focused validation
   passed with
   `python -m pytest tests/test_background_peak_fits_notebook.py -k "radial_background or background_subtraction or qr_rod_peak_editor or hk0 or final_cache" -ra`
   (`46 passed, 155 deselected`), scoped compileall, scoped Ruff, and
@@ -814,24 +831,37 @@ Passing checks:
   optional feature. Feature status: implemented locally, automated source/helper
   coverage is passing, and manual popup acceptance against a real detector run
   remains the launch check.
-- 2026-05-21 radial popup responsiveness follow-up: the radial pre-fit editor
-  no longer uses Matplotlib widgets or a Matplotlib figure for interaction. It
-  now renders downsampled caked `2theta` previews through Pillow
-  `ImageTk.PhotoImage` on Tk canvases, keeps the accepted config interface
-  stable, and still recomputes the radial model only for percentile/smoothing
-  changes. Focused
+- 2026-05-21 caked plane background follow-up: the pre-fit editor no longer
+  uses the lower-envelope radial model for this workflow. It now fits a full 2D
+  linear background plane in caked `(phi, 2theta)` space from `-90 <= phi <= 90`
+  rows, shows that phi band with `2theta`/`phi` axis labels, and subtracts the
+  detector-evaluated plane before caking, peak fitting, and Qr-rod profile
+  extraction. The popup still uses Pillow `ImageTk.PhotoImage` on Tk canvases
+  and keeps the accepted config interface stable. Focused
   validation passed with
   `python -m pytest tests/test_background_peak_fits_notebook.py -k "radial_background or background_subtraction or qr_rod_peak_editor or hk0 or final_cache" -ra`
   (`48 passed, 155 deselected`), after the narrower radial check
   `python -m pytest tests/test_background_peak_fits_notebook.py -k "radial_background or background_subtraction" -ra`
   (`9 passed, 192 deselected`), scoped compileall, scoped Ruff, and
-  `git diff --check`. Bug/error status: fixed for the radial editor being too
-  laggy to use and for showing detector images where the operator needed caked
-  `2theta` previews. The clip-zero preview now re-cakes the detector-corrected
-  image so it matches the fit pipeline semantics. Migration status: stale
-  radial-prefit caches are rejected by bumped pre-editor and final Qr-rod cache
-  signatures; no saved-state migration is required. Feature status: implemented
-  locally; manual real-data popup validation remains pending.
+  `git diff --check`; the central-phi plane follow-up added focused caked-plane
+  helper/source coverage and reran the related selector
+  (`51 passed, 155 deselected`). Bug/error status: fixed for the editor using
+  the wrong radial model and for showing detector images where the operator
+  needed a central-phi caked plane preview. The clip-zero preview still re-cakes
+  the detector-corrected image so it matches the fit pipeline semantics.
+  Migration status: stale prefit-background caches are rejected by bumped
+  pre-editor and final Qr-rod cache signatures; no saved-state migration is
+  required. Feature status: implemented locally; manual real-data popup
+  validation remains pending.
+- 2026-05-21 marker-editor responsiveness closeout: Delta Qr slider motion now
+  defers detector companion preview work until release or accept, the marker
+  editor caches per-panel plot inputs across redraws, and preview callback
+  errors stay in editor state instead of closing the popup. Full notebook-script
+  validation passed with `python -m pytest tests/test_background_peak_fits_notebook.py -ra`
+  (`203 passed, 8 skipped`), scoped compileall, scoped Ruff, and
+  `git diff --check`. Bug/error status: fixed for the observed laggy marker
+  editor interactions. Migration status: no saved-state, CLI/config, artifact
+  schema, dependency, CI workflow, or version bump is required.
 
 Known validation limits:
 
@@ -842,10 +872,10 @@ Known validation limits:
 - The PbI2 headless diagnostic path has been rerun. The L3 star crop,
   cache reuse, and interactive Qr-rod marker editor still need a real
   Bi2Se3/Bi2Te3 script run after this slice.
-- The radial background popup still needs a manual interactive run with
+- The caked plane background popup still needs a manual interactive run with
   `RA_SIM_RADIAL_BACKGROUND_SUBTRACTION_EDIT_MODE=popup` and cache resets to
-  verify the caked `2theta` preview and scale-slider acceptance on current raw
-  data.
+  verify the labeled `-90 <= phi <= 90` caked plane preview and scale-slider
+  acceptance on current raw data.
 - Visual acceptance still needs manual script-output review: colored detector
   background, HK labels near low-L rod bases, emphasized central `HK=0`
   Delta-Qr band, the `hk0_l3_star.png` crop fully containing the L=3

@@ -126,12 +126,12 @@ def _safe_run_name(value: object) -> str:
 
 
 QR_ROD_PROFILE_CACHE_SCHEMA = "ra_sim.qr_rod_profile_cache.v1"
-QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_specular_theta_i12_l8_v15_radial_2theta_caked"
+QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_specular_theta_i12_l8_v17_caked_phi_m90_90_plane"
 PRE_EDITOR_CACHE_SCHEMA = "ra_sim.background_pre_editor_cache.v1"
 PRE_EDITOR_CACHE_SIGNATURE = "pre_qr_rod_marker_editor_inputs_v1"
-PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE = "background_peak_fit_results_v3_radial_2theta_caked"
+PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE = "background_peak_fit_results_v5_caked_phi_m90_90_plane"
 PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE = "profile_fit_cache_v1"
-PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_l_defaults_v14_radial_2theta_caked"
+PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_l_defaults_v16_caked_phi_m90_90_plane"
 
 
 def _cache_normalize_value(value: object) -> object:
@@ -1001,19 +1001,37 @@ def replace_qr_rod_marker_group_qz(
     )
 
 
-def write_qr_rod_peak_edits(path_value: Path | str, marker_table: pd.DataFrame) -> Path:
+def write_qr_rod_peak_edits(
+    path_value: Path | str,
+    marker_table: pd.DataFrame,
+    *,
+    metadata: object = None,
+) -> Path:
     path = Path(path_value).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
     table = pd.DataFrame(marker_table).copy()
     records = json.loads(table.to_json(orient="records", double_precision=12, default_handler=str))
     payload = {"schema": "ra_sim.qr_rod_peak_edits.v1", "markers": records}
+    if metadata is not None:
+        payload["metadata"] = _cache_normalize_value(metadata)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     return path
 
 
-def load_qr_rod_peak_edits(path_value: Path | str) -> pd.DataFrame:
+def load_qr_rod_peak_edits(
+    path_value: Path | str,
+    *,
+    expected_metadata: object = None,
+) -> pd.DataFrame:
     path = Path(path_value).expanduser()
     payload = json.loads(path.read_text(encoding="utf-8"))
+    if expected_metadata is not None:
+        expected = _cache_normalize_value(expected_metadata)
+        actual = _cache_normalize_value(
+            payload.get("metadata") if isinstance(payload, dict) else None
+        )
+        if actual != expected:
+            raise ValueError("Qr-rod peak edits were saved for a different fitting policy")
     records = payload.get("markers", []) if isinstance(payload, dict) else payload
     if not isinstance(records, list):
         raise ValueError("Qr-rod peak edits must be a JSON list or contain a markers list")
@@ -1473,11 +1491,15 @@ def show_qr_rod_peak_marker_popup(
     text_input_widgets: list[object] = []
     marker_scatter_by_group: dict[tuple[int, str], object | None] = {}
     marker_annotations_by_group: dict[tuple[int, str], list[object]] = {}
+    group_plot_cache: dict[
+        tuple[object, ...], tuple[np.ndarray, pd.DataFrame, np.ndarray, np.ndarray, np.ndarray]
+    ] = {}
     edit_file_state: dict[str, object] = {
         "path": "" if edit_path is None else str(edit_path).strip()
     }
     region_profile_refresh_pending = False
     region_profile_refresh_sources: set[str] = set()
+    region_preview_refresh_pending = False
 
     def editor_debug_enabled() -> bool:
         os_module = globals().get("os")
@@ -1585,6 +1607,18 @@ def show_qr_rod_peak_marker_popup(
             prefer_fallback=use_region_l_bounds_for_hk0(),
         )
 
+    def clear_group_plot_cache(group: tuple[int, str] | None = None) -> None:
+        if group is None:
+            group_plot_cache.clear()
+            return
+        stale_keys = [
+            key
+            for key in group_plot_cache
+            if len(key) >= 2 and key[0] == int(group[0]) and key[1] == str(group[1])
+        ]
+        for key in stale_keys:
+            group_plot_cache.pop(key, None)
+
     def refresh_region_profile_table() -> bool:
         nonlocal profiles, region_profile_refresh_pending
         if not region_controls_enabled or not callable(profile_update_callback):
@@ -1675,6 +1709,7 @@ def show_qr_rod_peak_marker_popup(
         )
         profiles = updated_table
         region_control_state["rod_profile_table"] = profiles.copy()
+        clear_group_plot_cache()
         region_profile_refresh_pending = False
         region_profile_refresh_sources.clear()
         region_control_state.pop("profile_refresh_pending", None)
@@ -1689,6 +1724,13 @@ def show_qr_rod_peak_marker_popup(
         region_profile_refresh_pending = True
         region_profile_refresh_sources.add(str(source))
         region_control_state["profile_refresh_pending"] = True
+
+    def mark_detector_preview_refresh_pending() -> None:
+        nonlocal region_preview_refresh_pending
+        if not region_controls_enabled or not callable(region_preview_update_callback):
+            return
+        region_preview_refresh_pending = True
+        region_control_state["region_preview_refresh_pending"] = True
 
     def mark_marker_table_changed(
         group: tuple[int, str] | None,
@@ -1715,12 +1757,13 @@ def show_qr_rod_peak_marker_popup(
             return False
         return not region_profile_refresh_sources or region_profile_refresh_sources == {"delta_qr"}
 
-    def refresh_detector_region_preview() -> None:
+    def refresh_detector_region_preview() -> bool:
+        nonlocal region_preview_refresh_pending
         if not region_controls_enabled or not callable(region_preview_update_callback):
-            return
+            return False
         l_bounds = current_l_bounds()
         if l_bounds is None:
-            return
+            return False
         delta_qr_value = max(1.0e-9, as_float(region_control_state.get("delta_qr"), 1.0e-3))
         l_min_value, l_max_value = l_bounds
         try:
@@ -1735,8 +1778,18 @@ def show_qr_rod_peak_marker_popup(
             region_preview_update_callback(**preview_kwargs)
         except Exception as exc:
             region_control_state["region_preview_update_error"] = str(exc)
-            return
+            return False
         region_control_state.pop("region_preview_update_error", None)
+        region_preview_refresh_pending = False
+        region_control_state.pop("region_preview_refresh_pending", None)
+        return True
+
+    def flush_detector_region_preview() -> None:
+        nonlocal region_preview_refresh_pending
+        if not region_preview_refresh_pending:
+            return
+        if refresh_detector_region_preview():
+            region_control_state.pop("region_preview_refresh_pending", None)
 
     def group_marker_rows(m_value: int, branch_value: str) -> pd.DataFrame:
         if edited.empty or not {"m", "branch", "qz_marker"}.issubset(edited):
@@ -1848,6 +1901,7 @@ def show_qr_rod_peak_marker_popup(
         if clean_marker_title(edited.loc[source_index, "marker_title"]) == title:
             return
         edited.loc[source_index, "marker_title"] = title
+        clear_group_plot_cache()
         if redraw_figure:
             redraw()
 
@@ -1927,10 +1981,22 @@ def show_qr_rod_peak_marker_popup(
             branch_value=str(branch_value),
             qz_values=values,
         )
+        clear_group_plot_cache((int(m_value), str(branch_value)))
 
     def marker_plot_arrays(
         m_value: int, branch_value: str
     ) -> tuple[np.ndarray, pd.DataFrame, np.ndarray, np.ndarray, np.ndarray]:
+        group_l_bounds = editor_l_bounds_for_group(int(m_value))
+        cache_key = (
+            int(m_value),
+            str(branch_value),
+            tuple(round(float(value), 12) for value in group_l_bounds)
+            if group_l_bounds is not None
+            else None,
+        )
+        cached = group_plot_cache.get(cache_key)
+        if cached is not None:
+            return cached
         x_qz, y = profile_xy(m_value, branch_value)
         markers = group_markers(m_value, branch_value)
         marker_l = qz_to_editor_l(m_value, branch_value, markers)
@@ -1939,11 +2005,17 @@ def show_qr_rod_peak_marker_popup(
         editor_log_y = int(m_value) == 0
         y_markers_plot = positive_log_plot_values(y_markers) if editor_log_y else y_markers
         finite = np.isfinite(marker_l) & np.isfinite(y_markers)
-        group_l_bounds = editor_l_bounds_for_group(int(m_value))
         if group_l_bounds is not None:
             l_lo, l_hi = group_l_bounds
             finite = finite & (marker_l >= float(l_lo)) & (marker_l <= float(l_hi))
-        return marker_l, marker_rows, y_markers, y_markers_plot, finite
+        group_plot_cache[cache_key] = (
+            marker_l,
+            marker_rows,
+            y_markers,
+            y_markers_plot,
+            finite,
+        )
+        return group_plot_cache[cache_key]
 
     def marker_facecolors(group: tuple[int, str], finite: np.ndarray) -> list[str]:
         colors = ["white"] * int(np.count_nonzero(finite))
@@ -2210,7 +2282,7 @@ def show_qr_rod_peak_marker_popup(
             return
         region_control_state["delta_qr"] = max(1.0e-9, as_float(value, 1.0e-3))
         mark_region_profile_refresh_pending("delta_qr")
-        refresh_detector_region_preview()
+        mark_detector_preview_refresh_pending()
 
     def set_region_l_min(text: object) -> None:
         if not region_controls_enabled:
@@ -2218,6 +2290,7 @@ def show_qr_rod_peak_marker_popup(
         value = as_float(text, region_control_state.get("l_min", 0.0))
         if np.isfinite(value):
             region_control_state["l_min"] = float(value)
+        clear_group_plot_cache()
         mark_region_profile_refresh_pending("l_bounds")
         editor_debug("l_min.submit", text=text)
         refresh_deferred_region_controls()
@@ -2228,6 +2301,7 @@ def show_qr_rod_peak_marker_popup(
         value = as_float(text, region_control_state.get("l_max", 8.0))
         if np.isfinite(value):
             region_control_state["l_max"] = float(value)
+        clear_group_plot_cache()
         mark_region_profile_refresh_pending("l_bounds")
         editor_debug("l_max.submit", text=text)
         refresh_deferred_region_controls()
@@ -2293,6 +2367,7 @@ def show_qr_rod_peak_marker_popup(
         edited.loc[source_index, "display_l"] = float(x_value)
         edited.loc[source_index, "l"] = float(x_value)
         edited.loc[source_index, "marker_source"] = "manual_edit"
+        clear_group_plot_cache((int(m_value), str(branch_value)))
         if refresh_preview:
             mark_marker_table_changed((int(m_value), str(branch_value)))
         elif region_controls_enabled and qr_rod_editor_phase_matches(int(m_value), editor_phase):
@@ -2370,6 +2445,7 @@ def show_qr_rod_peak_marker_popup(
             if required_marker_table is not None:
                 imported = marker_table_with_specular_l_markers(imported, required_marker_table)
             edited = imported.copy()
+            clear_group_plot_cache()
             imported_groups = (
                 [
                     (int(row["m"]), str(row["branch"]))
@@ -2463,6 +2539,7 @@ def show_qr_rod_peak_marker_popup(
             and qr_rod_editor_phase_matches(int(group[0]), editor_phase)
         ):
             refresh_detector_region_preview()
+        flush_detector_region_preview()
         if should_flush_region_profile_on_release():
             flush_region_profile_refresh()
 
@@ -2484,6 +2561,7 @@ def show_qr_rod_peak_marker_popup(
         elif key in {"enter", "return"}:
             flush_title_box()
             flush_region_profile_refresh(redraw_figure=False)
+            flush_detector_region_preview()
             result["accepted"] = True
             plt.close(fig)
         elif key in {"escape"}:
@@ -2493,6 +2571,7 @@ def show_qr_rod_peak_marker_popup(
     def accept(_event) -> None:
         flush_title_box()
         flush_region_profile_refresh(redraw_figure=False)
+        flush_detector_region_preview()
         result["accepted"] = True
         plt.close(fig)
 
@@ -3136,9 +3215,9 @@ print(
     "fit backend: background peak fits use the selected safe backend; process pool is used only when requested and supported; CuPy is used only for detector Qr/Qz rod-profile accumulation"
 )
 
-# Optional pre-fit radial detector background reduction is available through
-# the diagnostic popup and environment overrides. Peak model subtraction still
-# happens only after peak fits are generated.
+# Optional pre-fit central-phi caked plane background reduction is available
+# through the diagnostic popup and environment overrides. Peak model
+# subtraction still happens only after peak fits are generated.
 BACKGROUND_IMAGE_SUBTRACTION_DISABLED = _truthy_setting(
     "BACKGROUND_IMAGE_SUBTRACTION_DISABLED_OVERRIDE",
     "RA_SIM_BACKGROUND_IMAGE_SUBTRACTION_DISABLED",
@@ -3473,6 +3552,48 @@ def caked_image_for_intensity_mode(
     return density
 
 
+def caked_density_image_from_result(caked_result: object) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    caked_integrated, theta_axis, phi_axis = prepare_gui_phi_display(caked_result)
+    raw_sum_signal = getattr(caked_result, "sum_signal", None)
+    raw_sum_normalization = getattr(caked_result, "sum_normalization", None)
+    raw_count = getattr(caked_result, "count", None)
+    if (raw_sum_signal is None) != (raw_sum_normalization is None):
+        raise RuntimeError("pyFAI caked sum_signal and sum_normalization fields must be paired")
+    if raw_sum_signal is None:
+        caked_sum_signal = None
+        caked_sum_normalization = None
+    else:
+        caked_sum_signal, _, _ = caked_field_to_gui_phi(
+            raw_sum_signal,
+            caked_result.azimuthal_deg,
+            caked_result.radial_deg,
+        )
+        caked_sum_normalization, _, _ = caked_field_to_gui_phi(
+            raw_sum_normalization,
+            caked_result.azimuthal_deg,
+            caked_result.radial_deg,
+        )
+    if raw_count is None:
+        caked_count = None
+    else:
+        caked_count, _, _ = caked_field_to_gui_phi(
+            raw_count,
+            caked_result.azimuthal_deg,
+            caked_result.radial_deg,
+        )
+    return (
+        caked_image_for_intensity_mode(
+            caked_integrated,
+            caked_sum_signal=caked_sum_signal,
+            caked_sum_normalization=caked_sum_normalization,
+            caked_count=caked_count,
+            intensity_mode="density",
+        ),
+        theta_axis,
+        phi_axis,
+    )
+
+
 def radial_background_subtraction_config_from_state(
     variables: dict[str, object],
     *,
@@ -3573,10 +3694,135 @@ def radial_background_subtraction_policy_signature(config: dict[str, object]) ->
     normalized = _radial_background_subtraction_config_from_mapping(config)
     return {
         "mode": str(normalized["mode"]),
+        "model_kind": "caked_phi_m90_90_plane",
+        "phi_fit_min": -90.0,
+        "phi_fit_max": 90.0,
         "scale": round(float(normalized["scale"]), 12),
         "percentile": round(float(normalized["percentile"]), 12),
         "smooth_sigma": round(float(normalized["smooth_sigma"]), 12),
         "clip_zero": bool(normalized["clip_zero"]),
+    }
+
+
+def _radial_background_phi_delta_deg(values: object, center: float) -> np.ndarray:
+    return (np.asarray(values, dtype=np.float64) - float(center) + 180.0) % 360.0 - 180.0
+
+
+def caked_background_plane_from_image(
+    caked_image: object,
+    theta_axis: object,
+    phi_axis: object,
+    *,
+    phi_fit_min: float = -90.0,
+    phi_fit_max: float = 90.0,
+) -> dict[str, object]:
+    image = np.asarray(caked_image, dtype=np.float64)
+    theta = np.asarray(theta_axis, dtype=np.float64).reshape(-1)
+    phi = np.asarray(phi_axis, dtype=np.float64).reshape(-1)
+    if image.ndim != 2:
+        raise RuntimeError("caked image must be 2D")
+    if image.shape != (phi.size, theta.size):
+        raise RuntimeError("caked image shape must match phi/theta axes")
+
+    theta_grid, phi_grid = np.meshgrid(theta, phi)
+    finite = np.isfinite(image) & np.isfinite(theta_grid) & np.isfinite(phi_grid)
+    phi_lo, phi_hi = sorted((float(phi_fit_min), float(phi_fit_max)))
+    fit_mask = finite & (phi_grid >= phi_lo) & (phi_grid <= phi_hi)
+    if np.count_nonzero(fit_mask) < 3:
+        fill_source = image[fit_mask] if np.any(fit_mask) else image[finite]
+        fill = float(np.nanmedian(fill_source)) if fill_source.size else 0.0
+        model = np.full(image.shape, fill, dtype=np.float64)
+        return {
+            "background_model": model,
+            "coefficients": np.asarray([fill, 0.0, 0.0], dtype=np.float64),
+            "theta_ref": 0.0,
+            "phi_ref": 0.0,
+            "theta_axis": theta.copy(),
+            "fit_profile": np.full(theta.shape, fill, dtype=np.float64),
+            "model_profile": np.full(theta.shape, fill, dtype=np.float64),
+            "fit_mask": fit_mask,
+            "phi_fit_min": float(phi_lo),
+            "phi_fit_max": float(phi_hi),
+            "model_kind": "caked_phi_m90_90_plane",
+        }
+
+    theta_ref = float(np.nanmedian(theta_grid[fit_mask]))
+    phi_ref = float(np.nanmedian(phi_grid[fit_mask]))
+    theta_fit = np.asarray(theta_grid[fit_mask] - theta_ref, dtype=np.float64)
+    phi_fit = np.asarray(_radial_background_phi_delta_deg(phi_grid[fit_mask], phi_ref))
+    y_fit = np.asarray(image[fit_mask], dtype=np.float64)
+    design = np.column_stack([np.ones_like(theta_fit), theta_fit, phi_fit])
+    try:
+        coefficients, *_ = np.linalg.lstsq(design, y_fit, rcond=None)
+    except Exception:
+        coefficients = np.asarray([float(np.nanmedian(y_fit)), 0.0, 0.0], dtype=np.float64)
+    coefficients = np.asarray(coefficients, dtype=np.float64)
+    for _ in range(6):
+        residual = y_fit - design @ coefficients[:3]
+        sigma = 1.4826 * float(np.nanmedian(np.abs(residual - np.nanmedian(residual))))
+        if not np.isfinite(sigma) or sigma <= 0.0:
+            break
+        threshold = 1.5 * sigma
+        weights = np.ones_like(residual, dtype=np.float64)
+        large = np.abs(residual) > threshold
+        weights[large] = threshold / np.maximum(np.abs(residual[large]), 1.0e-12)
+        root_w = np.sqrt(weights)
+        try:
+            coefficients, *_ = np.linalg.lstsq(
+                design * root_w[:, None],
+                y_fit * root_w,
+                rcond=None,
+            )
+        except Exception:
+            break
+        coefficients = np.asarray(coefficients, dtype=np.float64)
+    if coefficients.size < 3 or not np.all(np.isfinite(coefficients[:3])):
+        coefficients = np.asarray([float(np.nanmedian(y_fit)), 0.0, 0.0], dtype=np.float64)
+
+    model = (
+        float(coefficients[0])
+        + float(coefficients[1]) * (theta_grid - theta_ref)
+        + float(coefficients[2]) * _radial_background_phi_delta_deg(phi_grid, phi_ref)
+    )
+    fit_profile = np.full(theta.shape, np.nan, dtype=np.float64)
+    model_profile = np.full(theta.shape, np.nan, dtype=np.float64)
+    for col in range(theta.size):
+        fit_col = fit_mask[:, col]
+        if np.any(fit_col):
+            fit_profile[col] = float(np.nanmedian(image[fit_col, col]))
+            model_profile[col] = float(np.nanmedian(model[fit_col, col]))
+    profile_finite = np.isfinite(fit_profile)
+    if not np.any(profile_finite):
+        fill = float(np.nanmedian(y_fit))
+        fit_profile[:] = fill
+        model_profile[:] = fill
+    else:
+        fit_profile = np.interp(
+            theta,
+            theta[profile_finite],
+            fit_profile[profile_finite],
+            left=float(fit_profile[profile_finite][0]),
+            right=float(fit_profile[profile_finite][-1]),
+        )
+        model_profile = np.interp(
+            theta,
+            theta[profile_finite],
+            model_profile[profile_finite],
+            left=float(model_profile[profile_finite][0]),
+            right=float(model_profile[profile_finite][-1]),
+        )
+    return {
+        "background_model": np.asarray(model, dtype=np.float64),
+        "coefficients": np.asarray(coefficients[:3], dtype=np.float64),
+        "theta_ref": float(theta_ref),
+        "phi_ref": float(phi_ref),
+        "theta_axis": theta.copy(),
+        "fit_profile": np.asarray(fit_profile, dtype=np.float64),
+        "model_profile": np.asarray(model_profile, dtype=np.float64),
+        "fit_mask": fit_mask,
+        "phi_fit_min": float(phi_lo),
+        "phi_fit_max": float(phi_hi),
+        "model_kind": "caked_phi_m90_90_plane",
     }
 
 
@@ -3694,6 +3940,11 @@ def apply_radial_background_subtraction_to_detector(
     detector_image: object,
     theta_map: object,
     config: dict[str, object],
+    *,
+    phi_map: object | None = None,
+    caked_image: object | None = None,
+    theta_axis: object | None = None,
+    phi_axis: object | None = None,
 ) -> dict[str, object]:
     image = np.asarray(detector_image, dtype=np.float64)
     theta = np.asarray(theta_map, dtype=np.float64)
@@ -3707,7 +3958,54 @@ def apply_radial_background_subtraction_to_detector(
             "corrected_image": corrected,
             "background_model": zero_model,
             "enabled": False,
+            "model_kind": "off",
             **normalized,
+        }
+
+    if (
+        phi_map is not None
+        and caked_image is not None
+        and theta_axis is not None
+        and phi_axis is not None
+    ):
+        phi = np.asarray(phi_map, dtype=np.float64)
+        if phi.shape != image.shape:
+            raise RuntimeError("detector image and phi map must have matching shapes")
+        plane_payload = caked_background_plane_from_image(
+            caked_image,
+            theta_axis,
+            phi_axis,
+            phi_fit_min=-90.0,
+            phi_fit_max=90.0,
+        )
+        coefficients = np.asarray(plane_payload["coefficients"], dtype=np.float64)
+        theta_ref = float(plane_payload["theta_ref"])
+        phi_ref = float(plane_payload["phi_ref"])
+        background_model = np.zeros_like(image, dtype=np.float64)
+        valid = np.isfinite(theta) & np.isfinite(phi)
+        if np.any(valid):
+            background_model[valid] = (
+                float(coefficients[0])
+                + float(coefficients[1]) * (theta[valid] - theta_ref)
+                + float(coefficients[2]) * _radial_background_phi_delta_deg(phi[valid], phi_ref)
+            )
+        corrected = image - float(normalized["scale"]) * background_model
+        if bool(normalized["clip_zero"]):
+            corrected = np.where(np.isfinite(corrected), np.maximum(corrected, 0.0), corrected)
+        return {
+            "corrected_image": corrected,
+            "background_model": background_model,
+            "enabled": True,
+            **normalized,
+            "model_kind": plane_payload["model_kind"],
+            "plane_coefficients": plane_payload["coefficients"],
+            "plane_theta_ref": float(theta_ref),
+            "plane_phi_ref": float(phi_ref),
+            "caked_background_model": plane_payload["background_model"],
+            "caked_background_fit_mask": plane_payload["fit_mask"],
+            "theta_centers": plane_payload["theta_axis"],
+            "radial_profile": plane_payload["fit_profile"],
+            "smoothed_profile": plane_payload["model_profile"],
         }
 
     finite_count = int(np.count_nonzero(np.isfinite(image) & np.isfinite(theta)))
@@ -3741,6 +4039,7 @@ def apply_radial_background_subtraction_to_detector(
         "n_bins": int(n_bins),
         "min_pixels": max(1, int(min_pixels)),
         **normalized,
+        "model_kind": "detector_radial_profile",
         "theta_centers": model_payload["theta_centers"],
         "radial_profile": model_payload["radial_profile"],
         "smoothed_profile": model_payload["smoothed_profile"],
@@ -3767,9 +4066,9 @@ def show_radial_background_subtraction_popup(
         import tkinter as tk
         from tkinter import ttk
 
-        from PIL import Image, ImageTk
+        from PIL import Image, ImageDraw, ImageTk
     except Exception as exc:
-        raise RuntimeError(f"Tk radial background editor is unavailable: {exc}") from exc
+        raise RuntimeError(f"Tk caked-plane background editor is unavailable: {exc}") from exc
 
     if not background_files:
         return dict(initial_config)
@@ -3798,7 +4097,14 @@ def show_radial_background_subtraction_popup(
             int(math.ceil(cols / float(max_preview_width))),
         )
 
-    def detector_preview_image(values: object) -> object:
+    def detector_preview_image(
+        values: object,
+        *,
+        x_axis: object = None,
+        y_axis: object = None,
+        x_label: str = "",
+        y_label: str = "",
+    ) -> object:
         array = np.asarray(values, dtype=np.float64)
         if array.ndim != 2:
             array = np.reshape(array, (1, -1))
@@ -3810,10 +4116,80 @@ def show_radial_background_subtraction_popup(
         finite = np.isfinite(preview)
         scaled = np.zeros(preview.shape, dtype=np.uint8)
         if vmax > vmin and np.any(finite):
-            normalized = np.clip((preview[finite] - vmin) / (vmax - vmin), 0.0, 1.0)
-            scaled[finite] = np.asarray(np.round(normalized * 255.0), dtype=np.uint8)
+                normalized = np.clip((preview[finite] - vmin) / (vmax - vmin), 0.0, 1.0)
+                scaled[finite] = np.asarray(np.round(normalized * 255.0), dtype=np.uint8)
         rgb = np.stack([scaled, scaled, scaled], axis=-1)
-        return Image.fromarray(rgb)
+        image = Image.fromarray(rgb)
+        if not (x_axis is not None or y_axis is not None or x_label or y_label):
+            return image
+
+        margin_left = 58
+        margin_right = 14
+        margin_top = 12
+        margin_bottom = 40
+        canvas = Image.new(
+            "RGB",
+            (int(image.width) + margin_left + margin_right, int(image.height) + margin_top + margin_bottom),
+            "white",
+        )
+        image_x = margin_left
+        image_y = margin_top
+        canvas.paste(image, (image_x, image_y))
+        draw = ImageDraw.Draw(canvas)
+        image_right = image_x + int(image.width) - 1
+        image_bottom = image_y + int(image.height) - 1
+        draw.rectangle([image_x, image_y, image_right, image_bottom], outline="#222222", width=1)
+
+        def text_size(text: str) -> tuple[int, int]:
+            bbox = draw.textbbox((0, 0), str(text))
+            return int(bbox[2] - bbox[0]), int(bbox[3] - bbox[1])
+
+        def axis_endpoints(axis_values: object) -> tuple[float, float] | None:
+            axis = np.asarray(axis_values, dtype=np.float64).reshape(-1)
+            finite_axis = axis[np.isfinite(axis)]
+            if finite_axis.size == 0:
+                return None
+            return float(finite_axis[0]), float(finite_axis[-1])
+
+        x_limits = axis_endpoints(x_axis)
+        if x_limits is not None:
+            left_text = f"{x_limits[0]:.3g}"
+            right_text = f"{x_limits[1]:.3g}"
+            draw.line([image_x, image_bottom, image_x, image_bottom + 4], fill="#222222")
+            draw.line([image_right, image_bottom, image_right, image_bottom + 4], fill="#222222")
+            draw.text((image_x, image_bottom + 7), left_text, fill="#222222")
+            right_w, _right_h = text_size(right_text)
+            draw.text((image_right - right_w, image_bottom + 7), right_text, fill="#222222")
+        if x_label:
+            label_w, _label_h = text_size(x_label)
+            draw.text(
+                (image_x + max(0, int(image.width) - label_w) / 2.0, image_bottom + 24),
+                x_label,
+                fill="#222222",
+            )
+
+        y_limits = axis_endpoints(y_axis)
+        if y_limits is not None:
+            top_text = f"{y_limits[0]:.3g}"
+            bottom_text = f"{y_limits[1]:.3g}"
+            top_w, top_h = text_size(top_text)
+            bottom_w, bottom_h = text_size(bottom_text)
+            draw.line([image_x - 4, image_y, image_x, image_y], fill="#222222")
+            draw.line([image_x - 4, image_bottom, image_x, image_bottom], fill="#222222")
+            draw.text((image_x - top_w - 7, image_y - top_h / 2.0), top_text, fill="#222222")
+            draw.text(
+                (image_x - bottom_w - 7, image_bottom - bottom_h / 2.0),
+                bottom_text,
+                fill="#222222",
+            )
+        if y_label:
+            label_w, label_h = text_size(y_label)
+            label_image = Image.new("RGB", (label_w + 4, label_h + 4), "white")
+            label_draw = ImageDraw.Draw(label_image)
+            label_draw.text((2, 2), y_label, fill="#222222")
+            rotated = label_image.rotate(90, expand=True)
+            canvas.paste(rotated, (4, image_y + max(0, int(image.height) - rotated.height) // 2))
+        return canvas
 
     def first_valid_background_index() -> int:
         for key in (
@@ -3847,9 +4223,12 @@ def show_radial_background_subtraction_popup(
         pixel2=float(pixel_size_m),
         wavelength=float(wavelength_m),
     )
-    theta_map, _raw_phi_map = detector_pixel_angular_maps(raw_detector.shape, ai.geometry)
+    theta_map, raw_phi_map = detector_pixel_angular_maps(raw_detector.shape, ai.geometry)
+    phi_map = raw_phi_to_gui_phi(raw_phi_map)
 
-    def caked_preview_from_detector(detector_values: object) -> tuple[np.ndarray, np.ndarray]:
+    def caked_preview_from_detector(
+        detector_values: object,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         preview_result = ai.integrate2d(
             np.asarray(detector_values, dtype=np.float64),
             npt_rad=NPT_RADIAL,
@@ -3860,52 +4239,22 @@ def show_radial_background_subtraction_popup(
             engine=EXACT_CAKE_ENGINE,
             workers=CAKE_WORKERS,
         )
-        caked_integrated, theta_axis, _phi_axis = prepare_gui_phi_display(preview_result)
-        raw_sum_signal = getattr(preview_result, "sum_signal", None)
-        raw_sum_normalization = getattr(preview_result, "sum_normalization", None)
-        raw_count = getattr(preview_result, "count", None)
-        if (raw_sum_signal is None) != (raw_sum_normalization is None):
-            raise RuntimeError("pyFAI caked sum_signal and sum_normalization fields must be paired")
-        if raw_sum_signal is None:
-            caked_sum_signal = None
-            caked_sum_normalization = None
-        else:
-            caked_sum_signal, _, _ = caked_field_to_gui_phi(
-                raw_sum_signal,
-                preview_result.azimuthal_deg,
-                preview_result.radial_deg,
-            )
-            caked_sum_normalization, _, _ = caked_field_to_gui_phi(
-                raw_sum_normalization,
-                preview_result.azimuthal_deg,
-                preview_result.radial_deg,
-            )
-        if raw_count is None:
-            caked_count = None
-        else:
-            caked_count, _, _ = caked_field_to_gui_phi(
-                raw_count,
-                preview_result.azimuthal_deg,
-                preview_result.radial_deg,
-            )
-        return (
-            caked_image_for_intensity_mode(
-                caked_integrated,
-                caked_sum_signal=caked_sum_signal,
-                caked_sum_normalization=caked_sum_normalization,
-                caked_count=caked_count,
-                intensity_mode="density",
-            ),
-            theta_axis,
-        )
+        return caked_density_image_from_result(preview_result)
 
-    raw_caked_image, caked_theta_axis = caked_preview_from_detector(raw_detector)
+    raw_caked_image, caked_theta_axis, caked_phi_axis = caked_preview_from_detector(raw_detector)
+    caked_phi_axis = np.asarray(caked_phi_axis, dtype=np.float64)
+    visible_phi_mask = (caked_phi_axis >= -90.0) & (caked_phi_axis <= 90.0)
+    if not np.any(visible_phi_mask):
+        visible_phi_mask = np.isfinite(caked_phi_axis)
+    raw_caked_image = raw_caked_image[visible_phi_mask, :]
+    caked_phi_axis = caked_phi_axis[visible_phi_mask]
     caked_preview_step = preview_stride(tuple(int(v) for v in raw_caked_image.shape))
     raw_caked_preview = np.asarray(
         raw_caked_image[::caked_preview_step, ::caked_preview_step],
         dtype=np.float64,
     )
-    caked_theta_preview = np.asarray(caked_theta_axis[::caked_preview_step], dtype=np.float64)
+    caked_theta_preview = np.asarray(caked_theta_axis, dtype=np.float64)[::caked_preview_step]
+    caked_phi_preview = np.asarray(caked_phi_axis[::caked_preview_step], dtype=np.float64)
     current_config = _radial_background_subtraction_config_from_mapping(initial_config)
     result = {"config": dict(initial_config)}
     enabled = str(current_config["mode"]) == "radial"
@@ -3937,6 +4286,10 @@ def show_radial_background_subtraction_popup(
                 "smooth_sigma": float(smooth_sigma_value),
                 "clip_zero": False,
             },
+            phi_map=phi_map,
+            caked_image=raw_caked_image,
+            theta_axis=caked_theta_axis,
+            phi_axis=caked_phi_axis,
         )
         return cached_radial_payload
 
@@ -4036,7 +4389,13 @@ def show_radial_background_subtraction_popup(
         )
 
     def update_panel_image(name: str, values: object) -> None:
-        pil_image = detector_preview_image(values)
+        pil_image = detector_preview_image(
+            values,
+            x_axis=caked_theta_preview,
+            y_axis=caked_phi_preview,
+            x_label="2theta (deg)",
+            y_label="phi (deg)",
+        )
         photo = ImageTk.PhotoImage(pil_image, master=root)
         image_refs[name] = photo
         image_canvases[name].itemconfigure(image_items[name], image=photo)
@@ -4049,28 +4408,8 @@ def show_radial_background_subtraction_popup(
                 payload = recompute_radial_payload()
             else:
                 payload = cached_radial_payload
-            theta_values = np.asarray(caked_theta_preview, dtype=np.float64).reshape(-1)
-            centers = np.asarray(payload.get("theta_centers", []), dtype=np.float64)
-            smoothed = np.asarray(payload.get("smoothed_profile", []), dtype=np.float64)
-            model_line = np.zeros(theta_values.shape, dtype=np.float64)
-            valid = np.isfinite(theta_values)
-            if centers.size and smoothed.size and np.any(valid):
-                model_line[valid] = np.interp(
-                    theta_values[valid],
-                    centers,
-                    smoothed,
-                    left=float(smoothed[0]),
-                    right=float(smoothed[-1]),
-                )
-            model_caked_image = np.broadcast_to(
-                model_line[None, :],
-                raw_caked_preview.shape,
-            ).copy()
-            model_caked_image = np.where(
-                np.isfinite(raw_caked_preview),
-                model_caked_image,
-                np.nan,
-            )
+            model_caked_full = np.asarray(payload["caked_background_model"], dtype=np.float64)
+            model_caked_image = model_caked_full[::caked_preview_step, ::caked_preview_step]
             if bool(config["clip_zero"]):
                 detector_model = np.asarray(payload["background_model"], dtype=np.float64)
                 detector_corrected = raw_detector - scale * detector_model
@@ -4079,7 +4418,10 @@ def show_radial_background_subtraction_popup(
                     np.maximum(detector_corrected, 0.0),
                     detector_corrected,
                 )
-                corrected_caked_full, _theta_axis = caked_preview_from_detector(detector_corrected)
+                corrected_caked_full, _theta_axis, _corrected_phi_axis = caked_preview_from_detector(
+                    detector_corrected
+                )
+                corrected_caked_full = corrected_caked_full[visible_phi_mask, :]
                 corrected_caked_image = np.asarray(
                     corrected_caked_full[::caked_preview_step, ::caked_preview_step],
                     dtype=np.float64,
@@ -4109,20 +4451,6 @@ def show_radial_background_subtraction_popup(
             enabled = True
             enabled_var.set(True)
         update_preview()
-
-    def set_percentile(_event: object | None = None) -> None:
-        nonlocal cached_radial_payload, percentile_value
-        percentile_value = min(100.0, max(0.0, as_float(percentile_var.get(), percentile_value)))
-        percentile_var.set(f"{percentile_value:.6g}")
-        cached_radial_payload = None
-        update_preview(recompute_model=True)
-
-    def set_smooth_sigma(_event: object | None = None) -> None:
-        nonlocal cached_radial_payload, smooth_sigma_value
-        smooth_sigma_value = max(0.0, as_float(smooth_sigma_var.get(), smooth_sigma_value))
-        smooth_sigma_var.set(f"{smooth_sigma_value:.6g}")
-        cached_radial_payload = None
-        update_preview(recompute_model=True)
 
     def toggle_check() -> None:
         nonlocal enabled, clip_zero
@@ -4154,7 +4482,13 @@ def show_radial_background_subtraction_popup(
     def cancel() -> None:
         finish_with_config(dict(initial_config))
 
-    raw_preview = detector_preview_image(raw_caked_preview)
+    raw_preview = detector_preview_image(
+        raw_caked_preview,
+        x_axis=caked_theta_preview,
+        y_axis=caked_phi_preview,
+        x_label="2theta (deg)",
+        y_label="phi (deg)",
+    )
     preview_width, preview_height = raw_preview.size
     profile_width = int(preview_width)
     profile_height = int(preview_height)
@@ -4164,7 +4498,7 @@ def show_radial_background_subtraction_popup(
     title_tilt = background_tilt_deg.get(preview_idx, float("nan"))
     try:
         root = tk.Tk()
-        root.title("Radial background subtraction")
+        root.title("Caked-plane background subtraction")
         root.protocol("WM_DELETE_WINDOW", cancel)
         root.columnconfigure(0, weight=1)
         root.rowconfigure(0, weight=1)
@@ -4205,10 +4539,16 @@ def show_radial_background_subtraction_popup(
         )
         add_image_panel(
             "model",
-            "Radial caked background model",
+            "Caked background plane (-90 <= phi <= 90)",
             0,
             1,
-            detector_preview_image(np.zeros_like(raw_caked_preview, dtype=np.float64)),
+            detector_preview_image(
+                np.zeros_like(raw_caked_preview, dtype=np.float64),
+                x_axis=caked_theta_preview,
+                y_axis=caked_phi_preview,
+                x_label="2theta (deg)",
+                y_label="phi (deg)",
+            ),
         )
         add_image_panel("corrected", "Corrected caked image", 1, 0, raw_preview)
 
@@ -4216,7 +4556,7 @@ def show_radial_background_subtraction_popup(
         profile_panel.grid(row=1, column=1, sticky="nsew")
         profile_panel.columnconfigure(0, weight=1)
         profile_panel.rowconfigure(1, weight=1)
-        ttk.Label(profile_panel, text="Lower-envelope 2theta profile").grid(
+        ttk.Label(profile_panel, text="Plane fit profile (-90 <= phi <= 90)").grid(
             row=0, column=0, sticky="w"
         )
         profile_canvas = tk.Canvas(
@@ -4238,8 +4578,6 @@ def show_radial_background_subtraction_popup(
         clip_zero_var = tk.BooleanVar(root, value=bool(clip_zero))
         scale_var = tk.DoubleVar(root, value=float(current_config["scale"]))
         scale_label_var = tk.StringVar(root, value=f"Subtract scale {float(scale_var.get()):.3g}")
-        percentile_var = tk.StringVar(root, value=f"{float(current_config['percentile']):.6g}")
-        smooth_sigma_var = tk.StringVar(root, value=f"{float(current_config['smooth_sigma']):.6g}")
 
         ttk.Checkbutton(
             controls,
@@ -4262,28 +4600,15 @@ def show_radial_background_subtraction_popup(
             command=toggle_check,
         ).grid(row=0, column=4, sticky="w")
 
-        ttk.Label(controls, text="Percentile").grid(row=1, column=0, sticky="w", pady=(6, 0))
-        percentile_entry = ttk.Entry(controls, textvariable=percentile_var, width=10)
-        percentile_entry.grid(row=1, column=1, sticky="w", pady=(6, 0))
-        ttk.Label(controls, text="Smooth sigma").grid(
-            row=1, column=2, sticky="e", padx=(12, 4), pady=(6, 0)
-        )
-        smooth_entry = ttk.Entry(controls, textvariable=smooth_sigma_var, width=10)
-        smooth_entry.grid(row=1, column=3, sticky="w", pady=(6, 0))
-        percentile_entry.bind("<Return>", set_percentile)
-        percentile_entry.bind("<FocusOut>", set_percentile)
-        smooth_entry.bind("<Return>", set_smooth_sigma)
-        smooth_entry.bind("<FocusOut>", set_smooth_sigma)
-
         button_frame = ttk.Frame(controls)
-        button_frame.grid(row=1, column=4, sticky="e", pady=(6, 0))
+        button_frame.grid(row=1, column=0, columnspan=5, sticky="e", pady=(6, 0))
         ttk.Button(button_frame, text="Accept", command=accept).grid(row=0, column=0, padx=2)
         ttk.Button(button_frame, text="Off", command=off).grid(row=0, column=1, padx=2)
         ttk.Button(button_frame, text="Cancel", command=cancel).grid(row=0, column=2, padx=2)
 
         update_preview(recompute_model=bool(enabled) and float(scale_var.get()) > 0.0)
         print(
-            "opening radial background subtraction editor "
+            "opening caked-plane background subtraction editor "
             f"for {preview_path.name} tilt={format_angle_value(title_tilt)} deg; "
             "click Accept to continue",
             flush=True,
@@ -5029,13 +5354,24 @@ try:
 except Exception:
     n2_value = complex(1.0, 0.0)
 
+DEFAULT_QR_ROD_DELTA_QR_SOURCE = 0.25
+PBI2_QR_ROD_DELTA_QR_DEFAULT = 0.13
+QR_ROD_DELTA_QR_SCALE = 0.85
+qr_rod_delta_qr_source_default = DEFAULT_QR_ROD_DELTA_QR_SOURCE
+if IS_PBI2_SAMPLE_STEM:
+    qr_rod_delta_qr_source_default = PBI2_QR_ROD_DELTA_QR_DEFAULT / float(
+        QR_ROD_DELTA_QR_SCALE
+    )
 qr_rod_delta_qr_source = as_float(
     (state.get("analysis_range", {}) if isinstance(state.get("analysis_range"), dict) else {}).get(
         "delta_qr"
     ),
-    as_float(variables.get("delta_qr_var"), 0.25),
+    as_float(variables.get("delta_qr_var"), qr_rod_delta_qr_source_default),
 )
-QR_ROD_DELTA_QR_SCALE = 0.85
+if IS_PBI2_SAMPLE_STEM and np.isclose(
+    float(qr_rod_delta_qr_source), DEFAULT_QR_ROD_DELTA_QR_SOURCE
+):
+    qr_rod_delta_qr_source = qr_rod_delta_qr_source_default
 qr_rod_delta_qr = max(1.0e-9, float(qr_rod_delta_qr_source) * float(QR_ROD_DELTA_QR_SCALE))
 PBI2_DISABLE_BACKGROUND_SUBTRACTION = IS_PBI2_SAMPLE_STEM and _truthy_setting(
     "PBI2_DISABLE_BACKGROUND_SUBTRACTION_OVERRIDE",
@@ -5120,8 +5456,8 @@ if radial_bg_runtime_mode == "popup":
         )
     except Exception as exc:
         if str(radial_bg_edit_mode or "auto").strip().lower() == "popup":
-            raise RuntimeError(f"radial background subtraction popup unavailable: {exc}") from exc
-        print(f"skipped radial background subtraction popup: {exc}")
+            raise RuntimeError(f"caked-plane background subtraction popup unavailable: {exc}") from exc
+        print(f"skipped caked-plane background subtraction popup: {exc}")
 RADIAL_BACKGROUND_SUBTRACTION_CONFIG = _radial_background_subtraction_config_from_mapping(
     radial_background_subtraction_config
 )
@@ -5129,11 +5465,12 @@ RADIAL_BACKGROUND_SUBTRACTION_POLICY_SIGNATURE = radial_background_subtraction_p
     RADIAL_BACKGROUND_SUBTRACTION_CONFIG
 )
 print(
-    "radial detector background subtraction: "
+    "central-phi caked plane background subtraction: "
     f"mode={RADIAL_BACKGROUND_SUBTRACTION_CONFIG['mode']} "
+    f"model={RADIAL_BACKGROUND_SUBTRACTION_POLICY_SIGNATURE['model_kind']} "
     f"scale={float(RADIAL_BACKGROUND_SUBTRACTION_CONFIG['scale']):.4g} "
-    f"percentile={float(RADIAL_BACKGROUND_SUBTRACTION_CONFIG['percentile']):.4g} "
-    f"smooth_sigma={float(RADIAL_BACKGROUND_SUBTRACTION_CONFIG['smooth_sigma']):.4g} "
+    f"phi_fit_min={float(RADIAL_BACKGROUND_SUBTRACTION_POLICY_SIGNATURE['phi_fit_min']):.4g} "
+    f"phi_fit_max={float(RADIAL_BACKGROUND_SUBTRACTION_POLICY_SIGNATURE['phi_fit_max']):.4g} "
     f"clip_zero={bool(RADIAL_BACKGROUND_SUBTRACTION_CONFIG['clip_zero'])} "
     f"edit_mode={radial_bg_runtime_mode}"
 )
@@ -5155,6 +5492,13 @@ ROD_PROFILE_BACKGROUND_POLICY_SIGNATURE = {
     "qr_rod_bg_min_side_pixels": int(QR_ROD_BG_MIN_SIDE_PIXELS),
     "qr_rod_bg_percentile": float(QR_ROD_BG_PERCENTILE),
     "pbi2_nonzero_marker_l_min_span_ratio": float(PBI2_NONZERO_MARKER_L_MIN_SPAN_RATIO),
+}
+QR_ROD_PEAK_EDIT_CONTEXT_SIGNATURE = {
+    "fit_signature": QR_ROD_FINAL_FIT_CACHE_SIGNATURE,
+    "active_lattice": ACTIVE_LATTICE_CACHE_SIGNATURE,
+    "q_group_rows": Q_GROUP_ROWS_CACHE_SIGNATURE,
+    "rod_reference_policy": ROD_REFERENCE_POLICY_SIGNATURE,
+    "rod_profile_policy": ROD_PROFILE_BACKGROUND_POLICY_SIGNATURE,
 }
 rod_phi_samples = max(361, int(as_float(variables.get("rod_points_per_gz_var"), 721)))
 psi_deg = as_float(variables.get("psi_var"), 0.0)
@@ -5787,12 +6131,36 @@ for bg_idx, bg_path_text in enumerate(background_files):
     theta_map, raw_phi_map = detector_pixel_angular_maps(detector_image.shape, ai.geometry)
     phi_map = raw_phi_to_gui_phi(raw_phi_map)
     raw_detector_image = detector_image.copy()
-    # Apply optional pre-fit radial detector background reduction before caking
-    # and before all peak and rod intensity fits.
+    raw_plane_caked_image = None
+    raw_plane_theta_axis = None
+    raw_plane_phi_axis = None
+    if (
+        str(RADIAL_BACKGROUND_SUBTRACTION_CONFIG["mode"]) == "radial"
+        and float(RADIAL_BACKGROUND_SUBTRACTION_CONFIG["scale"]) > 0.0
+    ):
+        raw_plane_caked_result = ai.integrate2d(
+            raw_detector_image,
+            npt_rad=NPT_RADIAL,
+            npt_azim=NPT_AZIMUTH,
+            correctSolidAngle=BACKGROUND_SOLID_ANGLE_CORRECTION,
+            method="lut",
+            unit="2th_deg",
+            engine=EXACT_CAKE_ENGINE,
+            workers=CAKE_WORKERS,
+        )
+        raw_plane_caked_image, raw_plane_theta_axis, raw_plane_phi_axis = (
+            caked_density_image_from_result(raw_plane_caked_result)
+        )
+    # Apply optional pre-fit caked phi>90 plane background reduction before
+    # caking and before all peak and rod intensity fits.
     radial_subtraction_payload = apply_radial_background_subtraction_to_detector(
         raw_detector_image,
         theta_map,
         RADIAL_BACKGROUND_SUBTRACTION_CONFIG,
+        phi_map=phi_map,
+        caked_image=raw_plane_caked_image,
+        theta_axis=raw_plane_theta_axis,
+        phi_axis=raw_plane_phi_axis,
     )
     detector_image = np.asarray(
         radial_subtraction_payload["corrected_image"],
@@ -6445,9 +6813,10 @@ for prep in background_preps:
         f"{display_label}: fit={len(fit_results)} fail={len(failures)} "
         f"tth_max={float(prep['tth_max']):.3f} "
         f"radial_background={RADIAL_BACKGROUND_SUBTRACTION_CONFIG['mode']} "
+        f"model={RADIAL_BACKGROUND_SUBTRACTION_POLICY_SIGNATURE['model_kind']} "
         f"scale={float(RADIAL_BACKGROUND_SUBTRACTION_CONFIG['scale']):.4g} "
-        f"percentile={float(RADIAL_BACKGROUND_SUBTRACTION_CONFIG['percentile']):.4g} "
-        f"smooth_sigma={float(RADIAL_BACKGROUND_SUBTRACTION_CONFIG['smooth_sigma']):.4g} "
+        f"phi_fit_min={float(RADIAL_BACKGROUND_SUBTRACTION_POLICY_SIGNATURE['phi_fit_min']):.4g} "
+        f"phi_fit_max={float(RADIAL_BACKGROUND_SUBTRACTION_POLICY_SIGNATURE['phi_fit_max']):.4g} "
         f"clip_zero={bool(RADIAL_BACKGROUND_SUBTRACTION_CONFIG['clip_zero'])} "
         f"peak_subtraction_only={bool(PEAK_SUBTRACTION_ONLY)} "
         f"background_image_subtraction_disabled={bool(BACKGROUND_IMAGE_SUBTRACTION_DISABLED)} "
@@ -14457,7 +14826,10 @@ if (
 qr_rod_peak_edit_source = "last_cached"
 if qr_rod_peak_edits_path:
     try:
-        marker_table = load_qr_rod_peak_edits(qr_rod_peak_edits_path)
+        marker_table = load_qr_rod_peak_edits(
+            qr_rod_peak_edits_path,
+            expected_metadata=QR_ROD_PEAK_EDIT_CONTEXT_SIGNATURE,
+        )
         marker_table = marker_table_with_specular_l_markers(marker_table, specular_l_marker_table)
         qr_rod_peak_edit_source = "imported_edits"
         print(f"loaded Qr-rod peak edits={Path(qr_rod_peak_edits_path).expanduser()}")
@@ -14563,7 +14935,11 @@ qr_rod_region_editor_result = {
 }
 if bool(qr_rod_specular_editor_result.get("accepted", False)) and qr_rod_peak_edits_path:
     try:
-        saved_path = write_qr_rod_peak_edits(qr_rod_peak_edits_path, marker_table)
+        saved_path = write_qr_rod_peak_edits(
+            qr_rod_peak_edits_path,
+            marker_table,
+            metadata=QR_ROD_PEAK_EDIT_CONTEXT_SIGNATURE,
+        )
         print(f"saved final Qr-rod peak edits={saved_path}")
     except Exception as exc:
         print(

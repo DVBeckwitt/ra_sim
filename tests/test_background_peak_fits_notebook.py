@@ -106,12 +106,15 @@ def _script_functions(*names: str) -> dict[str, object]:
         wanted.add("rod_profile_has_real_hk0_qz_rows")
     if wanted & {
         "apply_radial_background_subtraction_to_detector",
+        "caked_background_plane_from_image",
         "radial_background_model_from_detector",
         "radial_background_subtraction_policy_signature",
         "show_radial_background_subtraction_popup",
     }:
         wanted.add("radial_background_subtraction_config_from_state")
         wanted.add("_radial_background_subtraction_config_from_mapping")
+        wanted.add("_radial_background_phi_delta_deg")
+        wanted.add("caked_background_plane_from_image")
         wanted.add("radial_background_model_from_detector")
         wanted.add("radial_background_profile_from_detector")
     tree = ast.parse(
@@ -169,12 +172,12 @@ def _script_functions(*names: str) -> dict[str, object]:
         "ROD_QZ_NONLINEAR_LOG_RESIDUAL_WEIGHT": 1.0,
         "ROD_QZ_NONLINEAR_LOG_FLOOR_FRACTION": 0.05,
         "ROD_QZ_SHARED_LINEAR_BASELINE_ENABLED": True,
-        "QR_ROD_FINAL_FIT_CACHE_SIGNATURE": "joint_qz_labeled_marker_fit_specular_theta_i12_l8_v15_radial_2theta_caked",
+        "QR_ROD_FINAL_FIT_CACHE_SIGNATURE": "joint_qz_labeled_marker_fit_specular_theta_i12_l8_v17_caked_phi_m90_90_plane",
         "PRE_EDITOR_CACHE_SCHEMA": "ra_sim.background_pre_editor_cache.v1",
         "PRE_EDITOR_CACHE_SIGNATURE": "pre_qr_rod_marker_editor_inputs_v1",
-        "PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE": "background_peak_fit_results_v3_radial_2theta_caked",
+        "PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE": "background_peak_fit_results_v5_caked_phi_m90_90_plane",
         "PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE": "profile_fit_cache_v1",
-        "PRE_EDITOR_QR_ROD_STAGE_SIGNATURE": "qr_rod_pre_marker_profiles_hk0_l_defaults_v14_radial_2theta_caked",
+        "PRE_EDITOR_QR_ROD_STAGE_SIGNATURE": "qr_rod_pre_marker_profiles_hk0_l_defaults_v16_caked_phi_m90_90_plane",
         "QR_ROD_BG_SIDE_BAND_INNER_SCALE": 1.30,
         "QR_ROD_BG_SIDE_BAND_OUTER_SCALE": 2.80,
         "QR_ROD_BG_MIN_SIDE_PIXELS": 8,
@@ -968,6 +971,81 @@ def test_apply_radial_background_subtraction_clip_zero_is_optional() -> None:
     assert float(np.nanmin(clipped["corrected_image"])) == pytest.approx(0.0)
 
 
+def test_caked_background_plane_fit_uses_only_phi_between_minus90_and90() -> None:
+    namespace = _script_functions("caked_background_plane_from_image")
+    fit_plane = namespace["caked_background_plane_from_image"]
+    theta_axis = np.linspace(0.0, 4.0, 6, dtype=np.float64)
+    phi_axis = np.asarray([-120.0, -80.0, 0.0, 80.0, 120.0], dtype=np.float64)
+    theta_grid, phi_grid = np.meshgrid(theta_axis, phi_axis)
+    caked_image = 12.0 + 3.0 * theta_grid + 0.25 * phi_grid
+    caked_image[[0, 4], :] += 500.0
+
+    payload = fit_plane(caked_image, theta_axis, phi_axis)
+
+    fit_mask = np.asarray(payload["fit_mask"], dtype=bool)
+    model = np.asarray(payload["background_model"], dtype=np.float64)
+    assert not np.any(fit_mask[[0, 4], :])
+    assert np.all(fit_mask[1:4, :])
+    np.testing.assert_allclose(model[1:4, :], caked_image[1:4, :], atol=1.0e-9)
+    assert payload["model_kind"] == "caked_phi_m90_90_plane"
+
+
+def test_caked_background_plane_fallback_uses_only_minus90_to90_rows() -> None:
+    namespace = _script_functions("caked_background_plane_from_image")
+    fit_plane = namespace["caked_background_plane_from_image"]
+    theta_axis = np.asarray([0.0, 1.0], dtype=np.float64)
+    phi_axis = np.asarray([-120.0, 0.0, 120.0], dtype=np.float64)
+    caked_image = np.asarray(
+        [
+            [500.0, 500.0],
+            [9.0, 11.0],
+            [700.0, 700.0],
+        ],
+        dtype=np.float64,
+    )
+
+    payload = fit_plane(caked_image, theta_axis, phi_axis)
+
+    fit_mask = np.asarray(payload["fit_mask"], dtype=bool)
+    model = np.asarray(payload["background_model"], dtype=np.float64)
+    assert not np.any(fit_mask[[0, 2], :])
+    assert np.all(fit_mask[1, :])
+    np.testing.assert_allclose(model, np.full_like(caked_image, 10.0), atol=1.0e-9)
+
+
+def test_apply_radial_background_subtraction_uses_caked_phi_plane_when_available() -> None:
+    namespace = _script_functions("apply_radial_background_subtraction_to_detector")
+    apply_subtraction = namespace["apply_radial_background_subtraction_to_detector"]
+    theta_axis = np.linspace(0.0, 4.0, 5, dtype=np.float64)
+    phi_axis = np.asarray([-80.0, 0.0, 80.0], dtype=np.float64)
+    theta_grid, phi_grid = np.meshgrid(theta_axis, phi_axis)
+    caked_image = 20.0 + 2.0 * theta_grid + 0.1 * phi_grid
+    detector_theta = np.asarray([[0.0, 2.0], [4.0, 1.0]], dtype=np.float64)
+    detector_phi = np.asarray([[-80.0, 0.0], [80.0, 40.0]], dtype=np.float64)
+    detector_image = 20.0 + 2.0 * detector_theta + 0.1 * detector_phi
+
+    payload = apply_subtraction(
+        detector_image,
+        detector_theta,
+        {
+            "mode": "radial",
+            "scale": 1.0,
+            "percentile": 20.0,
+            "smooth_sigma": 0.0,
+            "clip_zero": False,
+        },
+        phi_map=detector_phi,
+        caked_image=caked_image,
+        theta_axis=theta_axis,
+        phi_axis=phi_axis,
+    )
+
+    assert payload["enabled"] is True
+    assert payload["model_kind"] == "caked_phi_m90_90_plane"
+    np.testing.assert_allclose(payload["background_model"], detector_image, atol=1.0e-9)
+    np.testing.assert_allclose(payload["corrected_image"], np.zeros_like(detector_image), atol=1.0e-9)
+
+
 def test_parallel_script_radial_background_popup_is_before_background_preps() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
 
@@ -983,23 +1061,24 @@ def test_parallel_script_radial_background_popup_is_before_background_preps() ->
     ]
     assert "import tkinter as tk" in popup_source
     assert "from tkinter import ttk" in popup_source
-    assert "from PIL import Image, ImageTk" in popup_source
+    assert "from PIL import Image, ImageDraw, ImageTk" in popup_source
     assert "tk.Canvas(" in popup_source
     assert "ttk.Scale(" in popup_source
-    assert "ttk.Entry(" in popup_source
     assert "ttk.Checkbutton(" in popup_source
     assert "ttk.Button(" in popup_source
     assert "ImageTk.PhotoImage(" in popup_source
     assert "image_refs" in popup_source
     assert "def detector_preview_image(" in popup_source
+    assert 'x_label="2theta (deg)"' in popup_source
+    assert 'y_label="phi (deg)"' in popup_source
     assert "def draw_radial_profile(" in popup_source
     assert "profile_canvas.create_line" in popup_source
     assert "root.mainloop()" in popup_source
     assert "from matplotlib.widgets" not in popup_source
     assert "plt.subplots(" not in popup_source
     assert "Subtract scale" in popup_source
-    assert '"Percentile"' in popup_source
-    assert '"Smooth sigma"' in popup_source
+    assert '"Percentile"' not in popup_source
+    assert '"Smooth sigma"' not in popup_source
     assert '"Enabled"' in popup_source
     assert '"Clip < 0"' in popup_source
     for label in ('"Accept"', '"Off"', '"Cancel"'):
@@ -1018,23 +1097,22 @@ def test_parallel_script_radial_background_popup_displays_caked_not_raw_detector
     ]
 
     assert "ai.integrate2d(" in popup_source
-    assert "prepare_gui_phi_display(" in popup_source
-    assert "caked_image_for_intensity_mode(" in popup_source
+    assert "caked_density_image_from_result(preview_result)" in popup_source
     assert "raw_caked_image" in popup_source
     assert "raw_caked_preview" in popup_source
     assert "model_caked_image" in popup_source
     assert "corrected_caked_image" in popup_source
     assert "caked_theta_axis" in popup_source
-    assert "caked_theta_preview" in popup_source
-    assert "np.broadcast_to(" in popup_source
-    assert "detector_corrected = raw_detector - scale * detector_model" in popup_source
-    assert "corrected_caked_full, _theta_axis = caked_preview_from_detector(detector_corrected)" in (
-        popup_source
-    )
+    assert "visible_phi_mask" in popup_source
+    assert "caked_phi_axis >= -90.0" in popup_source
+    assert "caked_phi_axis <= 90.0" in popup_source
+    assert "raw_caked_image = raw_caked_image[visible_phi_mask, :]" in popup_source
+    assert "corrected_caked_full = corrected_caked_full[visible_phi_mask, :]" in popup_source
+    assert "caked_image=raw_caked_image" in popup_source
     assert "Raw caked image" in popup_source
-    assert "Radial caked background model" in popup_source
+    assert "Caked background plane (-90 <= phi <= 90)" in popup_source
     assert "Corrected caked image" in popup_source
-    assert "Lower-envelope 2theta profile" in popup_source
+    assert "Plane fit profile (-90 <= phi <= 90)" in popup_source
     assert "Raw detector image" not in popup_source
     assert "Corrected detector image" not in popup_source
 
@@ -1047,25 +1125,15 @@ def test_parallel_script_radial_background_popup_reuses_model_on_scale_updates()
         )
     ]
     scale_source = popup_source[
-        popup_source.index("def set_scale(") : popup_source.index("\n    def set_percentile(")
-    ]
-    percentile_source = popup_source[
-        popup_source.index("def set_percentile(") : popup_source.index(
-            "\n    def set_smooth_sigma("
-        )
-    ]
-    smooth_source = popup_source[
-        popup_source.index("def set_smooth_sigma(") : popup_source.index(
-            "\n    def toggle_check("
-        )
+        popup_source.index("def set_scale(") : popup_source.index("\n    def toggle_check(")
     ]
 
     assert "cached_radial_payload" in popup_source
     assert "def recompute_radial_payload(" in popup_source
     assert "def update_preview(*, recompute_model: bool = False)" in popup_source
+    assert "def set_percentile(" not in popup_source
+    assert "def set_smooth_sigma(" not in popup_source
     assert "recompute_model=True" not in scale_source
-    assert "cached_radial_payload = None" in percentile_source
-    assert "cached_radial_payload = None" in smooth_source
 
 
 def test_parallel_script_applies_radial_subtraction_before_integrate2d() -> None:
@@ -1080,8 +1148,12 @@ def test_parallel_script_applies_radial_subtraction_before_integrate2d() -> None
         "apply_radial_background_subtraction_to_detector("
     )
     assert prep_loop_source.index("apply_radial_background_subtraction_to_detector(") < prep_loop_source.index(
-        "caked_result = ai.integrate2d("
+        "\n    caked_result = ai.integrate2d("
     )
+    assert "raw_plane_caked_result = ai.integrate2d(" in prep_loop_source
+    assert "caked_density_image_from_result(raw_plane_caked_result)" in prep_loop_source
+    assert "phi_map=phi_map" in prep_loop_source
+    assert "caked_image=raw_plane_caked_image" in prep_loop_source
     assert '"radial_background_model"' in prep_loop_source
     assert '"radial_background_subtraction"' in prep_loop_source
 
@@ -1176,12 +1248,74 @@ def test_parallel_script_radial_background_policy_changes_final_qr_rod_cache_key
     assert "RADIAL_BACKGROUND_SUBTRACTION_POLICY_SIGNATURE" in source
 
 
+def test_parallel_script_qr_rod_peak_edits_validate_background_policy(tmp_path: Path) -> None:
+    namespace = _script_functions(
+        "_cache_normalize_value",
+        "clean_marker_title",
+        "load_qr_rod_peak_edits",
+        "write_qr_rod_peak_edits",
+    )
+    write_edits = namespace["write_qr_rod_peak_edits"]
+    load_edits = namespace["load_qr_rod_peak_edits"]
+    edit_path = tmp_path / "qr_rod_peak_edits.json"
+    markers = pd.DataFrame(
+        [{"m": 1, "branch": "+", "qz_marker": 1.0, "fit_l": 2.0, "display_l": 2.0}]
+    )
+
+    write_edits(
+        edit_path,
+        markers,
+        metadata={"radial_background_subtraction": {"mode": "off", "scale": 0.0}},
+    )
+
+    loaded = load_edits(
+        edit_path,
+        expected_metadata={"radial_background_subtraction": {"mode": "off", "scale": 0.0}},
+    )
+    with pytest.raises(ValueError, match="different fitting policy"):
+        load_edits(
+            edit_path,
+            expected_metadata={"radial_background_subtraction": {"mode": "radial", "scale": 1.0}},
+        )
+    legacy_path = tmp_path / "legacy_qr_rod_peak_edits.json"
+    legacy_path.write_text(
+        json.dumps({"schema": "ra_sim.qr_rod_peak_edits.v1", "markers": markers.to_dict("records")}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="different fitting policy"):
+        load_edits(
+            legacy_path,
+            expected_metadata={"radial_background_subtraction": {"mode": "off", "scale": 0.0}},
+        )
+
+    assert loaded[["m", "branch", "qz_marker"]].to_dict("records") == [
+        {"m": 1, "branch": "+", "qz_marker": 1.0}
+    ]
+
+
+def test_parallel_script_qr_rod_peak_editor_rejects_stale_background_policy_edits() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    load_section = source[
+        source.index("if qr_rod_peak_edits_path:") : source.index(
+            "\nqr_rod_nonzero_editor_result = edit_qr_rod_region_editor("
+        )
+    ]
+    save_section = source[
+        source.index("if bool(qr_rod_specular_editor_result.get(\"accepted\", False))")
+        : source.index("\nrod_profile_table = rod_profile_table_for_l_window(")
+    ]
+
+    assert "QR_ROD_PEAK_EDIT_CONTEXT_SIGNATURE" in source
+    assert "expected_metadata=QR_ROD_PEAK_EDIT_CONTEXT_SIGNATURE" in load_section
+    assert "metadata=QR_ROD_PEAK_EDIT_CONTEXT_SIGNATURE" in save_section
+
+
 def test_parallel_script_radial_background_cache_signatures_reject_old_prefit_caches() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
 
-    assert 'QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_specular_theta_i12_l8_v15_radial_2theta_caked"' in source
-    assert 'PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE = "background_peak_fit_results_v3_radial_2theta_caked"' in source
-    assert 'PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_l_defaults_v14_radial_2theta_caked"' in source
+    assert 'QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_specular_theta_i12_l8_v17_caked_phi_m90_90_plane"' in source
+    assert 'PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE = "background_peak_fit_results_v5_caked_phi_m90_90_plane"' in source
+    assert 'PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_l_defaults_v16_caked_phi_m90_90_plane"' in source
 
 
 def test_parallel_script_qr_rod_final_cache_key_changes_with_background_debug_policy() -> None:
@@ -1697,6 +1831,24 @@ def test_parallel_script_pbi2_specular_hk0_uses_l15_and_theta12() -> None:
     assert '"specular_qr_rod_l_min"' in source
     assert '"specular_qr_rod_l_max"' in source
     assert '"specular_theta_initial_deg"' in source
+
+
+def test_parallel_script_pbi2_qr_rod_delta_qr_defaults_to_013() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    delta_qr_source = source[
+        source.index("DEFAULT_QR_ROD_DELTA_QR_SOURCE =") : source.index(
+            "\nPBI2_DISABLE_BACKGROUND_SUBTRACTION ="
+        )
+    ]
+
+    assert "PBI2_QR_ROD_DELTA_QR_DEFAULT = 0.13" in source
+    assert "QR_ROD_DELTA_QR_SCALE = 0.85" in delta_qr_source
+    assert "qr_rod_delta_qr_source_default = PBI2_QR_ROD_DELTA_QR_DEFAULT / float(" in (
+        delta_qr_source
+    )
+    assert "np.isclose(" in delta_qr_source
+    assert "float(qr_rod_delta_qr_source)" in delta_qr_source
+    assert "DEFAULT_QR_ROD_DELTA_QR_SOURCE" in delta_qr_source
 
 
 def test_parallel_script_pbi2_nonzero_branches_share_qz_bounds() -> None:
@@ -4219,7 +4371,7 @@ def test_parallel_script_qr_rod_marker_hash_changes_cache_key() -> None:
 
     assert cache_key(None) == {
         "mode": "last_cached",
-        "fit_signature": "joint_qz_labeled_marker_fit_specular_theta_i12_l8_v14_radial_prefit",
+        "fit_signature": "joint_qz_labeled_marker_fit_specular_theta_i12_l8_v17_caked_phi_m90_90_plane",
     }
     assert cache_key(None, marker_table=markers, mode="popup") != cache_key(
         None, marker_table=shifted, mode="popup"
@@ -4253,7 +4405,7 @@ def test_parallel_script_marker_title_changes_cache_key() -> None:
 def test_parallel_script_qr_rod_final_cache_requires_fit_signature() -> None:
     namespace = _script_functions("qr_rod_profile_cache_has_final_fit")
     cache_has_final_fit = namespace["qr_rod_profile_cache_has_final_fit"]
-    final_fit_signature = "joint_qz_labeled_marker_fit_specular_theta_i12_l8_v14_radial_prefit"
+    final_fit_signature = "joint_qz_labeled_marker_fit_specular_theta_i12_l8_v17_caked_phi_m90_90_plane"
     payload = {
         "final_rod_profile_table": pd.DataFrame(
             {"qz_center": [1.0, 2.0], "joint_fit_density": [0.1, 0.2]}
@@ -4282,7 +4434,7 @@ def test_parallel_script_qr_rod_final_cache_requires_fit_signature() -> None:
 def test_parallel_script_qr_rod_final_cache_rejects_missing_hk0_profile() -> None:
     namespace = _script_functions("qr_rod_profile_cache_has_final_fit")
     cache_has_final_fit = namespace["qr_rod_profile_cache_has_final_fit"]
-    final_fit_signature = "joint_qz_labeled_marker_fit_specular_theta_i12_l8_v14_radial_prefit"
+    final_fit_signature = "joint_qz_labeled_marker_fit_specular_theta_i12_l8_v17_caked_phi_m90_90_plane"
     payload = {
         "final_rod_profile_table": pd.DataFrame(
             {
@@ -5170,7 +5322,6 @@ def test_parallel_script_unified_editor_region_controls_update_preview(
 
     assert accepted is True
     assert [call[:3] for call in preview_calls] == [
-        (0.02, 0.0, 3.0),
         (0.02, 0.5, 3.0),
         (0.02, 0.5, 2.5),
     ]
@@ -5691,6 +5842,7 @@ def test_parallel_script_unified_editor_delta_qr_refreshes_profile_table_on_rele
                 widget.set_val(0.02)
                 widget.set_val(0.03)
         assert update_calls == []
+        assert preview_calls == []
         fig.canvas.callbacks.process(
             "button_release_event",
             MouseEvent("button_release_event", fig.canvas, 0, 0, button=1),
@@ -5723,10 +5875,101 @@ def test_parallel_script_unified_editor_delta_qr_refreshes_profile_table_on_rele
     )
 
     assert accepted is True
-    assert preview_calls == [(0.02, 0.0, 3.0), (0.03, 0.0, 3.0)]
+    assert preview_calls == [(0.03, 0.0, 3.0)]
     assert update_calls == [(0.03, 0.0, 3.0)]
     refreshed = pd.DataFrame(region_state["rod_profile_table"])
     assert refreshed["background_density"].tolist() == [10.0, 20.0]
+
+
+def test_parallel_script_qr_rod_peak_editor_preview_error_does_not_close_editor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from matplotlib.backend_bases import KeyEvent, MouseEvent
+
+    namespace = _script_functions(
+        "as_float",
+        "qr_rod_peak_edit_runtime_mode",
+        "show_qr_rod_peak_marker_popup",
+        "marker_table_with_specular_l_markers",
+        "qz_l_linear_coeff_from_marker_rows",
+        "marker_row_title",
+        "clean_marker_title",
+        "replace_qr_rod_marker_group_qz",
+        "positive_log_plot_values",
+        "apply_positive_log_y_axis",
+        "snap_qr_rod_markers_to_profile_peaks",
+        "l_tick_label",
+        "_safe_run_name",
+        "load_qr_rod_peak_edits",
+        "write_qr_rod_peak_edits",
+    )
+    show_editor = namespace["show_qr_rod_peak_marker_popup"]
+    region_state = {"delta_qr": 0.01, "l_min": 0.0, "l_max": 3.0}
+    update_calls: list[tuple[float, float, float]] = []
+
+    def refresh_profiles(delta_qr: float, l_min: float, l_max: float) -> pd.DataFrame:
+        update_calls.append((float(delta_qr), float(l_min), float(l_max)))
+        return pd.DataFrame(
+            {
+                "m": [1, 1],
+                "branch": ["+", "+"],
+                "qz_center": [1.0, 2.0],
+                "background_density": [10.0, 20.0],
+            }
+        )
+
+    def refresh_preview(
+        *,
+        delta_qr: float,
+        l_min: float,
+        l_max: float,
+        marker_table: pd.DataFrame,
+    ) -> None:
+        raise RuntimeError("preview failed")
+
+    def fake_show(*_args, **_kwargs) -> None:
+        fig = plt.gcf()
+        for widget in list(getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets")):
+            if type(widget).__name__ == "Slider":
+                widget.set_val(0.02)
+        assert "region_preview_update_error" not in region_state
+        fig.canvas.callbacks.process(
+            "button_release_event",
+            MouseEvent("button_release_event", fig.canvas, 0, 0, button=1),
+        )
+        fig.canvas.callbacks.process(
+            "key_press_event",
+            KeyEvent("key_press_event", fig.canvas, key="enter"),
+        )
+
+    marker_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_marker": 1.0, "fit_l": 1.0, "display_l": 1.0},
+            {"m": 1, "branch": "+", "qz_marker": 2.0, "fit_l": 2.0, "display_l": 2.0},
+        ]
+    )
+    rod_profile_table = pd.DataFrame(
+        {
+            "m": [1, 1],
+            "branch": ["+", "+"],
+            "qz_center": [1.0, 2.0],
+            "background_density": [1.0, 2.0],
+        }
+    )
+
+    monkeypatch.setattr(plt, "show", fake_show)
+    _edited, accepted = show_editor(
+        marker_table,
+        rod_profile_table,
+        backend_name="TkAgg",
+        region_state=region_state,
+        profile_update_callback=refresh_profiles,
+        region_preview_update_callback=refresh_preview,
+    )
+
+    assert accepted is True
+    assert update_calls == [(0.02, 0.0, 3.0)]
+    assert region_state["region_preview_update_error"] == "preview failed"
 
 
 def test_parallel_script_hk0_delta_qr_refresh_is_phase_scoped(
@@ -5788,6 +6031,7 @@ def test_parallel_script_hk0_delta_qr_refresh_is_phase_scoped(
             if type(widget).__name__ == "Slider":
                 widget.set_val(0.02)
         assert update_calls == []
+        assert preview_calls == []
         fig.canvas.callbacks.process(
             "button_release_event",
             MouseEvent("button_release_event", fig.canvas, 0, 0, button=1),
@@ -6340,7 +6584,7 @@ def test_parallel_script_qz_l_axis_helper_is_defined_before_editor_l_window_setu
     assert "qr_rod_editor_initial_l_min = float(NONZERO_QR_ROD_L_MIN)" in source
     assert "qr_rod_editor_initial_l_max = float(NONZERO_QR_ROD_L_MAX)" in source
     assert (
-        'PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_l_defaults_v13_radial_prefit"'
+        'PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_l_defaults_v16_caked_phi_m90_90_plane"'
         in source
     )
 
@@ -6362,6 +6606,22 @@ def test_parallel_script_qr_rod_peak_editor_uses_l_axis() -> None:
     assert 'ax.set_xlabel("L"' in function_source
     assert "MaxNLocator(integer=True)" in function_source
     assert 'ax.set_xlabel("Qz"' not in function_source
+
+
+def test_parallel_script_qr_rod_peak_editor_caches_plot_inputs() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    function_source = source[
+        source.index("def show_qr_rod_peak_marker_popup(") : source.index(
+            "\ndef qr_rod_profile_cache_with_final_fit("
+        )
+    ]
+
+    assert "group_plot_cache:" in function_source
+    assert "clear_group_plot_cache(" in function_source
+    assert "group_plot_cache[cache_key]" in function_source
+    assert "clear_group_plot_cache()" in function_source
 
 
 def test_parallel_script_qr_rod_peak_editor_has_import_export_buttons() -> None:
