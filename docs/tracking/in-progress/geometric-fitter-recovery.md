@@ -5,7 +5,7 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-05-12
+Last updated: 2026-05-21
 
 ## Summary
 
@@ -1547,6 +1547,33 @@ Locked Qr/Qz dynamic authority guard follow-up, 2026-05-21:
 - Shipping status: safe as a diagnostic hardening bug-fix slice. Rollback is a
   normal git revert of the objective-row authority fields, classification,
   GUI message, regression tests, and this tracking update.
+
+Locked Qr/Qz optimizer-request handoff preservation, 2026-05-21:
+
+- Bug/error status: fixed for the live shape where preflight handoff rows had
+  clean locked-Qr observed/predicted detector-native and caked anchors, but the
+  optimizer request builder still let thinner initial/hit-table rows carry stale
+  nominal prediction fields into the dynamic-angle objective.
+- The GUI optimizer-request row builder now reuses the existing
+  `fit_handoff_audit_rows` payload for locked Qr pairs, preserving finite
+  observed/predicted native points, caked anchors, and authority fields before
+  optimization starts. The dynamic resolver records projected prediction caked
+  values into the objective payload fields used by residual summaries.
+- Regression status: the live same-HKL two-branch fixture now keeps
+  `matched_pair_count == 2`, identity RMS below 5 degrees, branch 0 predicted
+  phi near `131.750`, and branch 1 predicted phi near `39.250`; stale nominal
+  phi values near `22.750` and `-38.250` do not feed the identity objective.
+- Feature status: no new GUI control, CLI flag, public API, config key,
+  saved-state schema, artifact schema, dependency, CI workflow, deprecation, or
+  migration. This only preserves existing private locked-Qr row fields across
+  the GUI/runtime handoff.
+- Validation: `python -m pytest -q tests/test_geometry_fitting.py -k "locked_qr or dynamic_prediction or caked_authority or detector_frame or phi_wrap"`,
+  `python -m pytest -q tests/test_geometry_fit_live_rows_signature_handoff.py tests/test_geometry_fit_manual_fit_space_classification.py tests/test_gui_geometry_fit_workflow.py -k "locked or caked or handoff or dynamic or authority"`,
+  and `python -m ra_sim.dev check` pass.
+- Shipping status: ready as a normal bug-fix slice. The GUI/runtime process must
+  be restarted so the startup log shows this commit or a later commit instead
+  of `23cd6dc6`. Rollback is a normal git revert of the handoff-preservation
+  patch, focused regressions, and this tracking update.
 
 Do not use `run_geometry_fit_quality_baseline.py` as the first optimizer debug
 tool. Run it only after the ladder identifies a stable parameter set.

@@ -20903,8 +20903,14 @@ def _resolve_qr_fit_prediction_from_trial_params(
                     {
                         "available": True,
                         "fit_prediction_caked_deg": list(projected_caked),
-                        "fit_prediction_caked_authority": "exact_projector_from_native",
-                        "sim_refined_caked_authority": "exact_projector_from_native",
+                        "predicted_caked_deg": list(projected_caked),
+                        "objective_sim_caked_deg": list(projected_caked),
+                        "fit_prediction_caked_authority": (
+                            "dynamic_trial_projection_from_prediction_native"
+                        ),
+                        "sim_refined_caked_authority": (
+                            "dynamic_trial_projection_from_prediction_native"
+                        ),
                         "optimizer_simulated_source_two_theta_phi": list(projected_caked),
                         "optimizer_source_source": "point_only_detector_projection",
                         "objective_source_authority": "point_only_detector_projection",
@@ -21053,8 +21059,8 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 live_source = str(static_payload.get("source") or "fit_prediction_caked_deg")
                 retained_static_caked_prediction = True
         if retained_source_row_refined_prediction:
-            objective_authority = "sim_refined_caked_matching_native"
-            caked_authority = "sim_refined_caked_matching_native"
+            objective_authority = "sim_refined_caked_matching_prediction_native"
+            caked_authority = "sim_refined_caked_matching_prediction_native"
             refinement_policy = "source_row_refined_caked_matching_native"
         elif retained_static_caked_prediction:
             objective_authority = "fit_prediction_caked_deg"
@@ -21068,6 +21074,8 @@ def _resolve_qr_fit_prediction_from_trial_params(
             {
                 "available": True,
                 "fit_prediction_caked_deg": list(live_payload),
+                "predicted_caked_deg": list(live_payload),
+                "objective_sim_caked_deg": list(live_payload),
                 "fit_prediction_caked_authority": caked_authority,
                 "sim_refined_caked_authority": caked_authority,
                 "optimizer_simulated_source_two_theta_phi": list(live_payload),
@@ -21303,8 +21311,18 @@ def _resolve_qr_fit_prediction_from_trial_params(
                     float(projected_nominal_caked[0]),
                     float(projected_nominal_caked[1]),
                 ],
-                "fit_prediction_caked_authority": "exact_projector_from_native",
-                "sim_refined_caked_authority": "exact_projector_from_native",
+                "predicted_caked_deg": [
+                    float(projected_nominal_caked[0]),
+                    float(projected_nominal_caked[1]),
+                ],
+                "objective_sim_caked_deg": [
+                    float(projected_nominal_caked[0]),
+                    float(projected_nominal_caked[1]),
+                ],
+                "fit_prediction_caked_authority": (
+                    "dynamic_trial_projection_from_prediction_native"
+                ),
+                "sim_refined_caked_authority": ("dynamic_trial_projection_from_prediction_native"),
                 "optimizer_simulated_source_two_theta_phi": [
                     float(projected_nominal_caked[0]),
                     float(projected_nominal_caked[1]),

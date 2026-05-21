@@ -369,3 +369,112 @@ def test_live_rows_accepted_when_job_local_fallback_populates_rows(monkeypatch) 
     assert ready_payload["live_rows_raw_count"] == 1
     assert ready_payload["live_rows_signature_match"] is True
     assert ready_payload["geometry_fit_live_handoff_patch_marker"] == "phase4d1"
+
+
+def test_runtime_session_preserves_locked_qr_dynamic_payload_fields() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    geometry_fit = runtime_session.gui_geometry_fit
+    hkl = (-1, 0, 10)
+    q_group_key = ("q_group", "primary", 1, 10)
+    observed_native = (1083.734, 1152.380)
+    observed_caked = (37.566, 39.750)
+    clean_prediction_native = (1080.0, 1139.0)
+    clean_prediction_caked = (38.168, 39.250)
+    stale_prediction_native = (1862.136, 1077.417)
+    stale_prediction_caked = (41.225, -38.250)
+    identity = {
+        "normalized_hkl": hkl,
+        "source_table_index": 0,
+        "source_reflection_index": 0,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_row_index": 12,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "q_group_key": q_group_key,
+        "source_label": "primary",
+    }
+    provider_pair = {
+        "pair_index": 0,
+        "provider_pair_index": 0,
+        "dataset_pair_index": 0,
+        "background_index": 0,
+        "q_group_key": q_group_key,
+        "hkl": hkl,
+        "normalized_hkl": hkl,
+        "source_branch_index": 1,
+        "selected_source_identity_canonical": dict(identity),
+        "background_point": observed_native,
+        "background_frame": "detector_native",
+        "solver_measured_point": observed_native,
+        "solver_measured_frame": "detector_native",
+        "simulated_point": clean_prediction_caked,
+        "simulated_frame": "caked_2theta_phi",
+        "simulated_point_source": "manual_picker_saved",
+    }
+    measured_row = {
+        "x": observed_native[0],
+        "y": observed_native[1],
+        "hkl": hkl,
+        "q_group_key": q_group_key,
+        "background_two_theta_deg": observed_caked[0],
+        "background_phi_deg": observed_caked[1],
+        "fit_observed_detector_native_px": observed_native,
+        "fit_observed_caked_deg": observed_caked,
+        **identity,
+    }
+    initial_row = {
+        "hkl": hkl,
+        "q_group_key": q_group_key,
+        "sim_native": stale_prediction_native,
+        "sim_native_source": "stale_hit_table_display_mislabeled_native",
+        "simulated_two_theta_deg": stale_prediction_caked[0],
+        "simulated_phi_deg": stale_prediction_caked[1],
+        **identity,
+    }
+    audit_row = {
+        "pair_index": 0,
+        "hkl": hkl,
+        "q_group_key": q_group_key,
+        "source_branch_index": 1,
+        "fit_observed_detector_native_px": observed_native,
+        "fit_observed_caked_deg": observed_caked,
+        "observed_caked_authority": "dynamic_trial_projection_from_observed_native",
+        "fit_prediction_detector_native_px": clean_prediction_native,
+        "fit_prediction_caked_deg": clean_prediction_caked,
+        "predicted_caked_deg": clean_prediction_caked,
+        "sim_refined_caked_deg": clean_prediction_caked,
+        "fit_prediction_caked_authority": "dynamic_trial_projection_from_prediction_native",
+        "sim_refined_caked_authority": "dynamic_trial_projection_from_prediction_native",
+    }
+    dataset = {
+        "dataset_index": 0,
+        "pair_count": 1,
+        "provider_pairs": [provider_pair],
+        "manual_point_pairs": [dict(provider_pair)],
+        "measured_for_fit": [measured_row],
+        "initial_pairs_display": [initial_row],
+        "fit_handoff_audit_rows": [audit_row],
+    }
+
+    rows, summary = geometry_fit._build_geometry_fit_optimizer_request_rows(
+        prepared_run=SimpleNamespace(current_dataset=dataset),
+        solver_inputs=SimpleNamespace(
+            miller=np.asarray([hkl], dtype=np.int64),
+            intensities=np.ones(1, dtype=np.float64),
+            image_size=4000,
+        ),
+    )
+
+    assert summary["fixed_source_pair_count"] == 1
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["fit_observed_detector_native_px"] == pytest.approx(observed_native)
+    assert row["fit_observed_caked_deg"] == pytest.approx(observed_caked)
+    assert row["fit_prediction_detector_native_px"] == pytest.approx(clean_prediction_native)
+    assert row["fit_prediction_caked_deg"] == pytest.approx(clean_prediction_caked)
+    assert row["sim_refined_caked_deg"] == pytest.approx(clean_prediction_caked)
+    assert row["fit_prediction_caked_authority"] == (
+        "dynamic_trial_projection_from_prediction_native"
+    )
+    assert row["observed_caked_authority"] == "dynamic_trial_projection_from_observed_native"

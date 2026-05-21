@@ -5739,7 +5739,7 @@ def test_locked_qr_dynamic_prediction_ignores_stale_nominal_caked_when_refined_p
                 "fit_prediction_detector_native_px": list(prediction_native),
                 "sim_refined_detector_native_px": list(prediction_native),
                 "sim_refined_caked_deg": list(exact_projected_caked),
-                "sim_refined_caked_authority": "sim_refined_caked_matching_native",
+                "sim_refined_caked_authority": "sim_refined_caked_matching_prediction_native",
                 "sim_nominal_caked_deg": list(stale_nominal_caked),
                 "simulated_two_theta_deg": stale_nominal_caked[0],
                 "simulated_phi_deg": stale_nominal_caked[1],
@@ -5786,46 +5786,126 @@ def test_locked_qr_dynamic_prediction_ignores_stale_nominal_caked_when_refined_p
     assert prediction["optimizer_simulated_source_two_theta_phi"] == pytest.approx(
         list(exact_projected_caked)
     )
-    assert prediction["fit_prediction_caked_authority"] == "exact_projector_from_native"
+    assert prediction["fit_prediction_caked_authority"] == (
+        "dynamic_trial_projection_from_prediction_native"
+    )
     assert prediction["objective_source_authority"] == "point_only_detector_projection"
     assert prediction["used_sim_nominal_caked_for_objective"] is False
 
 
-def _locked_qr_dynamic_live_shape_context():
-    branch_payloads = {
-        0: {
-            "observed": (33.063, 130.754),
-            "refined": (32.681, 132.250),
-            "stale": (39.718, 36.750),
-            "native": (1097.0, 1920.0),
+def test_locked_qr_dynamic_objective_never_uses_nominal_caked_prediction():
+    stale_nominal_caked = (41.225, -38.250)
+    clean_projected_caked = (38.168, 39.250)
+    prediction_native = (1080.0, 1139.0)
+
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        row = _point_only_dynamic_qr_row(*stale_nominal_caked)
+        row.update(
+            {
+                "fit_prediction_detector_native_px": list(prediction_native),
+                "fit_prediction_caked_deg": [40.0, -80.0],
+                "sim_refined_detector_native_px": list(prediction_native),
+                "sim_refined_caked_deg": list(clean_projected_caked),
+                "sim_nominal_caked_deg": list(stale_nominal_caked),
+                "simulated_two_theta_deg": stale_nominal_caked[0],
+                "simulated_phi_deg": stale_nominal_caked[1],
+            }
+        )
+        return _locked_qr_source_rows_payload([row])
+
+    def projector(cols, rows, *, local_params=None, **_kwargs):
+        del local_params
+        assert np.asarray(cols, dtype=float).tolist() == [prediction_native[0]]
+        assert np.asarray(rows, dtype=float).tolist() == [prediction_native[1]]
+        return _point_only_projector_payload(
+            clean_projected_caked[0],
+            clean_projected_caked[1],
+            native_col=prediction_native[0],
+            native_row=prediction_native[1],
+        )
+
+    prediction = opt._resolve_qr_fit_prediction_from_trial_params(
+        _locked_qr_fixed_source_entry(
+            background_two_theta_deg=37.566,
+            background_phi_deg=39.750,
+        ),
+        {"center_x": 0.0},
+        {
+            "dataset_ctx": _point_only_qr_dataset_ctx(source_rows_builder, projector),
+            "hit_tables": (),
+            "sim_buffer": np.zeros((1, 1), dtype=np.float64),
+            "image_size": 4000,
+            "fit_center": [2000.0, 2000.0],
+            "detector_distance": 0.1,
+            "pixel_size": 1.0,
+            "prediction_source_rows_cache": {},
+            "_qr_fit_point_only_projection": True,
         },
-        1: {
-            "observed": (37.566, 39.750),
-            "refined": (38.605, 39.250),
-            "stale": (41.634, -38.250),
-            "native": (1074.0, 1132.0),
-        },
+        _locked_qr_fixed_source_entry(),
+    )
+
+    allowed_authorities = {
+        "dynamic_trial_projection_from_prediction_native",
+        "dynamic_trial_projection_from_prediction_display_converted_to_native",
+        "sim_refined_caked_matching_prediction_native",
     }
+    forbidden_authorities = {
+        "sim_nominal_caked",
+        "simulated_two_theta_phi",
+        "saved_handoff_caked",
+        "unknown",
+    }
+
+    assert prediction["fit_prediction_caked_authority"] in allowed_authorities
+    assert prediction["fit_prediction_caked_authority"] not in forbidden_authorities
+    assert prediction["predicted_caked_deg"] == pytest.approx(list(clean_projected_caked))
+    assert prediction["objective_sim_caked_deg"] == pytest.approx(list(clean_projected_caked))
+    assert prediction["fit_prediction_caked_deg"] == pytest.approx(list(clean_projected_caked))
+    assert prediction["optimizer_simulated_source_two_theta_phi"] == pytest.approx(
+        list(clean_projected_caked)
+    )
+
+
+def _locked_qr_dynamic_live_shape_context(branch_payloads=None):
+    if branch_payloads is None:
+        branch_payloads = {
+            0: {
+                "observed": (33.063, 130.754),
+                "refined": (32.681, 132.250),
+                "stale": (39.718, 36.750),
+                "native": (1097.0, 1920.0),
+            },
+            1: {
+                "observed": (37.566, 39.750),
+                "refined": (38.605, 39.250),
+                "stale": (41.634, -38.250),
+                "native": (1074.0, 1132.0),
+            },
+        }
 
     def locked_entry(branch: int) -> dict[str, object]:
         payload = branch_payloads[branch]
-        return _locked_qr_fixed_source_entry(
-            hkl=(-1, 0, 10),
-            label="-1,0,10",
-            source_branch_index=branch,
-            source_peak_index=branch,
-            resolved_peak_index=branch,
-            source_row_index=240 + branch,
-            branch_id=f"locked-branch-{branch}",
-            best_sample_index=30 + branch,
-            mosaic_top_rank_key=("rank", 30 + branch),
-            background_two_theta_deg=payload["observed"][0],
-            background_phi_deg=payload["observed"][1],
-            caked_x=payload["observed"][0],
-            caked_y=payload["observed"][1],
-            fit_space_anchor_override=True,
-            fit_space_anchor_source="manual_caked_click",
-        )
+        overrides = {
+            "hkl": (-1, 0, 10),
+            "label": "-1,0,10",
+            "source_branch_index": branch,
+            "source_peak_index": branch,
+            "resolved_peak_index": branch,
+            "source_row_index": 240 + branch,
+            "branch_id": f"locked-branch-{branch}",
+            "best_sample_index": 30 + branch,
+            "mosaic_top_rank_key": ("rank", 30 + branch),
+            "background_two_theta_deg": payload["observed"][0],
+            "background_phi_deg": payload["observed"][1],
+            "caked_x": payload["observed"][0],
+            "caked_y": payload["observed"][1],
+            "fit_space_anchor_override": True,
+            "fit_space_anchor_source": "manual_caked_click",
+        }
+        if payload.get("observed_native") is not None:
+            overrides["fit_observed_detector_native_px"] = list(payload["observed_native"])
+        return _locked_qr_fixed_source_entry(**overrides)
 
     def source_row(branch: int) -> dict[str, object]:
         payload = branch_payloads[branch]
@@ -5844,7 +5924,7 @@ def _locked_qr_dynamic_live_shape_context():
                 "fit_prediction_detector_native_px": list(payload["native"]),
                 "sim_refined_detector_native_px": list(payload["native"]),
                 "sim_refined_caked_deg": list(payload["refined"]),
-                "sim_refined_caked_authority": "sim_refined_caked_matching_native",
+                "sim_refined_caked_authority": "sim_refined_caked_matching_prediction_native",
                 "sim_nominal_caked_deg": list(payload["stale"]),
                 "simulated_two_theta_deg": payload["stale"][0],
                 "simulated_phi_deg": payload["stale"][1],
@@ -5913,8 +5993,8 @@ def _locked_qr_dynamic_live_shape_context():
     return branch_payloads, dataset_ctx, local
 
 
-def _evaluate_locked_qr_dynamic_live_shape():
-    branch_payloads, dataset_ctx, local = _locked_qr_dynamic_live_shape_context()
+def _evaluate_locked_qr_dynamic_live_shape(branch_payloads=None):
+    branch_payloads, dataset_ctx, local = _locked_qr_dynamic_live_shape_context(branch_payloads)
     residual, _diagnostics, summary = opt._evaluate_geometry_fit_dataset_dynamic_point_matches(
         local,
         dataset_ctx,
@@ -5943,6 +6023,36 @@ def test_locked_qr_dynamic_identity_eval_matches_handoff_residuals():
     assert rows[1]["predicted_caked_deg"][1] != pytest.approx(branch_payloads[1]["stale"][1])
 
 
+def test_locked_qr_dynamic_identity_eval_uses_clean_handoff_payload():
+    branch_payloads = {
+        0: {
+            "observed": (33.063, 130.754),
+            "refined": (32.459, 131.750),
+            "stale": (39.567, 36.250),
+            "native": (1097.000, 1914.000),
+            "observed_native": (1083.270, 1915.182),
+        },
+        1: {
+            "observed": (37.566, 39.750),
+            "refined": (38.168, 39.250),
+            "stale": (41.225, -38.250),
+            "native": (1080.000, 1139.000),
+            "observed_native": (1083.734, 1152.380),
+        },
+    }
+
+    _payloads, _residual, summary, rows = _evaluate_locked_qr_dynamic_live_shape(
+        branch_payloads
+    )
+
+    assert int(summary["matched_pair_count"]) == 2
+    assert summary["raw_angular_rms_deg"] < 5.0
+    assert rows[0]["predicted_caked_deg"][1] == pytest.approx(131.750)
+    assert rows[1]["predicted_caked_deg"][1] == pytest.approx(39.250)
+    assert rows[0]["predicted_caked_deg"][1] != pytest.approx(22.750)
+    assert rows[1]["predicted_caked_deg"][1] != pytest.approx(-38.250)
+
+
 def test_locked_qr_dynamic_identity_eval_uses_same_observed_anchor_as_handoff():
     branch_payloads, _residual, _summary, rows = _evaluate_locked_qr_dynamic_live_shape()
 
@@ -5955,9 +6065,9 @@ def test_locked_qr_dynamic_pair_payload_has_single_prediction_authority():
     _branch_payloads, _residual, summary, rows = _evaluate_locked_qr_dynamic_live_shape()
 
     allowed_authorities = {
-        "exact_projector_from_native",
-        "exact_projector_from_display_converted_to_native",
-        "sim_refined_caked_matching_native",
+        "dynamic_trial_projection_from_prediction_native",
+        "dynamic_trial_projection_from_prediction_display_converted_to_native",
+        "sim_refined_caked_matching_prediction_native",
     }
     forbidden_authorities = {
         "sim_nominal_caked",

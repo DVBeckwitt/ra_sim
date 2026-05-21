@@ -21456,6 +21456,108 @@ def _build_geometry_fit_optimizer_request_rows(
         for row in dataset.get("initial_pairs_display", ()) or ()
         if isinstance(row, Mapping)
     ]
+    audit_rows = [
+        dict(row)
+        for row in dataset.get("fit_handoff_audit_rows", ()) or ()
+        if isinstance(row, Mapping)
+    ]
+    audit_rows_by_pair_index: dict[int, dict[str, object]] = {}
+    for fallback_index, audit_row in enumerate(audit_rows):
+        pair_index = _geometry_fit_coerce_nonnegative_index(
+            audit_row.get("pair_index", audit_row.get("dataset_pair_index"))
+        )
+        audit_rows_by_pair_index.setdefault(
+            int(pair_index) if pair_index is not None else int(fallback_index),
+            dict(audit_row),
+        )
+
+    def _audit_row_for_pair(pair_index: int) -> dict[str, object]:
+        if int(pair_index) in audit_rows_by_pair_index:
+            return dict(audit_rows_by_pair_index[int(pair_index)])
+        if 0 <= int(pair_index) < len(audit_rows):
+            return dict(audit_rows[int(pair_index)])
+        return {}
+
+    def _finite_pair_payload(value: object) -> tuple[float, float] | None:
+        point = _geometry_fit_point_list(value)
+        if point is None:
+            return None
+        try:
+            x_val = float(point[0])
+            y_val = float(point[1])
+        except Exception:
+            return None
+        if not (np.isfinite(x_val) and np.isfinite(y_val)):
+            return None
+        return float(x_val), float(y_val)
+
+    def _copy_locked_qr_dynamic_payload(
+        row: dict[str, object],
+        *sources: Mapping[str, object] | None,
+    ) -> None:
+        candidate_sources = [
+            dict(source) for source in sources if isinstance(source, Mapping) and source
+        ]
+        if not candidate_sources:
+            return
+        if not any(
+            geometry_fit_entry_has_fixed_manual_caked_qr(source)
+            or source.get("fit_prediction_detector_native_px") is not None
+            or source.get("fit_prediction_caked_deg") is not None
+            for source in candidate_sources
+        ):
+            return
+
+        pair_fields = (
+            "fit_observed_detector_native_px",
+            "fit_observed_detector_display_px",
+            "fit_observed_caked_deg",
+            "fit_prediction_detector_native_px",
+            "fit_prediction_detector_display_px",
+            "fit_prediction_caked_deg",
+            "predicted_caked_deg",
+            "objective_sim_caked_deg",
+            "sim_refined_detector_native_px",
+            "sim_refined_detector_display_px",
+            "sim_refined_caked_deg",
+            "observed_detector_native_px",
+            "observed_caked_deg",
+            "predicted_detector_native_px",
+        )
+        scalar_fields = (
+            "fit_observed_caked_projection_reason",
+            "fit_prediction_caked_projection_reason",
+            "fit_prediction_caked_authority",
+            "observed_caked_authority",
+            "sim_refined_caked_authority",
+            "fit_prediction_source",
+            "fit_prediction_resolver_function",
+            "fit_prediction_source_resolution_reason",
+            "fit_prediction_projection_theta_initial_deg",
+        )
+        for field_name in pair_fields:
+            for source in candidate_sources:
+                if field_name not in source:
+                    continue
+                point = _finite_pair_payload(source.get(field_name))
+                if point is None:
+                    continue
+                row[field_name] = (float(point[0]), float(point[1]))
+                break
+        for field_name in scalar_fields:
+            for source in candidate_sources:
+                if source.get(field_name) is None:
+                    continue
+                row[field_name] = copy.deepcopy(source.get(field_name))
+                break
+        if row.get("optimizer_simulated_source_two_theta_phi") is None:
+            predicted_caked = _finite_pair_payload(row.get("fit_prediction_caked_deg"))
+            if predicted_caked is not None:
+                row["optimizer_simulated_source_two_theta_phi"] = (
+                    float(predicted_caked[0]),
+                    float(predicted_caked[1]),
+                )
+
     if not provider_pairs and not manual_pairs:
         return [], {}
     pair_count = max(
@@ -21478,6 +21580,7 @@ def _build_geometry_fit_optimizer_request_rows(
         initial_row = initial_rows[pair_index] if pair_index < len(initial_rows) else {}
         provider_pair = provider_pairs[pair_index] if pair_index < len(provider_pairs) else {}
         manual_pair = manual_pairs[pair_index] if pair_index < len(manual_pairs) else {}
+        audit_row = _audit_row_for_pair(pair_index)
         identity = _geometry_fit_source_identity_from_pair(provider_pair, manual_pair)
         point = _geometry_fit_optimizer_point_from_pair(provider_pair, manual_pair)
         row = copy.deepcopy(dict(measured_row))
@@ -21550,6 +21653,14 @@ def _build_geometry_fit_optimizer_request_rows(
         row["optimizer_request_source"] = "provider_pair"
         row["provider_selected_source_identity_canonical"] = copy.deepcopy(identity)
         _geometry_fit_apply_source_coverage_identity(row)
+        _copy_locked_qr_dynamic_payload(
+            row,
+            audit_row,
+            manual_pair,
+            initial_row,
+            measured_row,
+            provider_pair,
+        )
 
         identity_matches = bool(identity) and _geometry_fit_optimizer_identity_matches(
             identity, row
