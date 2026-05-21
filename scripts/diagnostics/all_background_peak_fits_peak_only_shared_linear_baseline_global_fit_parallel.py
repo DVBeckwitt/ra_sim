@@ -781,6 +781,7 @@ def qr_rod_peak_edit_cache_key(
     path_value: object = None,
     *,
     marker_table: pd.DataFrame | None = None,
+    rod_profile_table: pd.DataFrame | None = None,
     mode: object = None,
     lattice_signature: object = None,
     q_group_signature: object = None,
@@ -796,6 +797,48 @@ def qr_rod_peak_edit_cache_key(
         reference_signature["rod_reference_policy"] = _cache_normalize_value(rod_reference_policy)
     if rod_profile_policy is not None:
         reference_signature["rod_profile_policy"] = _cache_normalize_value(rod_profile_policy)
+    if rod_profile_table is not None:
+        profile = pd.DataFrame(rod_profile_table).copy()
+        if not profile.empty and {"m", "branch"}.issubset(profile.columns):
+            profile_m = pd.to_numeric(profile["m"], errors="coerce").to_numpy(dtype=np.float64)
+            profile_branch = profile["branch"].astype(str).to_numpy(dtype=object)
+            profile = profile.loc[(profile_m == 0.0) & (profile_branch == "qz")].copy()
+        columns = [
+            col
+            for col in (
+                "m",
+                "branch",
+                "qz_center",
+                "qz_min",
+                "qz_max",
+                "pixel_count",
+                "background_density",
+            )
+            if col in profile
+        ]
+        if columns:
+            normalized_profile = profile[columns].copy()
+            for col in ("m", "qz_center", "qz_min", "qz_max", "pixel_count", "background_density"):
+                if col in normalized_profile:
+                    normalized_profile[col] = pd.to_numeric(
+                        normalized_profile[col], errors="coerce"
+                    )
+            if {"m", "branch", "qz_center"}.issubset(normalized_profile.columns):
+                normalized_profile = normalized_profile.sort_values(
+                    ["m", "branch", "qz_center"], kind="mergesort"
+                ).reset_index(drop=True)
+            records = json.loads(
+                normalized_profile.to_json(
+                    orient="records", double_precision=12, default_handler=str
+                )
+            )
+        else:
+            records = []
+        data = json.dumps(records, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        reference_signature["specular_profile"] = {
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "rows": int(len(profile)),
+        }
 
     def with_reference_signature(payload: dict[str, object]) -> dict[str, object]:
         if reference_signature:
@@ -1533,6 +1576,7 @@ def show_qr_rod_peak_marker_popup(
     region_profile_refresh_pending = False
     region_profile_refresh_sources: set[str] = set()
     region_preview_refresh_pending = False
+    last_button_press_axes: dict[str, object] = {"inaxes": None}
 
     def editor_debug_enabled() -> bool:
         os_module = globals().get("os")
@@ -1970,16 +2014,20 @@ def show_qr_rod_peak_marker_popup(
             title_box_state["syncing"] = False
 
     def suppress_inactive_text_box_stop_draw(box: object) -> None:
-        original_stop_typing = getattr(box, "stop_typing")
-
         def stop_typing_only_when_active() -> None:
+            notify_submit = False
             if bool(getattr(box, "capturekeystrokes", False)):
-                original_stop_typing()
-                return
+                notify_submit = last_button_press_axes.get("inaxes") not in group_by_axes
+                on_stop_typing = getattr(box, "_on_stop_typing", None)
+                if callable(on_stop_typing):
+                    on_stop_typing()
+                box._on_stop_typing = None
             cursor = getattr(box, "cursor", None)
             if cursor is not None:
                 cursor.set_visible(False)
             box.capturekeystrokes = False
+            if notify_submit and bool(getattr(box, "eventson", False)):
+                box._observers.process("submit", box.text)
 
         box.stop_typing = stop_typing_only_when_active
 
@@ -2715,6 +2763,12 @@ def show_qr_rod_peak_marker_popup(
     region_widgets: list[object] = []
     roi_controls_active = hk0_roi_controls_enabled()
     theta_i_controls_active = nonzero_theta_i_controls_enabled()
+
+    def remember_button_press_axes(event) -> None:
+        last_button_press_axes["inaxes"] = getattr(event, "inaxes", None)
+
+    fig.canvas.mpl_connect("button_press_event", remember_button_press_axes)
+
     if region_controls_enabled:
         delta_qr_slider = None
         theta_i_box = None
@@ -15346,6 +15400,7 @@ rod_profile_table = rod_profile_table_for_l_window(
 qr_rod_peak_edit_key = qr_rod_peak_edit_cache_key(
     None if qr_rod_peak_edit_source == "last_cached" else qr_rod_peak_edits_path or None,
     marker_table=marker_table if qr_rod_peak_edit_source != "last_cached" else None,
+    rod_profile_table=rod_profile_table,
     mode=qr_rod_peak_edit_source,
     lattice_signature=ACTIVE_LATTICE_CACHE_SIGNATURE,
     q_group_signature=Q_GROUP_ROWS_CACHE_SIGNATURE,

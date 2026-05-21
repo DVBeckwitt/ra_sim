@@ -272,8 +272,8 @@ Current status as of 2026-05-21:
 - split Qr-rod marker editing loads imported edit JSON before the nonzero/HK=0
   phase split, writes edit JSON only after the final HK=0/specular phase is
   accepted, records nonzero L/theta_i controls in the final-fit cache key, and
-  records the HK=0/specular phi/2theta ROI in the cache key so stale ROI fits
-  are not reused
+  records the HK=0/specular phi/2theta ROI and accepted HK=0/qz profile rows
+  in the cache key so stale ROI/profile fits are not reused
 - final nonlinear Pearson-VII Qz refinement minimizes the existing
   intensity-weighted residual plus a bounded log-intensity residual, matching
   the log-scaled Qr-rod plot without changing marker-table, CSV, CLI, or
@@ -301,6 +301,12 @@ Current status as of 2026-05-21:
   Qr-rod cache policy. During nonzero profile refresh, both plus/minus branches
   for the same `m` rebuild their Qz bins from the same active L window and
   common finite detector support, so their displayed L starts stay aligned.
+- Bug status fixed as of 2026-05-21: clicking or dragging a nonzero HK rod
+  panel while an `L Min` / `L Max` text box is focused blurs the box without
+  submitting its draft value, so panel interaction no longer changes the
+  shared L window. Accepted HK=0/specular profile rows are also hashed into
+  the final Qr-rod cache identity, so the final figure cannot reuse stale
+  cached `m=0` data after the GUI selection changes.
 - PbI2 manuscript figures default to
   `C:\Users\Kenpo\OneDrive\Documents\GitHub\PhD Work\2D-Manuscript-Draft\figures\results_pbi2`.
   Other samples keep the `results_ordered` default, and
@@ -336,6 +342,9 @@ Matplotlib desktop backends and skips it for CI/headless backends. Use `popup`
 to force the editor and `skip` for unattended runs. The editor can load and save
 JSON marker tables through `RA_SIM_QR_ROD_PEAK_EDITS`; accepted popup edits are
 hashed into the final-fit cache key so stale fitted profiles are not reused.
+For HK=0/specular edits, the accepted qz profile rows are also hashed because
+the final figure is drawn from the accepted profile table, not only from marker
+positions.
 No-edit runs also require the current final-fit signature before a cached joint
 fit is reused.
 On a matching pre-editor cache hit, the diagnostic still prepares the current

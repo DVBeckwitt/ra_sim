@@ -25,6 +25,8 @@
   - Fixed HK=0 Qr-rod picker startup so the specular ROI profile and detector preview initialize before the first pick, replaced the obsolete theta_i/L-bound controls with HK=0-only phi/2theta ROI bounds, kept the no-op Delta Qr control out of the HK=0 editor/cache policy, and removed pre-editor L-derived Qz clipping from the specular path.
   - Added a numeric `theta_i` field to the nonzero HK Qr-rod marker editor; the accepted value now rebuilds nonzero detector Q maps, detector preview overlays, and final Qr-rod cache identity while HK=0 remains phi/2theta ROI-only with no `L Min` / `L Max` controls.
   - Fixed nonzero Qr-rod profile refreshes so `m` plus/minus branches rebuild from the same active L grid and common finite detector support, preventing different displayed L starts after empty-bin filtering.
+  - Fixed the nonzero Qr-rod marker editor so clicking or dragging the `m=1 -` panel cannot submit a focused `L Min` text box and accidentally change the shared L window.
+  - Fixed final Qr-rod fit cache identity so accepted HK=0 profile rows from the specular editor cannot be replaced by stale cached final-figure data.
   - Linked the Qr-rod marker editor and detector-preview windows so closing either window also closes the other.
 
 - **Config and path migration**

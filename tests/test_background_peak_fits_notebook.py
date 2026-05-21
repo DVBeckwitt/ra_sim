@@ -4761,6 +4761,56 @@ def test_parallel_script_hk0_roi_changes_final_cache_key() -> None:
     )
 
 
+def test_parallel_script_hk0_profile_rows_change_final_cache_key() -> None:
+    namespace = _script_functions("_cache_normalize_value", "qr_rod_peak_edit_cache_key")
+    cache_key = namespace["qr_rod_peak_edit_cache_key"]
+    markers = pd.DataFrame(
+        [
+            {"m": 0, "branch": "qz", "qz_marker": 1.0, "fit_l": 1.0, "display_l": 1.0},
+            {"m": 0, "branch": "qz", "qz_marker": 2.0, "fit_l": 2.0, "display_l": 2.0},
+        ]
+    )
+    base_profile = pd.DataFrame(
+        [
+            {
+                "m": 0,
+                "branch": "qz",
+                "qz_center": 1.0,
+                "pixel_count": 8,
+                "background_density": 12.0,
+            },
+            {
+                "m": 0,
+                "branch": "qz",
+                "qz_center": 2.0,
+                "pixel_count": 9,
+                "background_density": 15.0,
+            },
+            {
+                "m": 1,
+                "branch": "+",
+                "qz_center": 1.0,
+                "pixel_count": 10,
+                "background_density": 20.0,
+            },
+        ]
+    )
+    shifted_profile = base_profile.copy()
+    shifted_profile.loc[1, "qz_center"] = 2.5
+
+    assert cache_key(
+        None,
+        marker_table=markers,
+        mode="popup",
+        rod_profile_table=base_profile,
+    ) != cache_key(
+        None,
+        marker_table=markers,
+        mode="popup",
+        rod_profile_table=shifted_profile,
+    )
+
+
 def test_parallel_script_qr_rod_final_cache_requires_fit_signature() -> None:
     namespace = _script_functions("qr_rod_profile_cache_has_final_fit")
     cache_has_final_fit = namespace["qr_rod_profile_cache_has_final_fit"]
@@ -7372,6 +7422,7 @@ def test_parallel_script_unified_editor_result_updates_final_profile_table() -> 
     assert 'qr_rod_specular_editor_result.get("rod_profile_table", rod_profile_table)' in section
     assert "merge_qr_rod_editor_phase_table(" in section
     assert "rod_profile_table_for_l_window(" in section
+    assert "rod_profile_table=rod_profile_table" in section
     assert "specular_l_min=qr_rod_specular_editor_l_min" not in section
     assert '"theta_initial_deg": float(qr_rod_editor_theta_initial_deg)' in section
     assert "editor_theta_initial_deg" in section
@@ -7932,6 +7983,82 @@ def test_parallel_script_qr_rod_peak_editor_click_preserves_panel_limits(
     assert accepted is True
     assert observed["after_xlim"] == pytest.approx(observed["before_xlim"])
     assert observed["after_ylim"] == pytest.approx(observed["before_ylim"])
+
+
+def test_parallel_script_qr_rod_peak_editor_hk1_minus_click_does_not_submit_l_min(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from matplotlib.backend_bases import MouseEvent
+
+    namespace = _script_functions(
+        "as_float",
+        "qr_rod_peak_edit_runtime_mode",
+        "show_qr_rod_peak_marker_popup",
+        "marker_table_with_specular_l_markers",
+        "qz_l_linear_coeff_from_marker_rows",
+        "marker_row_title",
+        "clean_marker_title",
+        "replace_qr_rod_marker_group_qz",
+        "positive_log_plot_values",
+        "apply_positive_log_y_axis",
+        "snap_qr_rod_markers_to_profile_peaks",
+        "l_tick_label",
+        "_safe_run_name",
+        "load_qr_rod_peak_edits",
+        "write_qr_rod_peak_edits",
+    )
+    show_editor = namespace["show_qr_rod_peak_marker_popup"]
+    region_state = {"delta_qr": 0.01, "l_min": 0.5, "l_max": 3.0}
+    observed: dict[str, object] = {}
+
+    def fake_show(*_args, **_kwargs) -> None:
+        fig = plt.gcf()
+        widgets = list(getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets"))
+        l_min_box = next(
+            widget
+            for widget in widgets
+            if type(widget).__name__ == "TextBox"
+            and getattr(getattr(widget, "label", None), "get_text", lambda: "")() == "L Min"
+        )
+        panels = {ax.get_title(): ax for ax in fig.axes if ax.get_xlabel() == "L"}
+        target = panels["HK=1 -"]
+        l_min_box.begin_typing()
+        l_min_box.text_disp.set_text("1.25")
+        l_min_box.cursor_index = len("1.25")
+        fig.canvas.draw()
+        x_pixel, y_pixel = target.transData.transform((1.0, 1.0))
+        event = MouseEvent("button_press_event", fig.canvas, x_pixel, y_pixel, button=1)
+        event.inaxes = target
+        fig.canvas.callbacks.process("button_press_event", event)
+        observed["l_min_after_click"] = region_state["l_min"]
+        observed["l_min_box_active_after_click"] = bool(l_min_box.capturekeystrokes)
+        plt.close(fig)
+
+    marker_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "-", "qz_marker": 1.0, "fit_l": 1.0, "display_l": 1.0},
+            {"m": 1, "branch": "-", "qz_marker": 2.0, "fit_l": 2.0, "display_l": 2.0},
+        ]
+    )
+    rod_profile_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "-", "qz_center": 1.0, "background_density": 1.0},
+            {"m": 1, "branch": "-", "qz_center": 2.0, "background_density": 2.0},
+        ]
+    )
+
+    monkeypatch.setattr(plt, "show", fake_show)
+    _edited, accepted = show_editor(
+        marker_table,
+        rod_profile_table,
+        backend_name="TkAgg",
+        region_state=region_state,
+        editor_phase="nonzero",
+    )
+
+    assert accepted is True
+    assert observed["l_min_after_click"] == pytest.approx(0.5)
+    assert observed["l_min_box_active_after_click"] is False
 
 
 def test_parallel_script_qr_rod_peak_editor_hk4_minus_drag_preserves_panel_limits(
