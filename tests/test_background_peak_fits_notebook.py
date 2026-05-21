@@ -169,12 +169,12 @@ def _script_functions(*names: str) -> dict[str, object]:
         "ROD_QZ_NONLINEAR_LOG_RESIDUAL_WEIGHT": 1.0,
         "ROD_QZ_NONLINEAR_LOG_FLOOR_FRACTION": 0.05,
         "ROD_QZ_SHARED_LINEAR_BASELINE_ENABLED": True,
-        "QR_ROD_FINAL_FIT_CACHE_SIGNATURE": "joint_qz_labeled_marker_fit_specular_theta_i12_l8_v14_radial_prefit",
+        "QR_ROD_FINAL_FIT_CACHE_SIGNATURE": "joint_qz_labeled_marker_fit_specular_theta_i12_l8_v15_radial_2theta_caked",
         "PRE_EDITOR_CACHE_SCHEMA": "ra_sim.background_pre_editor_cache.v1",
         "PRE_EDITOR_CACHE_SIGNATURE": "pre_qr_rod_marker_editor_inputs_v1",
-        "PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE": "background_peak_fit_results_v2_radial_prefit",
+        "PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE": "background_peak_fit_results_v3_radial_2theta_caked",
         "PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE": "profile_fit_cache_v1",
-        "PRE_EDITOR_QR_ROD_STAGE_SIGNATURE": "qr_rod_pre_marker_profiles_hk0_l_defaults_v13_radial_prefit",
+        "PRE_EDITOR_QR_ROD_STAGE_SIGNATURE": "qr_rod_pre_marker_profiles_hk0_l_defaults_v14_radial_2theta_caked",
         "QR_ROD_BG_SIDE_BAND_INNER_SCALE": 1.30,
         "QR_ROD_BG_SIDE_BAND_OUTER_SCALE": 2.80,
         "QR_ROD_BG_MIN_SIDE_PIXELS": 8,
@@ -1009,6 +1009,36 @@ def test_parallel_script_radial_background_popup_is_before_background_preps() ->
     assert "RA_SIM_RADIAL_BACKGROUND_SUBTRACTION_SCALE" in source
 
 
+def test_parallel_script_radial_background_popup_displays_caked_not_raw_detector() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    popup_source = source[
+        source.index("def show_radial_background_subtraction_popup(") : source.index(
+            "\n@njit(fastmath=True, nogil=True)"
+        )
+    ]
+
+    assert "ai.integrate2d(" in popup_source
+    assert "prepare_gui_phi_display(" in popup_source
+    assert "caked_image_for_intensity_mode(" in popup_source
+    assert "raw_caked_image" in popup_source
+    assert "raw_caked_preview" in popup_source
+    assert "model_caked_image" in popup_source
+    assert "corrected_caked_image" in popup_source
+    assert "caked_theta_axis" in popup_source
+    assert "caked_theta_preview" in popup_source
+    assert "np.broadcast_to(" in popup_source
+    assert "detector_corrected = raw_detector - scale * detector_model" in popup_source
+    assert "corrected_caked_full, _theta_axis = caked_preview_from_detector(detector_corrected)" in (
+        popup_source
+    )
+    assert "Raw caked image" in popup_source
+    assert "Radial caked background model" in popup_source
+    assert "Corrected caked image" in popup_source
+    assert "Lower-envelope 2theta profile" in popup_source
+    assert "Raw detector image" not in popup_source
+    assert "Corrected detector image" not in popup_source
+
+
 def test_parallel_script_radial_background_popup_reuses_model_on_scale_updates() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     popup_source = source[
@@ -1144,6 +1174,14 @@ def test_parallel_script_radial_background_policy_changes_final_qr_rod_cache_key
         signature_source
     )
     assert "RADIAL_BACKGROUND_SUBTRACTION_POLICY_SIGNATURE" in source
+
+
+def test_parallel_script_radial_background_cache_signatures_reject_old_prefit_caches() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert 'QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_specular_theta_i12_l8_v15_radial_2theta_caked"' in source
+    assert 'PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE = "background_peak_fit_results_v3_radial_2theta_caked"' in source
+    assert 'PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_l_defaults_v14_radial_2theta_caked"' in source
 
 
 def test_parallel_script_qr_rod_final_cache_key_changes_with_background_debug_policy() -> None:

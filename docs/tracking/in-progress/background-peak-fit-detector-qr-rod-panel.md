@@ -90,7 +90,8 @@ to make the Qr rod detector and integration figures source-consistent:
   detector image remains available, the radial model and corrected detector are
   saved as diagnostics, and the pre-editor/final Qr-rod cache signatures include
   the radial policy. The radial editor uses a Tk/Pillow canvas popup instead of
-  Matplotlib widgets so scale changes update from the cached radial model.
+  Matplotlib widgets, previews raw/model/corrected caked `2theta` images rather
+  than detector images, and keeps scale changes on the cached radial model.
 - The generated `.py` diagnostic opens the Qr-rod peak marker editor by default
   before the final joint Qz fit. `RA_SIM_QR_ROD_PEAK_EDIT_MODE=skip` disables
   the popup for unattended runs, `popup` is the default-on mode, and accepted
@@ -815,17 +816,22 @@ Passing checks:
   remains the launch check.
 - 2026-05-21 radial popup responsiveness follow-up: the radial pre-fit editor
   no longer uses Matplotlib widgets or a Matplotlib figure for interaction. It
-  now renders downsampled detector previews through Pillow `ImageTk.PhotoImage`
-  on Tk canvases, keeps the accepted config interface stable, and still
-  recomputes the radial model only for percentile/smoothing changes. Focused
+  now renders downsampled caked `2theta` previews through Pillow
+  `ImageTk.PhotoImage` on Tk canvases, keeps the accepted config interface
+  stable, and still recomputes the radial model only for percentile/smoothing
+  changes. Focused
   validation passed with
   `python -m pytest tests/test_background_peak_fits_notebook.py -k "radial_background or background_subtraction or qr_rod_peak_editor or hk0 or final_cache" -ra`
-  (`46 passed, 155 deselected`), after the narrower radial check
+  (`48 passed, 155 deselected`), after the narrower radial check
   `python -m pytest tests/test_background_peak_fits_notebook.py -k "radial_background or background_subtraction" -ra`
   (`9 passed, 192 deselected`), scoped compileall, scoped Ruff, and
   `git diff --check`. Bug/error status: fixed for the radial editor being too
-  laggy to use. Feature status: implemented locally; manual real-data popup
-  validation remains pending.
+  laggy to use and for showing detector images where the operator needed caked
+  `2theta` previews. The clip-zero preview now re-cakes the detector-corrected
+  image so it matches the fit pipeline semantics. Migration status: stale
+  radial-prefit caches are rejected by bumped pre-editor and final Qr-rod cache
+  signatures; no saved-state migration is required. Feature status: implemented
+  locally; manual real-data popup validation remains pending.
 
 Known validation limits:
 
@@ -838,7 +844,8 @@ Known validation limits:
   Bi2Se3/Bi2Te3 script run after this slice.
 - The radial background popup still needs a manual interactive run with
   `RA_SIM_RADIAL_BACKGROUND_SUBTRACTION_EDIT_MODE=popup` and cache resets to
-  verify the visual scale-slider acceptance on current raw data.
+  verify the caked `2theta` preview and scale-slider acceptance on current raw
+  data.
 - Visual acceptance still needs manual script-output review: colored detector
   background, HK labels near low-L rod bases, emphasized central `HK=0`
   Delta-Qr band, the `hk0_l3_star.png` crop fully containing the L=3

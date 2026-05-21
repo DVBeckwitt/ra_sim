@@ -126,12 +126,12 @@ def _safe_run_name(value: object) -> str:
 
 
 QR_ROD_PROFILE_CACHE_SCHEMA = "ra_sim.qr_rod_profile_cache.v1"
-QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_specular_theta_i12_l8_v14_radial_prefit"
+QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_specular_theta_i12_l8_v15_radial_2theta_caked"
 PRE_EDITOR_CACHE_SCHEMA = "ra_sim.background_pre_editor_cache.v1"
 PRE_EDITOR_CACHE_SIGNATURE = "pre_qr_rod_marker_editor_inputs_v1"
-PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE = "background_peak_fit_results_v2_radial_prefit"
+PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE = "background_peak_fit_results_v3_radial_2theta_caked"
 PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE = "profile_fit_cache_v1"
-PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_l_defaults_v13_radial_prefit"
+PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_l_defaults_v14_radial_2theta_caked"
 
 
 def _cache_normalize_value(value: object) -> object:
@@ -3848,6 +3848,64 @@ def show_radial_background_subtraction_popup(
         wavelength=float(wavelength_m),
     )
     theta_map, _raw_phi_map = detector_pixel_angular_maps(raw_detector.shape, ai.geometry)
+
+    def caked_preview_from_detector(detector_values: object) -> tuple[np.ndarray, np.ndarray]:
+        preview_result = ai.integrate2d(
+            np.asarray(detector_values, dtype=np.float64),
+            npt_rad=NPT_RADIAL,
+            npt_azim=NPT_AZIMUTH,
+            correctSolidAngle=BACKGROUND_SOLID_ANGLE_CORRECTION,
+            method="lut",
+            unit="2th_deg",
+            engine=EXACT_CAKE_ENGINE,
+            workers=CAKE_WORKERS,
+        )
+        caked_integrated, theta_axis, _phi_axis = prepare_gui_phi_display(preview_result)
+        raw_sum_signal = getattr(preview_result, "sum_signal", None)
+        raw_sum_normalization = getattr(preview_result, "sum_normalization", None)
+        raw_count = getattr(preview_result, "count", None)
+        if (raw_sum_signal is None) != (raw_sum_normalization is None):
+            raise RuntimeError("pyFAI caked sum_signal and sum_normalization fields must be paired")
+        if raw_sum_signal is None:
+            caked_sum_signal = None
+            caked_sum_normalization = None
+        else:
+            caked_sum_signal, _, _ = caked_field_to_gui_phi(
+                raw_sum_signal,
+                preview_result.azimuthal_deg,
+                preview_result.radial_deg,
+            )
+            caked_sum_normalization, _, _ = caked_field_to_gui_phi(
+                raw_sum_normalization,
+                preview_result.azimuthal_deg,
+                preview_result.radial_deg,
+            )
+        if raw_count is None:
+            caked_count = None
+        else:
+            caked_count, _, _ = caked_field_to_gui_phi(
+                raw_count,
+                preview_result.azimuthal_deg,
+                preview_result.radial_deg,
+            )
+        return (
+            caked_image_for_intensity_mode(
+                caked_integrated,
+                caked_sum_signal=caked_sum_signal,
+                caked_sum_normalization=caked_sum_normalization,
+                caked_count=caked_count,
+                intensity_mode="density",
+            ),
+            theta_axis,
+        )
+
+    raw_caked_image, caked_theta_axis = caked_preview_from_detector(raw_detector)
+    caked_preview_step = preview_stride(tuple(int(v) for v in raw_caked_image.shape))
+    raw_caked_preview = np.asarray(
+        raw_caked_image[::caked_preview_step, ::caked_preview_step],
+        dtype=np.float64,
+    )
+    caked_theta_preview = np.asarray(caked_theta_axis[::caked_preview_step], dtype=np.float64)
     current_config = _radial_background_subtraction_config_from_mapping(initial_config)
     result = {"config": dict(initial_config)}
     enabled = str(current_config["mode"]) == "radial"
@@ -3991,21 +4049,54 @@ def show_radial_background_subtraction_popup(
                 payload = recompute_radial_payload()
             else:
                 payload = cached_radial_payload
-            model = np.asarray(payload["background_model"], dtype=np.float64)
-            corrected = raw_detector - scale * model
+            theta_values = np.asarray(caked_theta_preview, dtype=np.float64).reshape(-1)
+            centers = np.asarray(payload.get("theta_centers", []), dtype=np.float64)
+            smoothed = np.asarray(payload.get("smoothed_profile", []), dtype=np.float64)
+            model_line = np.zeros(theta_values.shape, dtype=np.float64)
+            valid = np.isfinite(theta_values)
+            if centers.size and smoothed.size and np.any(valid):
+                model_line[valid] = np.interp(
+                    theta_values[valid],
+                    centers,
+                    smoothed,
+                    left=float(smoothed[0]),
+                    right=float(smoothed[-1]),
+                )
+            model_caked_image = np.broadcast_to(
+                model_line[None, :],
+                raw_caked_preview.shape,
+            ).copy()
+            model_caked_image = np.where(
+                np.isfinite(raw_caked_preview),
+                model_caked_image,
+                np.nan,
+            )
             if bool(config["clip_zero"]):
-                corrected = np.where(np.isfinite(corrected), np.maximum(corrected, 0.0), corrected)
+                detector_model = np.asarray(payload["background_model"], dtype=np.float64)
+                detector_corrected = raw_detector - scale * detector_model
+                detector_corrected = np.where(
+                    np.isfinite(detector_corrected),
+                    np.maximum(detector_corrected, 0.0),
+                    detector_corrected,
+                )
+                corrected_caked_full, _theta_axis = caked_preview_from_detector(detector_corrected)
+                corrected_caked_image = np.asarray(
+                    corrected_caked_full[::caked_preview_step, ::caked_preview_step],
+                    dtype=np.float64,
+                )
+            else:
+                corrected_caked_image = raw_caked_preview - scale * model_caked_image
             theta_centers = np.asarray(payload.get("theta_centers", []), dtype=np.float64)
             radial_profile = np.asarray(payload.get("radial_profile", []), dtype=np.float64)
             smoothed_profile = np.asarray(payload.get("smoothed_profile", []), dtype=np.float64)
         else:
-            model = np.zeros_like(raw_detector, dtype=np.float64)
-            corrected = raw_detector.copy()
+            model_caked_image = np.zeros_like(raw_caked_preview, dtype=np.float64)
+            corrected_caked_image = raw_caked_preview.copy()
             theta_centers = np.asarray([], dtype=np.float64)
             radial_profile = np.asarray([], dtype=np.float64)
             smoothed_profile = np.asarray([], dtype=np.float64)
-        update_panel_image("model", model)
-        update_panel_image("corrected", corrected)
+        update_panel_image("model", model_caked_image)
+        update_panel_image("corrected", corrected_caked_image)
         draw_radial_profile(theta_centers, radial_profile, smoothed_profile)
 
     def set_scale(_value: float) -> None:
@@ -4063,7 +4154,7 @@ def show_radial_background_subtraction_popup(
     def cancel() -> None:
         finish_with_config(dict(initial_config))
 
-    raw_preview = detector_preview_image(raw_detector)
+    raw_preview = detector_preview_image(raw_caked_preview)
     preview_width, preview_height = raw_preview.size
     profile_width = int(preview_width)
     profile_height = int(preview_height)
@@ -4107,25 +4198,25 @@ def show_radial_background_subtraction_popup(
 
         add_image_panel(
             "raw",
-            f"Raw detector image ({preview_idx}: {preview_path.name})",
+            f"Raw caked image ({preview_idx}: {preview_path.name})",
             0,
             0,
             raw_preview,
         )
         add_image_panel(
             "model",
-            "Radial background model",
+            "Radial caked background model",
             0,
             1,
-            detector_preview_image(np.zeros_like(raw_detector, dtype=np.float64)),
+            detector_preview_image(np.zeros_like(raw_caked_preview, dtype=np.float64)),
         )
-        add_image_panel("corrected", "Corrected detector image", 1, 0, raw_preview)
+        add_image_panel("corrected", "Corrected caked image", 1, 0, raw_preview)
 
         profile_panel = ttk.Frame(main, padding=(0, 0, 8, 8))
         profile_panel.grid(row=1, column=1, sticky="nsew")
         profile_panel.columnconfigure(0, weight=1)
         profile_panel.rowconfigure(1, weight=1)
-        ttk.Label(profile_panel, text="Lower-envelope radial profile").grid(
+        ttk.Label(profile_panel, text="Lower-envelope 2theta profile").grid(
             row=0, column=0, sticky="w"
         )
         profile_canvas = tk.Canvas(

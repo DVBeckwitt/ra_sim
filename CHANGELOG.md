@@ -18,6 +18,7 @@
   - Replaced the threaded weighted-event dense Q table with the serial packed Q-set layout, split threaded chunk wall time into `time_chunk_compute`, and added scalar-equivalent beam-phase/event-count diagnostics.
   - Restored the Python cache/stat compatibility surface around `process_peaks_parallel_safe(...)` in `ra_sim.simulation.diffraction`, including `_PHASE_SPACE_CACHE`, `_SOURCE_TEMPLATE_CACHE`, `_Q_VECTOR_CACHE`, and `get_last_process_peaks_safe_stats()`, so the source-template cache regression coverage passes again.
   - Scoped the default Numba cache directory by Python cache tag and moved diagnostic intersection analysis off the unstable compiled `solve_q`/intensity path to avoid stale-cache and full-suite compile failures.
+  - Fixed the background peak-fit radial subtraction editor to preview raw/model/corrected caked `2theta` images instead of detector images, keep normal scale-slider updates on downsampled caked arrays, preview clip-zero through the detector-corrected path, and invalidate stale radial-prefit caches.
 
 - **Config and path migration**
   - Renamed background-path keys in config from `dark_image`/`osc_files` to `simulation_dark_osc_file`/`simulation_background_osc_files`.
