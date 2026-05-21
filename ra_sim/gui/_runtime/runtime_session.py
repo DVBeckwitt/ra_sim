@@ -25152,20 +25152,23 @@ def do_update():
         and previous_dependency_signatures is not None
         and current_dependency_signatures != previous_dependency_signatures
     )
+    non_simulation_update_action = classifier_decision.action in {
+        UpdateAction.DISPLAY_ONLY,
+        UpdateAction.COMBINE_ONLY,
+        UpdateAction.DETECTOR_CENTER_REMAP,
+        UpdateAction.PRIMARY_PRUNE_REUSE,
+        UpdateAction.PRIMARY_PRUNE_FILL,
+        UpdateAction.ANALYSIS_ONLY,
+    }
+    requires_current_image_signature = classifier_decision.action in {
+        UpdateAction.DISPLAY_ONLY,
+        UpdateAction.COMBINE_ONLY,
+        UpdateAction.ANALYSIS_ONLY,
+    }
     effective_update_action = (
         classifier_decision.action
-        if classifier_decision.action
-        in {
-            UpdateAction.DISPLAY_ONLY,
-            UpdateAction.COMBINE_ONLY,
-            UpdateAction.DETECTOR_CENTER_REMAP,
-            UpdateAction.PRIMARY_PRUNE_REUSE,
-            UpdateAction.PRIMARY_PRUNE_FILL,
-        }
-        and (
-            classifier_decision.action not in {UpdateAction.DISPLAY_ONLY, UpdateAction.COMBINE_ONLY}
-            or not initial_image_signature_changed
-        )
+        if non_simulation_update_action
+        and (not requires_current_image_signature or not initial_image_signature_changed)
         else UpdateAction.FULL_SIMULATION
     )
     _set_classifier_decision(

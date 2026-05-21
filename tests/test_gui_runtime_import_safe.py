@@ -8693,10 +8693,7 @@ def test_do_update_primary_fill_keeps_hit_table_signature_stale_until_all_run_si
     assert runtime_session.simulation_runtime_state.stored_hit_table_signature is None
 
 
-def test_runtime_trace_records_classifier_display_decision(
-    monkeypatch,
-) -> None:
-    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+def _install_do_update_cached_simulation_trace_state(monkeypatch, runtime_session):
     fixture = _install_matching_hidden_analysis_payload_state(
         monkeypatch,
         runtime_session,
@@ -8733,6 +8730,17 @@ def test_runtime_trace_records_classifier_display_decision(
         lambda job: requested_jobs.append(dict(job)) or "submitted",
         raising=False,
     )
+    return state, trace_events, requested_jobs
+
+
+def test_runtime_trace_records_classifier_display_decision(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    state, trace_events, requested_jobs = _install_do_update_cached_simulation_trace_state(
+        monkeypatch,
+        runtime_session,
+    )
 
     runtime_session.do_update()
 
@@ -8755,6 +8763,39 @@ def test_runtime_trace_records_classifier_display_decision(
     assert complete_trace["classifier_requires_worker"] is False
     assert complete_trace["effective_update_action"] == "display_only"
     assert complete_trace["dependency_signatures_applied"] is True
+
+
+def test_runtime_trace_preserves_background_visibility_analysis_only_decision(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    state, trace_events, requested_jobs = _install_do_update_cached_simulation_trace_state(
+        monkeypatch,
+        runtime_session,
+    )
+
+    runtime_session.do_update()
+
+    assert requested_jobs == [], [
+        event for event in trace_events if event["event"] == "do_update_signature"
+    ]
+    assert state.last_dependency_signatures is not None
+    trace_events.clear()
+
+    runtime_session.background_runtime_state.visible = True
+    runtime_session.do_update()
+
+    assert requested_jobs == [], [
+        event for event in trace_events if event["event"] == "do_update_signature"
+    ]
+    complete_trace = next(
+        event for event in reversed(trace_events) if event["event"] == "do_update_complete"
+    )
+    assert complete_trace["classifier_update_action"] == "analysis_only"
+    assert complete_trace["classifier_update_reason"] == "analysis_geometry_changed"
+    assert complete_trace["classifier_requires_worker"] is False
+    assert complete_trace["classifier_requires_analysis"] is True
+    assert complete_trace["effective_update_action"] == "analysis_only"
 
 
 def _patch_do_update_prune_fast_path_state(runtime_session) -> None:

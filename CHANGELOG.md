@@ -284,6 +284,7 @@
   - Fixed headless `fit-geometry` per-background caked projector compatibility so Bi2Se3 and Bi2Te3 saved manual-caked states can run constrained `gamma,Gamma` direct fits through the shared dataset builder.
 
 - **GUI and UX updates**
+  - Fixed background visibility toggles so cached simulation data is reused and the runtime keeps the update in the analysis/display path instead of promoting it to a full simulation.
   - Added a Setup `Pick Beam Center` control that uses the current detector/background image, zoomed preview, and GUI Row/Col mapping to update the beam-center sliders and entries.
   - Made live caked Qr/Qz visual-source ledger output opt-in and cached manual-pick simulated-candidate refinement by stable simulation/exact-projection signatures so repeated warm-cache caked clicks do not reprint trace rows or rerun full row refinement; display-image sanitization and copied-but-equivalent caked axes no longer churn caked pick caches, explicit projection signatures survive normalize/hydrate/digest handoff, lookup rebuild completion is tracked explicitly, failed lookup builders are retried, no-signature direct calls clear stale skip metadata, and the New4 exact-caked finalizer repairs stale polish fields only for clean selected summaries.
   - Fixed detector-view Selected-Qr rod ROI mode so it displays a detector-native Qr/Qz support mask, suppresses the legacy detector `2theta/phi` angular ROI while enabled, and sets Qz bounds from detector pixels during rod drags.

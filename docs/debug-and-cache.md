@@ -464,11 +464,17 @@ Current action status:
   state only when a valid stored image exists
 - `combine_only`: feature status implemented; recombines cached primary and
   secondary images only when matching component images exist
-- `analysis_only`: classifier status implemented; runtime execution remains
-  conservative outside the explicit fast paths
+- `analysis_only`: feature status implemented for current stored-image redraws;
+  preserves cached simulation data for analysis/display updates such as
+  background visibility toggles, and falls back to full simulation when the
+  stored image signature is stale
 
 Bug/error status:
 
+- background visibility toggles no longer promote an `analysis_only` classifier
+  decision into a full simulation when the stored image is current; the
+  runtime syncs the existing background artist alpha and schedules only the
+  cached-image update path
 - stale full-worker results are discarded before newer display, prune-reuse, or
   detector-center-remap fast-path state can be overwritten
 - `last_dependency_signatures` is updated only after the applied state reflects
@@ -478,6 +484,16 @@ Bug/error status:
   caches while preserving reusable source/physics contribution caches
 - broad full-simulation invalidation remains the fallback for physics changes
   and signature-incompatible cache states
+
+Validation status as of 2026-05-21:
+
+- `python -m pytest tests/test_gui_runtime_import_safe.py -k "background_visibility_analysis_only or runtime_trace_records_classifier_display_decision" -ra`
+  passed
+- `python -m pytest tests/test_gui_runtime_background.py tests/test_gui_runtime_update_dependencies.py -ra`
+  passed
+- `python -m ra_sim.dev check` passed
+- no saved-state, config, CLI, artifact-schema, or migration/deprecation work is
+  required for this bug fix
 
 Validation status as of 2026-04-28:
 

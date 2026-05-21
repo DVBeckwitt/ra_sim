@@ -2,7 +2,30 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from ra_sim.gui import background_manager
 from ra_sim.gui import runtime_background
+
+
+def test_toggle_background_visibility_only_syncs_alpha_and_schedules_update() -> None:
+    background_state = SimpleNamespace(visible=True)
+    calls: list[tuple[str, object]] = []
+
+    visible = background_manager.toggle_background_visibility_with_side_effects(
+        background_state,
+        sync_background_runtime_state=lambda: calls.append(("sync", background_state.visible)),
+        set_background_alpha=lambda alpha: calls.append(("alpha", alpha)),
+        schedule_update=lambda: calls.append(("schedule", background_state.visible)),
+        visible_alpha=0.25,
+        hidden_alpha=0.75,
+    )
+
+    assert visible is False
+    assert background_state.visible is False
+    assert calls == [
+        ("sync", False),
+        ("alpha", 0.75),
+        ("schedule", False),
+    ]
 
 
 def test_build_runtime_background_status_refreshers_prefers_controls_then_callbacks() -> None:
