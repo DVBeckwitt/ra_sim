@@ -7128,6 +7128,214 @@ def test_manual_caked_qr_fit_auto_enables_dynamic_point_path(monkeypatch) -> Non
     assert result.point_match_summary["qr_fit_resolved_count"] == 1
 
 
+def test_caked_manual_fixed_pairs_with_finite_anchors_do_not_route_to_pixel_central_match(
+    monkeypatch,
+) -> None:
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        return (
+            np.zeros((image_size, image_size), dtype=np.float64),
+            [],
+            np.empty((0, 0, 0)),
+            np.empty(0),
+            np.empty(0),
+            [],
+        )
+
+    def fake_least_squares(residual_fn, x0, **_kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    live_pairs = [
+        {
+            "branch": 0,
+            "native_col": 8.0,
+            "native_row": 9.0,
+            "source_row_index": 42,
+            "source_peak_index": 0,
+            "source_reflection_index": 910,
+            "observed": (33.063, 130.754),
+            "predicted": (32.773, 129.750),
+        },
+        {
+            "branch": 1,
+            "native_col": 10.0,
+            "native_row": 11.0,
+            "source_row_index": 120,
+            "source_peak_index": 1,
+            "source_reflection_index": 911,
+            "observed": (37.566, 39.750),
+            "predicted": (38.041, 41.750),
+        },
+    ]
+
+    measured = []
+    for pair in live_pairs:
+        branch = int(pair["branch"])
+        measured.append(
+            _locked_qr_fixed_source_entry(
+                native_col=float(pair["native_col"]),
+                native_row=float(pair["native_row"]),
+                source_branch_index=branch,
+                source_peak_index=int(pair["source_peak_index"]),
+                source_row_index=int(pair["source_row_index"]),
+                source_reflection_index=int(pair["source_reflection_index"]),
+                branch_id=f"locked-branch-{branch}",
+                fit_observed_caked_deg=list(pair["observed"]),
+                fit_prediction_caked_deg=list(pair["predicted"]),
+                fit_space_anchor_override=True,
+                fit_space_anchor_source="manual_caked_projection",
+            )
+        )
+
+    observed_by_native = {
+        (float(pair["native_col"]), float(pair["native_row"])): pair["observed"]
+        for pair in live_pairs
+    }
+
+    def source_rows_builder(*, local_params=None):
+        rows = []
+        for pair in live_pairs:
+            branch = int(pair["branch"])
+            predicted = pair["predicted"]
+            row = _locked_qr_trial_source_row(
+                native_col=float(pair["native_col"]) + 4.0,
+                native_row=float(pair["native_row"]) + 4.0,
+                source_table_index=99,
+                source_row_index=int(pair["source_row_index"]),
+                source_branch_index=branch,
+                source_peak_index=int(pair["source_peak_index"]),
+                source_reflection_index=int(pair["source_reflection_index"]),
+                branch_id=f"locked-branch-{branch}",
+                caked_x=float(predicted[0]),
+                caked_y=float(predicted[1]),
+                two_theta_deg=float(predicted[0]),
+                phi_deg=float(predicted[1]),
+                sim_visual_caked_deg=[float(predicted[0]), float(predicted[1])],
+                actual_source="sim_visual_caked_deg",
+                source_kind="sim_visual_caked_deg",
+                projection_frame="caked_display",
+                coordinate_provenance="trial_geometry_projection",
+                is_dynamic_trial_row=True,
+                physical_branch_slot=branch,
+            )
+            row["fit_qr_branch_key"] = {
+                "q_group_key": list(row["q_group_key"]),
+                "hkl": list(row["hkl"]),
+                "physical_branch_slot": branch,
+                "source_branch_index": branch,
+                "source_peak_index": int(row["source_peak_index"]),
+                "source_table_index": int(row["source_table_index"]),
+                "source_row_index": int(row["source_row_index"]),
+                "source_reflection_index": int(row["source_reflection_index"]),
+                "source_reflection_namespace": row["source_reflection_namespace"],
+                "source_reflection_is_full": bool(row["source_reflection_is_full"]),
+                "branch_id": row["branch_id"],
+                "best_sample_index": int(row["best_sample_index"]),
+                "mosaic_top_rank_key": list(row["mosaic_top_rank_key"]),
+                "selection_reason": row["selection_reason"],
+            }
+            rows.append(row)
+        return _locked_qr_source_rows_payload(rows)
+
+    def projector(cols, rows, *, local_params=None, **_kwargs):
+        two_theta = []
+        phi = []
+        for col, row in zip(np.ravel(cols), np.ravel(rows)):
+            point = observed_by_native.get((float(col), float(row)), live_pairs[0]["observed"])
+            two_theta.append(float(point[0]))
+            phi.append(float(point[1]))
+        return {
+            "two_theta_deg": np.asarray(two_theta, dtype=np.float64),
+            "phi_deg": np.asarray(phi, dtype=np.float64),
+            "native_cols": np.asarray(cols, dtype=np.float64),
+            "native_rows": np.asarray(rows, dtype=np.float64),
+            "fit_space_source": "dataset_fit_space_projector",
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "fit_space_local_params_signature": "unit-test",
+            "cake_bundle_signature": "unit-test",
+            "input_frame": "native_detector",
+            "invalid_reason": None,
+            "native_frame_conversion_source": "",
+            "native_frame_conversion_count": 0,
+            "valid": True,
+        }
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 40
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+    result = opt.fit_geometry_parameters(
+        np.array([[2.0, 0.0, 0.0]], dtype=np.float64),
+        np.array([1.0], dtype=np.float64),
+        image_size,
+        _base_params(image_size, optics_mode=1),
+        measured_peaks=measured,
+        var_names=["gamma", "Gamma"],
+        experimental_image=experimental_image,
+        dataset_specs=[
+            {
+                "dataset_index": 0,
+                "label": "bg0",
+                "theta_initial": 0.0,
+                "measured_peaks": measured,
+                "experimental_image": experimental_image,
+                "_manual_caked_fit_space_required": True,
+                "fit_space_projector": projector,
+                "fit_space_projector_kind": "exact_caked_bundle",
+                "qr_fit_trial_source_rows_builder": source_rows_builder,
+                "qr_fit_trial_source_rows_builder_kind": "unit_test_dynamic_rows",
+                "sim_caked_image_builder": lambda *_args, **_kwargs: pytest.fail(
+                    "manual caked point-only mode must not generate a caked image"
+                ),
+                "sim_caked_image_builder_kind": "must_not_call",
+            }
+        ],
+        refinement_config={
+            "solver": {
+                "manual_point_fit_mode": True,
+                "dynamic_point_geometry_fit": False,
+                "fixed_manual_prediction_preflight_guard": True,
+                "restarts": 0,
+                "weighted_matching": False,
+                "use_measurement_uncertainty": False,
+                "max_nfev": 1,
+            },
+            "single_ray": {"enabled": False},
+            "identifiability": {"enabled": False},
+            "full_beam_polish": {"enabled": False},
+            "image_refinement": {"enabled": False},
+        },
+    )
+
+    assert result.final_metric_name in {
+        "dynamic_angular_point_match",
+        "manual_caked_fixed_pair_match",
+    }
+    assert result.final_metric_name != "central_point_match"
+    assert result.final_metric_space == "caked_deg"
+    assert result.final_metric_units == "deg"
+    assert result.point_match_summary["metric_unit"] == "deg"
+    assert result.point_match_summary["matched_pair_count"] == 2
+    assert bool(result.geometry_fit_debug_summary["manual_caked_fit_space_required"]) is True
+    assert bool(result.geometry_fit_debug_summary["manual_caked_fit_space_ready"]) is True
+    assert bool(result.geometry_fit_debug_summary["dynamic_point_geometry_fit"]) is True
+    assert (
+        bool(result.geometry_fit_debug_summary["dynamic_point_geometry_fit_auto_enabled"]) is True
+    )
+    assert result.point_match_summary["raw_angular_row_count"] == 2
+
+
 def test_manual_caked_qr_fit_required_flag_rejects_missing_exact_projector(monkeypatch) -> None:
     monkeypatch.setattr(
         opt,
@@ -7181,6 +7389,109 @@ def test_manual_caked_qr_fit_required_flag_rejects_missing_exact_projector(monke
     assert result.final_metric_name == "manual_caked_fit_space_missing"
     assert "manual caked fit-space requires exact caked anchors/projector" in result.message
     assert result.point_match_summary["reason"] == "manual_caked_fit_space_missing"
+
+
+def test_caked_manual_fixed_pairs_missing_observed_caked_anchor_fail_before_optimizer(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        opt,
+        "_process_peaks_parallel_safe",
+        lambda *_args, **_kwargs: pytest.fail(
+            "missing observed caked anchors must reject before simulation"
+        ),
+    )
+    image_size = 24
+    params = _base_params(image_size, optics_mode=1)
+    measured = _locked_qr_fixed_source_entry(
+        native_col=8.0,
+        native_row=9.0,
+        fit_prediction_caked_deg=[32.773, 129.750],
+        fit_space_anchor_override=True,
+        fit_space_anchor_source="manual_caked_projection",
+    )
+
+    result = opt.fit_geometry_parameters(
+        np.array([[2.0, 0.0, 0.0]], dtype=np.float64),
+        np.array([1.0], dtype=np.float64),
+        image_size,
+        params,
+        measured_peaks=[measured],
+        var_names=["gamma", "Gamma"],
+        experimental_image=np.zeros((image_size, image_size), dtype=np.float64),
+        dataset_specs=[
+            {
+                "label": "bg0.osc",
+                "measured_peaks": [measured],
+                "_manual_caked_fit_space_required": True,
+                "fit_space_projector": lambda *_args, **_kwargs: pytest.fail(
+                    "missing observed caked anchors must reject before projection"
+                ),
+                "fit_space_projector_kind": "exact_caked_bundle",
+            }
+        ],
+        refinement_config={
+            "solver": {
+                "manual_point_fit_mode": True,
+                "dynamic_point_geometry_fit": False,
+                "restarts": 0,
+            },
+            "single_ray": {"enabled": False},
+            "identifiability": {"enabled": False},
+            "full_beam_polish": {"enabled": False},
+            "image_refinement": {"enabled": False},
+        },
+    )
+
+    assert not result.success
+    assert result.status == -10
+    assert result.final_metric_name == "manual_caked_fit_space_missing"
+    assert result.point_match_summary["metric_name"] == "manual_caked_fit_space_missing"
+    assert result.point_match_summary.get("metric_unit") != "px"
+    assert result.geometry_fit_debug_summary["manual_caked_fit_space_ready"] is False
+    assert "missing_observed_caked_anchor" in result.geometry_fit_debug_summary[
+        "manual_caked_fit_missing_reasons"
+    ]
+
+
+def test_manual_caked_rejection_text_does_not_suggest_missing_detector_matches() -> None:
+    from ra_sim.gui import geometry_fit as gui_geometry_fit
+
+    result = SimpleNamespace(
+        success=False,
+        final_metric_space="caked_deg",
+        final_metric_units="deg",
+        rms_deg=6.25,
+        max_deg=6.25,
+        point_match_summary={
+            "metric_name": "dynamic_angular_point_match",
+            "metric_unit": "deg",
+            "matched_pair_count": 0,
+            "manual_caked_fit_pair_count": 2,
+            "manual_caked_residual_row_count": 2,
+            "raw_angular_row_count": 2,
+            "raw_angular_rms_deg": 6.25,
+            "raw_angular_max_deg": 6.25,
+        },
+    )
+
+    rejection_reasons = gui_geometry_fit.build_geometry_fit_rejection_reason_lines(
+        result,
+        rms=6.25,
+    )
+    progress_text = gui_geometry_fit.build_geometry_fit_rejected_progress_text(
+        current_dataset={"pair_count": 2, "group_count": 1},
+        dataset_count=1,
+        joint_background_mode=False,
+        rms=6.25,
+        rejection_reasons=rejection_reasons,
+        rms_unit="deg",
+    )
+
+    assert "No matched peak pairs were available for the fitted solution." not in rejection_reasons
+    assert "No matched peak pairs" not in progress_text
+    assert "Add more manual points" not in progress_text
+    assert "No geometry parameters were changed." in progress_text
 
 
 def test_final_summary_does_not_label_dynamic_objective_rms_as_px(monkeypatch) -> None:

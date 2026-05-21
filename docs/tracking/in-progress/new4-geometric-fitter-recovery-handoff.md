@@ -9,6 +9,24 @@ Last updated: 2026-05-20
 
 ## Current status
 
+- 2026-05-20 manual caked optimizer-routing follow-up completed. The latest
+  live evidence changed the remaining root cause: observed caked projection is
+  now finite, but tuple-style `fit_observed_caked_deg` anchors were not counted
+  by the optimizer readiness helper, so caked-required manual pairs could miss
+  the dynamic angular route and finish as detector-pixel `central_point_match`.
+  The optimizer now treats finite `fit_observed_caked_deg` tuples as caked
+  fit-space anchors, records manual-caked readiness/count diagnostics, emits a
+  compact route-check line before solving, and keeps caked-ready manual fits on
+  degree-based final metrics. The GUI rejection text no longer tells operators
+  to add points when caked manual pairs exist and the failure is caked angular
+  residual/routing. The trace checker now rejects the finite-anchor caked
+  objective followed by `weighted_rms=... px` or `central_point_match`.
+  Bug/error status: fixed in source and targeted regression tests for the
+  finite-anchor optimizer-routing half of the manual caked Qr/Qz loop. Feature
+  status: no GUI control, CLI flag, config key, saved-state field, artifact
+  schema, dependency, migration, deprecation, ADR, or version bump. Remaining
+  proof: rerun the live Tk GUI workflow and require degree metrics or a clear
+  pre-optimizer caked route block.
 - 2026-05-20 shipping/status follow-up completed. The current branch contains
   the detector-origin observed-caked projection fix and the follow-up regression
   pinning commit. The cached live traces

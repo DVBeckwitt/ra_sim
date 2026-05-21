@@ -23167,7 +23167,22 @@ def build_geometry_fit_rejection_reason_lines(
                 matched_pair_count = 0
         max_offset = _geometry_fit_metric_float(metric_max_value)
 
-    if has_matched_pair_count and matched_pair_count <= 0:
+    manual_caked_pair_count = 0
+    if isinstance(point_match_summary, Mapping) and metric_space == "caked_deg":
+        for key in (
+            "manual_caked_fit_pair_count",
+            "raw_angular_row_count",
+            "manual_caked_residual_row_count",
+        ):
+            try:
+                manual_caked_pair_count = max(
+                    int(manual_caked_pair_count),
+                    int(point_match_summary.get(key, 0) or 0),
+                )
+            except Exception:
+                continue
+
+    if has_matched_pair_count and matched_pair_count <= 0 and manual_caked_pair_count <= 0:
         reasons.append("No matched peak pairs were available for the fitted solution.")
     if (
         metric_space == "caked_deg"
@@ -24571,7 +24586,17 @@ def build_geometry_fit_rejected_progress_text(
         )
         + (f" | joint backgrounds={int(dataset_count)}" if joint_background_mode else "")
     )
-    lines.append("Add more manual points or remove outliers before rerunning the fit.")
+    caked_manual_rejection = bool(
+        str(rms_unit or "").strip().lower() in {"deg", "weighted_deg"}
+        or any(
+            "caked" in str(reason).lower() or "qr/qz" in str(reason).lower()
+            for reason in rejection_reasons
+        )
+    )
+    if caked_manual_rejection:
+        lines.append("No geometry parameters were changed.")
+    else:
+        lines.append("Add more manual points or remove outliers before rerunning the fit.")
     return "\n".join(lines)
 
 

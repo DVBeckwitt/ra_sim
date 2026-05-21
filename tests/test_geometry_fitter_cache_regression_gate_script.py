@@ -182,6 +182,35 @@ def test_geometry_fit_handoff_checker_rejects_live_text_log_signature(tmp_path) 
     assert any("objective_space=caked_deg used weighted_rms in px" in v for v in violations)
 
 
+def test_geometry_fit_handoff_checker_rejects_finite_anchor_pixel_fallback(
+    tmp_path,
+) -> None:
+    checker = _load_handoff_check_module()
+    trace_path = tmp_path / "geometry_fit_bad_caked_routing_e4a3e15f.log"
+    trace_path.write_text(
+        "\n".join(
+            [
+                "[geometry] manual_geometry_live_code_path git_commit=e4a3e15f",
+                "[geometry-fit] fit_observed_caked_deg=(33.063, 130.754)",
+                "[geometry-fit] fit_prediction_caked_deg=(32.773, 129.750)",
+                "[geometry-fit] fit_observed_caked_deg=(37.566, 39.750)",
+                "[geometry-fit] fit_prediction_caked_deg=(38.041, 41.750)",
+                "[geometry-fit] objective_space=caked_deg",
+                "[geometry-fit] Geometry fit: identity fixed manual pairs eval=1 "
+                "cost=433.320000 best_cost=433.320000 weighted_rms=12.0183 px",
+                "[geometry-fit] Geometry fit: complete "
+                "(cost=433.320000, rms=12.0183px, metric=central_point_match, matched=0)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    violations = checker.violations_for_trace(trace_path)
+
+    assert any("finite caked manual anchors used central_point_match" in v for v in violations)
+    assert any("finite caked manual anchors used weighted_rms in px" in v for v in violations)
+
+
 def test_geometry_fit_handoff_checker_allows_caked_preflight_failure(tmp_path) -> None:
     checker = _load_handoff_check_module()
     trace_path = tmp_path / "geometry_fit_trace_preflight.jsonl"

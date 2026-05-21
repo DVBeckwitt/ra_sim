@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import math
 import sys
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
@@ -46,6 +47,17 @@ def _as_int(value: object, default: int = 0) -> int:
         return int(default)
 
 
+def _looks_like_finite_pair(value: object) -> bool:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)) or len(value) < 2:
+        return False
+    try:
+        first = float(value[0])
+        second = float(value[1])
+    except Exception:
+        return False
+    return bool(math.isfinite(first) and math.isfinite(second))
+
+
 def _record_from_text_line(text: str, line_number: int, parse_error: str) -> dict[str, object]:
     lowered = text.strip().lower()
     record: dict[str, object] = {
@@ -61,6 +73,10 @@ def _record_from_text_line(text: str, line_number: int, parse_error: str) -> dic
         or "observed_caked_deg=<unavailable" in lowered
     ):
         record["fit_observed_caked_unavailable"] = True
+    if "fit_observed_caked_deg=(" in lowered:
+        record["fit_observed_caked_finite"] = True
+    if "fit_prediction_caked_deg=(" in lowered:
+        record["fit_prediction_caked_finite"] = True
     if "detector_to_caked_unavailable=true" in lowered:
         record["detector_to_caked_unavailable"] = True
     if "preflight: ready to solve geometry fit" in lowered:
@@ -121,6 +137,8 @@ def violations_for_trace(path: Path) -> list[str]:
     saw_metric_px = False
     saw_px_rms = False
     saw_central_px = False
+    saw_finite_observed_caked = False
+    saw_finite_predicted_caked = False
 
     for record in records:
         line = int(record.get("_line_number", 0) or 0)
@@ -149,6 +167,14 @@ def violations_for_trace(path: Path) -> list[str]:
             .startswith("<unavailable")
         ):
             saw_missing_observed_caked = True
+        if _is_true(record.get("fit_observed_caked_finite")) or _looks_like_finite_pair(
+            record.get("fit_observed_caked_deg")
+        ):
+            saw_finite_observed_caked = True
+        if _is_true(record.get("fit_prediction_caked_finite")) or _looks_like_finite_pair(
+            record.get("fit_prediction_caked_deg")
+        ):
+            saw_finite_predicted_caked = True
         if _is_true(record.get("preflight_ready")):
             saw_preflight_ready = True
         if final_metric_name == "central_point_match":
@@ -195,6 +221,15 @@ def violations_for_trace(path: Path) -> list[str]:
         violations.append(f"{path}: objective_space=caked_deg used metric_unit=px")
     if saw_caked_objective and saw_px_rms:
         violations.append(f"{path}: objective_space=caked_deg used weighted_rms in px")
+    if saw_caked_objective and saw_finite_observed_caked and saw_finite_predicted_caked:
+        if saw_central_point_match:
+            violations.append(
+                f"{path}: finite caked manual anchors used central_point_match"
+            )
+        if saw_px_rms:
+            violations.append(f"{path}: finite caked manual anchors used weighted_rms in px")
+        if saw_metric_px:
+            violations.append(f"{path}: finite caked manual anchors used metric_unit=px")
     if saw_caked_objective and saw_optimizer_run and saw_matched_zero:
         violations.append(f"{path}: objective_space=caked_deg reached optimizer with matched=0")
     if saw_caked_objective and saw_missing_observed_caked and saw_preflight_ready:

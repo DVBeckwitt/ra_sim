@@ -2074,6 +2074,13 @@ def _dataset_specs_have_geometry_source_identities(
 
 
 def _entry_has_caked_fit_space_anchor(entry: Mapping[str, object]) -> bool:
+    for key in (
+        "fit_observed_caked_deg",
+        "observed_caked_deg",
+        "background_caked_deg",
+    ):
+        if _finite_pair(entry.get(key)) is not None:
+            return True
     return any(
         _finite_pair((entry.get(x_key), entry.get(y_key))) is not None
         for x_key, y_key in (
@@ -2084,26 +2091,95 @@ def _entry_has_caked_fit_space_anchor(entry: Mapping[str, object]) -> bool:
     )
 
 
+def _entry_has_caked_fit_space_prediction(entry: Mapping[str, object]) -> bool:
+    for key in (
+        "fit_prediction_caked_deg",
+        "predicted_caked_deg",
+        "sim_refined_caked_deg",
+        "sim_nominal_caked_deg",
+    ):
+        if _finite_pair(entry.get(key)) is not None:
+            return True
+    return any(
+        _finite_pair((entry.get(x_key), entry.get(y_key))) is not None
+        for x_key, y_key in (
+            ("refined_sim_caked_x", "refined_sim_caked_y"),
+            ("simulated_two_theta_deg", "simulated_phi_deg"),
+            ("sim_visual_caked_x", "sim_visual_caked_y"),
+            ("fit_prediction_caked_x", "fit_prediction_caked_y"),
+        )
+    )
+
+
+def _manual_caked_fit_space_readiness_summary(
+    dataset_specs: Optional[Sequence[object]],
+    measured_peaks: Optional[Sequence[object]],
+) -> Dict[str, object]:
+    expected_count = 0
+    observed_count = 0
+    predicted_count = 0
+    exact_projector_available = False
+    dynamic_prediction_available = False
+    saw_candidate_dataset = False
+    missing_reasons: Set[str] = set()
+
+    for spec in _coerce_sequence_items(dataset_specs):
+        if not isinstance(spec, Mapping):
+            continue
+        measured_entries = _coerce_sequence_items(spec.get("measured_peaks", measured_peaks))
+        fixed_entries = [
+            entry
+            for entry in measured_entries
+            if isinstance(entry, Mapping) and _fixed_manual_qr_pair_requires_shared_resolver(entry)
+        ]
+        if not fixed_entries:
+            continue
+        saw_candidate_dataset = True
+        has_exact_projector = bool(
+            str(spec.get("fit_space_projector_kind", "") or "") == "exact_caked_bundle"
+            and callable(spec.get("fit_space_projector"))
+        )
+        has_dynamic_prediction = callable(spec.get("qr_fit_trial_source_rows_builder"))
+        exact_projector_available = bool(exact_projector_available or has_exact_projector)
+        dynamic_prediction_available = bool(dynamic_prediction_available or has_dynamic_prediction)
+        expected_count += int(len(fixed_entries))
+        if not has_exact_projector:
+            missing_reasons.add("missing_exact_caked_projector")
+        for entry in fixed_entries:
+            if _entry_has_caked_fit_space_anchor(entry):
+                observed_count += 1
+            else:
+                missing_reasons.add("missing_observed_caked_anchor")
+            if _entry_has_caked_fit_space_prediction(entry) or has_dynamic_prediction:
+                predicted_count += 1
+            else:
+                missing_reasons.add("missing_predicted_caked_anchor")
+
+    ready = bool(
+        saw_candidate_dataset
+        and exact_projector_available
+        and expected_count > 0
+        and observed_count >= expected_count
+        and predicted_count >= expected_count
+        and not missing_reasons
+    )
+    return {
+        "ready": bool(ready),
+        "expected_pair_count": int(expected_count),
+        "observed_caked_count": int(observed_count),
+        "predicted_caked_count": int(predicted_count),
+        "exact_projector_available": bool(exact_projector_available),
+        "dynamic_prediction_available": bool(dynamic_prediction_available),
+        "missing_reasons": sorted(missing_reasons),
+    }
+
+
 def _dataset_specs_require_dynamic_caked_qr_fit(
     dataset_specs: Optional[Sequence[object]],
     measured_peaks: Optional[Sequence[object]],
 ) -> bool:
-    for spec in _coerce_sequence_items(dataset_specs):
-        if not isinstance(spec, Mapping):
-            continue
-        if str(spec.get("fit_space_projector_kind", "") or "") != "exact_caked_bundle":
-            continue
-        if not callable(spec.get("fit_space_projector")):
-            continue
-        measured_entries = _coerce_sequence_items(spec.get("measured_peaks", measured_peaks))
-        for entry in measured_entries:
-            if (
-                isinstance(entry, Mapping)
-                and _fixed_manual_qr_pair_requires_shared_resolver(entry)
-                and _entry_has_caked_fit_space_anchor(entry)
-            ):
-                return True
-    return False
+    summary = _manual_caked_fit_space_readiness_summary(dataset_specs, measured_peaks)
+    return bool(summary.get("ready", False))
 
 
 def _dataset_specs_require_manual_caked_fit_space(
@@ -22452,12 +22528,16 @@ def fit_geometry_parameters(
     missing_pair_penalty = float(solver_cfg.get("missing_pair_penalty_px", 20.0))
     missing_pair_penalty = max(0.0, missing_pair_penalty)
     dynamic_point_geometry_fit_requested = bool(solver_cfg.get("dynamic_point_geometry_fit", False))
+    manual_caked_fit_space_readiness = _manual_caked_fit_space_readiness_summary(
+        dataset_spec_entries,
+        measured_peaks,
+    )
     manual_caked_fit_space_required = _dataset_specs_require_manual_caked_fit_space(
         dataset_spec_entries
     )
-    manual_caked_fit_space_ready = _dataset_specs_require_dynamic_caked_qr_fit(
-        dataset_spec_entries,
-        measured_peaks,
+    manual_caked_fit_space_ready = bool(manual_caked_fit_space_readiness.get("ready", False))
+    manual_caked_fit_pair_count = int(
+        manual_caked_fit_space_readiness.get("expected_pair_count", 0) or 0
     )
     dynamic_point_geometry_fit_auto_enabled = bool(
         manual_point_fit_mode
@@ -22892,6 +22972,29 @@ def fit_geometry_parameters(
     params.setdefault("center_y", center_col_default)
     params.setdefault("theta_offset", 0.0)
 
+    if manual_caked_fit_space_required or manual_caked_fit_space_ready:
+        route_evaluator = (
+            "dynamic_angular_point_match"
+            if manual_caked_fit_space_ready
+            else "manual_caked_fit_space_missing"
+        )
+        route_unit = "deg" if manual_caked_fit_space_ready else "none"
+        _emit_status(
+            "manual_caked_route_check "
+            f"objective_space=caked_deg "
+            f"required={str(bool(manual_caked_fit_space_required)).lower()} "
+            f"ready={str(bool(manual_caked_fit_space_ready)).lower()} "
+            "observed_caked={observed} predicted_caked={predicted} "
+            "evaluator={evaluator} unit={unit}".format(
+                observed=int(manual_caked_fit_space_readiness.get("observed_caked_count", 0) or 0),
+                predicted=int(
+                    manual_caked_fit_space_readiness.get("predicted_caked_count", 0) or 0
+                ),
+                evaluator=route_evaluator,
+                unit=route_unit,
+            )
+        )
+
     if manual_caked_fit_space_required and not manual_caked_fit_space_ready:
 
         def _initial_value_for_var(name: object) -> float:
@@ -22937,16 +23040,40 @@ def fit_geometry_parameters(
         result.point_match_summary = {
             "reason": reason,
             "metric_name": "manual_caked_fit_space_missing",
+            "metric_unit": "deg",
             "objective_space": "caked_deg",
             "manual_caked_fit_space_required": True,
-            "exact_fit_space_projector_available": False,
+            "exact_fit_space_projector_available": bool(
+                manual_caked_fit_space_readiness.get("exact_projector_available", False)
+            ),
             "dynamic_point_geometry_fit": False,
+            "manual_caked_fit_space_ready": False,
+            "manual_caked_fit_pair_count": int(manual_caked_fit_pair_count),
+            "manual_caked_fit_observed_caked_count": int(
+                manual_caked_fit_space_readiness.get("observed_caked_count", 0) or 0
+            ),
+            "manual_caked_fit_predicted_caked_count": int(
+                manual_caked_fit_space_readiness.get("predicted_caked_count", 0) or 0
+            ),
+            "manual_caked_fit_missing_reasons": list(
+                manual_caked_fit_space_readiness.get("missing_reasons", ()) or ()
+            ),
         }
         result.geometry_fit_debug_summary = {
             "point_match_mode": bool(point_match_mode),
             "manual_point_fit_mode": bool(manual_point_fit_mode),
             "manual_caked_fit_space_required": True,
             "manual_caked_fit_space_ready": False,
+            "manual_caked_fit_pair_count": int(manual_caked_fit_pair_count),
+            "manual_caked_fit_observed_caked_count": int(
+                manual_caked_fit_space_readiness.get("observed_caked_count", 0) or 0
+            ),
+            "manual_caked_fit_predicted_caked_count": int(
+                manual_caked_fit_space_readiness.get("predicted_caked_count", 0) or 0
+            ),
+            "manual_caked_fit_missing_reasons": list(
+                manual_caked_fit_space_readiness.get("missing_reasons", ()) or ()
+            ),
             "dynamic_point_geometry_fit": False,
             "dynamic_point_geometry_fit_auto_enabled": False,
             "rejection_reason": reason,
@@ -25475,6 +25602,18 @@ def fit_geometry_parameters(
         "point_match_mode": bool(point_match_mode),
         "dynamic_point_geometry_fit": bool(dynamic_point_geometry_fit),
         "dynamic_point_geometry_fit_auto_enabled": bool(dynamic_point_geometry_fit_auto_enabled),
+        "manual_caked_fit_space_required": bool(manual_caked_fit_space_required),
+        "manual_caked_fit_space_ready": bool(manual_caked_fit_space_ready),
+        "manual_caked_fit_pair_count": int(manual_caked_fit_pair_count),
+        "manual_caked_fit_observed_caked_count": int(
+            manual_caked_fit_space_readiness.get("observed_caked_count", 0) or 0
+        ),
+        "manual_caked_fit_predicted_caked_count": int(
+            manual_caked_fit_space_readiness.get("predicted_caked_count", 0) or 0
+        ),
+        "manual_caked_fit_missing_reasons": list(
+            manual_caked_fit_space_readiness.get("missing_reasons", ()) or ()
+        ),
         "provider_local_saved_sim_offset_baseline_primed": bool(
             provider_local_saved_sim_offset_baseline_primed
         ),
