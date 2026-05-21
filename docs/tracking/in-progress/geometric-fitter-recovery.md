@@ -1498,6 +1498,32 @@ Locked Qr/Qz caked authority mismatch, 2026-05-21:
   revert of the authority-precedence, live-row merge, focused tests, and this
   tracking update.
 
+Locked Qr/Qz dynamic-objective authority mismatch, 2026-05-21:
+
+- Bug/error status: fixed for the downstream dynamic-angle path where preflight
+  showed `ready=true`, optimizer setup used `dynamic-angle`, and final matching
+  kept two locked pairs, but the dynamic prediction resolver still allowed a
+  stale caked-display/nominal source row to become `sim_refined_caked_deg`.
+- The locked-Qr dynamic resolver now carries explicit source-row native
+  prediction coordinates through the existing source-row payload and exact
+  projects those native coordinates before caked-display values can become the
+  objective prediction. Stale `sim_visual_caked_deg`,
+  `simulated_two_theta_deg/simulated_phi_deg`, and `sim_nominal_caked_deg`
+  remain diagnostic for that row.
+- Regression tests cover the live-shape failure: a same-HKL locked branch pair
+  with stale nominal caked values and refined native detector predictions now
+  evaluates at identity against the refined/exact-projected caked anchors, not
+  the stale phi values near `36.750` or `-38.250` degrees.
+- Feature status: no new GUI control, CLI flag, public API, config key,
+  saved-state schema, artifact schema, dependency, CI workflow, deprecation, or
+  migration.
+- Validation: `python -m pytest -q tests/test_geometry_fitting.py -k "locked_qr or dynamic_prediction or caked_authority or detector_frame or phi_wrap or point_only_projection"`,
+  `python -m pytest -q tests/test_geometry_fit_live_rows_signature_handoff.py tests/test_geometry_fit_manual_fit_space_classification.py tests/test_gui_geometry_fit_workflow.py -k "locked or caked or handoff or dynamic"`,
+  and `python -m ra_sim.dev check` pass.
+- Shipping status: ready as a normal bug-fix slice. Rollback is a normal git
+  revert of the dynamic resolver precedence change, regression tests, and this
+  tracking update.
+
 Do not use `run_geometry_fit_quality_baseline.py` as the first optimizer debug
 tool. Run it only after the ladder identifies a stable parameter set.
 

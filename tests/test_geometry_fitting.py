@@ -5667,6 +5667,214 @@ def test_qr_caked_objective_prefers_live_sim_visual_caked_over_point_only_detect
     assert prediction["sim_nominal_detector_display_px_used_for_caked_projection"] is False
 
 
+def test_locked_qr_dynamic_prediction_ignores_stale_nominal_caked_when_refined_payload_exists():
+    projector_calls = 0
+    stale_nominal_caked = (41.634, -38.250)
+    exact_projected_caked = (38.605, 39.250)
+    prediction_native = (1074.0, 1132.0)
+
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        row = _point_only_dynamic_qr_row(*stale_nominal_caked)
+        row.update(
+            {
+                "fit_prediction_detector_native_px": list(prediction_native),
+                "sim_refined_detector_native_px": list(prediction_native),
+                "sim_refined_caked_deg": list(exact_projected_caked),
+                "sim_refined_caked_authority": "sim_refined_caked_matching_native",
+                "sim_nominal_caked_deg": list(stale_nominal_caked),
+                "simulated_two_theta_deg": stale_nominal_caked[0],
+                "simulated_phi_deg": stale_nominal_caked[1],
+            }
+        )
+        return _locked_qr_source_rows_payload([row])
+
+    def projector(cols, rows, *, local_params=None, **_kwargs):
+        nonlocal projector_calls
+        del local_params
+        projector_calls += 1
+        assert np.asarray(cols, dtype=float).tolist() == [prediction_native[0]]
+        assert np.asarray(rows, dtype=float).tolist() == [prediction_native[1]]
+        return _point_only_projector_payload(
+            exact_projected_caked[0],
+            exact_projected_caked[1],
+            native_col=prediction_native[0],
+            native_row=prediction_native[1],
+        )
+
+    prediction = opt._resolve_qr_fit_prediction_from_trial_params(
+        _locked_qr_fixed_source_entry(
+            background_two_theta_deg=37.566,
+            background_phi_deg=39.750,
+        ),
+        {"center_x": 0.0},
+        {
+            "dataset_ctx": _point_only_qr_dataset_ctx(source_rows_builder, projector),
+            "hit_tables": (),
+            "sim_buffer": np.zeros((4000, 4000), dtype=np.float64),
+            "image_size": 4000,
+            "fit_center": [2000.0, 2000.0],
+            "detector_distance": 0.1,
+            "pixel_size": 1.0,
+            "prediction_source_rows_cache": {},
+            "_qr_fit_point_only_projection": True,
+        },
+        _locked_qr_fixed_source_entry(),
+    )
+
+    assert projector_calls == 1
+    assert prediction["fit_prediction_caked_deg"] == pytest.approx(list(exact_projected_caked))
+    assert prediction["sim_refined_caked_deg"] == pytest.approx(list(exact_projected_caked))
+    assert prediction["optimizer_simulated_source_two_theta_phi"] == pytest.approx(
+        list(exact_projected_caked)
+    )
+    assert prediction["fit_prediction_caked_authority"] == "exact_projector_from_native"
+    assert prediction["objective_source_authority"] == "point_only_detector_projection"
+    assert prediction["used_sim_nominal_caked_for_objective"] is False
+
+
+def test_locked_qr_dynamic_identity_eval_matches_handoff_residuals():
+    branch_payloads = {
+        0: {
+            "observed": (33.063, 130.754),
+            "refined": (32.681, 132.250),
+            "stale": (39.718, 36.750),
+            "native": (1097.0, 1920.0),
+        },
+        1: {
+            "observed": (37.566, 39.750),
+            "refined": (38.605, 39.250),
+            "stale": (41.634, -38.250),
+            "native": (1074.0, 1132.0),
+        },
+    }
+
+    def locked_entry(branch: int) -> dict[str, object]:
+        payload = branch_payloads[branch]
+        return _locked_qr_fixed_source_entry(
+            hkl=(-1, 0, 10),
+            label="-1,0,10",
+            source_branch_index=branch,
+            source_peak_index=branch,
+            resolved_peak_index=branch,
+            source_row_index=240 + branch,
+            branch_id=f"locked-branch-{branch}",
+            best_sample_index=30 + branch,
+            mosaic_top_rank_key=("rank", 30 + branch),
+            background_two_theta_deg=payload["observed"][0],
+            background_phi_deg=payload["observed"][1],
+            caked_x=payload["observed"][0],
+            caked_y=payload["observed"][1],
+            fit_space_anchor_override=True,
+            fit_space_anchor_source="manual_caked_click",
+        )
+
+    def source_row(branch: int) -> dict[str, object]:
+        payload = branch_payloads[branch]
+        row = _point_only_dynamic_qr_row(*payload["stale"])
+        row.update(
+            {
+                "hkl": (-1, 0, 10),
+                "source_branch_index": branch,
+                "source_peak_index": branch,
+                "resolved_peak_index": branch,
+                "physical_branch_slot": branch,
+                "source_row_index": 240 + branch,
+                "branch_id": f"locked-branch-{branch}",
+                "best_sample_index": 30 + branch,
+                "mosaic_top_rank_key": ("rank", 30 + branch),
+                "fit_prediction_detector_native_px": list(payload["native"]),
+                "sim_refined_detector_native_px": list(payload["native"]),
+                "sim_refined_caked_deg": list(payload["refined"]),
+                "sim_refined_caked_authority": "sim_refined_caked_matching_native",
+                "sim_nominal_caked_deg": list(payload["stale"]),
+                "simulated_two_theta_deg": payload["stale"][0],
+                "simulated_phi_deg": payload["stale"][1],
+            }
+        )
+        row["fit_qr_branch_key"] = {
+            **dict(row.get("fit_qr_branch_key") or {}),
+            "hkl": [-1, 0, 10],
+            "source_branch_index": branch,
+            "source_peak_index": branch,
+            "source_row_index": 240 + branch,
+            "physical_branch_slot": branch,
+            "branch_id": f"locked-branch-{branch}",
+            "best_sample_index": 30 + branch,
+            "mosaic_top_rank_key": ["rank", 30 + branch],
+        }
+        return row
+
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        return _locked_qr_source_rows_payload([source_row(0), source_row(1)])
+
+    def projector(cols, rows, *, local_params=None, **_kwargs):
+        del local_params
+        projected_two_theta: list[float] = []
+        projected_phi: list[float] = []
+        native_cols: list[float] = []
+        native_rows: list[float] = []
+        for col, row_value in zip(np.asarray(cols, dtype=float), np.asarray(rows, dtype=float)):
+            for payload in branch_payloads.values():
+                if (float(col), float(row_value)) == payload["native"]:
+                    projected_two_theta.append(float(payload["refined"][0]))
+                    projected_phi.append(float(payload["refined"][1]))
+                    native_cols.append(float(payload["native"][0]))
+                    native_rows.append(float(payload["native"][1]))
+                    break
+            else:
+                raise AssertionError(f"unexpected projected point {(col, row_value)}")
+        return {
+            "two_theta_deg": np.asarray(projected_two_theta, dtype=np.float64),
+            "phi_deg": np.asarray(projected_phi, dtype=np.float64),
+            "native_cols": np.asarray(native_cols, dtype=np.float64),
+            "native_rows": np.asarray(native_rows, dtype=np.float64),
+            "fit_space_source": "dataset_fit_space_projector",
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "fit_space_local_params_signature": "unit-test",
+            "cake_bundle_signature": "unit-test",
+            "input_frame": "native_detector",
+            "invalid_reason": None,
+            "native_frame_conversion_source": "",
+            "native_frame_conversion_count": 0,
+            "valid": True,
+        }
+
+    dataset_ctx = _point_only_qr_dataset_ctx(source_rows_builder, projector)
+    dataset_ctx.subset.measured_entries = [locked_entry(0), locked_entry(1)]
+    local = _base_params(4000, optics_mode=1)
+    local.update(
+        {
+            "center_x": 2000.0,
+            "center_y": 2000.0,
+            "center": [2000.0, 2000.0],
+            "_qr_fit_point_only_projection": True,
+        }
+    )
+
+    residual, _diagnostics, summary = opt._evaluate_geometry_fit_dataset_dynamic_point_matches(
+        local,
+        dataset_ctx,
+        image_size=4000,
+        missing_pair_penalty_deg=5.0,
+        theta_value=0.0,
+        collect_diagnostics=True,
+    )
+
+    rows = sorted(
+        summary["_angular_residual_rows"],
+        key=lambda row: int(row["source_branch_index"]),
+    )
+    assert int(summary["matched_pair_count"]) == 2
+    assert summary["raw_angular_rms_deg"] < 5.0
+    assert np.linalg.norm(residual) < 5.0
+    assert rows[0]["predicted_caked_deg"] == pytest.approx(list(branch_payloads[0]["refined"]))
+    assert rows[1]["predicted_caked_deg"] == pytest.approx(list(branch_payloads[1]["refined"]))
+    assert rows[0]["predicted_caked_deg"][1] != pytest.approx(branch_payloads[0]["stale"][1])
+    assert rows[1]["predicted_caked_deg"][1] != pytest.approx(branch_payloads[1]["stale"][1])
+
+
 def test_qr_caked_objective_rejects_caked_display_values_as_detector_px():
     live_caked = (40.212, 39.904)
 

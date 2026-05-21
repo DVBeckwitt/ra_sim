@@ -18955,6 +18955,50 @@ def _resolve_locked_qr_trial_detector_point_from_source_rows(
     candidate_identity = dict(candidate.get("candidate_identity") or {})
     point = candidate.get("point")
     live_caked_point, live_caked_source = _source_row_live_caked_point(row)
+    source_row_prediction_native = None
+    source_row_prediction_native_source = None
+    for native_key in (
+        "fit_prediction_detector_native_px",
+        "predicted_detector_native_px",
+        "sim_refined_detector_native_px",
+    ):
+        source_row_prediction_native = _finite_pair(row.get(native_key))
+        if source_row_prediction_native is not None:
+            source_row_prediction_native_source = str(native_key)
+            break
+    if source_row_prediction_native is None:
+        for col_key, row_key, source in (
+            (
+                "fit_prediction_detector_native_col",
+                "fit_prediction_detector_native_row",
+                "fit_prediction_detector_native_col/row",
+            ),
+            (
+                "sim_refined_detector_native_col",
+                "sim_refined_detector_native_row",
+                "sim_refined_detector_native_col/row",
+            ),
+        ):
+            try:
+                point_candidate = (float(row.get(col_key, np.nan)), float(row.get(row_key, np.nan)))
+            except Exception:
+                continue
+            if np.isfinite(point_candidate[0]) and np.isfinite(point_candidate[1]):
+                source_row_prediction_native = point_candidate
+                source_row_prediction_native_source = str(source)
+                break
+    source_row_refined_caked_payload = _fit_qr_first_caked_pair_payload(
+        row,
+        tuple_keys=(
+            "fit_prediction_caked_deg",
+            "predicted_caked_deg",
+            "sim_refined_caked_deg",
+        ),
+        field_pairs=(
+            ("refined_sim_caked_x", "refined_sim_caked_y", "refined_sim_caked_x/y"),
+            ("fit_prediction_caked_x", "fit_prediction_caked_y", "fit_prediction_caked_x/y"),
+        ),
+    )
     caked_display_surface = _source_row_is_caked_display_surface(row)
     payload.update(
         {
@@ -18965,6 +19009,24 @@ def _resolve_locked_qr_trial_detector_point_from_source_rows(
                 else None
             ),
             "source_row_live_caked_source": live_caked_source or None,
+            "source_row_prediction_detector_native_px": (
+                [
+                    float(source_row_prediction_native[0]),
+                    float(source_row_prediction_native[1]),
+                ]
+                if source_row_prediction_native is not None
+                else None
+            ),
+            "source_row_prediction_detector_native_px_source": source_row_prediction_native_source,
+            "source_row_refined_caked_deg": (
+                [
+                    float(source_row_refined_caked_payload["point"][0]),
+                    float(source_row_refined_caked_payload["point"][1]),
+                ]
+                if isinstance(source_row_refined_caked_payload.get("point"), tuple)
+                else None
+            ),
+            "source_row_refined_caked_source": source_row_refined_caked_payload.get("source"),
             "source_row_detector_projection_allowed": bool(
                 point is not None and not caked_display_surface
             ),
@@ -20763,6 +20825,151 @@ def _resolve_qr_fit_prediction_from_trial_params(
     if live_caked_source_row:
         live_source = live_caked_source or "sim_visual_caked_deg"
         live_payload = [float(live_caked_point[0]), float(live_caked_point[1])]
+        source_row_prediction_native = _finite_pair(
+            resolution_payload.get("source_row_prediction_detector_native_px")
+        )
+        if source_row_prediction_native is not None:
+            two_theta_arr, phi_arr, projection_meta = _project_detector_points_to_fit_space(
+                dataset_ctx if isinstance(dataset_ctx, GeometryFitDatasetContext) else None,
+                np.asarray([float(source_row_prediction_native[0])], dtype=np.float64),
+                np.asarray([float(source_row_prediction_native[1])], dtype=np.float64),
+                local_params=trial_params,
+                anchor_kind="simulated",
+                input_frame="native_detector",
+                center=fit_context.get("fit_center"),
+                detector_distance=float(fit_context.get("detector_distance", np.nan)),
+                pixel_size=float(fit_context.get("pixel_size", np.nan)),
+                gamma_deg=float(fit_context.get("gamma_deg", 0.0)),
+                Gamma_deg=float(fit_context.get("Gamma_deg", 0.0)),
+            )
+            if (
+                bool(projection_meta.get("valid", False))
+                and two_theta_arr.size >= 1
+                and phi_arr.size >= 1
+                and np.isfinite(two_theta_arr[0])
+                and np.isfinite(phi_arr[0])
+            ):
+                projected_caked = [float(two_theta_arr[0]), float(phi_arr[0])]
+                native_cols = np.asarray(
+                    projection_meta.get("native_cols", [source_row_prediction_native[0]]),
+                    dtype=np.float64,
+                ).reshape(-1)
+                native_rows = np.asarray(
+                    projection_meta.get("native_rows", [source_row_prediction_native[1]]),
+                    dtype=np.float64,
+                ).reshape(-1)
+                projected_native = [
+                    float(native_cols[0])
+                    if native_cols.size
+                    else float(source_row_prediction_native[0]),
+                    float(native_rows[0])
+                    if native_rows.size
+                    else float(source_row_prediction_native[1]),
+                ]
+                native_source = (
+                    resolution_payload.get("source_row_prediction_detector_native_px_source")
+                    or "source_row_prediction_detector_native_px"
+                )
+                caked_delta = [
+                    float(projected_caked[0] - live_payload[0]),
+                    float(_wrap_phi_deg(projected_caked[1] - live_payload[1])),
+                ]
+                out.update(
+                    {
+                        "available": True,
+                        "fit_prediction_caked_deg": list(projected_caked),
+                        "fit_prediction_caked_authority": "exact_projector_from_native",
+                        "sim_refined_caked_authority": "exact_projector_from_native",
+                        "optimizer_simulated_source_two_theta_phi": list(projected_caked),
+                        "optimizer_source_source": "point_only_detector_projection",
+                        "objective_source_authority": "point_only_detector_projection",
+                        "source_authority_match": True,
+                        "sim_nominal_caked_raw_deg": list(live_payload),
+                        "sim_nominal_caked_deg": list(live_payload),
+                        "sim_nominal_projected_caked_deg": list(projected_caked),
+                        "sim_refined_caked_raw_deg": list(projected_caked),
+                        "sim_refined_caked_deg": list(projected_caked),
+                        "sim_refinement_delta_caked_deg": list(caked_delta),
+                        "sim_refinement_delta_caked_norm_deg": float(math.hypot(*caked_delta)),
+                        "sim_refinement_status": "source_row_native_projected_to_caked",
+                        "sim_refinement_policy": "exact_projector_from_native",
+                        "sim_refinement_caked_image_source": "point_only_detector_projection",
+                        "sim_refinement_subpixel": "no",
+                        "sim_refinement_subpixel_status": "none",
+                        "sim_refinement_subpixel_method": "none",
+                        "sim_refinement_bin_center_only": False,
+                        "sim_refinement_peak_value": 0.0,
+                        "sim_refinement_local_max_intensity": 0.0,
+                        "sim_refinement_local_sum_intensity": 0.0,
+                        "sim_refinement_local_nonzero_count": 0,
+                        "dynamic_baseline_anchor_coordinate_baseline_used": False,
+                        "live_caked_source_used_for_objective": False,
+                        "static_locked_caked_prediction_retained": False,
+                        "point_only_detector_projection_used": True,
+                        "point_only_projector_skipped": False,
+                        "point_only_detector_coordinate_source": native_source,
+                        "sim_nominal_detector_display_px_used_for_caked_projection": False,
+                        "sim_nominal_projection_input_px": [
+                            float(source_row_prediction_native[0]),
+                            float(source_row_prediction_native[1]),
+                        ],
+                        "sim_nominal_projection_input_frame": "native_detector",
+                        "sim_nominal_native_px": list(projected_native),
+                        "sim_nominal_detector_native_px": list(projected_native),
+                        "sim_refined_detector_native_px": list(projected_native),
+                        "fit_prediction_detector_native_px": list(projected_native),
+                        "fit_prediction_detector_native_px_source": native_source,
+                        "caked_projection_signature": projection_meta.get(
+                            "fit_space_local_params_signature"
+                        ),
+                        "cake_bundle_signature": projection_meta.get("cake_bundle_signature"),
+                        "fit_space_projector_kind": projection_meta.get("fit_space_projector_kind"),
+                        "projection_meta": dict(projection_meta),
+                        "fit_prediction_detector_display_px": None,
+                        "fit_prediction_detector_display_px_source": (
+                            "invalid_for_detector_space:caked_display"
+                        ),
+                        "resolved_detector_display_px": None,
+                        "resolved_detector_native_px": list(projected_native),
+                        "detector_native_reprojection_is_diagnostic": False,
+                        "detector_native_reprojection_used_for_objective": True,
+                        "objective_residual_coordinate_space": "caked_deg",
+                        "objective_residual_units": "deg",
+                        "pixel_residual_used_for_objective": False,
+                        "used_sim_nominal_caked_for_objective": False,
+                        "used_exact_projector": True,
+                        "used_sim_refined_caked": False,
+                    }
+                )
+                return out
+            source_row_refined_caked = _fit_qr_caked_pair_from_entry(
+                resolution_payload,
+                "source_row_refined_caked_deg",
+            )
+            retained_source_row_refined_prediction = False
+            if source_row_refined_caked is not None:
+                live_payload = [
+                    float(source_row_refined_caked[0]),
+                    float(source_row_refined_caked[1]),
+                ]
+                live_source = str(
+                    resolution_payload.get("source_row_refined_caked_source")
+                    or "sim_refined_caked_deg"
+                )
+                retained_source_row_refined_prediction = True
+            else:
+                out.update(
+                    {
+                        "available": False,
+                        "unavailable_reason": "locked_qr_dynamic_prediction_unprojectable",
+                        "fit_prediction_caked_authority": "unknown",
+                        "sim_refinement_status": "source_row_native_projection_failed",
+                        "sim_refinement_policy": "point_only_fail_closed",
+                    }
+                )
+                return out
+        else:
+            retained_source_row_refined_prediction = False
         observed_payload = _fit_qr_first_caked_pair_payload(
             locked_correspondence,
             tuple_keys=(
@@ -20797,7 +21004,11 @@ def _resolve_qr_fit_prediction_from_trial_params(
         observed_point = observed_payload.get("point")
         static_point = static_payload.get("point")
         retained_static_caked_prediction = False
-        if isinstance(observed_point, tuple) and isinstance(static_point, tuple):
+        if (
+            not retained_source_row_refined_prediction
+            and isinstance(observed_point, tuple)
+            and isinstance(static_point, tuple)
+        ):
             live_delta = _caked_surface_delta_norm(
                 (float(live_payload[0]), float(live_payload[1])),
                 (float(observed_point[0]), float(observed_point[1])),
@@ -20816,30 +21027,24 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 live_payload = [float(static_point[0]), float(static_point[1])]
                 live_source = str(static_payload.get("source") or "fit_prediction_caked_deg")
                 retained_static_caked_prediction = True
-        objective_authority = (
-            "fit_prediction_caked_deg"
-            if retained_static_caked_prediction
-            else "sim_visual_caked_deg"
-        )
-        refinement_policy = (
-            "static_locked_caked_prediction_retained"
-            if retained_static_caked_prediction
-            else "live_caked_source"
-        )
+        if retained_source_row_refined_prediction:
+            objective_authority = "sim_refined_caked_matching_native"
+            caked_authority = "sim_refined_caked_matching_native"
+            refinement_policy = "source_row_refined_caked_matching_native"
+        elif retained_static_caked_prediction:
+            objective_authority = "fit_prediction_caked_deg"
+            caked_authority = "saved_handoff_caked"
+            refinement_policy = "static_locked_caked_prediction_retained"
+        else:
+            objective_authority = "sim_visual_caked_deg"
+            caked_authority = "dynamic_trial_projection"
+            refinement_policy = "live_caked_source"
         out.update(
             {
                 "available": True,
                 "fit_prediction_caked_deg": list(live_payload),
-                "fit_prediction_caked_authority": (
-                    "saved_handoff_caked"
-                    if retained_static_caked_prediction
-                    else "dynamic_trial_projection"
-                ),
-                "sim_refined_caked_authority": (
-                    "saved_handoff_caked"
-                    if retained_static_caked_prediction
-                    else "dynamic_trial_projection"
-                ),
+                "fit_prediction_caked_authority": caked_authority,
+                "sim_refined_caked_authority": caked_authority,
                 "optimizer_simulated_source_two_theta_phi": list(live_payload),
                 "optimizer_source_source": live_source,
                 "objective_source_authority": objective_authority,
@@ -20852,7 +21057,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 "sim_refinement_delta_caked_norm_deg": 0.0,
                 "sim_refinement_status": (
                     refinement_policy
-                    if retained_static_caked_prediction
+                    if retained_static_caked_prediction or retained_source_row_refined_prediction
                     else "live_sim_visual_caked"
                 ),
                 "sim_refinement_policy": refinement_policy,
@@ -20866,8 +21071,13 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 "sim_refinement_local_sum_intensity": 0.0,
                 "sim_refinement_local_nonzero_count": 0,
                 "dynamic_baseline_anchor_coordinate_baseline_used": True,
-                "live_caked_source_used_for_objective": True,
+                "live_caked_source_used_for_objective": bool(
+                    not retained_source_row_refined_prediction
+                ),
                 "static_locked_caked_prediction_retained": bool(retained_static_caked_prediction),
+                "source_row_refined_caked_prediction_retained": bool(
+                    retained_source_row_refined_prediction
+                ),
                 "point_only_detector_projection_used": False,
                 "point_only_projector_skipped": bool(point_only_projection),
                 "point_only_detector_coordinate_source": "live_caked_source",
@@ -20887,6 +21097,9 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 "objective_residual_coordinate_space": "caked_deg",
                 "objective_residual_units": "deg",
                 "pixel_residual_used_for_objective": False,
+                "used_sim_nominal_caked_for_objective": False,
+                "used_exact_projector": False,
+                "used_sim_refined_caked": bool(retained_source_row_refined_prediction),
             }
         )
         return out
