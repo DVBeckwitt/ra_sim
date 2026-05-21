@@ -7203,6 +7203,28 @@ def test_parallel_script_qr_rod_peak_editor_marks_hk0_marker_changes_dirty() -> 
         assert token in function_source
 
 
+def test_parallel_script_qr_rod_peak_editor_freezes_panel_l_axis_mapping() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    function_source = source[
+        source.index("def show_qr_rod_peak_marker_popup(") : source.index(
+            "\ndef edit_qr_rod_region_editor("
+        )
+    ]
+    import_section = function_source[
+        function_source.index("def import_peak_edits(") : function_source.index(
+            "\n    def export_peak_edits("
+        )
+    ]
+
+    assert "group_l_coeff_cache: dict[tuple[int, str], tuple[float, float]] = {}" in (
+        function_source
+    )
+    assert "def clear_group_l_coeff_cache(" in function_source
+    assert "marker_source=edited.copy()" in function_source
+    assert "for column in (\"fit_l\", \"display_l\", \"l\"):" in function_source
+    assert "clear_group_l_coeff_cache()" in import_section
+
+
 def test_parallel_script_qr_rod_peak_marker_move_delete_defers_callbacks_until_accept(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -8059,6 +8081,95 @@ def test_parallel_script_qr_rod_peak_editor_hk1_minus_click_does_not_submit_l_mi
     assert accepted is True
     assert observed["l_min_after_click"] == pytest.approx(0.5)
     assert observed["l_min_box_active_after_click"] is False
+
+
+def test_parallel_script_qr_rod_peak_editor_hk1_minus_drag_keeps_other_markers_fixed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from matplotlib.backend_bases import MouseEvent
+
+    namespace = _script_functions(
+        "as_float",
+        "qr_rod_peak_edit_runtime_mode",
+        "show_qr_rod_peak_marker_popup",
+        "marker_table_with_specular_l_markers",
+        "qz_l_linear_coeff_from_marker_rows",
+        "marker_row_title",
+        "clean_marker_title",
+        "replace_qr_rod_marker_group_qz",
+        "positive_log_plot_values",
+        "apply_positive_log_y_axis",
+        "snap_qr_rod_markers_to_profile_peaks",
+        "l_tick_label",
+        "_safe_run_name",
+        "load_qr_rod_peak_edits",
+        "write_qr_rod_peak_edits",
+    )
+    show_editor = namespace["show_qr_rod_peak_marker_popup"]
+    observed: dict[str, object] = {}
+
+    def emit_event(fig, ax, name: str, x_value: float, y_value: float) -> None:
+        x_pixel, y_pixel = ax.transData.transform((float(x_value), float(y_value)))
+        event = MouseEvent(name, fig.canvas, x_pixel, y_pixel, button=1)
+        event.inaxes = ax
+        fig.canvas.callbacks.process(name, event)
+
+    def marker_offsets(ax) -> np.ndarray:
+        assert ax.collections
+        offsets = ax.collections[0].get_offsets()
+        return np.asarray(np.ma.filled(offsets, np.nan), dtype=np.float64)
+
+    def fake_show(*_args, **_kwargs) -> None:
+        fig = plt.gcf()
+        panels = {ax.get_title(): ax for ax in fig.axes if ax.get_xlabel() == "L"}
+        target = panels["HK=1 -"]
+        fig.canvas.draw()
+        before_xlim = target.get_xlim()
+        initial_offsets = marker_offsets(target)
+        selected_index = 2
+        selected_x = float(initial_offsets[selected_index, 0])
+        selected_y = float(initial_offsets[selected_index, 1])
+        emit_event(fig, target, "button_press_event", selected_x, selected_y)
+        emit_event(fig, target, "motion_notify_event", selected_x + 0.2, selected_y)
+        moved_offsets = marker_offsets(target)
+        observed["before_xlim"] = before_xlim
+        observed["after_xlim"] = target.get_xlim()
+        observed["initial_marker_x"] = initial_offsets[:, 0].copy()
+        observed["moved_marker_x"] = moved_offsets[:, 0].copy()
+        plt.close(fig)
+
+    marker_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "-", "qz_marker": 0.9, "fit_l": 1.0, "display_l": 1.0},
+            {"m": 1, "branch": "-", "qz_marker": 1.7, "fit_l": 1.0, "display_l": 1.0},
+            {"m": 1, "branch": "-", "qz_marker": 1.95, "fit_l": 2.0, "display_l": 2.0},
+            {"m": 1, "branch": "-", "qz_marker": 2.7, "fit_l": 3.0, "display_l": 3.0},
+        ]
+    )
+    rod_profile_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "-", "qz_center": 0.9, "background_density": 8.0},
+            {"m": 1, "branch": "-", "qz_center": 1.7, "background_density": 18.0},
+            {"m": 1, "branch": "-", "qz_center": 1.95, "background_density": 26.0},
+            {"m": 1, "branch": "-", "qz_center": 2.7, "background_density": 12.0},
+        ]
+    )
+
+    monkeypatch.setattr(plt, "show", fake_show)
+    _edited, accepted = show_editor(
+        marker_table,
+        rod_profile_table,
+        backend_name="TkAgg",
+        region_state={"delta_qr": 0.01, "l_min": 0.5, "l_max": 3.0},
+        editor_phase="nonzero",
+    )
+
+    assert accepted is True
+    assert observed["after_xlim"] == pytest.approx(observed["before_xlim"])
+    initial_x = np.asarray(observed["initial_marker_x"], dtype=np.float64)
+    moved_x = np.asarray(observed["moved_marker_x"], dtype=np.float64)
+    assert moved_x[[0, 1, 3]].tolist() == pytest.approx(initial_x[[0, 1, 3]].tolist())
+    assert moved_x[2] == pytest.approx(float(initial_x[2]) + 0.2)
 
 
 def test_parallel_script_qr_rod_peak_editor_hk4_minus_drag_preserves_panel_limits(

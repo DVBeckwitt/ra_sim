@@ -26,6 +26,7 @@
   - Added a numeric `theta_i` field to the nonzero HK Qr-rod marker editor; the accepted value now rebuilds nonzero detector Q maps, detector preview overlays, and final Qr-rod cache identity while HK=0 remains phi/2theta ROI-only with no `L Min` / `L Max` controls.
   - Fixed nonzero Qr-rod profile refreshes so `m` plus/minus branches rebuild from the same active L grid and common finite detector support, preventing different displayed L starts after empty-bin filtering.
   - Fixed the nonzero Qr-rod marker editor so clicking or dragging the `m=1 -` panel cannot submit a focused `L Min` text box and accidentally change the shared L window.
+  - Fixed the `m=1 -` Qr-rod marker editor drift by freezing each panel's Qz-to-L mapping for the editor session, so marker edits no longer refit the panel coordinate transform while dragging.
   - Fixed final Qr-rod fit cache identity so accepted HK=0 profile rows from the specular editor cannot be replaced by stale cached final-figure data.
   - Linked the Qr-rod marker editor and detector-preview windows so closing either window also closes the other.
 

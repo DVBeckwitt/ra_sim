@@ -1577,6 +1577,7 @@ def show_qr_rod_peak_marker_popup(
     region_profile_refresh_sources: set[str] = set()
     region_preview_refresh_pending = False
     last_button_press_axes: dict[str, object] = {"inaxes": None}
+    group_l_coeff_cache: dict[tuple[int, str], tuple[float, float]] = {}
 
     def editor_debug_enabled() -> bool:
         os_module = globals().get("os")
@@ -1764,6 +1765,9 @@ def show_qr_rod_peak_marker_popup(
         ]
         for key in stale_keys:
             group_plot_cache.pop(key, None)
+
+    def clear_group_l_coeff_cache() -> None:
+        group_l_coeff_cache.clear()
 
     def refresh_region_profile_table() -> bool:
         nonlocal profiles, region_profile_refresh_pending
@@ -1963,9 +1967,22 @@ def show_qr_rod_peak_marker_popup(
         return np.sort(values[np.isfinite(values)])
 
     def group_qz_l_coeff(m_value: int, branch_value: str) -> tuple[float, float]:
-        return qz_to_l_linear_coeff(
-            m_value=int(m_value), branch_value=str(branch_value), marker_source=edited
+        key = (int(m_value), str(branch_value))
+        cached = group_l_coeff_cache.get(key)
+        if cached is not None:
+            return cached
+        slope, intercept = qz_to_l_linear_coeff(
+            m_value=int(m_value), branch_value=str(branch_value), marker_source=edited.copy()
         )
+        if (
+            not np.isfinite(slope)
+            or not np.isfinite(intercept)
+            or abs(float(slope)) <= 1.0e-12
+        ):
+            slope, intercept = 1.0, 0.0
+        coeff = (float(slope), float(intercept))
+        group_l_coeff_cache[key] = coeff
+        return coeff
 
     def qz_to_editor_l(m_value: int, branch_value: str, qz_values: object) -> np.ndarray:
         slope, intercept = group_qz_l_coeff(m_value, branch_value)
@@ -2129,13 +2146,27 @@ def show_qr_rod_peak_marker_popup(
 
     def set_group_markers(m_value: int, branch_value: str, values: object) -> None:
         nonlocal edited
+        key = (int(m_value), str(branch_value))
+        group_qz_l_coeff(key[0], key[1])
         edited = replace_qr_rod_marker_group_qz(
             edited,
-            m_value=int(m_value),
-            branch_value=str(branch_value),
+            m_value=key[0],
+            branch_value=key[1],
             qz_values=values,
         )
-        clear_group_plot_cache((int(m_value), str(branch_value)))
+        if not edited.empty and {"m", "branch", "qz_marker"}.issubset(edited.columns):
+            group_mask = (
+                pd.to_numeric(edited["m"], errors="coerce").to_numpy(dtype=np.float64)
+                == float(key[0])
+            ) & (edited["branch"].astype(str).to_numpy(dtype=object) == key[1])
+            if np.any(group_mask):
+                qz_values = pd.to_numeric(
+                    edited.loc[group_mask, "qz_marker"], errors="coerce"
+                ).to_numpy(dtype=np.float64)
+                l_values = qz_to_editor_l(key[0], key[1], qz_values)
+                for column in ("fit_l", "display_l", "l"):
+                    edited.loc[group_mask, column] = l_values
+        clear_group_plot_cache(key)
 
     def marker_plot_arrays(
         m_value: int, branch_value: str
@@ -2631,6 +2662,7 @@ def show_qr_rod_peak_marker_popup(
                 imported = marker_table_with_specular_l_markers(imported, required_marker_table)
             edited = imported.copy()
             clear_group_plot_cache()
+            clear_group_l_coeff_cache()
             imported_groups = (
                 [
                     (int(row["m"]), str(row["branch"]))

@@ -304,9 +304,12 @@ Current status as of 2026-05-21:
 - Bug status fixed as of 2026-05-21: clicking or dragging a nonzero HK rod
   panel while an `L Min` / `L Max` text box is focused blurs the box without
   submitting its draft value, so panel interaction no longer changes the
-  shared L window. Accepted HK=0/specular profile rows are also hashed into
-  the final Qr-rod cache identity, so the final figure cannot reuse stale
-  cached `m=0` data after the GUI selection changes.
+  shared L window. The editor also freezes each panel's Qz-to-L mapping for
+  the popup session, so dragging a marker in `m=1`, `branch="-"` updates only
+  the selected marker and does not refit the panel coordinate transform from
+  the mutated marker table. Accepted HK=0/specular profile rows are also
+  hashed into the final Qr-rod cache identity, so the final figure cannot
+  reuse stale cached `m=0` data after the GUI selection changes.
 - PbI2 manuscript figures default to
   `C:\Users\Kenpo\OneDrive\Documents\GitHub\PhD Work\2D-Manuscript-Draft\figures\results_pbi2`.
   Other samples keep the `results_ordered` default, and
