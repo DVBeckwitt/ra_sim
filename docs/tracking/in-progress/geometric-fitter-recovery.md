@@ -1575,6 +1575,21 @@ Locked Qr/Qz optimizer-request handoff preservation, 2026-05-21:
   of `23cd6dc6`. Rollback is a normal git revert of the handoff-preservation
   patch, focused regressions, and this tracking update.
 
+Locked Qr/Qz handoff simplification follow-up, 2026-05-21:
+
+- Bug/error status: unchanged from the handoff-preservation fix. The follow-up
+  only simplifies the private locked-Qr optimizer-request payload copy path by
+  avoiding redundant mapping copies, repeated integer conversion, and repeated
+  float casts while keeping the same source precedence and field payloads.
+- Feature status: no new GUI control, CLI flag, public API, config key,
+  saved-state schema, artifact schema, dependency, CI workflow, deprecation, or
+  migration.
+- Validation: focused locked-Qr handoff regressions pass, the broader
+  GUI/runtime locked/caked subset passes, Ruff format/check passes for the
+  changed GUI file, and `python -m ra_sim.dev check` is the shipping gate.
+- Shipping status: safe as an internal refactor slice. Rollback is a normal git
+  revert of the simplification and this tracking update.
+
 Do not use `run_geometry_fit_quality_baseline.py` as the first optimizer debug
 tool. Run it only after the ladder identifies a stable parameter set.
 

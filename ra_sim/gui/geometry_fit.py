@@ -3387,8 +3387,7 @@ def build_geometry_fit_qr_handoff_audit_rows(
     solver_requested_objective_space = (
         "caked_deg"
         if bool(spec.get("_manual_caked_fit_space_required", False))
-        or str(spec.get("solver_requested_objective_space") or "").strip().lower()
-        == "caked_deg"
+        or str(spec.get("solver_requested_objective_space") or "").strip().lower() == "caked_deg"
         else "detector_native_px"
     )
     fit_space_projector = spec.get("fit_space_projector") if isinstance(spec, Mapping) else None
@@ -21472,10 +21471,11 @@ def _build_geometry_fit_optimizer_request_rows(
         )
 
     def _audit_row_for_pair(pair_index: int) -> dict[str, object]:
-        if int(pair_index) in audit_rows_by_pair_index:
-            return dict(audit_rows_by_pair_index[int(pair_index)])
-        if 0 <= int(pair_index) < len(audit_rows):
-            return dict(audit_rows[int(pair_index)])
+        pair_key = int(pair_index)
+        if pair_key in audit_rows_by_pair_index:
+            return dict(audit_rows_by_pair_index[pair_key])
+        if 0 <= pair_key < len(audit_rows):
+            return dict(audit_rows[pair_key])
         return {}
 
     def _finite_pair_payload(value: object) -> tuple[float, float] | None:
@@ -21489,23 +21489,24 @@ def _build_geometry_fit_optimizer_request_rows(
             return None
         if not (np.isfinite(x_val) and np.isfinite(y_val)):
             return None
-        return float(x_val), float(y_val)
+        return x_val, y_val
 
     def _copy_locked_qr_dynamic_payload(
         row: dict[str, object],
         *sources: Mapping[str, object] | None,
     ) -> None:
-        candidate_sources = [
-            dict(source) for source in sources if isinstance(source, Mapping) and source
-        ]
+        candidate_sources = tuple(
+            source for source in sources if isinstance(source, Mapping) and source
+        )
         if not candidate_sources:
             return
-        if not any(
+        has_locked_qr_payload = any(
             geometry_fit_entry_has_fixed_manual_caked_qr(source)
             or source.get("fit_prediction_detector_native_px") is not None
             or source.get("fit_prediction_caked_deg") is not None
             for source in candidate_sources
-        ):
+        )
+        if not has_locked_qr_payload:
             return
 
         pair_fields = (
@@ -21542,21 +21543,19 @@ def _build_geometry_fit_optimizer_request_rows(
                 point = _finite_pair_payload(source.get(field_name))
                 if point is None:
                     continue
-                row[field_name] = (float(point[0]), float(point[1]))
+                row[field_name] = point
                 break
         for field_name in scalar_fields:
             for source in candidate_sources:
-                if source.get(field_name) is None:
+                value = source.get(field_name)
+                if value is None:
                     continue
-                row[field_name] = copy.deepcopy(source.get(field_name))
+                row[field_name] = copy.deepcopy(value)
                 break
         if row.get("optimizer_simulated_source_two_theta_phi") is None:
             predicted_caked = _finite_pair_payload(row.get("fit_prediction_caked_deg"))
             if predicted_caked is not None:
-                row["optimizer_simulated_source_two_theta_phi"] = (
-                    float(predicted_caked[0]),
-                    float(predicted_caked[1]),
-                )
+                row["optimizer_simulated_source_two_theta_phi"] = predicted_caked
 
     if not provider_pairs and not manual_pairs:
         return [], {}
@@ -23424,6 +23423,7 @@ def build_geometry_fit_rejection_reason_lines(
         "locked_manual_qr_identity_loss",
         "manual_caked_route_invariant_violation",
     }:
+
         def _summary_count(key: str, fallback_key: str) -> int:
             if not isinstance(point_match_summary, Mapping):
                 return 0
