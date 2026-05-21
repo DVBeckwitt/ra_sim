@@ -2937,11 +2937,6 @@ def _geometry_fit_dataset_pairs_from_handoff(
     ]
 
 
-_GEOMETRY_FIT_QR_HANDOFF_AUDIT_GROUP_KEY = ("q_group", "primary", 1, 10)
-_GEOMETRY_FIT_QR_HANDOFF_AUDIT_HKL = (-1, 0, 10)
-_GEOMETRY_FIT_QR_HANDOFF_AUDIT_BRANCHES = {0, 1}
-
-
 def _geometry_fit_audit_tuple(value: object) -> tuple[object, ...] | None:
     if isinstance(value, np.ndarray):
         value = value.tolist()
@@ -2987,6 +2982,35 @@ def _geometry_fit_audit_first(
     for entry in entries:
         if isinstance(entry, Mapping) and entry.get(key) is not None:
             return entry.get(key)
+    return None
+
+
+_GEOMETRY_FIT_AUDIT_CANONICAL_IDENTITY_KEYS = (
+    "provider_selected_source_identity_canonical",
+    "selected_source_identity_canonical",
+    "manual_picker_selected_source_identity_canonical",
+)
+
+
+def _geometry_fit_audit_first_identity(
+    entries: Sequence[Mapping[str, object]],
+    *keys: str,
+) -> object:
+    for key in keys:
+        value = _geometry_fit_audit_first(entries, key)
+        if value is not None:
+            return value
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        for identity_key in _GEOMETRY_FIT_AUDIT_CANONICAL_IDENTITY_KEYS:
+            identity = entry.get(identity_key)
+            if not isinstance(identity, Mapping):
+                continue
+            for key in keys:
+                value = identity.get(key)
+                if value is not None:
+                    return value
     return None
 
 
@@ -3430,23 +3454,48 @@ def build_geometry_fit_qr_handoff_audit_rows(
         entries = [display_entry, initial_entry, fit_entry, provider_pair, manual_pair]
 
         q_group_key = _geometry_fit_audit_q_group_key(
-            _geometry_fit_audit_first(entries, "q_group_key")
-            or _geometry_fit_audit_first(entries, "source_q_group_key")
+            _geometry_fit_audit_first_identity(entries, "q_group_key", "source_q_group_key")
         )
         hkl = _geometry_fit_audit_hkl(
-            _geometry_fit_audit_first(entries, "hkl")
-            or _geometry_fit_audit_first(entries, "normalized_hkl")
+            _geometry_fit_audit_first_identity(entries, "hkl", "normalized_hkl")
         )
         branch_idx = _geometry_fit_coerce_nonnegative_index(
-            _geometry_fit_audit_first(entries, "source_branch_index")
+            _geometry_fit_audit_first_identity(
+                entries,
+                "source_branch_index",
+                "source_peak_index",
+                "resolved_peak_index",
+            )
         )
-        source_table_index = _geometry_fit_audit_first(entries, "source_table_index")
-        source_row_index = _geometry_fit_audit_first(entries, "source_row_index")
-        source_peak_index = _geometry_fit_audit_first(entries, "source_peak_index")
-        if (
-            q_group_key != _GEOMETRY_FIT_QR_HANDOFF_AUDIT_GROUP_KEY
-            or hkl != _GEOMETRY_FIT_QR_HANDOFF_AUDIT_HKL
-            or branch_idx not in _GEOMETRY_FIT_QR_HANDOFF_AUDIT_BRANCHES
+        source_table_index = _geometry_fit_audit_first_identity(
+            entries,
+            "source_table_index",
+            "source_reflection_index",
+        )
+        source_row_index = _geometry_fit_audit_first_identity(entries, "source_row_index")
+        source_peak_index = _geometry_fit_audit_first_identity(
+            entries,
+            "source_peak_index",
+            "source_branch_index",
+            "resolved_peak_index",
+        )
+        locked_qr_entry: dict[str, object] = {}
+        for source_entry in entries:
+            if isinstance(source_entry, Mapping):
+                locked_qr_entry.update(source_entry)
+        if q_group_key is not None:
+            locked_qr_entry["q_group_key"] = q_group_key
+        if hkl is not None:
+            locked_qr_entry["hkl"] = hkl
+        if branch_idx in {0, 1}:
+            locked_qr_entry["source_branch_index"] = int(branch_idx)
+        if source_table_index is not None:
+            locked_qr_entry["source_table_index"] = source_table_index
+        if source_row_index is not None:
+            locked_qr_entry["source_row_index"] = source_row_index
+        if not geometry_fit_entry_has_fixed_manual_caked_qr(
+            locked_qr_entry,
+            require_explicit_branch=True,
         ):
             continue
         source_trace_entry = {}
@@ -21718,6 +21767,48 @@ def _geometry_fit_optimizer_point_matches(
     )
 
 
+def _geometry_fit_locked_qr_audit_identity_key(
+    row: Mapping[str, object],
+) -> tuple[object, ...] | None:
+    q_group_key = _geometry_fit_audit_q_group_key(
+        _geometry_fit_audit_first_identity((row,), "q_group_key", "source_q_group_key")
+    )
+    hkl = _geometry_fit_audit_hkl(
+        _geometry_fit_audit_first_identity((row,), "hkl", "normalized_hkl")
+    )
+    branch_idx = _geometry_fit_coerce_nonnegative_index(
+        _geometry_fit_audit_first_identity(
+            (row,),
+            "source_branch_index",
+            "source_peak_index",
+            "resolved_peak_index",
+        )
+    )
+    source_row_index = _geometry_fit_coerce_nonnegative_index(
+        _geometry_fit_audit_first_identity((row,), "source_row_index")
+    )
+    source_table_index = _geometry_fit_coerce_nonnegative_index(
+        _geometry_fit_audit_first_identity(
+            (row,),
+            "source_table_index",
+            "source_reflection_index",
+        )
+    )
+    source_label = str(_geometry_fit_audit_first_identity((row,), "source_label") or "").strip()
+    if not source_label and q_group_key is not None and len(q_group_key) >= 2:
+        source_label = str(q_group_key[1])
+    if q_group_key is None or hkl is None or branch_idx not in {0, 1} or source_row_index is None:
+        return None
+    return (
+        q_group_key,
+        hkl,
+        int(branch_idx),
+        int(source_table_index) if source_table_index is not None else None,
+        int(source_row_index),
+        source_label,
+    )
+
+
 def _build_geometry_fit_optimizer_request_rows(
     *,
     prepared_run: GeometryFitPreparedRun,
@@ -21765,8 +21856,23 @@ def _build_geometry_fit_optimizer_request_rows(
             int(pair_index) if pair_index is not None else int(fallback_index),
             dict(audit_row),
         )
+    audit_rows_by_identity_key: dict[tuple[object, ...], dict[str, object]] = {}
+    for audit_row in audit_rows:
+        identity_key = _geometry_fit_locked_qr_audit_identity_key(audit_row)
+        if identity_key is not None:
+            audit_rows_by_identity_key.setdefault(identity_key, dict(audit_row))
 
-    def _audit_row_for_pair(pair_index: int) -> dict[str, object]:
+    def _audit_row_for_pair(
+        pair_index: int,
+        *sources: Mapping[str, object] | None,
+    ) -> dict[str, object]:
+        candidate: dict[str, object] = {}
+        for source in sources:
+            if isinstance(source, Mapping):
+                candidate.update(dict(source))
+        identity_key = _geometry_fit_locked_qr_audit_identity_key(candidate)
+        if identity_key is not None and identity_key in audit_rows_by_identity_key:
+            return dict(audit_rows_by_identity_key[identity_key])
         pair_key = int(pair_index)
         if pair_key in audit_rows_by_pair_index:
             return dict(audit_rows_by_pair_index[pair_key])
@@ -21875,7 +21981,13 @@ def _build_geometry_fit_optimizer_request_rows(
         initial_row = initial_rows[pair_index] if pair_index < len(initial_rows) else {}
         provider_pair = provider_pairs[pair_index] if pair_index < len(provider_pairs) else {}
         manual_pair = manual_pairs[pair_index] if pair_index < len(manual_pairs) else {}
-        audit_row = _audit_row_for_pair(pair_index)
+        audit_row = _audit_row_for_pair(
+            pair_index,
+            measured_row,
+            initial_row,
+            provider_pair,
+            manual_pair,
+        )
         identity = _geometry_fit_source_identity_from_pair(provider_pair, manual_pair)
         point = _geometry_fit_optimizer_point_from_pair(provider_pair, manual_pair)
         row = copy.deepcopy(dict(measured_row))

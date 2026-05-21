@@ -48,6 +48,11 @@
   - Updated `load_tilt_hint` to return converted simulation-space tilt/center/distance hints.
 
 - **Fitting and optimization**
+  - Fixed locked Qr/Qz geometry-fit handoff for multiple selected Qr groups:
+    handoff audit rows are no longer hardcoded to the `(-1,0,10)` group, and
+    optimizer request payloads now match locked-Qr audit rows by q-group, HKL,
+    branch, and source-row identity, including nested canonical provider
+    provenance, before falling back to pair order.
   - Added an explicit branch-line angle residual for locked two-branch Qr/Qz
     manual caked geometry fits in both GUI and headless saved-state routes,
     while keeping single-branch or branch-ambiguous groups out of the line

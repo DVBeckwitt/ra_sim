@@ -1638,6 +1638,37 @@ Locked Qr/Qz caked-storage timeout race, 2026-05-21:
   revert of the runtime preflight split, focused regressions, and this tracking
   update.
 
+Locked Qr/Qz multi-group handoff, 2026-05-21:
+
+- Bug/error status: fixed for the group-specific failure where the handoff audit
+  builder only produced repaired locked-Qr payload rows for
+  `q_group_key=("q_group","primary",1,10)` / `hkl=(-1,0,10)`, so a second
+  selected group such as `(-1,0,5)` could fall back to stale caked authority and
+  explode during dynamic-angle validation.
+- The handoff audit path now emits rows for every branch-proven locked Qr/Qz
+  fixed-source pair instead of filtering to one hardcoded group. The optimizer
+  request builder matches those audit rows by q-group, HKL, source branch,
+  source table/reflection, source row, and source label before using pair-index
+  or row-order fallback.
+- Nested canonical provider provenance is now treated as first-class identity
+  for audit row construction, not only for the optimizer-request lookup. This
+  covers reduced or merged rows where top-level q-group/HKL/branch fields are
+  absent but `provider_selected_source_identity_canonical` still carries the
+  locked-Qr source identity.
+- Dynamic objective status: the existing dynamic-angle evaluator and branch-line
+  residual builder are already multi-group safe when they receive clean
+  handoff payloads. New regressions prove two selected Qr groups keep
+  `matched_pair_count == 4`, identity residual RMS below 5 degrees, and
+  separate line groups for `1,5` and `1,10`.
+- Feature status: no new GUI control, CLI flag, public API, config key,
+  saved-state schema, artifact schema, dependency, CI workflow, deprecation, or
+  migration.
+- Validation: focused multi-group handoff, optimizer-request, locked-Qr dynamic,
+  branch-line grouping, and manual caked classification tests pass.
+- Shipping status: ready as a normal bug-fix slice. Rollback is a normal git
+  revert of the generic locked-Qr audit filter, identity-key optimizer payload
+  matching, focused regressions, and this tracking update.
+
 Do not use `run_geometry_fit_quality_baseline.py` as the first optimizer debug
 tool. Run it only after the ladder identifies a stable parameter set.
 

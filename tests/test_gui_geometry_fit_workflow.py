@@ -373,6 +373,156 @@ def test_locked_qr_prediction_caked_prefers_exact_projection_over_nominal_handof
     assert ("simulated", prediction_native[0], prediction_native[1]) in projector_calls
 
 
+def test_qr_handoff_audit_includes_all_locked_qr_groups() -> None:
+    groups = [
+        (("q_group", "primary", 1, 5), (-1, 0, 5)),
+        (("q_group", "primary", 1, 10), (-1, 0, 10)),
+    ]
+    provider_pairs = []
+    manual_pairs = []
+    measured_display = []
+    measured_for_fit = []
+    initial_pairs_display = []
+    for group_index, (q_group_key, hkl) in enumerate(groups):
+        for branch in (0, 1):
+            source_row_index = group_index * 10 + branch
+            identity = {
+                "q_group_key": q_group_key,
+                "hkl": hkl,
+                "normalized_hkl": hkl,
+                "source_branch_index": branch,
+                "source_peak_index": branch,
+                "source_table_index": group_index,
+                "source_reflection_index": group_index,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": source_row_index,
+                "source_label": "primary",
+            }
+            observed_native = (
+                1000.0 + group_index * 100.0 + branch,
+                1900.0 - group_index * 200.0 - branch,
+            )
+            predicted_native = (
+                observed_native[0] + 2.0,
+                observed_native[1] - 3.0,
+            )
+            provider_pairs.append(
+                {
+                    **identity,
+                    "pair_index": len(provider_pairs),
+                    "dataset_pair_index": len(provider_pairs),
+                    "provider_selected_source_identity_canonical": dict(identity),
+                    "fit_source_resolution_kind": "provider_fixed_source_local",
+                    "optimizer_request_has_fixed_source": True,
+                }
+            )
+            manual_pairs.append(dict(provider_pairs[-1]))
+            measured_display.append(
+                {
+                    **identity,
+                    "x": observed_native[0],
+                    "y": observed_native[1],
+                }
+            )
+            measured_for_fit.append(
+                {
+                    **identity,
+                    "background_detector_x": observed_native[0],
+                    "background_detector_y": observed_native[1],
+                    "background_two_theta_deg": 30.0 + group_index,
+                    "background_phi_deg": 40.0 + branch,
+                }
+            )
+            initial_pairs_display.append(
+                {
+                    **identity,
+                    "sim_native": predicted_native,
+                    "simulated_two_theta_deg": 31.0 + group_index,
+                    "simulated_phi_deg": 41.0 + branch,
+                }
+            )
+
+    rows = geometry_fit.build_geometry_fit_qr_handoff_audit_rows(
+        {
+            "provider_pairs": provider_pairs,
+            "manual_point_pairs": manual_pairs,
+            "measured_display": measured_display,
+            "measured_for_fit": measured_for_fit,
+            "initial_pairs_display": initial_pairs_display,
+            "source_rows_for_trace": [],
+            "spec": {
+                "_manual_caked_fit_space_required": True,
+                "solver_requested_objective_space": "caked_deg",
+            },
+        }
+    )
+
+    assert len(rows) == 4
+    grouped_branches = {}
+    for row in rows:
+        key = tuple(row["q_group_key"]), tuple(row["hkl"])
+        grouped_branches.setdefault(key, set()).add(int(row["source_branch_index"]))
+    assert grouped_branches == {
+        (("q_group", "primary", 1, 5), (-1, 0, 5)): {0, 1},
+        (("q_group", "primary", 1, 10), (-1, 0, 10)): {0, 1},
+    }
+
+
+def test_qr_handoff_audit_uses_nested_locked_qr_identity_fields() -> None:
+    identity = {
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "hkl": (-1, 0, 5),
+        "normalized_hkl": (-1, 0, 5),
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "source_table_index": 5,
+        "source_reflection_index": 5,
+        "source_row_index": 50,
+        "source_label": "primary",
+    }
+    rows = geometry_fit.build_geometry_fit_qr_handoff_audit_rows(
+        {
+            "provider_pairs": [
+                {
+                    "provider_selected_source_identity_canonical": dict(identity),
+                    "fit_source_resolution_kind": "provider_fixed_source_local",
+                    "optimizer_request_has_fixed_source": True,
+                }
+            ],
+            "manual_point_pairs": [{}],
+            "measured_display": [{"x": 1005.0, "y": 1905.0}],
+            "measured_for_fit": [
+                {
+                    "background_two_theta_deg": 25.0,
+                    "background_phi_deg": 125.0,
+                }
+            ],
+            "initial_pairs_display": [
+                {
+                    "sim_native": (1006.0, 1906.0),
+                    "simulated_two_theta_deg": 25.5,
+                    "simulated_phi_deg": 126.0,
+                }
+            ],
+            "source_rows_for_trace": [],
+            "spec": {
+                "_manual_caked_fit_space_required": True,
+                "solver_requested_objective_space": "caked_deg",
+            },
+        }
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["q_group_key"] == identity["q_group_key"]
+    assert row["hkl"] == identity["hkl"]
+    assert row["source_branch_index"] == identity["source_branch_index"]
+    assert row["source_peak_index"] == identity["source_peak_index"]
+    assert row["source_table_index"] == identity["source_table_index"]
+    assert row["source_row_index"] == identity["source_row_index"]
+
+
 class _DummyVar:
     def __init__(self, value):
         self._value = value

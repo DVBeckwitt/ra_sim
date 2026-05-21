@@ -6078,6 +6078,242 @@ def _evaluate_locked_qr_dynamic_live_shape(branch_payloads=None):
     return branch_payloads, residual, summary, rows
 
 
+def _locked_qr_two_group_dynamic_context():
+    payloads = [
+        {
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "hkl": (-1, 0, 5),
+            "branch": 0,
+            "source_table_index": 5,
+            "source_row_index": 50,
+            "observed": (25.0, 125.0),
+            "refined": (25.5, 126.0),
+            "stale": (80.0, -5.0),
+            "native": (1005.0, 1905.0),
+        },
+        {
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "hkl": (-1, 0, 5),
+            "branch": 1,
+            "source_table_index": 5,
+            "source_row_index": 51,
+            "observed": (34.0, 35.0),
+            "refined": (34.5, 35.5),
+            "stale": (90.0, -35.0),
+            "native": (1006.0, 1106.0),
+        },
+        {
+            "q_group_key": ("q_group", "primary", 1, 10),
+            "hkl": (-1, 0, 10),
+            "branch": 0,
+            "source_table_index": 10,
+            "source_row_index": 100,
+            "observed": (33.063, 130.754),
+            "refined": (32.459, 131.750),
+            "stale": (39.567, 36.250),
+            "native": (1097.0, 1914.0),
+        },
+        {
+            "q_group_key": ("q_group", "primary", 1, 10),
+            "hkl": (-1, 0, 10),
+            "branch": 1,
+            "source_table_index": 10,
+            "source_row_index": 101,
+            "observed": (37.566, 39.750),
+            "refined": (38.168, 39.250),
+            "stale": (41.225, -38.250),
+            "native": (1080.0, 1139.0),
+        },
+    ]
+
+    def locked_entry(payload: Mapping[str, object]) -> dict[str, object]:
+        branch = int(payload["branch"])
+        hkl = tuple(payload["hkl"])
+        q_group_key = tuple(payload["q_group_key"])
+        return _locked_qr_fixed_source_entry(
+            hkl=hkl,
+            label=",".join(str(value) for value in hkl),
+            q_group_key=q_group_key,
+            branch_group_key=("branch_group", "primary", q_group_key[2]),
+            source_table_index=int(payload["source_table_index"]),
+            resolved_table_index=int(payload["source_table_index"]),
+            source_reflection_index=int(payload["source_table_index"]),
+            source_reflection_namespace="full_reflection",
+            source_reflection_is_full=True,
+            source_row_index=int(payload["source_row_index"]),
+            source_branch_index=branch,
+            source_peak_index=branch,
+            resolved_peak_index=branch,
+            branch_id=f"locked-{hkl[-1]}-{branch}",
+            best_sample_index=int(payload["source_row_index"]),
+            mosaic_top_rank_key=("rank", int(payload["source_row_index"])),
+            background_two_theta_deg=payload["observed"][0],
+            background_phi_deg=payload["observed"][1],
+            caked_x=payload["observed"][0],
+            caked_y=payload["observed"][1],
+            fit_space_anchor_override=True,
+            fit_space_anchor_source="manual_caked_click",
+        )
+
+    def source_row(payload: Mapping[str, object]) -> dict[str, object]:
+        branch = int(payload["branch"])
+        hkl = tuple(payload["hkl"])
+        q_group_key = tuple(payload["q_group_key"])
+        row = _point_only_dynamic_qr_row(*payload["stale"])
+        row.update(
+            {
+                "hkl": hkl,
+                "q_group_key": q_group_key,
+                "branch_group_key": ("branch_group", "primary", q_group_key[2]),
+                "source_table_index": int(payload["source_table_index"]),
+                "resolved_table_index": int(payload["source_table_index"]),
+                "source_reflection_index": int(payload["source_table_index"]),
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": int(payload["source_row_index"]),
+                "source_branch_index": branch,
+                "source_peak_index": branch,
+                "resolved_peak_index": branch,
+                "physical_branch_slot": branch,
+                "branch_id": f"locked-{hkl[-1]}-{branch}",
+                "best_sample_index": int(payload["source_row_index"]),
+                "mosaic_top_rank_key": ("rank", int(payload["source_row_index"])),
+                "native_col": payload["native"][0],
+                "native_row": payload["native"][1],
+                "fit_prediction_detector_native_px": list(payload["native"]),
+                "sim_refined_detector_native_px": list(payload["native"]),
+                "sim_refined_caked_deg": list(payload["refined"]),
+                "sim_refined_caked_authority": "sim_refined_caked_matching_prediction_native",
+                "sim_nominal_caked_deg": list(payload["stale"]),
+                "simulated_two_theta_deg": payload["stale"][0],
+                "simulated_phi_deg": payload["stale"][1],
+            }
+        )
+        row["fit_qr_branch_key"] = {
+            **dict(row.get("fit_qr_branch_key") or {}),
+            "q_group_key": list(q_group_key),
+            "hkl": list(hkl),
+            "source_branch_index": branch,
+            "source_peak_index": branch,
+            "source_table_index": int(payload["source_table_index"]),
+            "source_row_index": int(payload["source_row_index"]),
+            "source_reflection_index": int(payload["source_table_index"]),
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "physical_branch_slot": branch,
+            "branch_id": f"locked-{hkl[-1]}-{branch}",
+            "best_sample_index": int(payload["source_row_index"]),
+            "mosaic_top_rank_key": ["rank", int(payload["source_row_index"])],
+        }
+        return row
+
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        return _locked_qr_source_rows_payload([source_row(payload) for payload in payloads])
+
+    def projector(cols, rows, *, local_params=None, **_kwargs):
+        del local_params
+        projected_two_theta: list[float] = []
+        projected_phi: list[float] = []
+        native_cols: list[float] = []
+        native_rows: list[float] = []
+        for col, row_value in zip(np.asarray(cols, dtype=float), np.asarray(rows, dtype=float)):
+            for payload in payloads:
+                if (float(col), float(row_value)) == tuple(payload["native"]):
+                    projected_two_theta.append(float(payload["refined"][0]))
+                    projected_phi.append(float(payload["refined"][1]))
+                    native_cols.append(float(payload["native"][0]))
+                    native_rows.append(float(payload["native"][1]))
+                    break
+            else:
+                raise AssertionError(f"unexpected projected point {(col, row_value)}")
+        return {
+            "two_theta_deg": np.asarray(projected_two_theta, dtype=np.float64),
+            "phi_deg": np.asarray(projected_phi, dtype=np.float64),
+            "native_cols": np.asarray(native_cols, dtype=np.float64),
+            "native_rows": np.asarray(native_rows, dtype=np.float64),
+            "fit_space_source": "dataset_fit_space_projector",
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "fit_space_local_params_signature": "unit-test",
+            "cake_bundle_signature": "unit-test",
+            "input_frame": "native_detector",
+            "invalid_reason": None,
+            "native_frame_conversion_source": "",
+            "native_frame_conversion_count": 0,
+            "valid": True,
+        }
+
+    subset = opt.ReflectionSimulationSubset(
+        miller=np.array([payload["hkl"] for payload in payloads], dtype=np.float64),
+        intensities=np.ones(len(payloads), dtype=np.float64),
+        measured_entries=[locked_entry(payload) for payload in payloads],
+        original_indices=np.arange(len(payloads), dtype=np.int64),
+        total_reflection_count=len(payloads),
+        fixed_source_reflection_count=len(payloads),
+        fallback_hkl_count=0,
+        reduced=False,
+    )
+    dataset_ctx = opt.GeometryFitDatasetContext(
+        dataset_index=0,
+        label="bg0",
+        theta_initial=0.0,
+        subset=subset,
+        fit_space_projector=projector,
+        fit_space_projector_kind="exact_caked_bundle",
+        sim_caked_image_builder=None,
+        sim_caked_image_builder_kind="must_not_call",
+        qr_fit_trial_source_rows_builder=source_rows_builder,
+        qr_fit_trial_source_rows_builder_kind="unit_test_dynamic_rows",
+    )
+    local = _base_params(4000, optics_mode=1)
+    local.update(
+        {
+            "center_x": 2000.0,
+            "center_y": 2000.0,
+            "center": [2000.0, 2000.0],
+            "_qr_fit_point_only_projection": True,
+        }
+    )
+    return payloads, dataset_ctx, local
+
+
+def _evaluate_locked_qr_two_group_dynamic(line_constraints: bool = False):
+    payloads, dataset_ctx, local = _locked_qr_two_group_dynamic_context()
+    local["_q_group_line_constraints_enabled"] = bool(line_constraints)
+    local["_q_group_line_requires_two_branches"] = True
+    local["_q_group_line_angle_weight"] = 0.5
+    local["_q_group_line_offset_weight"] = 0.0
+    residual, _diagnostics, summary = opt._evaluate_geometry_fit_dataset_dynamic_point_matches(
+        local,
+        dataset_ctx,
+        image_size=4000,
+        missing_pair_penalty_deg=5.0,
+        theta_value=0.0,
+        collect_diagnostics=True,
+    )
+    rows = sorted(
+        summary["_angular_residual_rows"],
+        key=lambda row: (
+            tuple(row["q_group_key"]),
+            int(row["source_branch_index"]),
+        ),
+    )
+    return payloads, residual, summary, rows
+
+
+def _locked_qr_payload_by_key(
+    payloads: list[dict[str, object]],
+) -> dict[tuple[object, ...], dict[str, object]]:
+    return {
+        (
+            tuple(payload["q_group_key"]),
+            tuple(payload["hkl"]),
+            int(payload["branch"]),
+        ): payload
+        for payload in payloads
+    }
+
+
 def test_locked_qr_dynamic_identity_eval_matches_handoff_residuals():
     branch_payloads, residual, summary, rows = _evaluate_locked_qr_dynamic_live_shape()
 
@@ -6152,6 +6388,51 @@ def test_locked_qr_dynamic_pair_payload_has_single_prediction_authority():
         assert worst_row["observed_caked_deg"] == pytest.approx(row["observed_caked_deg"])
         assert worst_row["predicted_caked_deg"] == pytest.approx(row["predicted_caked_deg"])
         assert worst_row["objective_sim_caked_deg"] == pytest.approx(row["objective_sim_caked_deg"])
+
+
+def test_locked_qr_two_groups_identity_eval_uses_clean_handoff_payload_for_all_pairs():
+    payloads, residual, summary, rows = _evaluate_locked_qr_two_group_dynamic()
+    payload_by_key = _locked_qr_payload_by_key(payloads)
+
+    assert int(summary["matched_pair_count"]) == 4
+    assert summary["raw_angular_rms_deg"] < 5.0
+    assert np.linalg.norm(residual) < 5.0
+    for row in rows:
+        key = (
+            tuple(row["q_group_key"]),
+            tuple(row["hkl"]),
+            int(row["source_branch_index"]),
+        )
+        payload = payload_by_key[key]
+        assert row["predicted_caked_deg"] == pytest.approx(list(payload["refined"]))
+        assert row["predicted_caked_deg"] != pytest.approx(list(payload["stale"]))
+        assert row["locked_qr_prediction_caked_authority_reason"] is None
+        assert float(row["angular_residual_norm_deg"]) < 5.0
+
+
+def test_locked_qr_two_groups_line_groups_are_separate_and_use_objective_payload():
+    payloads, residual, summary, rows = _evaluate_locked_qr_two_group_dynamic(line_constraints=True)
+    payload_by_key = _locked_qr_payload_by_key(payloads)
+    row_groups: dict[tuple[object, ...], set[int]] = {}
+    for row in rows:
+        q_group_key = tuple(row["q_group_key"])
+        branch = int(row["source_branch_index"])
+        row_groups.setdefault(q_group_key, set()).add(branch)
+        payload = payload_by_key[(q_group_key, tuple(row["hkl"]), branch)]
+        assert row["observed_caked_deg"] == pytest.approx(list(payload["observed"]))
+        assert row["predicted_caked_deg"] == pytest.approx(list(payload["refined"]))
+        assert row["objective_sim_caked_deg"] == pytest.approx(list(payload["refined"]))
+
+    assert int(summary["matched_pair_count"]) == 4
+    assert int(summary["line_group_count"]) == 2
+    assert int(summary["resolved_line_group_count"]) == 2
+    assert int(summary["missing_line_group_count"]) == 0
+    assert row_groups == {
+        ("q_group", "primary", 1, 5): {0, 1},
+        ("q_group", "primary", 1, 10): {0, 1},
+    }
+    assert residual.size == 12
+    assert np.isfinite(float(summary["line_angle_rms_deg"]))
 
 
 def test_qr_caked_objective_rejects_caked_display_values_as_detector_px():
