@@ -49,6 +49,7 @@ _PRIMARY_CACHE_FIELDS = (
     "primary_active_contribution_keys",
     "primary_hit_table_cache",
     "primary_best_sample_index_cache",
+    "primary_intersection_cache_entry_cache",
     "primary_relative_hit_table_cache",
     "primary_relative_hit_table_cache_center",
     "primary_relative_hit_table_cache_signature",
@@ -174,6 +175,7 @@ def _clear_primary_contribution_cache(state: object) -> None:
     _set_if_present(state, "primary_active_contribution_keys", [])
     _set_if_present(state, "primary_hit_table_cache", {})
     _set_if_present(state, "primary_best_sample_index_cache", {})
+    _set_if_present(state, "primary_intersection_cache_entry_cache", {})
     _set_if_present(state, "primary_relative_hit_table_cache", {})
     _set_if_present(state, "primary_relative_hit_table_cache_center", None)
     _set_if_present(state, "primary_relative_hit_table_cache_signature", None)

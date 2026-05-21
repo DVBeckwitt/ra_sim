@@ -6,6 +6,7 @@ import pytest
 
 from ra_sim.simulation import diffraction
 from ra_sim.simulation import diffraction_debug
+from ra_sim.simulation import intersection_cache_schema as cache_schema
 from ra_sim.utils.calculations import (
     IndexofRefraction,
     _legacy_kernel_n2_sample_array_from_angstrom,
@@ -505,7 +506,8 @@ def test_process_peaks_parallel_skips_negative_l(monkeypatch):
         save_flag=0,
     )
 
-    assert called_l_values == [1.0]
+    assert called_l_values
+    assert all(value == pytest.approx(1.0) for value in called_l_values)
 
 
 def test_process_peaks_parallel_passes_wavelength_specific_n2(monkeypatch):
@@ -797,6 +799,39 @@ def test_build_intersection_cache_preserves_all_specular_sampled_rows(monkeypatc
         np.vstack([np.asarray(table, dtype=np.float64)[0, 2:4] for table in cache]),
         np.array([[10.0, 10.0], [20.0, 21.0], [31.0, 30.0]], dtype=np.float64),
     )
+
+
+def test_build_intersection_cache_keeps_explicit_zero_offset_representative_without_sample(
+    monkeypatch,
+):
+    monkeypatch.setattr(diffraction, "_should_log_intersection_cache", lambda: False)
+
+    row = np.full(cache_schema.HIT_ROW_WITH_CONTEXT_WIDTH, np.nan, dtype=np.float64)
+    row[:10] = [0.0, 30.0, 40.0, -0.25, 1.0, 0.0, 2.0, 7.0, 3.0, np.nan]
+    row[cache_schema.HIT_ROW_COL_BEAM_X_OFFSET] = 0.0
+    row[cache_schema.HIT_ROW_COL_BEAM_Y_OFFSET] = 0.0
+    row[cache_schema.HIT_ROW_COL_THETA_OFFSET] = 0.0
+    row[cache_schema.HIT_ROW_COL_PHI_OFFSET] = 0.0
+    row[cache_schema.HIT_ROW_COL_WAVELENGTH_OFFSET] = 0.0
+
+    cache = diffraction.build_branch_representative_intersection_cache(
+        [row.reshape(1, -1)],
+        4.0,
+        7.0,
+        beam_x_array=np.array([10.0, 20.0], dtype=np.float64),
+        beam_y_array=np.array([11.0, 21.0], dtype=np.float64),
+        theta_array=np.array([0.1, 0.2], dtype=np.float64),
+        phi_array=np.array([0.3, 0.4], dtype=np.float64),
+        wavelength_array=np.array([1.52, 1.56], dtype=np.float64),
+        best_sample_indices_out=np.array([-1], dtype=np.int64),
+    )
+
+    assert len(cache) == 1
+    cache_row = np.asarray(cache[0], dtype=np.float64)[0]
+    assert float(cache_row[cache_schema.CACHE_COL_INTENSITY]) == pytest.approx(0.0)
+    np.testing.assert_allclose(cache_row[9:14], np.zeros(5, dtype=np.float64))
+    assert np.isnan(cache_row[cache_schema.CACHE_COL_BEST_SAMPLE_INDEX])
+    np.testing.assert_allclose(cache_row[14:16], np.array([7.0, 3.0], dtype=np.float64))
 
 
 def test_build_intersection_cache_preserves_all_non_specular_sampled_rows(monkeypatch):

@@ -39,6 +39,7 @@ def _state() -> SimpleNamespace:
         primary_active_contribution_keys=[0],
         primary_hit_table_cache=primary_cache,
         primary_best_sample_index_cache={0: 0},
+        primary_intersection_cache_entry_cache={0: [np.ones((1, 17), dtype=np.float64)]},
         primary_relative_hit_table_cache=relative_cache,
         primary_relative_hit_table_cache_center=(10.0, 20.0),
         primary_relative_hit_table_cache_signature=("primary-remap",),
@@ -129,6 +130,7 @@ def test_display_only_preserves_all_simulation_caches() -> None:
         "stored_secondary_sim_image": state.stored_secondary_sim_image,
         "stored_sim_image": state.stored_sim_image,
         "primary_hit_table_cache": state.primary_hit_table_cache,
+        "primary_intersection_cache_entry_cache": state.primary_intersection_cache_entry_cache,
         "primary_relative_hit_table_cache": state.primary_relative_hit_table_cache,
         "secondary_relative_hit_table_cache": state.secondary_relative_hit_table_cache,
         "last_caked_image_unscaled": state.last_caked_image_unscaled,
@@ -144,11 +146,13 @@ def test_display_only_preserves_all_simulation_caches() -> None:
 def test_prune_reuse_preserves_primary_contribution_cache() -> None:
     state = _state()
     primary_cache = state.primary_hit_table_cache
+    representative_cache = state.primary_intersection_cache_entry_cache
     relative_cache = state.primary_relative_hit_table_cache
 
     invalidate_for_update_action(state, UpdateAction.PRIMARY_PRUNE_REUSE)
 
     assert state.primary_hit_table_cache is primary_cache
+    assert state.primary_intersection_cache_entry_cache is representative_cache
     assert state.primary_relative_hit_table_cache is relative_cache
     assert state.primary_contribution_cache_signature == ("primary-contrib",)
     assert state.stored_primary_sim_image is not None
@@ -159,6 +163,7 @@ def test_prune_reuse_preserves_primary_contribution_cache() -> None:
 def test_detector_center_remap_clears_analysis_geometry_cache_only() -> None:
     state = _state()
     primary_cache = state.primary_hit_table_cache
+    representative_cache = state.primary_intersection_cache_entry_cache
     relative_cache = state.primary_relative_hit_table_cache
     secondary_relative = state.secondary_relative_hit_table_cache
     primary_image = state.stored_primary_sim_image
@@ -166,6 +171,7 @@ def test_detector_center_remap_clears_analysis_geometry_cache_only() -> None:
     invalidate_for_update_action(state, UpdateAction.DETECTOR_CENTER_REMAP)
 
     assert state.primary_hit_table_cache is primary_cache
+    assert state.primary_intersection_cache_entry_cache is representative_cache
     assert state.primary_relative_hit_table_cache is relative_cache
     assert state.secondary_relative_hit_table_cache is secondary_relative
     assert state.stored_primary_sim_image is primary_image
@@ -191,6 +197,7 @@ def test_full_simulation_uses_broad_invalidation() -> None:
     assert state.stored_secondary_sim_image is None
     assert state.stored_sim_image is None
     assert state.primary_hit_table_cache == {}
+    assert state.primary_intersection_cache_entry_cache == {}
     assert state.primary_relative_hit_table_cache == {}
     assert state.secondary_relative_hit_table_cache == []
     assert state.geometry_q_group_entries_cache == []
@@ -203,12 +210,14 @@ def test_full_simulation_uses_broad_invalidation() -> None:
 def test_primary_prune_fill_preserves_existing_contribution_cache() -> None:
     state = _state()
     primary_cache = state.primary_hit_table_cache
+    representative_cache = state.primary_intersection_cache_entry_cache
     relative_cache = state.primary_relative_hit_table_cache
     combined_image = state.stored_sim_image
 
     invalidate_for_update_action(state, UpdateAction.PRIMARY_PRUNE_FILL)
 
     assert state.primary_hit_table_cache is primary_cache
+    assert state.primary_intersection_cache_entry_cache is representative_cache
     assert state.primary_relative_hit_table_cache is relative_cache
     assert state.stored_sim_image is combined_image
 
@@ -218,19 +227,14 @@ def test_update_action_invalidation_keeps_explicit_q_group_selection_state() -> 
         state = _state()
         disabled_qr_sets = set(state.disabled_qr_sets)
         disabled_qz_sections = set(state.disabled_qz_sections)
-        pending_legacy_disabled_qz_sections = set(
-            state.pending_legacy_disabled_qz_sections
-        )
+        pending_legacy_disabled_qz_sections = set(state.pending_legacy_disabled_qz_sections)
         refresh_requested = bool(state.refresh_requested)
 
         invalidate_for_update_action(state, action)
 
         assert state.disabled_qr_sets == disabled_qr_sets
         assert state.disabled_qz_sections == disabled_qz_sections
-        assert (
-            state.pending_legacy_disabled_qz_sections
-            == pending_legacy_disabled_qz_sections
-        )
+        assert state.pending_legacy_disabled_qz_sections == pending_legacy_disabled_qz_sections
         assert state.refresh_requested is refresh_requested
 
 

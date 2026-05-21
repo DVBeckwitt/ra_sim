@@ -1,27 +1,24 @@
 # Weighted-event representative cache carry-through
 
-Status: implemented; broad-suite cleanup remains separate
+Status: implemented; committed validation pending
 Type: bug
 Owner:
 Issue: none
 Priority: p1
-Last updated: 2026-04-28
+Last updated: 2026-05-21
 
 ## Summary
 
-Fast weighted-event runtime was keeping sampled-event semantics correct, but the
-representative cache could still lose the deterministic closest/highest-mosaic
-ray for one final Qr-set branch before QR click, caked click, or geometry-fit
-consumers read `get_last_intersection_cache()`.
+Fast weighted-event runtime keeps sampled-event semantics for images, but the
+geometry fitter needs deterministic branch anchors that are independent of the
+stochastic sampled rays. Each final Qr/L/branch now gets a zero-intensity ghost
+representative at beam center, with zero divergence/beam offsets and the
+default wavelength, and the fitter-facing cache uses those rows instead of the
+closest sampled row.
 
-This follow-up keeps fast weighted-event path active and moves representative
-selection fully into raw candidate enumeration:
-
-`raw candidate -> final Qr-branch slot -> deterministic winner -> cache carry-through`
-
-Representative identity is now final Qr-set branch slot, not `(peak_idx,
+Representative identity remains the final Qr-set branch slot, not `(peak_idx,
 branch_id)`, so multiple HKLs in one shared `Qr/L/branch` fold to one stored
-representative.
+ghost representative.
 
 ## Current state
 
@@ -29,41 +26,44 @@ Implemented in [diffraction.py](../../../ra_sim/simulation/diffraction.py) with
 targeted regression coverage in
 [test_diffraction_weighted_events.py](../../../tests/test_diffraction_weighted_events.py),
 [test_diffraction_constraints.py](../../../tests/test_diffraction_constraints.py),
+[test_gui_runtime_primary_cache.py](../../../tests/test_gui_runtime_primary_cache.py),
+[test_gui_runtime_invalidation.py](../../../tests/test_gui_runtime_invalidation.py),
 and
-[test_manual_geometry_selection_helpers.py](../../../tests/test_manual_geometry_selection_helpers.py).
+[test_gui_structure_factor_pruning.py](../../../tests/test_gui_structure_factor_pruning.py).
 
 What changed:
 
 - added `_build_weighted_event_representative_slot_map(miller, av)` to map each
   peak/branch to one final representative slot;
-- fast weighted-event representative buffers now allocate per final slot, not
-  per peak;
-- `_weighted_event_update_representative(...)` now ranks representatives by
-  true mosaic weight first, then mosaic-top angular distance, beam/wavelength
-  distance, candidate mass, and deterministic provenance;
-- representative rows now keep explicit provenance
-  `[peak_idx, q_idx, sample_idx]` in hit-row columns `7/8/9`;
-- representative hit-row column `9` is the authoritative mosaic-top beam
-  sample index for Qr/cache selection and takes precedence over table-level
-  sampled-event `best_sample_indices_out` fallbacks during cache construction;
-- GUI `mosaic_top_rank_key(...)` now follows the same representative fallback
-  order as simulation selection: highest mosaic weight, angular distance, beam
-  distance, wavelength distance from profile center, intensity/mass, then
-  stable source order;
+- added extended hit rows carrying explicit zero beam/divergence/wavelength
+  context for ghost representatives;
+- added `_build_weighted_event_ghost_representative_hit_tables(...)` to solve
+  branch anchors at beam center/default wavelength without sampling intensity;
+- removed the old sampled mosaic-top representative ranking/update/merge hot
+  path from the weighted-event kernels;
+- representative rows now keep explicit provenance `[peak_idx, q_idx]` in
+  hit-row columns `7/8`, leave best sample as `NaN`, and write zero context
+  offsets in hit-row columns `10:15`;
 - the weighted-event fast parallel path now uses explicit Python
   `ThreadPoolExecutor` chunks calling `_weighted_event_sample_chunk_kernel`
   compiled as `njit(nogil=True)`, with no monolithic `parallel=True` sample
   kernel;
-- representative hit-table emission is one row per valid final slot in stable
-  slot-key order;
+- representative hit-table emission is one ghost row per valid final slot in
+  stable slot-key order;
 - `build_intersection_cache(...)` now preserves finite hit-row provenance into
   cache columns `14/15/16`, with fallback only when provenance is missing;
+- `build_intersection_cache(...)` accepts explicit hit-row context offsets, so
+  ghost rows with no best sample survive caking/geometry cache construction;
 - `build_branch_representative_intersection_cache(...)` is passthrough-only and
   no longer reselects, recollapses, merges, or deduplicates preselected
   representative rows;
 - `get_last_intersection_cache()` stays representative-facing while
   `get_last_intersection_cache_views()` still exposes both sampled-event rows
   and branch-representative rows.
+- GUI primary-fill stores representative intersection-cache entries per
+  contribution key, drops stale representative entries when raw hit rows are
+  replaced, and translates representative detector coordinates during
+  detector-center remaps;
 - Qr selection tests now exercise representative rows through
   `build_intersection_cache(...) -> intersection_cache_to_hit_tables(...) ->
   build_geometry_fit_simulated_peaks(...) -> collapse_qr_qz_selection_peaks(...)`
@@ -83,31 +83,23 @@ What changed:
 
 Bug/error status:
 
-- requested representative carry-through fix is implemented on fast path;
-- targeted weighted-event and cache tests are green;
-- requested caked-Qr representative-pick proof is green;
-- branch-local focused diagnostics pass with
-  `original_plan_validation_incomplete=no`,
-  `threads_1_parallel_backend: fast_serial`, and
-  `threads_2_parallel_backend: threaded_njit_chunks`;
-- production weighted-event, cache, and GUI selection surfaces match the shared
-  validated worktree commit used as merge source;
-- broader manual-geometry replay/workflow suites were already red in this
-  worktree and remain red for adjacent replay/finalizer paths not changed in
-  this patch;
-- full-suite run is not green. The current clean `-x` failure is
-  `tests/test_compare_bi2se3_reference_tool.py::test_compare_tool_default_uses_two_theta_balanced_wavelength`,
-  where the Bi2Se3 CIF fixture hash differs from the expected reference hash;
-  this is outside the weighted-event representative-cache and worker-control
-  patch.
+- requested zero-intensity branch ghost fix is implemented on fast and Python
+  weighted-event paths;
+- targeted weighted-event, cache, invalidation, structure-factor-pruning, and
+  Numba-disable compatibility tests are green;
+- old sampled mosaic-top representative ranking code has been removed from the
+  production hot path;
+- full `tests/test_gui_runtime_primary_cache.py` still has the known unrelated
+  detector-center relative-coordinate expectation mismatch in
+  `test_store_primary_cache_payload_can_store_detector_relative_hit_tables`.
 
 Feature status:
 
 - no weighted-event sampling/statistics behavior change is intended;
 - sampled rows still preserve duplicates and remain separate from
   representative-facing cache rows;
-- representative cache is hardened for QR click, caked click, and geometry-fit
-  source selection;
+- representative cache is hardened for QR click, caked click, geometry-fit
+  source selection, primary-fill reuse, and detector-center remap;
 - manual weighted-event worker control is available through Python API,
   config, environment variable, headless CLI, and benchmark flags;
 - future weighted-event merges can be validated with one focused command before
@@ -195,9 +187,9 @@ Passed in this worktree:
   on CIF reference hash drift after 92 passing tests and 2 skipped tests;
 - `python -m pytest tests/test_diffraction_weighted_events.py::test_solve_q_real_jit_does_not_crash_allocate_sched -q`
 - `python -m pytest tests/test_diffraction_weighted_events.py::test_compute_intensity_array_is_serial_njit -q`
-- `python -m pytest tests/test_diffraction_weighted_events.py::test_representative_choice_uses_true_mosaic_weight_before_mass -q`
-- `python -m pytest tests/test_diffraction_weighted_events.py::test_representative_choice_preserves_mosaic_top_sample_index_in_hit_row -q`
-- `python -m pytest tests/test_diffraction_weighted_events.py::test_mosaic_top_representative_survives_even_when_unsampled -q`
+- `python -m pytest tests/test_diffraction_weighted_events.py::test_center_ghost_representative_survives_even_when_unsampled -q`
+- `python -m pytest tests/test_gui_runtime_primary_cache.py::test_store_primary_cache_payload_drops_stale_representative_intersection_cache -q`
+- `python -m pytest tests/test_gui_runtime_primary_cache.py::test_translate_intersection_cache_entry_cache_for_center_delta -q`
 - `python -m pytest tests/test_diffraction_weighted_events.py::test_manual_worker_count_one_routes_serial -q`
 - `python -m pytest tests/test_diffraction_weighted_events.py::test_manual_worker_count_two_routes_threaded_chunks -q`
 - `python -m pytest tests/test_diffraction_weighted_events.py::test_manual_worker_count_four_reports_four_workers_when_enough_samples -q`

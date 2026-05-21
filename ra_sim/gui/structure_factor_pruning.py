@@ -526,6 +526,8 @@ def invalidate_runtime_bragg_qr_filter_results(
         bindings.simulation_runtime_state.primary_contribution_cache_signature = None
         bindings.simulation_runtime_state.primary_active_contribution_keys.clear()
         bindings.simulation_runtime_state.primary_hit_table_cache.clear()
+        if hasattr(bindings.simulation_runtime_state, "primary_intersection_cache_entry_cache"):
+            bindings.simulation_runtime_state.primary_intersection_cache_entry_cache.clear()
         bindings.simulation_runtime_state.primary_source_mode = "miller"
         bindings.simulation_runtime_state.primary_filter_signature = None
 

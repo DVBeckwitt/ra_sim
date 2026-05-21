@@ -1073,9 +1073,13 @@ What changed:
   cache rows, and duplicate best-sample event counts; only image deposition may
   aggregate repeated ordinals internally
 - branch representatives stay separate from sampled events; fitter-facing
-  `get_last_intersection_cache()` still returns representative rows, while
-  `get_last_intersection_cache_views()` exposes both sampled event rows and
-  branch representative rows
+  `get_last_intersection_cache()` returns deterministic zero-intensity ghost
+  representatives at beam center, zero divergence, zero beam offset, and the
+  default wavelength, while `get_last_intersection_cache_views()` exposes both
+  sampled event rows and branch representative rows
+- GUI primary-fill reuse stores representative intersection-cache entries per
+  contribution key, drops stale entries when raw hit rows are replaced, and
+  translates representative detector coordinates across detector-center remaps
 - `get_last_process_peaks_weighted_event_stats()` exposes weighted-event debug
   counters and timers, including solve/project/select counts and pass-1/pass-2
   mass totals for test assertions
@@ -1104,6 +1108,8 @@ Still intentionally disabled for weighted events:
 - clustered beam replacement
 - grouped event emission by `(Gr, Gz)`
 - sampling from representative/cache rows
+- sampled-row or old mosaic-top-rank representative selection for geometric-fit
+  cache anchors
 
 ## Numba on-disk compilation cache
 

@@ -431,10 +431,10 @@ def _install_streaming_fast_outer_backend(
         all_q = np.asarray(args[0], dtype=np.float64)
         peak_idx = int(args[1])
         sample_idx = int(args[2])
-        save_flag = int(args[31])
-        q_data = args[32]
-        q_count = args[33]
-        q_debug_truncated_count = args[34]
+        save_flag = int(args[27])
+        q_data = args[28]
+        q_count = args[29]
+        q_debug_truncated_count = args[30]
         candidate_mass = args[-6]
         candidate_row = args[-5]
         candidate_col = args[-4]
@@ -622,82 +622,6 @@ def _install_streaming_fast_outer_backend(
         diffraction,
         "_weighted_event_emit_from_stored_candidates",
         fake_emit_from_stored,
-    )
-
-
-def _new_representative_slot_state(n_slots):
-    return (
-        np.zeros(n_slots, dtype=np.uint8),
-        np.full(n_slots, np.inf, dtype=np.float64),
-        np.full(n_slots, np.inf, dtype=np.float64),
-        np.full(n_slots, np.inf, dtype=np.float64),
-        np.full(n_slots, np.inf, dtype=np.float64),
-        np.full(n_slots, np.inf, dtype=np.float64),
-        np.full(n_slots, -1, dtype=np.int64),
-        np.full(n_slots, -1, dtype=np.int64),
-        np.full(n_slots, -1, dtype=np.int64),
-        np.full((n_slots, diffraction.HIT_ROW_WITH_PROVENANCE_WIDTH), np.nan, dtype=np.float64),
-    )
-
-
-def _update_representative_slot(
-    state,
-    *,
-    rep_slot=0,
-    sample_mosaic_weight=1.0,
-    angular=0.0,
-    beam=0.0,
-    wavelength=0.0,
-    mass=1.0,
-    sample_idx=0,
-    peak_idx=0,
-    q_idx=0,
-    row_f=20.0,
-    col_f=10.0,
-    phi_f=-0.20,
-    H=1.0,
-    K=0.0,
-    L=2.0,
-):
-    update = diffraction._weighted_event_update_representative.py_func
-    (
-        representative_valid,
-        representative_neg_mosaic_weight,
-        representative_angular_distance,
-        representative_beam_distance,
-        representative_wavelength_distance,
-        representative_neg_mass,
-        representative_sample_idx,
-        representative_peak_idx,
-        representative_q_idx,
-        representative_rows,
-    ) = state
-    update(
-        int(rep_slot),
-        float(sample_mosaic_weight),
-        float(angular),
-        float(beam),
-        float(wavelength),
-        float(mass),
-        int(sample_idx),
-        int(peak_idx),
-        int(q_idx),
-        float(row_f),
-        float(col_f),
-        float(phi_f),
-        float(H),
-        float(K),
-        float(L),
-        representative_valid,
-        representative_neg_mosaic_weight,
-        representative_angular_distance,
-        representative_beam_distance,
-        representative_wavelength_distance,
-        representative_neg_mass,
-        representative_sample_idx,
-        representative_peak_idx,
-        representative_q_idx,
-        representative_rows,
     )
 
 
@@ -2340,7 +2264,7 @@ def test_duplicate_events_preserved(monkeypatch):
     )
 
 
-def test_representative_cache_prefers_closest_branch_ray_even_if_low_mass(monkeypatch):
+def test_representative_cache_uses_center_ghost_even_if_sampled_mass_larger(monkeypatch):
     diffraction._set_last_intersection_cache([])
     monkeypatch.setattr(diffraction, "_retain_last_intersection_cache", lambda: True)
     _install_simple_weighted_backend(
@@ -2374,12 +2298,13 @@ def test_representative_cache_prefers_closest_branch_ray_even_if_low_mass(monkey
     sampled_rows = np.vstack(
         [np.asarray(table, dtype=np.float64) for table in views["sampled_event_rows"]]
     )
-    assert float(rep_rows[0, 4]) == pytest.approx(1.0)
-    assert float(rep_rows[0, 16]) == pytest.approx(0.0)
+    assert float(rep_rows[0, cache_schema.CACHE_COL_INTENSITY]) == pytest.approx(0.0)
+    assert np.isnan(rep_rows[0, cache_schema.CACHE_COL_BEST_SAMPLE_INDEX])
+    np.testing.assert_allclose(rep_rows[0, 9:14], np.zeros(5, dtype=np.float64))
     assert float(np.max(sampled_rows[:, 4])) == pytest.approx(100.0)
 
 
-def test_representative_cache_prefers_true_mosaic_weight_before_sampled_mass(monkeypatch):
+def test_representative_cache_uses_zero_intensity_ghost_before_sampled_mass(monkeypatch):
     diffraction._set_last_intersection_cache([])
     monkeypatch.setattr(diffraction, "_retain_last_intersection_cache", lambda: True)
     _install_simple_weighted_backend(
@@ -2411,11 +2336,12 @@ def test_representative_cache_prefers_true_mosaic_weight_before_sampled_mass(mon
         [np.asarray(table, dtype=np.float64) for table in views["sampled_event_rows"]]
     )
     assert float(np.max(sampled_rows[:, 4])) == pytest.approx(10.0)
-    assert float(rep_rows[0, 4]) == pytest.approx(0.9)
-    assert float(rep_rows[0, diffraction.CACHE_COL_BEST_SAMPLE_INDEX]) == pytest.approx(0.0)
+    assert float(rep_rows[0, cache_schema.CACHE_COL_INTENSITY]) == pytest.approx(0.0)
+    assert np.isnan(rep_rows[0, diffraction.CACHE_COL_BEST_SAMPLE_INDEX])
+    np.testing.assert_allclose(rep_rows[0, 9:14], np.zeros(5, dtype=np.float64))
 
 
-def test_mosaic_top_representative_survives_even_when_unsampled(monkeypatch):
+def test_center_ghost_representative_survives_even_when_unsampled(monkeypatch):
     diffraction._set_last_intersection_cache([])
     monkeypatch.setattr(diffraction, "_retain_last_intersection_cache", lambda: True)
     _install_simple_weighted_backend(
@@ -2457,10 +2383,9 @@ def test_mosaic_top_representative_survives_even_when_unsampled(monkeypatch):
 
     assert representative_rows.shape[0] == 1
     assert float(representative_rows[0, cache_schema.CACHE_COL_DETECTOR_COL]) == pytest.approx(10.0)
-    assert float(representative_rows[0, cache_schema.CACHE_COL_INTENSITY]) == pytest.approx(0.9)
-    assert float(representative_rows[0, cache_schema.CACHE_COL_BEST_SAMPLE_INDEX]) == pytest.approx(
-        0.0
-    )
+    assert float(representative_rows[0, cache_schema.CACHE_COL_INTENSITY]) == pytest.approx(0.0)
+    assert np.isnan(representative_rows[0, cache_schema.CACHE_COL_BEST_SAMPLE_INDEX])
+    np.testing.assert_allclose(representative_rows[0, 9:14], np.zeros(5, dtype=np.float64))
     np.testing.assert_allclose(last_cache_rows, representative_rows, rtol=0.0, atol=0.0)
 
     qr_hit_rows = diffraction.intersection_cache_to_hit_tables(
@@ -2474,15 +2399,80 @@ def test_mosaic_top_representative_survives_even_when_unsampled(monkeypatch):
         primary_c=7.0,
         round_pixel_centers=False,
     )
+    assert qr_peaks[0]["weight"] == pytest.approx(0.0)
     selected, _degenerate_count = gqm.collapse_geometry_fit_simulated_peaks(
         qr_peaks,
         one_per_q_group=True,
     )
 
     assert len(selected) == 1
-    assert selected[0]["best_sample_index"] == 0
+    assert "best_sample_index" not in selected[0]
     assert selected[0]["native_col"] == pytest.approx(10.0)
-    assert selected[0]["weight"] == pytest.approx(0.9)
+
+
+def test_branch_representative_cache_uses_zero_intensity_center_ghost(monkeypatch):
+    diffraction._set_last_intersection_cache([])
+    monkeypatch.setattr(diffraction, "_retain_last_intersection_cache", lambda: True)
+    _install_simple_weighted_backend(
+        monkeypatch,
+        solution_map={
+            (1, 0, 1, 0): np.array([[10.0, -1.0, 0.0, 1.0]], dtype=np.float64),
+            (1, 0, 1, 1): np.array([[20.0, -1.0, 0.0, 100.0]], dtype=np.float64),
+        },
+    )
+
+    def controlled_targets(_total_mass, event_count, sample_idx):
+        assert int(event_count) == 1
+        if int(sample_idx) == 0:
+            return np.empty(0, dtype=np.float64)
+        return np.array([0.0], dtype=np.float64)
+
+    monkeypatch.setattr(diffraction, "_weighted_event_targets", controlled_targets)
+    kwargs = _base_process_kwargs(n_samp=2)
+    kwargs["theta_array"] = np.array([0.25, 0.50], dtype=np.float64)
+    kwargs["phi_array"] = np.array([0.25, 0.50], dtype=np.float64)
+    kwargs["wavelength_array"] = np.array([1.52, 1.56], dtype=np.float64)
+
+    diffraction.process_peaks_parallel_safe(
+        **kwargs,
+        save_flag=0,
+        collect_hit_tables=True,
+        accumulate_image=False,
+        sample_weights=np.array([0.9, 0.1], dtype=np.float64),
+        events_per_beam_phase=1,
+    )
+
+    views = diffraction.get_last_intersection_cache_views()
+    sampled_rows = _flatten_row_tables(views["sampled_event_rows"])
+    representative_rows = _flatten_row_tables(views["branch_representative_rows"])
+
+    assert sampled_rows.shape[0] == 1
+    assert float(sampled_rows[0, cache_schema.CACHE_COL_DETECTOR_COL]) == pytest.approx(20.0)
+    assert float(sampled_rows[0, cache_schema.CACHE_COL_INTENSITY]) == pytest.approx(10.0)
+    assert float(sampled_rows[0, cache_schema.CACHE_COL_BEST_SAMPLE_INDEX]) == pytest.approx(1.0)
+
+    assert representative_rows.shape[0] == 1
+    assert float(representative_rows[0, cache_schema.CACHE_COL_DETECTOR_COL]) == pytest.approx(10.0)
+    assert float(representative_rows[0, cache_schema.CACHE_COL_INTENSITY]) == pytest.approx(0.0)
+    np.testing.assert_allclose(representative_rows[0, 9:14], np.zeros(5, dtype=np.float64))
+    assert np.isnan(representative_rows[0, cache_schema.CACHE_COL_BEST_SAMPLE_INDEX])
+
+    qr_hit_rows = diffraction.intersection_cache_to_hit_tables(
+        diffraction.get_last_intersection_cache()
+    )
+    qr_peaks = gqm.build_geometry_fit_simulated_peaks(
+        qr_hit_rows,
+        image_shape=(64, 64),
+        native_sim_to_display_coords=lambda col, row, _shape: (float(col), float(row)),
+        primary_a=4.0,
+        primary_c=7.0,
+        round_pixel_centers=False,
+    )
+
+    assert len(qr_peaks) == 1
+    assert qr_peaks[0]["native_col"] == pytest.approx(10.0)
+    assert qr_peaks[0]["weight"] == pytest.approx(0.0)
+    assert "best_sample_index" not in qr_peaks[0]
 
 
 def test_qr_set_detection_uses_representative_rows_not_sampled_rows(monkeypatch):
@@ -2548,7 +2538,7 @@ def test_representative_rows_not_sampled_events(monkeypatch):
     representative_rows = _flatten_row_tables(views["branch_representative_rows"])
     assert sampled_rows.shape[0] == 3
     assert representative_rows.shape[0] == 1
-    assert float(representative_rows[0, cache_schema.CACHE_COL_INTENSITY]) == pytest.approx(1.0)
+    assert float(representative_rows[0, cache_schema.CACHE_COL_INTENSITY]) == pytest.approx(0.0)
 
 
 _WEIGHTED_EVENT_PLAN_COMPLIANCE_MATRIX = [
@@ -2679,18 +2669,18 @@ _WEIGHTED_EVENT_PLAN_COMPLIANCE_MATRIX = [
         "notes": "solve_q uses serial intensity helper and avoids LLVM allocate_sched crash path",
     },
     {
-        "plan_item": "mosaic-top beam event preserved per final Qr/L/branch slot",
-        "implementation_location": "ra_sim/simulation/diffraction.py::_weighted_event_update_representative",
-        "test_name": "tests/test_diffraction_weighted_events.py::test_mosaic_top_representative_survives_even_when_unsampled",
+        "plan_item": "zero-intensity center ghost preserved per final Qr/L/branch slot",
+        "implementation_location": "ra_sim/simulation/diffraction.py::_build_weighted_event_ghost_representative_hit_tables",
+        "test_name": "tests/test_diffraction_weighted_events.py::test_center_ghost_representative_survives_even_when_unsampled",
         "status": "pass",
-        "notes": "unsampled high-mosaic representative survives into branch representative rows and cache",
+        "notes": "unsampled sampled events do not replace the deterministic ghost representative",
     },
     {
-        "plan_item": "Qr selection uses mosaic-top representative, not sampled event rows",
+        "plan_item": "Qr selection uses center ghost representative, not sampled event rows",
         "implementation_location": "ra_sim/gui/geometry_q_group_manager.py::collapse_geometry_fit_simulated_peaks",
-        "test_name": "tests/test_diffraction_weighted_events.py::test_mosaic_top_representative_survives_even_when_unsampled",
+        "test_name": "tests/test_diffraction_weighted_events.py::test_center_ghost_representative_survives_even_when_unsampled",
         "status": "pass",
-        "notes": "Qr collapse selects representative sample 0 while sampled rows contain sample 1",
+        "notes": "Qr collapse selects the center ghost while sampled rows contain sample 1",
     },
 ]
 
@@ -2722,8 +2712,8 @@ def test_weighted_events_original_plan_compliance_matrix(capsys):
         "real solve_q path works",
         "no silent fallback in normal parallel tests",
         "solve_q JIT does not crash allocate_sched",
-        "mosaic-top beam event preserved per final Qr/L/branch slot",
-        "Qr selection uses mosaic-top representative, not sampled event rows",
+        "zero-intensity center ghost preserved per final Qr/L/branch slot",
+        "Qr selection uses center ghost representative, not sampled event rows",
     ]
     incomplete = False
     incomplete = incomplete or len(_WEIGHTED_EVENT_PLAN_COMPLIANCE_MATRIX) != len(
@@ -2761,9 +2751,7 @@ def test_weighted_event_merge_diagnostics_marker_contract():
     required = {
         "test_solve_q_real_jit_does_not_crash_allocate_sched",
         "test_compute_intensity_array_is_serial_njit",
-        "test_representative_choice_uses_true_mosaic_weight_before_mass",
-        "test_representative_choice_preserves_mosaic_top_sample_index_in_hit_row",
-        "test_mosaic_top_representative_survives_even_when_unsampled",
+        "test_center_ghost_representative_survives_even_when_unsampled",
         "test_manual_worker_count_one_routes_serial",
         "test_manual_worker_count_two_routes_threaded_chunks",
         "test_manual_worker_count_four_reports_four_workers_when_enough_samples",
@@ -2787,8 +2775,8 @@ def test_weighted_event_invariant_matrix_has_no_untested_entries():
         "duplicate_events_preserved": "test_duplicate_events_preserved",
         "representative_rows_not_sampled_events": "test_representative_rows_not_sampled_events",
         "source_template_and_clustering_disabled": "test_source_template_and_clustering_disabled",
-        "mosaic_top_representative_survives_even_when_unsampled": (
-            "test_mosaic_top_representative_survives_even_when_unsampled"
+        "center_ghost_representative_survives_even_when_unsampled": (
+            "test_center_ghost_representative_survives_even_when_unsampled"
         ),
     }
     assert all(test_name for test_name in invariant_tests.values())
@@ -2811,226 +2799,6 @@ def test_final_qr_set_branch_slots_fold_same_qr_l_hkls_and_keep_one_representati
     assert int(representative_slot_by_peak_branch[0, 0]) != int(
         representative_slot_by_peak_branch[0, 1]
     )
-
-    state = _new_representative_slot_state(len(representative_slot_keys))
-    representative_valid = state[0]
-    representative_rows = state[-1]
-
-    _update_representative_slot(
-        state,
-        rep_slot=int(representative_slot_by_peak_branch[0, 0]),
-        sample_mosaic_weight=1.0,
-        angular=0.40,
-        beam=0.0,
-        wavelength=0.0,
-        mass=10.0,
-        sample_idx=2,
-        peak_idx=0,
-        q_idx=0,
-        row_f=20.0,
-        col_f=10.0,
-        phi_f=-0.30,
-        H=1.0,
-        K=0.0,
-        L=2.0,
-    )
-    _update_representative_slot(
-        state,
-        rep_slot=int(representative_slot_by_peak_branch[1, 0]),
-        sample_mosaic_weight=1.0,
-        angular=0.05,
-        beam=0.0,
-        wavelength=0.0,
-        mass=1.0,
-        sample_idx=1,
-        peak_idx=1,
-        q_idx=1,
-        row_f=21.0,
-        col_f=11.0,
-        phi_f=-0.20,
-        H=0.0,
-        K=1.0,
-        L=2.0,
-    )
-
-    representative_hit_tables = diffraction._build_weighted_event_representative_hit_tables(
-        representative_valid,
-        representative_rows,
-        representative_slot_keys,
-    )
-
-    assert len(representative_hit_tables) == 1
-    row = np.asarray(representative_hit_tables[0], dtype=np.float64)[0]
-    np.testing.assert_allclose(
-        row[:10], np.array([1.0, 11.0, 21.0, -0.20, 0.0, 1.0, 2.0, 1.0, 1.0, 1.0])
-    )
-
-
-def test_representative_choice_uses_true_mosaic_weight_before_mass():
-    state = _new_representative_slot_state(1)
-    representative_rows = state[-1]
-
-    _update_representative_slot(
-        state,
-        sample_mosaic_weight=0.9,
-        angular=1.0,
-        beam=1.0,
-        wavelength=1.0,
-        mass=1.0,
-        sample_idx=0,
-    )
-    _update_representative_slot(
-        state,
-        sample_mosaic_weight=0.1,
-        angular=0.0,
-        beam=0.0,
-        wavelength=0.0,
-        mass=100.0,
-        sample_idx=1,
-        q_idx=1,
-        row_f=40.0,
-        col_f=30.0,
-    )
-
-    np.testing.assert_allclose(
-        representative_rows[0, :10],
-        np.array([1.0, 10.0, 20.0, -0.20, 1.0, 0.0, 2.0, 0.0, 0.0, 0.0]),
-    )
-
-
-def test_representative_choice_falls_back_to_angular_then_beam_then_wavelength():
-    state = _new_representative_slot_state(1)
-    representative_rows = state[-1]
-
-    _update_representative_slot(
-        state,
-        sample_mosaic_weight=1.0,
-        angular=0.40,
-        beam=0.10,
-        wavelength=0.10,
-        mass=10.0,
-        sample_idx=0,
-    )
-    _update_representative_slot(
-        state,
-        sample_mosaic_weight=1.0,
-        angular=0.20,
-        beam=9.00,
-        wavelength=9.00,
-        mass=1.0,
-        sample_idx=1,
-    )
-    assert int(representative_rows[0, 9]) == 1
-
-    _update_representative_slot(
-        state,
-        sample_mosaic_weight=1.0,
-        angular=0.20,
-        beam=0.05,
-        wavelength=9.00,
-        mass=1.0,
-        sample_idx=2,
-    )
-    assert int(representative_rows[0, 9]) == 2
-
-    _update_representative_slot(
-        state,
-        sample_mosaic_weight=1.0,
-        angular=0.20,
-        beam=0.05,
-        wavelength=0.01,
-        mass=1.0,
-        sample_idx=3,
-    )
-    assert int(representative_rows[0, 9]) == 3
-
-
-def test_representative_choice_preserves_mosaic_top_sample_index_in_hit_row():
-    state = _new_representative_slot_state(1)
-    representative_rows = state[-1]
-
-    _update_representative_slot(
-        state,
-        sample_mosaic_weight=2.0,
-        angular=0.0,
-        beam=0.0,
-        wavelength=0.0,
-        mass=5.0,
-        sample_idx=7,
-        peak_idx=3,
-        q_idx=11,
-    )
-
-    assert float(representative_rows[0, 7]) == pytest.approx(3.0)
-    assert float(representative_rows[0, 8]) == pytest.approx(11.0)
-    assert float(representative_rows[0, 9]) == pytest.approx(7.0)
-
-
-def test_representative_merge_uses_same_mosaic_top_rank_as_update():
-    update_state = _new_representative_slot_state(1)
-    _update_representative_slot(
-        update_state,
-        sample_mosaic_weight=0.1,
-        angular=0.0,
-        beam=0.0,
-        wavelength=0.0,
-        mass=100.0,
-        sample_idx=1,
-        q_idx=1,
-        row_f=40.0,
-        col_f=30.0,
-    )
-    _update_representative_slot(
-        update_state,
-        sample_mosaic_weight=0.9,
-        angular=1.0,
-        beam=1.0,
-        wavelength=1.0,
-        mass=1.0,
-        sample_idx=0,
-        q_idx=0,
-        row_f=20.0,
-        col_f=10.0,
-    )
-
-    representative_valid_parts = np.array([[1], [1]], dtype=np.uint8)
-    representative_neg_mosaic_weight_parts = np.array([[-0.1], [-0.9]], dtype=np.float64)
-    representative_angular_distance_parts = np.array([[0.0], [1.0]], dtype=np.float64)
-    representative_beam_distance_parts = np.array([[0.0], [1.0]], dtype=np.float64)
-    representative_wavelength_distance_parts = np.array([[0.0], [1.0]], dtype=np.float64)
-    representative_neg_mass_parts = np.array([[-100.0], [-1.0]], dtype=np.float64)
-    representative_sample_idx_parts = np.array([[1], [0]], dtype=np.int64)
-    representative_peak_idx_parts = np.array([[0], [0]], dtype=np.int64)
-    representative_q_idx_parts = np.array([[1], [0]], dtype=np.int64)
-    representative_rows_parts = np.full(
-        (2, 1, diffraction.HIT_ROW_WITH_PROVENANCE_WIDTH),
-        np.nan,
-        dtype=np.float64,
-    )
-    representative_rows_parts[0, 0, :] = np.array(
-        [100.0, 30.0, 40.0, -0.20, 1.0, 0.0, 2.0, 0.0, 1.0, 1.0],
-        dtype=np.float64,
-    )
-    representative_rows_parts[1, 0, :] = np.array(
-        [1.0, 10.0, 20.0, -0.20, 1.0, 0.0, 2.0, 0.0, 0.0, 0.0],
-        dtype=np.float64,
-    )
-    merge_state = _new_representative_slot_state(1)
-    diffraction._merge_weighted_event_representative_partials.py_func(
-        representative_valid_parts,
-        representative_neg_mosaic_weight_parts,
-        representative_angular_distance_parts,
-        representative_beam_distance_parts,
-        representative_wavelength_distance_parts,
-        representative_neg_mass_parts,
-        representative_sample_idx_parts,
-        representative_peak_idx_parts,
-        representative_q_idx_parts,
-        representative_rows_parts,
-        *merge_state,
-    )
-
-    np.testing.assert_allclose(merge_state[-1], update_state[-1])
 
 
 def test_build_intersection_cache_preserves_explicit_representative_provenance(monkeypatch):
@@ -3182,8 +2950,8 @@ def test_get_last_intersection_cache_is_representative_facing_after_weighted_eve
     representative_cache = diffraction.get_last_intersection_cache()
     assert len(representative_cache) == 1
     representative_row = np.asarray(representative_cache[0], dtype=np.float64)[0]
-    assert float(representative_row[diffraction.CACHE_COL_BEST_SAMPLE_INDEX]) == pytest.approx(0.0)
-    assert float(representative_row[cache_schema.CACHE_COL_INTENSITY]) == pytest.approx(0.9)
+    assert np.isnan(representative_row[diffraction.CACHE_COL_BEST_SAMPLE_INDEX])
+    assert float(representative_row[cache_schema.CACHE_COL_INTENSITY]) == pytest.approx(0.0)
 
 
 def test_get_last_intersection_cache_views_split_sampled_and_representative_rows(monkeypatch):
@@ -3219,11 +2987,9 @@ def test_get_last_intersection_cache_views_split_sampled_and_representative_rows
 
     assert set(sampled_rows[:, diffraction.CACHE_COL_BEST_SAMPLE_INDEX].astype(int)) == {0, 1}
     assert representative_rows.shape[0] == 1
-    assert float(representative_rows[0, diffraction.CACHE_COL_BEST_SAMPLE_INDEX]) == pytest.approx(
-        0.0
-    )
+    assert np.isnan(representative_rows[0, diffraction.CACHE_COL_BEST_SAMPLE_INDEX])
     assert float(np.max(sampled_rows[:, cache_schema.CACHE_COL_INTENSITY])) == pytest.approx(10.0)
-    assert float(representative_rows[0, cache_schema.CACHE_COL_INTENSITY]) == pytest.approx(0.9)
+    assert float(representative_rows[0, cache_schema.CACHE_COL_INTENSITY]) == pytest.approx(0.0)
 
 
 def test_branch_representative_cache_passthrough_does_not_recollapse(monkeypatch):

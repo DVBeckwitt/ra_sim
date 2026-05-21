@@ -144,6 +144,9 @@ def live_cache_inventory_snapshot(simulation_runtime_state: object) -> dict[str,
         "primary_hit_table_cache_entry_count": live_cache_count(
             getattr(simulation_runtime_state, "primary_hit_table_cache", {})
         ),
+        "primary_intersection_cache_entry_count": live_cache_count(
+            getattr(simulation_runtime_state, "primary_intersection_cache_entry_cache", {})
+        ),
         "source_snapshots": source_snapshots,
     }
 

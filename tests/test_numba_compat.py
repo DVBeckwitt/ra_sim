@@ -352,7 +352,7 @@ def test_numba_disable_jit_diffraction_decorated_functions_keep_py_func():
 
         for name in (
             "compute_intensity_array_serial",
-            "_weighted_event_update_representative",
+            "_weighted_event_pass1_for_qset",
         ):
             fn = getattr(diffraction, name)
             assert hasattr(fn, "py_func"), name

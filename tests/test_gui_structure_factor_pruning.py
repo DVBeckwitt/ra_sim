@@ -1,3 +1,5 @@
+import numpy as np
+
 from ra_sim.gui import controllers, state, structure_factor_pruning
 
 
@@ -85,17 +87,10 @@ def test_structure_factor_pruning_runtime_current_value_helpers_and_status_text(
 
     assert structure_factor_pruning.current_runtime_sf_prune_bias(bindings) == 0.25
     assert structure_factor_pruning.current_runtime_solve_q_steps(bindings) == 13
-    assert (
-        structure_factor_pruning.current_runtime_solve_q_rel_tol(bindings) == 1.0e-4
-    )
-    assert (
-        structure_factor_pruning.current_runtime_solve_q_mode_label(bindings)
-        == "adaptive"
-    )
+    assert structure_factor_pruning.current_runtime_solve_q_rel_tol(bindings) == 1.0e-4
+    assert structure_factor_pruning.current_runtime_solve_q_mode_label(bindings) == "adaptive"
 
-    text = structure_factor_pruning.update_runtime_structure_factor_pruning_status(
-        bindings
-    )
+    text = structure_factor_pruning.update_runtime_structure_factor_pruning_status(bindings)
     assert text == "SF pruning keeps 12/20 rod points (60.0%), bias=+0.25"
     assert view_state.sf_prune_status_var.get() == text
 
@@ -140,10 +135,7 @@ def test_structure_factor_pruning_helper_builders_normalize_defaults() -> None:
         )
         == 1.0e-4
     )
-    assert (
-        structure_factor_pruning.normalize_runtime_solve_q_mode_label("robust")
-        == "adaptive"
-    )
+    assert structure_factor_pruning.normalize_runtime_solve_q_mode_label("robust") == "adaptive"
     assert (
         structure_factor_pruning.runtime_solve_q_mode_flag_from_label(
             "adaptive",
@@ -320,9 +312,7 @@ def test_structure_factor_pruning_runtime_helpers_tolerate_missing_view_state(
         lambda *args, **kwargs: calls.append(("rel_tol", args, kwargs)),
     )
 
-    text = structure_factor_pruning.update_runtime_structure_factor_pruning_status(
-        bindings
-    )
+    text = structure_factor_pruning.update_runtime_structure_factor_pruning_status(bindings)
     mode = structure_factor_pruning.set_runtime_solve_q_control_states(bindings)
 
     assert text == "SF pruning keeps 5/8 rod points (62.5%), bias=+0.00"
@@ -344,6 +334,7 @@ def test_apply_runtime_bragg_qr_filters_updates_status_invalidates_and_refreshes
         primary_contribution_cache_signature=("cache", 1),
         primary_active_contribution_keys=[1, 2],
         primary_hit_table_cache={1: [1]},
+        primary_intersection_cache_entry_cache={1: [np.ones((1, 17), dtype=np.float64)]},
         primary_source_mode="qr",
         primary_filter_signature=("sig",),
     )
@@ -391,6 +382,7 @@ def test_apply_runtime_bragg_qr_filters_updates_status_invalidates_and_refreshes
     assert simulation_runtime_state.primary_contribution_cache_signature is None
     assert simulation_runtime_state.primary_active_contribution_keys == []
     assert simulation_runtime_state.primary_hit_table_cache == {}
+    assert simulation_runtime_state.primary_intersection_cache_entry_cache == {}
     assert simulation_runtime_state.primary_source_mode == "miller"
     assert simulation_runtime_state.primary_filter_signature is None
     assert scheduled == [True]
@@ -410,6 +402,7 @@ def test_apply_runtime_bragg_qr_filters_can_preserve_primary_cache_for_bias_only
         primary_contribution_cache_signature=("cache", 1),
         primary_active_contribution_keys=[1, 2],
         primary_hit_table_cache={1: [1]},
+        primary_intersection_cache_entry_cache={1: [np.ones((1, 17), dtype=np.float64)]},
         primary_source_mode="qr",
         primary_filter_signature=("sig",),
     )
@@ -433,6 +426,7 @@ def test_apply_runtime_bragg_qr_filters_can_preserve_primary_cache_for_bias_only
     assert simulation_runtime_state.primary_contribution_cache_signature == ("cache", 1)
     assert simulation_runtime_state.primary_active_contribution_keys == [1, 2]
     assert simulation_runtime_state.primary_hit_table_cache == {1: [1]}
+    assert simulation_runtime_state.primary_intersection_cache_entry_cache
     assert simulation_runtime_state.primary_source_mode == "qr"
     assert simulation_runtime_state.primary_filter_signature == ("sig",)
 
@@ -538,14 +532,14 @@ def test_structure_factor_pruning_runtime_callback_factories_delegate_live_bindi
     monkeypatch.setattr(
         structure_factor_pruning,
         "current_runtime_solve_q_values",
-        lambda bindings, *, uniform_flag, adaptive_flag: calls.append(
-            ("current_solve_q", bindings, uniform_flag, adaptive_flag)
-        )
-        or structure_factor_pruning.RuntimeSolveQValues(
-            steps=11,
-            rel_tol=2.5e-4,
-            mode_label="adaptive",
-            mode_flag=adaptive_flag,
+        lambda bindings, *, uniform_flag, adaptive_flag: (
+            calls.append(("current_solve_q", bindings, uniform_flag, adaptive_flag))
+            or structure_factor_pruning.RuntimeSolveQValues(
+                steps=11,
+                rel_tol=2.5e-4,
+                mode_label="adaptive",
+                mode_flag=adaptive_flag,
+            )
         ),
     )
 
@@ -558,33 +552,21 @@ def test_structure_factor_pruning_runtime_callback_factories_delegate_live_bindi
             build_bindings
         )
     )
-    filter_callback = structure_factor_pruning.make_runtime_bragg_qr_filter_callback(
+    filter_callback = structure_factor_pruning.make_runtime_bragg_qr_filter_callback(build_bindings)
+    bias_callback = structure_factor_pruning.make_runtime_sf_prune_bias_change_callback(
         build_bindings
     )
-    bias_callback = (
-        structure_factor_pruning.make_runtime_sf_prune_bias_change_callback(
-            build_bindings
-        )
+    steps_callback = structure_factor_pruning.make_runtime_solve_q_steps_change_callback(
+        build_bindings
     )
-    steps_callback = (
-        structure_factor_pruning.make_runtime_solve_q_steps_change_callback(
-            build_bindings
-        )
+    rel_tol_callback = structure_factor_pruning.make_runtime_solve_q_rel_tol_change_callback(
+        build_bindings
     )
-    rel_tol_callback = (
-        structure_factor_pruning.make_runtime_solve_q_rel_tol_change_callback(
-            build_bindings
-        )
+    controls_callback = structure_factor_pruning.make_runtime_solve_q_control_states_callback(
+        build_bindings
     )
-    controls_callback = (
-        structure_factor_pruning.make_runtime_solve_q_control_states_callback(
-            build_bindings
-        )
-    )
-    current_bias_callback = (
-        structure_factor_pruning.make_runtime_current_sf_prune_bias_callback(
-            build_bindings
-        )
+    current_bias_callback = structure_factor_pruning.make_runtime_current_sf_prune_bias_callback(
+        build_bindings
     )
     current_solve_q_callback = (
         structure_factor_pruning.make_runtime_current_solve_q_values_callback(
@@ -593,10 +575,8 @@ def test_structure_factor_pruning_runtime_callback_factories_delegate_live_bindi
             adaptive_flag=9,
         )
     )
-    mode_callback = (
-        structure_factor_pruning.make_runtime_solve_q_mode_change_callback(
-            build_bindings
-        )
+    mode_callback = structure_factor_pruning.make_runtime_solve_q_mode_change_callback(
+        build_bindings
     )
 
     assert status_callback() == "status-text"

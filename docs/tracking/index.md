@@ -246,12 +246,13 @@ Full `ra_sim.dev check` is still blocked by existing
 selector timed out locally after five minutes without failure output.
 
 Weighted-event representative status note:
-`Weighted-event representative cache carry-through` is implemented on fast
-weighted-event path and targeted weighted-event/cache tests are green. Manual
-geometry replay/workflow suites and full-suite status remain red in this
-worktree for adjacent replay/finalizer and unrelated fixture/doc/env failures,
-so the follow-up stays tracked as in-progress until broader tree health is
-clean.
+`Weighted-event representative cache carry-through` now uses zero-intensity
+beam-center/default-wavelength ghost representatives for fitter-facing caches.
+Targeted weighted-event/cache/invalidation tests are green, old sampled
+representative hot-path ranking has been removed, and GUI primary-fill reuse now
+drops stale ghost entries and translates ghost detector coordinates during
+detector-center remaps. The follow-up stays tracked as in-progress until the
+known unrelated broad-suite failures are cleared.
 
 Fast-path cache audit and QR selector policy status note:
 Phases 1-9 are implemented and locally validated. QR/Qz masks remain explicit

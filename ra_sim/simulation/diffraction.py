@@ -19,8 +19,14 @@ from ra_sim.simulation.intersection_cache_schema import (
     CACHE_COL_SOURCE_TABLE_INDEX,
     CURRENT_DETECTOR_CACHE_WIDTH,
     HIT_ROW_COL_BEST_SAMPLE_INDEX,
+    HIT_ROW_COL_BEAM_X_OFFSET,
+    HIT_ROW_COL_BEAM_Y_OFFSET,
+    HIT_ROW_COL_PHI_OFFSET,
     HIT_ROW_COL_SOURCE_ROW_INDEX,
     HIT_ROW_COL_SOURCE_TABLE_INDEX,
+    HIT_ROW_COL_THETA_OFFSET,
+    HIT_ROW_COL_WAVELENGTH_OFFSET,
+    HIT_ROW_WITH_CONTEXT_WIDTH,
     HIT_ROW_WITH_PROVENANCE_WIDTH,
     cache_table_to_hit_table,
     coerce_float64_table,
@@ -3705,117 +3711,6 @@ def _candidate_branch_id(H: float, K: float, phi_f: float, qx: float) -> int:
     return 1 if float(qx) > 0.0 else 0
 
 
-def _candidate_top_mosaic_distance(
-    sample_idx: int,
-    beam_x_array,
-    beam_y_array,
-    theta_array,
-    phi_array,
-    wavelength_array,
-) -> float:
-    metric = 0.0
-    if beam_x_array is not None and sample_idx < np.asarray(beam_x_array).shape[0]:
-        beam_x_val = float(np.asarray(beam_x_array)[sample_idx])
-        if np.isfinite(beam_x_val):
-            metric += beam_x_val * beam_x_val
-    if beam_y_array is not None and sample_idx < np.asarray(beam_y_array).shape[0]:
-        beam_y_val = float(np.asarray(beam_y_array)[sample_idx])
-        if np.isfinite(beam_y_val):
-            metric += beam_y_val * beam_y_val
-    if theta_array is not None and sample_idx < np.asarray(theta_array).shape[0]:
-        theta_val = float(np.asarray(theta_array)[sample_idx])
-        if np.isfinite(theta_val):
-            metric += theta_val * theta_val
-    if phi_array is not None and sample_idx < np.asarray(phi_array).shape[0]:
-        phi_val = float(np.asarray(phi_array)[sample_idx])
-        if np.isfinite(phi_val):
-            metric += phi_val * phi_val
-    if wavelength_array is not None:
-        wavelength_arr = np.asarray(wavelength_array, dtype=np.float64).reshape(-1)
-        if sample_idx < wavelength_arr.shape[0]:
-            wavelength_val = float(wavelength_arr[sample_idx])
-            if np.isfinite(wavelength_val):
-                finite_wavelengths = wavelength_arr[np.isfinite(wavelength_arr)]
-                if finite_wavelengths.size > 0:
-                    metric += abs(wavelength_val - float(np.mean(finite_wavelengths)))
-    return float(metric)
-
-
-def _candidate_representative_rank_key(
-    sample_idx: int,
-    sample_mosaic_weight: float,
-    mass: float,
-    peak_idx: int,
-    q_idx: int,
-    beam_x_array,
-    beam_y_array,
-    theta_array,
-    phi_array,
-    wavelength_array,
-) -> tuple[float, float, float, float, float, int, int, int]:
-    """Python fallback rank matching GUI mosaic-top representative semantics."""
-
-    neg_mosaic_weight = float("inf")
-    if np.isfinite(sample_mosaic_weight):
-        neg_mosaic_weight = -float(sample_mosaic_weight)
-
-    angular_metric = float("inf")
-    theta_arr = (
-        None if theta_array is None else np.asarray(theta_array, dtype=np.float64).reshape(-1)
-    )
-    phi_arr = None if phi_array is None else np.asarray(phi_array, dtype=np.float64).reshape(-1)
-    if (
-        theta_arr is not None
-        and phi_arr is not None
-        and sample_idx < theta_arr.size
-        and sample_idx < phi_arr.size
-    ):
-        theta_val = float(theta_arr[sample_idx])
-        phi_val = float(phi_arr[sample_idx])
-        if np.isfinite(theta_val) and np.isfinite(phi_val):
-            angular_metric = theta_val * theta_val + phi_val * phi_val
-
-    beam_metric = float("inf")
-    beam_x_arr = (
-        None if beam_x_array is None else np.asarray(beam_x_array, dtype=np.float64).reshape(-1)
-    )
-    beam_y_arr = (
-        None if beam_y_array is None else np.asarray(beam_y_array, dtype=np.float64).reshape(-1)
-    )
-    if (
-        beam_x_arr is not None
-        and beam_y_arr is not None
-        and sample_idx < beam_x_arr.size
-        and sample_idx < beam_y_arr.size
-    ):
-        beam_x_val = float(beam_x_arr[sample_idx])
-        beam_y_val = float(beam_y_arr[sample_idx])
-        if np.isfinite(beam_x_val) and np.isfinite(beam_y_val):
-            beam_metric = beam_x_val * beam_x_val + beam_y_val * beam_y_val
-
-    wavelength_metric = float("inf")
-    if wavelength_array is not None:
-        wavelength_arr = np.asarray(wavelength_array, dtype=np.float64).reshape(-1)
-        if sample_idx < wavelength_arr.size:
-            wavelength_val = float(wavelength_arr[sample_idx])
-            if np.isfinite(wavelength_val):
-                finite_wavelengths = wavelength_arr[np.isfinite(wavelength_arr)]
-                if finite_wavelengths.size > 0:
-                    wavelength_metric = abs(wavelength_val - float(np.mean(finite_wavelengths)))
-
-    neg_mass = -float(mass) if np.isfinite(mass) else float("inf")
-    return (
-        float(neg_mosaic_weight),
-        float(angular_metric),
-        float(beam_metric),
-        float(wavelength_metric),
-        float(neg_mass),
-        int(sample_idx),
-        int(peak_idx),
-        int(q_idx),
-    )
-
-
 def _candidate_valid_mass(value: float) -> bool:
     return bool(np.isfinite(value) and float(value) > 0.0)
 
@@ -4274,204 +4169,6 @@ def _project_weighted_candidate_fast(
 
 
 @njit(fastmath=True, cache=True, nogil=True)
-def _weighted_event_update_representative(
-    rep_slot,
-    sample_mosaic_weight,
-    sample_angular_top_distance,
-    sample_beam_top_distance,
-    sample_wavelength_top_distance,
-    mass,
-    sample_idx,
-    peak_idx,
-    q_idx,
-    row_f,
-    col_f,
-    phi_f,
-    H,
-    K,
-    L,
-    representative_valid,
-    representative_neg_mosaic_weight,
-    representative_angular_distance,
-    representative_beam_distance,
-    representative_wavelength_distance,
-    representative_neg_mass,
-    representative_sample_idx,
-    representative_peak_idx,
-    representative_q_idx,
-    representative_rows,
-):
-    if rep_slot < 0 or rep_slot >= representative_valid.shape[0]:
-        return
-
-    neg_mosaic_weight = np.inf
-    if np.isfinite(sample_mosaic_weight):
-        neg_mosaic_weight = -sample_mosaic_weight
-    angular_key = np.inf
-    if np.isfinite(sample_angular_top_distance):
-        angular_key = sample_angular_top_distance
-    beam_key = np.inf
-    if np.isfinite(sample_beam_top_distance):
-        beam_key = sample_beam_top_distance
-    wavelength_key = np.inf
-    if np.isfinite(sample_wavelength_top_distance):
-        wavelength_key = sample_wavelength_top_distance
-    neg_mass = np.inf
-    if np.isfinite(mass):
-        neg_mass = -mass
-
-    better = False
-    if representative_valid[rep_slot] == 0:
-        better = True
-    else:
-        current_neg_mosaic_weight = representative_neg_mosaic_weight[rep_slot]
-        current_angular_distance = representative_angular_distance[rep_slot]
-        current_beam_distance = representative_beam_distance[rep_slot]
-        current_wavelength_distance = representative_wavelength_distance[rep_slot]
-        current_neg_mass = representative_neg_mass[rep_slot]
-        current_sample_idx = representative_sample_idx[rep_slot]
-        current_peak_idx = representative_peak_idx[rep_slot]
-        current_q_idx = representative_q_idx[rep_slot]
-        if neg_mosaic_weight < current_neg_mosaic_weight:
-            better = True
-        elif neg_mosaic_weight == current_neg_mosaic_weight:
-            if angular_key < current_angular_distance:
-                better = True
-            elif angular_key == current_angular_distance:
-                if beam_key < current_beam_distance:
-                    better = True
-                elif beam_key == current_beam_distance:
-                    if wavelength_key < current_wavelength_distance:
-                        better = True
-                    elif wavelength_key == current_wavelength_distance:
-                        if neg_mass < current_neg_mass:
-                            better = True
-                        elif neg_mass == current_neg_mass:
-                            if sample_idx < current_sample_idx:
-                                better = True
-                            elif sample_idx == current_sample_idx:
-                                if peak_idx < current_peak_idx:
-                                    better = True
-                                elif peak_idx == current_peak_idx and q_idx < current_q_idx:
-                                    better = True
-
-    if not better:
-        return
-
-    representative_valid[rep_slot] = 1
-    representative_neg_mosaic_weight[rep_slot] = neg_mosaic_weight
-    representative_angular_distance[rep_slot] = angular_key
-    representative_beam_distance[rep_slot] = beam_key
-    representative_wavelength_distance[rep_slot] = wavelength_key
-    representative_neg_mass[rep_slot] = neg_mass
-    representative_sample_idx[rep_slot] = sample_idx
-    representative_peak_idx[rep_slot] = peak_idx
-    representative_q_idx[rep_slot] = q_idx
-    representative_rows[rep_slot, 0] = mass
-    representative_rows[rep_slot, 1] = col_f
-    representative_rows[rep_slot, 2] = row_f
-    representative_rows[rep_slot, 3] = phi_f
-    representative_rows[rep_slot, 4] = H
-    representative_rows[rep_slot, 5] = K
-    representative_rows[rep_slot, 6] = L
-    representative_rows[rep_slot, 7] = float(peak_idx)
-    representative_rows[rep_slot, 8] = float(q_idx)
-    representative_rows[rep_slot, 9] = float(sample_idx)
-
-
-@njit(fastmath=True, cache=True, nogil=True)
-def _merge_weighted_event_representative_partials(
-    representative_valid_parts,
-    representative_neg_mosaic_weight_parts,
-    representative_angular_distance_parts,
-    representative_beam_distance_parts,
-    representative_wavelength_distance_parts,
-    representative_neg_mass_parts,
-    representative_sample_idx_parts,
-    representative_peak_idx_parts,
-    representative_q_idx_parts,
-    representative_rows_parts,
-    representative_valid,
-    representative_neg_mosaic_weight,
-    representative_angular_distance,
-    representative_beam_distance,
-    representative_wavelength_distance,
-    representative_neg_mass,
-    representative_sample_idx,
-    representative_peak_idx,
-    representative_q_idx,
-    representative_rows,
-):
-    for part_idx in range(representative_valid_parts.shape[0]):
-        for rep_slot in range(representative_valid_parts.shape[1]):
-            if representative_valid_parts[part_idx, rep_slot] == 0:
-                continue
-
-            neg_mosaic_weight = representative_neg_mosaic_weight_parts[part_idx, rep_slot]
-            angular_distance = representative_angular_distance_parts[part_idx, rep_slot]
-            beam_distance = representative_beam_distance_parts[part_idx, rep_slot]
-            wavelength_distance = representative_wavelength_distance_parts[part_idx, rep_slot]
-            neg_mass = representative_neg_mass_parts[part_idx, rep_slot]
-            sample_idx = representative_sample_idx_parts[part_idx, rep_slot]
-            peak_idx = representative_peak_idx_parts[part_idx, rep_slot]
-            q_idx = representative_q_idx_parts[part_idx, rep_slot]
-
-            better = False
-            if representative_valid[rep_slot] == 0:
-                better = True
-            else:
-                current_neg_mosaic_weight = representative_neg_mosaic_weight[rep_slot]
-                current_angular_distance = representative_angular_distance[rep_slot]
-                current_beam_distance = representative_beam_distance[rep_slot]
-                current_wavelength_distance = representative_wavelength_distance[rep_slot]
-                current_neg_mass = representative_neg_mass[rep_slot]
-                current_sample_idx = representative_sample_idx[rep_slot]
-                current_peak_idx = representative_peak_idx[rep_slot]
-                current_q_idx = representative_q_idx[rep_slot]
-                if neg_mosaic_weight < current_neg_mosaic_weight:
-                    better = True
-                elif neg_mosaic_weight == current_neg_mosaic_weight:
-                    if angular_distance < current_angular_distance:
-                        better = True
-                    elif angular_distance == current_angular_distance:
-                        if beam_distance < current_beam_distance:
-                            better = True
-                        elif beam_distance == current_beam_distance:
-                            if wavelength_distance < current_wavelength_distance:
-                                better = True
-                            elif wavelength_distance == current_wavelength_distance:
-                                if neg_mass < current_neg_mass:
-                                    better = True
-                                elif neg_mass == current_neg_mass:
-                                    if sample_idx < current_sample_idx:
-                                        better = True
-                                    elif sample_idx == current_sample_idx:
-                                        if peak_idx < current_peak_idx:
-                                            better = True
-                                        elif peak_idx == current_peak_idx and q_idx < current_q_idx:
-                                            better = True
-
-            if not better:
-                continue
-
-            representative_valid[rep_slot] = 1
-            representative_neg_mosaic_weight[rep_slot] = neg_mosaic_weight
-            representative_angular_distance[rep_slot] = angular_distance
-            representative_beam_distance[rep_slot] = beam_distance
-            representative_wavelength_distance[rep_slot] = wavelength_distance
-            representative_neg_mass[rep_slot] = neg_mass
-            representative_sample_idx[rep_slot] = sample_idx
-            representative_peak_idx[rep_slot] = peak_idx
-            representative_q_idx[rep_slot] = q_idx
-            for col_idx in range(representative_rows.shape[1]):
-                representative_rows[rep_slot, col_idx] = representative_rows_parts[
-                    part_idx,
-                    rep_slot,
-                    col_idx,
-                ]
-
-
-@njit(fastmath=True, cache=True, nogil=True)
 def _weighted_event_pass1_for_qset(
     all_q,
     peak_idx,
@@ -4481,10 +4178,6 @@ def _weighted_event_pass1_for_qset(
     L,
     reflection_intensity,
     sample_weight,
-    sample_mosaic_weight,
-    sample_angular_distance,
-    sample_beam_distance,
-    sample_wavelength_distance,
     debye_x_sq,
     debye_y_sq,
     center_row,
@@ -4508,17 +4201,6 @@ def _weighted_event_pass1_for_qset(
     q_data,
     q_count,
     q_debug_truncated_count,
-    representative_slot_by_peak_branch,
-    representative_valid,
-    representative_neg_mosaic_weight,
-    representative_angular_distance,
-    representative_beam_distance,
-    representative_wavelength_distance,
-    representative_neg_mass,
-    representative_sample_idx,
-    representative_peak_idx,
-    representative_q_idx,
-    representative_rows,
 ):
     total_mass = 0.0
     valid_count = 0
@@ -4599,36 +4281,6 @@ def _weighted_event_pass1_for_qset(
             continue
         total_mass += mass
         valid_count += 1
-        branch_id = _candidate_branch_id_fast(H, K, phi_f, Qx)
-        rep_slot = representative_slot_by_peak_branch[peak_idx, branch_id]
-        if rep_slot >= 0:
-            _weighted_event_update_representative(
-                rep_slot,
-                sample_mosaic_weight,
-                sample_angular_distance,
-                sample_beam_distance,
-                sample_wavelength_distance,
-                mass,
-                sample_idx,
-                peak_idx,
-                q_idx,
-                row_f,
-                col_f,
-                phi_f,
-                H,
-                K,
-                L,
-                representative_valid,
-                representative_neg_mosaic_weight,
-                representative_angular_distance,
-                representative_beam_distance,
-                representative_wavelength_distance,
-                representative_neg_mass,
-                representative_sample_idx,
-                representative_peak_idx,
-                representative_q_idx,
-                representative_rows,
-            )
 
     return total_mass, valid_count, project_calls
 
@@ -4643,10 +4295,6 @@ def _weighted_event_project_store_for_qset(
     L,
     reflection_intensity,
     sample_weight,
-    sample_mosaic_weight,
-    sample_angular_distance,
-    sample_beam_distance,
-    sample_wavelength_distance,
     debye_x_sq,
     debye_y_sq,
     center_row,
@@ -4670,17 +4318,6 @@ def _weighted_event_project_store_for_qset(
     q_data,
     q_count,
     q_debug_truncated_count,
-    representative_slot_by_peak_branch,
-    representative_valid,
-    representative_neg_mosaic_weight,
-    representative_angular_distance,
-    representative_beam_distance,
-    representative_wavelength_distance,
-    representative_neg_mass,
-    representative_sample_idx,
-    representative_peak_idx,
-    representative_q_idx,
-    representative_rows,
     candidate_mass,
     candidate_row,
     candidate_col,
@@ -4776,36 +4413,6 @@ def _weighted_event_project_store_for_qset(
 
         total_mass += mass
         valid_count += 1
-        branch_id = _candidate_branch_id_fast(H, K, phi_f, Qx)
-        rep_slot = representative_slot_by_peak_branch[peak_idx, branch_id]
-        if rep_slot >= 0:
-            _weighted_event_update_representative(
-                rep_slot,
-                sample_mosaic_weight,
-                sample_angular_distance,
-                sample_beam_distance,
-                sample_wavelength_distance,
-                mass,
-                sample_idx,
-                peak_idx,
-                q_idx,
-                row_f,
-                col_f,
-                phi_f,
-                H,
-                K,
-                L,
-                representative_valid,
-                representative_neg_mosaic_weight,
-                representative_angular_distance,
-                representative_beam_distance,
-                representative_wavelength_distance,
-                representative_neg_mass,
-                representative_sample_idx,
-                representative_peak_idx,
-                representative_q_idx,
-                representative_rows,
-            )
 
     return total_mass, valid_count, project_calls, candidate_count
 
@@ -5209,10 +4816,6 @@ def _weighted_event_sample_chunk_kernel(
     peak_reflection_intensity,
     sample_weight_array,
     has_sample_weight_array,
-    sample_mosaic_weights_rank,
-    sample_angular_top_distances,
-    sample_beam_top_distances,
-    sample_wavelength_top_distances,
     debye_x_sq,
     debye_y_sq,
     center_row,
@@ -5234,17 +4837,6 @@ def _weighted_event_sample_chunk_kernel(
     q_data,
     q_count,
     q_debug_truncated_count_parts,
-    representative_slot_by_peak_branch,
-    representative_valid_parts,
-    representative_neg_mosaic_weight_parts,
-    representative_angular_distance_parts,
-    representative_beam_distance_parts,
-    representative_wavelength_distance_parts,
-    representative_neg_mass_parts,
-    representative_sample_idx_parts,
-    representative_peak_idx_parts,
-    representative_q_idx_parts,
-    representative_rows_parts,
     image_parts,
     cache_keys_parts,
     cache_values_parts,
@@ -5269,16 +4861,6 @@ def _weighted_event_sample_chunk_kernel(
     cache_keys = cache_keys_parts[worker_slot_i]
     cache_values = cache_values_parts[worker_slot_i]
     image_part = image_parts[worker_slot_i]
-    representative_valid = representative_valid_parts[worker_slot_i]
-    representative_neg_mosaic_weight = representative_neg_mosaic_weight_parts[worker_slot_i]
-    representative_angular_distance = representative_angular_distance_parts[worker_slot_i]
-    representative_beam_distance = representative_beam_distance_parts[worker_slot_i]
-    representative_wavelength_distance = representative_wavelength_distance_parts[worker_slot_i]
-    representative_neg_mass = representative_neg_mass_parts[worker_slot_i]
-    representative_sample_idx = representative_sample_idx_parts[worker_slot_i]
-    representative_peak_idx = representative_peak_idx_parts[worker_slot_i]
-    representative_q_idx = representative_q_idx_parts[worker_slot_i]
-    representative_rows = representative_rows_parts[worker_slot_i]
     candidate_mass = candidate_mass_parts[worker_slot_i]
     candidate_row = candidate_row_parts[worker_slot_i]
     candidate_col = candidate_col_parts[worker_slot_i]
@@ -5359,10 +4941,6 @@ def _weighted_event_sample_chunk_kernel(
                         L,
                         reflection_intensity,
                         sample_weight,
-                        float(sample_mosaic_weights_rank[sample_idx]),
-                        float(sample_angular_top_distances[sample_idx]),
-                        float(sample_beam_top_distances[sample_idx]),
-                        float(sample_wavelength_top_distances[sample_idx]),
                         debye_x_sq,
                         debye_y_sq,
                         center_row,
@@ -5386,17 +4964,6 @@ def _weighted_event_sample_chunk_kernel(
                         q_data,
                         q_count,
                         q_debug_truncated_count,
-                        representative_slot_by_peak_branch,
-                        representative_valid,
-                        representative_neg_mosaic_weight,
-                        representative_angular_distance,
-                        representative_beam_distance,
-                        representative_wavelength_distance,
-                        representative_neg_mass,
-                        representative_sample_idx,
-                        representative_peak_idx,
-                        representative_q_idx,
-                        representative_rows,
                         candidate_mass,
                         candidate_row,
                         candidate_col,
@@ -5415,10 +4982,6 @@ def _weighted_event_sample_chunk_kernel(
                     L,
                     reflection_intensity,
                     sample_weight,
-                    float(sample_mosaic_weights_rank[sample_idx]),
-                    float(sample_angular_top_distances[sample_idx]),
-                    float(sample_beam_top_distances[sample_idx]),
-                    float(sample_wavelength_top_distances[sample_idx]),
                     debye_x_sq,
                     debye_y_sq,
                     center_row,
@@ -5442,17 +5005,6 @@ def _weighted_event_sample_chunk_kernel(
                     q_data,
                     q_count,
                     q_debug_truncated_count,
-                    representative_slot_by_peak_branch,
-                    representative_valid,
-                    representative_neg_mosaic_weight,
-                    representative_angular_distance,
-                    representative_beam_distance,
-                    representative_wavelength_distance,
-                    representative_neg_mass,
-                    representative_sample_idx,
-                    representative_peak_idx,
-                    representative_q_idx,
-                    representative_rows,
                 )
             sample_total_mass += float(peak_mass)
             pass1_total_mass += float(peak_mass)
@@ -7355,23 +6907,258 @@ def _build_weighted_event_hit_tables(
     return hit_tables
 
 
-def _build_weighted_event_representative_hit_tables(
-    representative_valid,
-    representative_rows,
+def _weighted_event_default_wavelength(lambda_, wavelength_array) -> float:
+    lambda_default = float(lambda_)
+    if np.isfinite(lambda_default) and lambda_default > 0.0:
+        return lambda_default
+    wavelength_arr = np.asarray(wavelength_array, dtype=np.float64).reshape(-1)
+    finite = wavelength_arr[np.isfinite(wavelength_arr) & (wavelength_arr > 0.0)]
+    if finite.size > 0:
+        return float(np.mean(finite))
+    return 1.0
+
+
+def _weighted_event_default_n2_sample(lambda_default: float, n2: complex) -> complex:
+    if np.isfinite(lambda_default) and lambda_default > 0.0:
+        try:
+            return complex(IndexofRefraction(float(lambda_default) * 1.0e-10))
+        except Exception:
+            pass
+    return complex(n2)
+
+
+def _build_weighted_event_ghost_representative_hit_tables(
+    *,
+    miller,
+    intensities,
+    av,
+    cv,
+    lambda_,
+    n2,
+    zb,
+    thickness,
+    sample_width_m,
+    sample_length_m,
+    optics_mode,
+    theta_initial_deg,
+    cor_angle_deg,
+    psi_z_deg,
+    R_z_R_y,
+    R_ZY_n,
+    P0,
+    sigma_rad,
+    gamma_rad_m,
+    eta_pv,
+    solve_q_steps_i,
+    solve_q_rel_tol_i,
+    solve_q_mode_i,
+    default_solve_q_dtheta,
+    default_solve_q_cos,
+    default_solve_q_sin,
+    debye_x_sq,
+    debye_y_sq,
+    center,
+    n_det_rot,
+    Detector_Pos,
+    e1_det,
+    e2_det,
+    pixel_size_m,
+    image_size,
+    exit_projection_mode,
+    representative_slot_by_peak_branch,
     representative_slot_keys,
+    wavelength_array,
 ):
+    """Build zero-intensity branch representatives at beam center and default wavelength."""
+
+    if not representative_slot_keys:
+        return []
+    miller_arr = np.asarray(miller, dtype=np.float64)
+    if miller_arr.ndim != 2 or miller_arr.shape[1] < 3:
+        return []
+    intensity_arr = np.asarray(intensities, dtype=np.float64).reshape(-1)
+    av_val = float(av)
+    cv_val = float(cv)
+    if not (
+        np.isfinite(av_val)
+        and abs(av_val) > 1.0e-12
+        and np.isfinite(cv_val)
+        and abs(cv_val) > 1.0e-12
+    ):
+        return []
+
+    lambda_default = _weighted_event_default_wavelength(lambda_, wavelength_array)
+    central_wavelength = np.array([lambda_default], dtype=np.float64)
+    central_zero = np.zeros(1, dtype=np.float64)
+    central_n2_sample = np.array(
+        [_weighted_event_default_n2_sample(lambda_default, n2)],
+        dtype=np.complex128,
+    )
+    try:
+        (
+            R_sample_central,
+            central_terms,
+            central_n2_array,
+            central_eps2_array,
+            _best_idx_precomputed,
+        ) = _precompute_sample_terms(
+            central_wavelength,
+            n2,
+            central_n2_sample,
+            central_zero,
+            central_zero,
+            central_zero,
+            central_zero,
+            zb,
+            thickness,
+            sample_width_m,
+            sample_length_m,
+            optics_mode,
+            theta_initial_deg,
+            cor_angle_deg,
+            psi_z_deg,
+            R_z_R_y,
+            R_ZY_n,
+            P0,
+        )
+    except Exception:
+        return []
+
+    if central_terms.shape[0] <= 0 or central_terms[0, _SAMPLE_COL_VALID] <= 0.5:
+        return []
+
+    rows_by_slot: dict[int, tuple[tuple[float, int, int], np.ndarray]] = {}
+    slot_by_branch = np.asarray(representative_slot_by_peak_branch, dtype=np.int64)
+    for peak_idx in range(int(miller_arr.shape[0])):
+        reflection_intensity = (
+            float(intensity_arr[peak_idx]) if peak_idx < intensity_arr.shape[0] else 0.0
+        )
+        if not np.isfinite(reflection_intensity) or reflection_intensity <= 0.0:
+            continue
+        H = float(miller_arr[peak_idx, 0])
+        K = float(miller_arr[peak_idx, 1])
+        L = float(miller_arr[peak_idx, 2])
+        if L < 0.0:
+            continue
+        gz0 = 2.0 * pi * (L / cv_val)
+        gr0 = 4.0 * pi / av_val * sqrt(max((H * H + H * K + K * K) / 3.0, 0.0))
+        G_vec = np.array([0.0, gr0, gz0], dtype=np.float64)
+        k_in_crystal = np.array(
+            [
+                central_terms[0, _SAMPLE_COL_KX_SCAT],
+                central_terms[0, _SAMPLE_COL_KY_SCAT],
+                central_terms[0, _SAMPLE_COL_RE_KZ],
+            ],
+            dtype=np.float64,
+        )
+        all_q, _stat = solve_q(
+            k_in_crystal,
+            float(central_terms[0, _SAMPLE_COL_K_SCAT]),
+            G_vec,
+            sigma_rad,
+            gamma_rad_m,
+            eta_pv,
+            H,
+            K,
+            L,
+            solve_q_steps_i,
+            DEFAULT_SOLVE_Q_BASE_INTERVALS,
+            solve_q_rel_tol_i,
+            solve_q_mode_i,
+            default_solve_q_dtheta,
+            default_solve_q_cos,
+            default_solve_q_sin,
+        )
+        q_arr = np.asarray(all_q, dtype=np.float64)
+        if q_arr.ndim != 2 or q_arr.shape[1] < 4:
+            continue
+        for q_idx in range(int(q_arr.shape[0])):
+            Qx = float(q_arr[q_idx, 0])
+            Qy = float(q_arr[q_idx, 1])
+            Qz = float(q_arr[q_idx, 2])
+            I_Q = float(q_arr[q_idx, 3])
+            if not np.isfinite(I_Q) or I_Q <= 0.0:
+                continue
+            candidate_valid, row_f, col_f, phi_f, mass = _project_weighted_candidate(
+                H=H,
+                K=K,
+                L=L,
+                Qx=Qx,
+                Qy=Qy,
+                Qz=Qz,
+                I_Q=I_Q,
+                reflection_intensity=reflection_intensity,
+                sample_weight=1.0,
+                debye_x_sq=debye_x_sq,
+                debye_y_sq=debye_y_sq,
+                center=center,
+                R_sample=R_sample_central,
+                n_det_rot=n_det_rot,
+                Detector_Pos=Detector_Pos,
+                e1_det=e1_det,
+                e2_det=e2_det,
+                I_plane=np.array(
+                    [
+                        central_terms[0, _SAMPLE_COL_I_PLANE_X],
+                        central_terms[0, _SAMPLE_COL_I_PLANE_Y],
+                        central_terms[0, _SAMPLE_COL_I_PLANE_Z],
+                    ],
+                    dtype=np.float64,
+                ),
+                k_x_scat=central_terms[0, _SAMPLE_COL_KX_SCAT],
+                k_y_scat=central_terms[0, _SAMPLE_COL_KY_SCAT],
+                re_k_z=central_terms[0, _SAMPLE_COL_RE_KZ],
+                im_k_z=central_terms[0, _SAMPLE_COL_IM_KZ],
+                k_scat=central_terms[0, _SAMPLE_COL_K_SCAT],
+                k0=central_terms[0, _SAMPLE_COL_K0],
+                Ti2=central_terms[0, _SAMPLE_COL_TI2],
+                L_in=central_terms[0, _SAMPLE_COL_L_IN],
+                n2_real=central_terms[0, _SAMPLE_COL_N2_REAL],
+                n2_samp=central_n2_array[0],
+                eps2=central_eps2_array[0],
+                thickness=thickness,
+                optics_mode=optics_mode,
+                pixel_size_m=pixel_size_m,
+                image_size=image_size,
+                exit_projection_mode=exit_projection_mode,
+            )
+            candidate_valid = bool(
+                candidate_valid
+                and _candidate_has_detector_support(int(image_size), float(row_f), float(col_f))
+            )
+            if not candidate_valid or not _candidate_valid_mass(mass):
+                continue
+
+            branch_id = _candidate_branch_id(H, K, phi_f, Qx)
+            if not (
+                0 <= peak_idx < slot_by_branch.shape[0] and 0 <= branch_id < slot_by_branch.shape[1]
+            ):
+                continue
+            slot_idx = int(slot_by_branch[peak_idx, branch_id])
+            if slot_idx < 0:
+                continue
+            row = np.full(HIT_ROW_WITH_CONTEXT_WIDTH, np.nan, dtype=np.float64)
+            row[0] = 0.0
+            row[1] = float(col_f)
+            row[2] = float(row_f)
+            row[3] = float(phi_f)
+            row[4] = H
+            row[5] = K
+            row[6] = L
+            row[7] = float(peak_idx)
+            row[8] = float(q_idx)
+            row[10:15] = 0.0
+            rank = (-float(I_Q), int(peak_idx), int(q_idx))
+            current = rows_by_slot.get(slot_idx)
+            if current is None or rank < current[0]:
+                rows_by_slot[slot_idx] = (rank, row)
+
     tables = []
     for slot_idx, _slot_key in enumerate(representative_slot_keys):
-        if slot_idx >= int(representative_valid.shape[0]):
-            break
-        if int(representative_valid[slot_idx]) <= 0:
+        selected = rows_by_slot.get(int(slot_idx))
+        if selected is None:
             continue
-        tables.append(
-            np.asarray(
-                representative_rows[slot_idx : slot_idx + 1, :],
-                dtype=np.float64,
-            ).copy()
-        )
+        tables.append(np.asarray(selected[1], dtype=np.float64).reshape(1, -1))
     return tables
 
 
@@ -7440,7 +7227,6 @@ def _process_peaks_parallel_weighted_events_fast_serial(
     reuse_weighted_event_projected_candidates=True,
     weighted_event_candidate_buffer_max_bytes=_WEIGHTED_EVENT_CANDIDATE_DEFAULT_MAX_BYTES,
 ):
-    del lambda_
     del sample_qr_ring_once
     requested_worker_count = _weighted_event_requested_worker_count_for_stats(numba_thread_count)
 
@@ -7556,18 +7342,49 @@ def _process_peaks_parallel_weighted_events_fast_serial(
     representative_slot_by_peak_branch, representative_slot_keys = (
         _build_weighted_event_representative_slot_map(miller, av)
     )
-    n_rep_slots = int(len(representative_slot_keys))
-    representative_valid = np.zeros(n_rep_slots, dtype=np.uint8)
-    representative_neg_mosaic_weight = np.full(n_rep_slots, np.inf, dtype=np.float64)
-    representative_angular_distance = np.full(n_rep_slots, np.inf, dtype=np.float64)
-    representative_beam_distance = np.full(n_rep_slots, np.inf, dtype=np.float64)
-    representative_wavelength_distance = np.full(n_rep_slots, np.inf, dtype=np.float64)
-    representative_neg_mass = np.full(n_rep_slots, np.inf, dtype=np.float64)
-    representative_sample_idx = np.full(n_rep_slots, -1, dtype=np.int64)
-    representative_peak_idx = np.full(n_rep_slots, -1, dtype=np.int64)
-    representative_q_idx = np.full(n_rep_slots, -1, dtype=np.int64)
-    representative_rows = np.empty((n_rep_slots, HIT_ROW_WITH_PROVENANCE_WIDTH), dtype=np.float64)
-    representative_rows.fill(np.nan)
+
+    def build_ghost_representative_hit_tables():
+        return _build_weighted_event_ghost_representative_hit_tables(
+            miller=miller,
+            intensities=intensities,
+            av=av,
+            cv=cv,
+            lambda_=lambda_,
+            n2=n2,
+            zb=zb,
+            thickness=thickness,
+            sample_width_m=sample_width_m,
+            sample_length_m=sample_length_m,
+            optics_mode=optics_mode,
+            theta_initial_deg=theta_initial_deg,
+            cor_angle_deg=cor_angle_deg,
+            psi_z_deg=psi_z_deg,
+            R_z_R_y=R_z_R_y,
+            R_ZY_n=R_ZY_n,
+            P0=P0,
+            sigma_rad=sigma_rad,
+            gamma_rad_m=gamma_rad_m,
+            eta_pv=eta_pv,
+            solve_q_steps_i=solve_q_steps_i,
+            solve_q_rel_tol_i=solve_q_rel_tol_i,
+            solve_q_mode_i=solve_q_mode_i,
+            default_solve_q_dtheta=default_solve_q_dtheta,
+            default_solve_q_cos=default_solve_q_cos,
+            default_solve_q_sin=default_solve_q_sin,
+            debye_x_sq=debye_x_sq,
+            debye_y_sq=debye_y_sq,
+            center=center,
+            n_det_rot=n_det_rot,
+            Detector_Pos=Detector_Pos,
+            e1_det=e1_det,
+            e2_det=e2_det,
+            pixel_size_m=pixel_size_m,
+            image_size=image_size,
+            exit_projection_mode=exit_projection_mode,
+            representative_slot_by_peak_branch=representative_slot_by_peak_branch,
+            representative_slot_keys=representative_slot_keys,
+            wavelength_array=wavelength_array,
+        )
 
     sample_weight_array = sample_weights
     if sample_weight_array is not None:
@@ -7664,37 +7481,6 @@ def _process_peaks_parallel_weighted_events_fast_serial(
         R_ZY_n,
         P0,
     )
-    finite_wavelengths = wavelength_array[np.isfinite(wavelength_array)]
-    mean_wavelength = float(np.mean(finite_wavelengths)) if finite_wavelengths.size > 0 else np.nan
-    sample_mosaic_weights_rank = np.ones(n_samp, dtype=np.float64)
-    if sample_weight_array is not None:
-        finite_positive_sample_weights = np.isfinite(sample_weight_array) & (
-            sample_weight_array > 0.0
-        )
-        sample_mosaic_weights_rank[finite_positive_sample_weights] = sample_weight_array[
-            finite_positive_sample_weights
-        ]
-    sample_angular_top_distances = np.full(n_samp, np.inf, dtype=np.float64)
-    sample_beam_top_distances = np.full(n_samp, np.inf, dtype=np.float64)
-    sample_wavelength_top_distances = np.full(n_samp, np.inf, dtype=np.float64)
-    if theta_array.size == n_samp:
-        if phi_array.size == n_samp:
-            finite_angles = np.isfinite(theta_array) & np.isfinite(phi_array)
-            sample_angular_top_distances[finite_angles] = (
-                theta_array[finite_angles] * theta_array[finite_angles]
-                + phi_array[finite_angles] * phi_array[finite_angles]
-            )
-    if beam_x_array.size == n_samp and beam_y_array.size == n_samp:
-        finite_beam = np.isfinite(beam_x_array) & np.isfinite(beam_y_array)
-        sample_beam_top_distances[finite_beam] = (
-            beam_x_array[finite_beam] * beam_x_array[finite_beam]
-            + beam_y_array[finite_beam] * beam_y_array[finite_beam]
-        )
-    if np.isfinite(mean_wavelength) and wavelength_array.size == n_samp:
-        finite_wavelength = np.isfinite(wavelength_array)
-        sample_wavelength_top_distances[finite_wavelength] = np.abs(
-            wavelength_array[finite_wavelength] - mean_wavelength
-        )
     solve_q_phase_reps = set()
     for phase_idx in range(n_samp):
         if sample_terms[phase_idx, _SAMPLE_COL_VALID] <= 0.5:
@@ -7909,53 +7695,6 @@ def _process_peaks_parallel_weighted_events_fast_serial(
             flat_event_peak_indices_parts = np.empty((active_worker_count, 0), dtype=np.int64)
         flat_event_count_parts = np.zeros(active_worker_count, dtype=np.int64)
 
-        representative_valid_parts = np.zeros((active_worker_count, n_rep_slots), dtype=np.uint8)
-        representative_neg_mosaic_weight_parts = np.full(
-            (active_worker_count, n_rep_slots),
-            np.inf,
-            dtype=np.float64,
-        )
-        representative_angular_distance_parts = np.full(
-            (active_worker_count, n_rep_slots),
-            np.inf,
-            dtype=np.float64,
-        )
-        representative_beam_distance_parts = np.full(
-            (active_worker_count, n_rep_slots),
-            np.inf,
-            dtype=np.float64,
-        )
-        representative_wavelength_distance_parts = np.full(
-            (active_worker_count, n_rep_slots),
-            np.inf,
-            dtype=np.float64,
-        )
-        representative_neg_mass_parts = np.full(
-            (active_worker_count, n_rep_slots),
-            np.inf,
-            dtype=np.float64,
-        )
-        representative_sample_idx_parts = np.full(
-            (active_worker_count, n_rep_slots),
-            -1,
-            dtype=np.int64,
-        )
-        representative_peak_idx_parts = np.full(
-            (active_worker_count, n_rep_slots),
-            -1,
-            dtype=np.int64,
-        )
-        representative_q_idx_parts = np.full(
-            (active_worker_count, n_rep_slots),
-            -1,
-            dtype=np.int64,
-        )
-        representative_rows_parts = np.full(
-            (active_worker_count, n_rep_slots, HIT_ROW_WITH_PROVENANCE_WIDTH),
-            np.nan,
-            dtype=np.float64,
-        )
-
         if accumulate_image_flag:
             image_parts = np.zeros(
                 (active_worker_count, int(image_size), int(image_size)),
@@ -8039,10 +7778,6 @@ def _process_peaks_parallel_weighted_events_fast_serial(
                 peak_reflection_intensity,
                 sample_weight_array_arg,
                 bool(sample_weight_array is not None),
-                sample_mosaic_weights_rank,
-                sample_angular_top_distances,
-                sample_beam_top_distances,
-                sample_wavelength_top_distances,
                 float(debye_x_sq),
                 float(debye_y_sq),
                 float(center_row),
@@ -8064,17 +7799,6 @@ def _process_peaks_parallel_weighted_events_fast_serial(
                 q_data_chunk,
                 q_count_chunk,
                 q_debug_truncated_count_parts,
-                representative_slot_by_peak_branch,
-                representative_valid_parts,
-                representative_neg_mosaic_weight_parts,
-                representative_angular_distance_parts,
-                representative_beam_distance_parts,
-                representative_wavelength_distance_parts,
-                representative_neg_mass_parts,
-                representative_sample_idx_parts,
-                representative_peak_idx_parts,
-                representative_q_idx_parts,
-                representative_rows_parts,
                 image_parts,
                 cache_keys_parts,
                 cache_values_parts,
@@ -8125,29 +7849,6 @@ def _process_peaks_parallel_weighted_events_fast_serial(
                 dtype=np.float64,
             )
             flat_event_peak_indices = np.empty(0, dtype=np.int64)
-
-        _merge_weighted_event_representative_partials(
-            representative_valid_parts[:active_worker_count, :],
-            representative_neg_mosaic_weight_parts[:active_worker_count, :],
-            representative_angular_distance_parts[:active_worker_count, :],
-            representative_beam_distance_parts[:active_worker_count, :],
-            representative_wavelength_distance_parts[:active_worker_count, :],
-            representative_neg_mass_parts[:active_worker_count, :],
-            representative_sample_idx_parts[:active_worker_count, :],
-            representative_peak_idx_parts[:active_worker_count, :],
-            representative_q_idx_parts[:active_worker_count, :],
-            representative_rows_parts[:active_worker_count, :, :],
-            representative_valid,
-            representative_neg_mosaic_weight,
-            representative_angular_distance,
-            representative_beam_distance,
-            representative_wavelength_distance,
-            representative_neg_mass,
-            representative_sample_idx,
-            representative_peak_idx,
-            representative_q_idx,
-            representative_rows,
-        )
 
         n_project_candidate_calls = int(
             np.sum(stats_parts[:active_worker_count, _WEIGHTED_EVENT_CHUNK_STAT_PROJECT_CALLS])
@@ -8230,11 +7931,7 @@ def _process_peaks_parallel_weighted_events_fast_serial(
             )
         else:
             hit_tables = []
-        representative_hit_tables = _build_weighted_event_representative_hit_tables(
-            representative_valid,
-            representative_rows,
-            representative_slot_keys,
-        )
+        representative_hit_tables = build_ghost_representative_hit_tables()
         time_emit_cache += time.perf_counter() - emit_start
 
         _set_last_process_peaks_weighted_event_stats(
@@ -8406,10 +8103,6 @@ def _process_peaks_parallel_weighted_events_fast_serial(
                         L,
                         reflection_intensity,
                         sample_weight,
-                        float(sample_mosaic_weights_rank[sample_idx]),
-                        float(sample_angular_top_distances[sample_idx]),
-                        float(sample_beam_top_distances[sample_idx]),
-                        float(sample_wavelength_top_distances[sample_idx]),
                         debye_x_sq,
                         debye_y_sq,
                         center_row,
@@ -8433,17 +8126,6 @@ def _process_peaks_parallel_weighted_events_fast_serial(
                         q_data,
                         q_count,
                         q_debug_truncated_count,
-                        representative_slot_by_peak_branch,
-                        representative_valid,
-                        representative_neg_mosaic_weight,
-                        representative_angular_distance,
-                        representative_beam_distance,
-                        representative_wavelength_distance,
-                        representative_neg_mass,
-                        representative_sample_idx,
-                        representative_peak_idx,
-                        representative_q_idx,
-                        representative_rows,
                         candidate_mass,
                         candidate_row,
                         candidate_col,
@@ -8462,10 +8144,6 @@ def _process_peaks_parallel_weighted_events_fast_serial(
                     L,
                     reflection_intensity,
                     sample_weight,
-                    float(sample_mosaic_weights_rank[sample_idx]),
-                    float(sample_angular_top_distances[sample_idx]),
-                    float(sample_beam_top_distances[sample_idx]),
-                    float(sample_wavelength_top_distances[sample_idx]),
                     debye_x_sq,
                     debye_y_sq,
                     center_row,
@@ -8489,17 +8167,6 @@ def _process_peaks_parallel_weighted_events_fast_serial(
                     q_data,
                     q_count,
                     q_debug_truncated_count,
-                    representative_slot_by_peak_branch,
-                    representative_valid,
-                    representative_neg_mosaic_weight,
-                    representative_angular_distance,
-                    representative_beam_distance,
-                    representative_wavelength_distance,
-                    representative_neg_mass,
-                    representative_sample_idx,
-                    representative_peak_idx,
-                    representative_q_idx,
-                    representative_rows,
                 )
             time_project += time.perf_counter() - project_start
             sample_total_mass += float(peak_mass)
@@ -8776,11 +8443,7 @@ def _process_peaks_parallel_weighted_events_fast_serial(
         )
     else:
         hit_tables = []
-    representative_hit_tables = _build_weighted_event_representative_hit_tables(
-        representative_valid,
-        representative_rows,
-        representative_slot_keys,
-    )
+    representative_hit_tables = build_ghost_representative_hit_tables()
     time_emit_cache += time.perf_counter() - emit_start
 
     _set_last_process_peaks_weighted_event_stats(
@@ -9221,10 +8884,6 @@ def _process_peaks_parallel_weighted_events_python(
     representative_slot_by_peak_branch, representative_slot_keys = (
         _build_weighted_event_representative_slot_map(miller, av)
     )
-    representative_rows_by_slot: dict[
-        int,
-        tuple[tuple[float, float, float, float, float, int, int, int], np.ndarray],
-    ] = {}
 
     sample_weight_array = sample_weights
     if sample_weight_array is not None:
@@ -9434,44 +9093,6 @@ def _process_peaks_parallel_weighted_events_python(
                 if not candidate_valid or not _candidate_valid_mass(mass):
                     continue
 
-                branch_id = _candidate_branch_id(H, K, phi_f, Qx)
-                representative_key = _candidate_representative_rank_key(
-                    sample_idx,
-                    sample_weight,
-                    mass,
-                    i_pk,
-                    q_idx,
-                    beam_x_array,
-                    beam_y_array,
-                    theta_array,
-                    phi_array,
-                    wavelength_array,
-                )
-                representative_row = np.array(
-                    [
-                        float(mass),
-                        float(col_f),
-                        float(row_f),
-                        float(phi_f),
-                        H,
-                        K,
-                        L,
-                        float(i_pk),
-                        float(q_idx),
-                        float(sample_idx),
-                    ],
-                    dtype=np.float64,
-                )
-                rep_slot = -1
-                if 0 <= i_pk < representative_slot_by_peak_branch.shape[0] and 0 <= branch_id < 2:
-                    rep_slot = int(representative_slot_by_peak_branch[i_pk, branch_id])
-                current_rep = representative_rows_by_slot.get(rep_slot)
-                if rep_slot >= 0 and (current_rep is None or representative_key < current_rep[0]):
-                    representative_rows_by_slot[rep_slot] = (
-                        representative_key,
-                        representative_row,
-                    )
-
                 sample_candidates.append(
                     (
                         int(i_pk),
@@ -9553,14 +9174,47 @@ def _process_peaks_parallel_weighted_events_python(
     else:
         hit_tables = []
 
-    representative_hit_tables = []
-    for slot_idx, _slot_key in enumerate(representative_slot_keys):
-        slot_row = representative_rows_by_slot.get(int(slot_idx))
-        if slot_row is None:
-            continue
-        representative_hit_tables.append(
-            np.asarray(slot_row[1], dtype=np.float64).reshape(1, HIT_ROW_WITH_PROVENANCE_WIDTH)
-        )
+    representative_hit_tables = _build_weighted_event_ghost_representative_hit_tables(
+        miller=miller,
+        intensities=intensities,
+        av=av,
+        cv=cv,
+        lambda_=lambda_,
+        n2=n2,
+        zb=zb,
+        thickness=thickness,
+        sample_width_m=sample_width_m,
+        sample_length_m=sample_length_m,
+        optics_mode=optics_mode,
+        theta_initial_deg=theta_initial_deg,
+        cor_angle_deg=cor_angle_deg,
+        psi_z_deg=psi_z_deg,
+        R_z_R_y=R_z_R_y,
+        R_ZY_n=R_ZY_n,
+        P0=P0,
+        sigma_rad=sigma_rad,
+        gamma_rad_m=gamma_rad_m,
+        eta_pv=eta_pv,
+        solve_q_steps_i=solve_q_steps_i,
+        solve_q_rel_tol_i=solve_q_rel_tol_i,
+        solve_q_mode_i=solve_q_mode_i,
+        default_solve_q_dtheta=default_solve_q_dtheta,
+        default_solve_q_cos=default_solve_q_cos,
+        default_solve_q_sin=default_solve_q_sin,
+        debye_x_sq=debye_x_sq,
+        debye_y_sq=debye_y_sq,
+        center=center,
+        n_det_rot=n_det_rot,
+        Detector_Pos=Detector_Pos,
+        e1_det=e1_det,
+        e2_det=e2_det,
+        pixel_size_m=pixel_size_m,
+        image_size=image_size,
+        exit_projection_mode=exit_projection_mode,
+        representative_slot_by_peak_branch=representative_slot_by_peak_branch,
+        representative_slot_keys=representative_slot_keys,
+        wavelength_array=wavelength_array,
+    )
 
     _set_last_process_peaks_weighted_event_stats(
         parallel_backend="weighted_events_python",
@@ -11004,6 +10658,23 @@ def _hit_table_row_sample_indices(hits_arr: np.ndarray) -> np.ndarray:
     return row_sample_indices
 
 
+def _hit_table_row_context_offsets(hits_arr: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Return explicit per-row beam-context offsets carried by extended hit rows."""
+
+    n_rows = int(hits_arr.shape[0]) if hits_arr.ndim == 2 else 0
+    offsets = np.full((n_rows, 5), np.nan, dtype=np.float64)
+    valid = np.zeros(n_rows, dtype=bool)
+    if hits_arr.ndim != 2 or hits_arr.shape[1] < HIT_ROW_WITH_CONTEXT_WIDTH:
+        return valid, offsets
+    offsets[:, 0] = hits_arr[:, HIT_ROW_COL_BEAM_X_OFFSET]
+    offsets[:, 1] = hits_arr[:, HIT_ROW_COL_BEAM_Y_OFFSET]
+    offsets[:, 2] = hits_arr[:, HIT_ROW_COL_THETA_OFFSET]
+    offsets[:, 3] = hits_arr[:, HIT_ROW_COL_PHI_OFFSET]
+    offsets[:, 4] = hits_arr[:, HIT_ROW_COL_WAVELENGTH_OFFSET]
+    valid = np.all(np.isfinite(offsets), axis=1)
+    return valid, offsets
+
+
 def build_intersection_cache(
     hit_tables,
     av,
@@ -11098,6 +10769,7 @@ def build_intersection_cache(
         if best_sample_arr is not None and table_idx < best_sample_arr.shape[0]:
             sample_idx = int(best_sample_arr[table_idx])
         row_sample_indices = _hit_table_row_sample_indices(hits_arr)
+        row_context_valid, row_context_offsets = _hit_table_row_context_offsets(hits_arr)
 
         if has_beam_context_arrays:
             has_valid_sample_idx = _sample_context_index_valid(
@@ -11120,8 +10792,19 @@ def build_intersection_cache(
                 for row_sample_idx in row_sample_indices
             )
             if not (has_valid_sample_idx or has_valid_row_sample_idx):
-                dropped_missing_best_sample_tables.append(int(table_idx))
-                continue
+                if not np.any(row_context_valid):
+                    dropped_missing_best_sample_tables.append(int(table_idx))
+                    continue
+                keep_rows = row_context_valid
+                hits_arr = np.asarray(hits_arr[keep_rows], dtype=np.float64)
+                h_vals = hits_arr[:, 4]
+                k_vals = hits_arr[:, 5]
+                l_vals = hits_arr[:, 6]
+                qr_vals = qr_vals[keep_rows]
+                qz_vals = qz_vals[keep_rows]
+                row_sample_indices = row_sample_indices[keep_rows]
+                row_context_offsets = row_context_offsets[keep_rows]
+                row_context_valid = row_context_valid[keep_rows]
 
         n_rows = hits_arr.shape[0]
         cache_table = np.empty((n_rows, CURRENT_DETECTOR_CACHE_WIDTH), dtype=np.float64)
@@ -11150,12 +10833,16 @@ def build_intersection_cache(
             cache_table[finite_source_row, CACHE_COL_SOURCE_ROW_INDEX] = raw_source_row[
                 finite_source_row
             ]
+        if np.any(row_context_valid):
+            cache_table[row_context_valid, 9:14] = row_context_offsets[row_context_valid]
         if has_beam_context_arrays:
             for row_idx in range(n_rows):
                 row_sample_idx = int(row_sample_indices[row_idx])
                 sample_for_row = row_sample_idx if row_sample_idx >= 0 else sample_idx
                 if row_sample_idx >= 0:
                     cache_table[row_idx, CACHE_COL_BEST_SAMPLE_INDEX] = float(row_sample_idx)
+                if row_context_valid[row_idx]:
+                    continue
                 if _sample_context_index_valid(
                     sample_for_row,
                     beam_x_arr,
@@ -11182,6 +10869,7 @@ def build_intersection_cache(
                 fallback_best_sample = ~valid_row_samples & ~np.isfinite(
                     cache_table[:, CACHE_COL_BEST_SAMPLE_INDEX]
                 )
+                fallback_best_sample &= ~row_context_valid
                 cache_table[fallback_best_sample, CACHE_COL_BEST_SAMPLE_INDEX] = float(sample_idx)
         missing_source_table = ~np.isfinite(cache_table[:, CACHE_COL_SOURCE_TABLE_INDEX])
         cache_table[missing_source_table, CACHE_COL_SOURCE_TABLE_INDEX] = float(table_idx)

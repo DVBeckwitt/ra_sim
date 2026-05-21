@@ -12,6 +12,7 @@ from ra_sim.gui import runtime_primary_cache as gui_runtime_primary_cache
 from ra_sim.gui import geometry_q_group_manager as gui_geometry_q_group_manager
 from ra_sim.simulation.diffraction import intersection_cache_to_hit_tables
 from ra_sim.simulation.intersection_cache_schema import (
+    CACHE_COL_SOURCE_TABLE_INDEX,
     coerce_intersection_cache_table,
     empty_hit_table,
 )
@@ -68,6 +69,32 @@ def copy_hit_tables(hit_tables: object) -> list[np.ndarray]:
     return copied
 
 
+def _representative_cache_by_contribution_key(
+    representative_intersection_cache: object,
+    contribution_keys: Sequence[object],
+) -> dict[object, list[np.ndarray]]:
+    if representative_intersection_cache is None:
+        return {}
+    keys = list(contribution_keys or ())
+    grouped: dict[object, list[np.ndarray]] = {key: [] for key in keys}
+    if not keys:
+        return grouped
+
+    for table in copy_intersection_cache_tables(representative_intersection_cache):
+        arr = np.asarray(table, dtype=np.float64)
+        if arr.ndim != 2 or arr.shape[0] <= 0 or arr.shape[1] <= CACHE_COL_SOURCE_TABLE_INDEX:
+            continue
+        for row_idx in range(arr.shape[0]):
+            source_value = float(arr[row_idx, CACHE_COL_SOURCE_TABLE_INDEX])
+            if not np.isfinite(source_value):
+                continue
+            source_idx = int(np.rint(source_value))
+            if source_idx < 0 or source_idx >= len(keys):
+                continue
+            grouped[keys[source_idx]].append(arr[row_idx : row_idx + 1, :].copy())
+    return grouped
+
+
 def resolved_peak_table_payload(
     intersection_cache: object,
     legacy_hit_tables: object,
@@ -88,6 +115,7 @@ def clear_primary_contribution_cache(simulation_runtime_state: object) -> None:
     simulation_runtime_state.primary_active_contribution_keys = []
     simulation_runtime_state.primary_hit_table_cache = {}
     simulation_runtime_state.primary_best_sample_index_cache = {}
+    simulation_runtime_state.primary_intersection_cache_entry_cache = {}
     simulation_runtime_state.primary_relative_hit_table_cache = {}
     simulation_runtime_state.primary_relative_hit_table_cache_center = None
     simulation_runtime_state.primary_relative_hit_table_cache_signature = None
@@ -127,6 +155,7 @@ def store_primary_cache_payload(
     contribution_keys: Sequence[object],
     raw_hit_tables: Sequence[np.ndarray],
     best_sample_indices: Sequence[object] | None,
+    representative_intersection_cache: Sequence[np.ndarray] | None = None,
     retain_runtime_optional_cache: Callable[..., bool],
     trace_live_cache_event: Callable[..., None],
     live_cache_count: Callable[[object], int],
@@ -162,6 +191,7 @@ def store_primary_cache_payload(
     if reset_required:
         simulation_runtime_state.primary_hit_table_cache = {}
         simulation_runtime_state.primary_best_sample_index_cache = {}
+        simulation_runtime_state.primary_intersection_cache_entry_cache = {}
         simulation_runtime_state.primary_relative_hit_table_cache = {}
         simulation_runtime_state.primary_relative_hit_table_cache_center = None
         simulation_runtime_state.primary_relative_hit_table_cache_signature = None
@@ -193,6 +223,12 @@ def store_primary_cache_payload(
                 if detector_remap_cache_signature is None
                 else detector_remap_cache_signature
             )
+        representative_cache_by_key = _representative_cache_by_contribution_key(
+            representative_intersection_cache,
+            contribution_keys,
+        )
+        if not hasattr(simulation_runtime_state, "primary_intersection_cache_entry_cache"):
+            simulation_runtime_state.primary_intersection_cache_entry_cache = {}
         for idx, (key, table) in enumerate(zip(contribution_keys or (), copied_tables)):
             if key in simulation_runtime_state.primary_hit_table_cache:
                 overwritten_count += 1
@@ -212,9 +248,17 @@ def store_primary_cache_payload(
                     copied_relative_tables[idx],
                     dtype=np.float64,
                 ).copy()
+            if key in representative_cache_by_key:
+                simulation_runtime_state.primary_intersection_cache_entry_cache[key] = [
+                    np.asarray(cache_table, dtype=np.float64).copy()
+                    for cache_table in representative_cache_by_key.get(key, [])
+                ]
+            else:
+                simulation_runtime_state.primary_intersection_cache_entry_cache.pop(key, None)
     else:
         simulation_runtime_state.primary_hit_table_cache = {}
         simulation_runtime_state.primary_best_sample_index_cache = {}
+        simulation_runtime_state.primary_intersection_cache_entry_cache = {}
         simulation_runtime_state.primary_relative_hit_table_cache = {}
         simulation_runtime_state.primary_relative_hit_table_cache_center = None
         simulation_runtime_state.primary_relative_hit_table_cache_signature = None
@@ -253,6 +297,11 @@ def rematerialize_primary_cache_artifacts(
     payload = gui_runtime_primary_cache.rematerialize_primary_artifacts(
         primary_hit_table_cache=simulation_runtime_state.primary_hit_table_cache,
         primary_best_sample_index_cache=simulation_runtime_state.primary_best_sample_index_cache,
+        primary_intersection_cache_cache=getattr(
+            simulation_runtime_state,
+            "primary_intersection_cache_entry_cache",
+            {},
+        ),
         active_keys=simulation_runtime_state.primary_active_contribution_keys,
         image_size=int(image_size),
         a_primary=float(a_primary),

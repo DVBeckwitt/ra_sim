@@ -14,6 +14,11 @@ from ra_sim.simulation.diffraction import (
     build_intersection_cache,
     intersection_cache_to_hit_tables,
 )
+from ra_sim.simulation.intersection_cache_schema import (
+    CACHE_COL_DETECTOR_COL,
+    CACHE_COL_DETECTOR_ROW,
+    coerce_intersection_cache_table,
+)
 
 
 @dataclass(frozen=True)
@@ -284,10 +289,72 @@ def _cached_best_sample_index(
         return -1
 
 
+def _copy_cached_intersection_cache_entry(entry: object) -> list[np.ndarray]:
+    if entry is None:
+        return []
+    raw_tables: list[object]
+    if isinstance(entry, np.ndarray):
+        raw_tables = [entry]
+    elif isinstance(entry, Sequence) and not isinstance(entry, (str, bytes)):
+        raw_tables = list(entry)
+    else:
+        raw_tables = [entry]
+
+    copied: list[np.ndarray] = []
+    for table in raw_tables:
+        arr = coerce_intersection_cache_table(table)
+        if arr.ndim == 2 and arr.shape[0] > 0:
+            copied.append(np.asarray(arr, dtype=np.float64).copy())
+    return copied
+
+
+def _rematerialized_intersection_cache_from_entry_cache(
+    primary_intersection_cache_cache: Mapping[object, object] | None,
+    raw_keys: Sequence[object],
+) -> list[np.ndarray] | None:
+    if not isinstance(primary_intersection_cache_cache, Mapping):
+        return None
+    if not raw_keys:
+        return []
+    if not all(key in primary_intersection_cache_cache for key in raw_keys):
+        return None
+
+    intersection_cache: list[np.ndarray] = []
+    for key in raw_keys:
+        intersection_cache.extend(
+            _copy_cached_intersection_cache_entry(primary_intersection_cache_cache.get(key))
+        )
+    return intersection_cache
+
+
+def translate_intersection_cache_entry_cache_for_center_delta(
+    primary_intersection_cache_cache: Mapping[object, object] | None,
+    *,
+    delta_row: float,
+    delta_col: float,
+) -> dict[object, list[np.ndarray]]:
+    """Translate detector-cache representative rows by a detector-center delta."""
+
+    if not isinstance(primary_intersection_cache_cache, Mapping):
+        return {}
+    translated: dict[object, list[np.ndarray]] = {}
+    for key, entry in primary_intersection_cache_cache.items():
+        tables = _copy_cached_intersection_cache_entry(entry)
+        shifted_tables: list[np.ndarray] = []
+        for table in tables:
+            shifted = np.asarray(table, dtype=np.float64).copy()
+            shifted[:, CACHE_COL_DETECTOR_COL] += float(delta_col)
+            shifted[:, CACHE_COL_DETECTOR_ROW] += float(delta_row)
+            shifted_tables.append(shifted)
+        translated[key] = shifted_tables
+    return translated
+
+
 def rematerialize_primary_artifacts(
     *,
     primary_hit_table_cache: Mapping[object, np.ndarray],
     primary_best_sample_index_cache: Mapping[object, int] | None = None,
+    primary_intersection_cache_cache: Mapping[object, object] | None = None,
     active_keys: Sequence[object],
     image_size: int,
     a_primary: float,
@@ -301,33 +368,39 @@ def rematerialize_primary_artifacts(
 ) -> dict[str, object]:
     """Rebuild primary simulation artifacts from cached raw hit tables."""
 
+    raw_keys = [key for key in active_keys if key in primary_hit_table_cache]
     raw_hit_tables = [
-        np.asarray(primary_hit_table_cache[key], dtype=np.float64).copy()
-        for key in active_keys
-        if key in primary_hit_table_cache
+        np.asarray(primary_hit_table_cache[key], dtype=np.float64).copy() for key in raw_keys
     ]
     best_sample_indices = np.asarray(
-        [
-            _cached_best_sample_index(primary_best_sample_index_cache, key)
-            for key in active_keys
-            if key in primary_hit_table_cache
-        ],
+        [_cached_best_sample_index(primary_best_sample_index_cache, key) for key in raw_keys],
         dtype=np.int64,
     )
     image = rasterize_hit_tables_to_image(raw_hit_tables, image_size=int(image_size))
-    intersection_cache = build_intersection_cache(
-        raw_hit_tables,
-        float(a_primary),
-        float(c_primary),
-        beam_x_array=beam_x_array,
-        beam_y_array=beam_y_array,
-        theta_array=theta_array,
-        phi_array=phi_array,
-        wavelength_array=wavelength_array,
-        best_sample_indices_out=best_sample_indices,
+    cached_intersection_cache = _rematerialized_intersection_cache_from_entry_cache(
+        primary_intersection_cache_cache,
+        raw_keys,
     )
+    intersection_cache: list[np.ndarray]
+    if cached_intersection_cache is not None:
+        intersection_cache = cached_intersection_cache
+    else:
+        intersection_cache = [
+            np.asarray(table, dtype=np.float64).copy()
+            for table in build_intersection_cache(
+                raw_hit_tables,
+                float(a_primary),
+                float(c_primary),
+                beam_x_array=beam_x_array,
+                beam_y_array=beam_y_array,
+                theta_array=theta_array,
+                phi_array=phi_array,
+                wavelength_array=wavelength_array,
+                best_sample_indices_out=best_sample_indices,
+            )
+        ]
     peak_tables = intersection_cache_to_hit_tables(intersection_cache)
-    if not peak_tables:
+    if not peak_tables and cached_intersection_cache is None:
         peak_tables = [table.copy() for table in raw_hit_tables]
     return {
         "image": image,

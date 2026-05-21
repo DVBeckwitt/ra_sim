@@ -15372,6 +15372,7 @@ def _store_primary_cache_payload(
     contribution_keys: Sequence[object],
     raw_hit_tables: Sequence[np.ndarray],
     best_sample_indices: Sequence[object] | None,
+    representative_intersection_cache: Sequence[np.ndarray] | None = None,
     detector_center: Sequence[object] | None = None,
     detector_remap_cache_signature: object = None,
     store_detector_relative_hit_tables: bool = False,
@@ -15384,6 +15385,7 @@ def _store_primary_cache_payload(
         contribution_keys=contribution_keys,
         raw_hit_tables=raw_hit_tables,
         best_sample_indices=best_sample_indices,
+        representative_intersection_cache=representative_intersection_cache,
         retain_runtime_optional_cache=_retain_runtime_optional_cache,
         trace_live_cache_event=_trace_live_cache_event,
         live_cache_count=_live_cache_count,
@@ -25319,6 +25321,11 @@ def do_update():
                     "primary_best_sample_indices",
                     [],
                 ),
+                representative_intersection_cache=(
+                    ready_simulation_result.get("primary_intersection_cache", [])
+                    if bool(ready_simulation_result.get("primary_intersection_cache_built", False))
+                    else None
+                ),
                 detector_center=ready_simulation_result.get("center"),
                 detector_remap_cache_signature=ready_simulation_result.get(
                     "primary_detector_remap_cache_signature"
@@ -25472,7 +25479,7 @@ def do_update():
         capture_primary_raw = bool(run_primary_job and job_kind_value in {"full", "primary_fill"})
         capture_secondary_raw = bool(run_secondary_enabled and job_kind_value == "full")
         build_intersection_cache_enabled = bool(
-            build_intersection_cache_for_job and job_kind_value == "full"
+            build_intersection_cache_for_job and job_kind_value in {"full", "primary_fill"}
         )
         collect_primary_hit_tables = bool(
             (collect_hit_tables_enabled or build_intersection_cache_enabled) and run_primary_job
@@ -25690,10 +25697,34 @@ def do_update():
                     current_center_pair,
                 )
             )
+            previous_primary_center = getattr(
+                simulation_runtime_state,
+                "primary_relative_hit_table_cache_center",
+                None,
+            )
+            primary_representative_cache = getattr(
+                simulation_runtime_state,
+                "primary_intersection_cache_entry_cache",
+                {},
+            )
+            remapped_primary_representative_cache = {}
+            try:
+                delta_row = float(current_center_pair[0]) - float(previous_primary_center[0])
+                delta_col = float(current_center_pair[1]) - float(previous_primary_center[1])
+                remapped_primary_representative_cache = gui_runtime_primary_cache.translate_intersection_cache_entry_cache_for_center_delta(
+                    primary_representative_cache,
+                    delta_row=delta_row,
+                    delta_col=delta_col,
+                )
+            except Exception:
+                remapped_primary_representative_cache = {}
             simulation_runtime_state.primary_hit_table_cache = {
                 key: np.asarray(table, dtype=np.float64).copy()
                 for key, table in zip(primary_keys, primary_absolute_tables)
             }
+            simulation_runtime_state.primary_intersection_cache_entry_cache = (
+                remapped_primary_representative_cache
+            )
             simulation_runtime_state.primary_contribution_cache_signature = (
                 primary_contribution_cache_signature
             )
@@ -25709,6 +25740,7 @@ def do_update():
                     {},
                 ),
                 active_keys=list(primary_keys),
+                primary_intersection_cache_cache=remapped_primary_representative_cache,
                 image_size=int(image_size),
                 a_primary=float(a_updated),
                 c_primary=float(c_updated),

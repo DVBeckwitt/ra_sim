@@ -9,6 +9,7 @@ import pytest
 from ra_sim.gui import runtime_primary_cache
 from ra_sim.gui._runtime import primary_cache_helpers
 from ra_sim.simulation.diffraction import intersection_cache_to_hit_tables
+from ra_sim.simulation import intersection_cache_schema as cache_schema
 from ra_sim.simulation.engine import simulate
 from ra_sim.simulation.types import (
     BeamSamples,
@@ -430,6 +431,47 @@ def test_prune_reuse_image_equals_sum_of_selected_cached_contributions() -> None
     assert not np.any((payload["image"] > 0.0) & (excluded > 0.0))
 
 
+def test_rematerialize_primary_artifacts_prefers_cached_representative_intersection_cache() -> None:
+    sampled_hit_table = np.asarray(
+        [[5.0, 20.0, 12.0, -0.2, 1.0, 0.0, 2.0, 0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+    representative_cache = np.full((1, cache_schema.CURRENT_DETECTOR_CACHE_WIDTH), np.nan)
+    representative_cache[0, :9] = [
+        1.0,
+        2.0,
+        10.0,
+        12.0,
+        0.0,
+        -0.2,
+        1.0,
+        0.0,
+        2.0,
+    ]
+    representative_cache[0, 9:14] = 0.0
+    representative_cache[0, cache_schema.CACHE_COL_SOURCE_TABLE_INDEX] = 0.0
+    representative_cache[0, cache_schema.CACHE_COL_SOURCE_ROW_INDEX] = 0.0
+
+    payload = runtime_primary_cache.rematerialize_primary_artifacts(
+        primary_hit_table_cache={0: sampled_hit_table},
+        primary_intersection_cache_cache={0: [representative_cache]},
+        active_keys=[0],
+        image_size=32,
+        a_primary=4.0,
+        c_primary=7.0,
+    )
+
+    assert float(np.sum(payload["image"])) == pytest.approx(5.0)
+    assert len(payload["intersection_cache"]) == 1
+    cache_row = np.asarray(payload["intersection_cache"][0], dtype=np.float64)[0]
+    assert float(cache_row[cache_schema.CACHE_COL_DETECTOR_COL]) == pytest.approx(10.0)
+    assert float(cache_row[cache_schema.CACHE_COL_INTENSITY]) == pytest.approx(0.0)
+    np.testing.assert_allclose(cache_row[9:14], np.zeros(5, dtype=np.float64))
+    peak_rows = payload["peak_tables"]
+    assert len(peak_rows) == 1
+    assert float(np.asarray(peak_rows[0], dtype=np.float64)[0, 1]) == pytest.approx(10.0)
+
+
 def test_rematerialize_primary_artifacts_treats_bad_best_sample_indices_as_missing(
     monkeypatch,
 ) -> None:
@@ -545,12 +587,137 @@ def test_store_primary_cache_payload_can_store_detector_relative_hit_tables() ->
     assert np.allclose(raw_hit_table[:, 1:3], [[12.0, 23.0], [8.0, 19.0]])
 
 
+def test_store_primary_cache_payload_stores_representative_intersection_cache() -> None:
+    state = SimpleNamespace(
+        primary_contribution_cache_signature=None,
+        primary_source_mode=None,
+        primary_active_contribution_keys=[],
+        primary_hit_table_cache={},
+        primary_best_sample_index_cache={},
+        primary_filter_signature=None,
+    )
+    sampled_hit_table = np.asarray(
+        [[5.0, 20.0, 12.0, -0.2, 1.0, 0.0, 2.0, 0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+    representative_cache = np.full((1, cache_schema.CURRENT_DETECTOR_CACHE_WIDTH), np.nan)
+    representative_cache[0, :9] = [
+        1.0,
+        2.0,
+        10.0,
+        12.0,
+        0.0,
+        -0.2,
+        1.0,
+        0.0,
+        2.0,
+    ]
+    representative_cache[0, 9:14] = 0.0
+    representative_cache[0, cache_schema.CACHE_COL_SOURCE_TABLE_INDEX] = 0.0
+    representative_cache[0, cache_schema.CACHE_COL_SOURCE_ROW_INDEX] = 0.0
+
+    primary_cache_helpers.store_primary_cache_payload(
+        state,
+        cache_signature=("sig", 3),
+        source_mode="miller",
+        active_keys=["peak-a"],
+        contribution_keys=["peak-a"],
+        raw_hit_tables=[sampled_hit_table],
+        best_sample_indices=[1],
+        representative_intersection_cache=[representative_cache],
+        retain_runtime_optional_cache=lambda *_args, **_kwargs: True,
+        trace_live_cache_event=lambda *_args, **_kwargs: None,
+        live_cache_count=lambda value: len(value) if value is not None else 0,
+        live_cache_signature_summary=lambda value: str(value),
+    )
+
+    payload = primary_cache_helpers.rematerialize_primary_cache_artifacts(
+        state,
+        image_size=32,
+        mosaic_params={
+            "beam_x_array": np.zeros(2, dtype=np.float64),
+            "beam_y_array": np.zeros(2, dtype=np.float64),
+            "theta_array": np.zeros(2, dtype=np.float64),
+            "phi_array": np.zeros(2, dtype=np.float64),
+            "wavelength_array": np.ones(2, dtype=np.float64),
+        },
+        a_primary=4.0,
+        c_primary=7.0,
+        trace_live_cache_event=lambda *_args, **_kwargs: None,
+        live_cache_signature_summary=lambda value: str(value),
+        live_cache_shape=lambda value: list(np.asarray(value).shape),
+        live_cache_count=lambda value: len(value) if value is not None else 0,
+    )
+
+    cache_row = np.asarray(payload["intersection_cache"][0], dtype=np.float64)[0]
+    assert float(np.sum(payload["image"])) == pytest.approx(5.0)
+    assert float(cache_row[cache_schema.CACHE_COL_DETECTOR_COL]) == pytest.approx(10.0)
+    assert float(cache_row[cache_schema.CACHE_COL_INTENSITY]) == pytest.approx(0.0)
+
+
+def test_store_primary_cache_payload_drops_stale_representative_intersection_cache() -> None:
+    state = SimpleNamespace(
+        primary_contribution_cache_signature=("sig", 3),
+        primary_source_mode="miller",
+        primary_active_contribution_keys=["peak-a"],
+        primary_hit_table_cache={"peak-a": np.ones((1, 10), dtype=np.float64)},
+        primary_best_sample_index_cache={"peak-a": 0},
+        primary_intersection_cache_entry_cache={
+            "peak-a": [np.ones((1, cache_schema.CURRENT_DETECTOR_CACHE_WIDTH), dtype=np.float64)]
+        },
+        primary_filter_signature=None,
+    )
+
+    primary_cache_helpers.store_primary_cache_payload(
+        state,
+        cache_signature=("sig", 3),
+        source_mode="miller",
+        active_keys=["peak-a"],
+        contribution_keys=["peak-a"],
+        raw_hit_tables=[np.asarray([[1.0, 2.0, 3.0, 0.0, 1.0, 0.0, 2.0]], dtype=np.float64)],
+        best_sample_indices=[0],
+        representative_intersection_cache=None,
+        retain_runtime_optional_cache=lambda *_args, **_kwargs: True,
+        trace_live_cache_event=lambda *_args, **_kwargs: None,
+        live_cache_count=lambda value: len(value) if value is not None else 0,
+        live_cache_signature_summary=lambda value: str(value),
+    )
+
+    assert state.primary_intersection_cache_entry_cache == {}
+
+
+def test_translate_intersection_cache_entry_cache_for_center_delta() -> None:
+    representative_cache = np.full((1, cache_schema.CURRENT_DETECTOR_CACHE_WIDTH), np.nan)
+    representative_cache[0, cache_schema.CACHE_COL_DETECTOR_COL] = 10.0
+    representative_cache[0, cache_schema.CACHE_COL_DETECTOR_ROW] = 12.0
+    representative_cache[0, cache_schema.CACHE_COL_INTENSITY] = 0.0
+    representative_cache[0, cache_schema.CACHE_COL_H : cache_schema.CACHE_COL_L + 1] = [
+        1.0,
+        0.0,
+        2.0,
+    ]
+
+    translated = runtime_primary_cache.translate_intersection_cache_entry_cache_for_center_delta(
+        {"peak-a": [representative_cache]},
+        delta_row=3.0,
+        delta_col=-2.0,
+    )
+
+    translated_row = np.asarray(translated["peak-a"][0], dtype=np.float64)[0]
+    assert float(translated_row[cache_schema.CACHE_COL_DETECTOR_COL]) == pytest.approx(8.0)
+    assert float(translated_row[cache_schema.CACHE_COL_DETECTOR_ROW]) == pytest.approx(15.0)
+    assert float(representative_cache[0, cache_schema.CACHE_COL_DETECTOR_COL]) == pytest.approx(
+        10.0
+    )
+
+
 def test_clear_primary_contribution_cache_clears_detector_relative_hit_tables() -> None:
     state = SimpleNamespace(
         primary_contribution_cache_signature=("sig", 1),
         primary_active_contribution_keys=[1],
         primary_hit_table_cache={1: np.ones((1, 4), dtype=np.float64)},
         primary_best_sample_index_cache={1: 0},
+        primary_intersection_cache_entry_cache={1: [np.ones((1, 17), dtype=np.float64)]},
         primary_relative_hit_table_cache={1: np.ones((1, 4), dtype=np.float64)},
         primary_relative_hit_table_cache_center=(10.0, 20.0),
         primary_relative_hit_table_cache_signature=("sig", 1),
@@ -560,5 +727,6 @@ def test_clear_primary_contribution_cache_clears_detector_relative_hit_tables() 
     primary_cache_helpers.clear_primary_contribution_cache(state)
 
     assert state.primary_relative_hit_table_cache == {}
+    assert state.primary_intersection_cache_entry_cache == {}
     assert state.primary_relative_hit_table_cache_center is None
     assert state.primary_relative_hit_table_cache_signature is None
