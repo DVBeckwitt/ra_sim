@@ -39403,6 +39403,37 @@ def test_caked_angular_rejection_includes_worst_rows_and_classification() -> Non
     assert "Recommended next fix:" in joined
 
 
+def test_caked_angular_rejection_explains_locked_qr_authority_mismatch() -> None:
+    result = SimpleNamespace(
+        success=True,
+        point_match_summary={
+            "acceptance_metric_space": "caked_deg",
+            "metric_unit": "deg",
+            "final_rms_deg": 81.0,
+            "final_max_deg": 95.5,
+            "matched_pair_count": 2,
+            "detector_pixel_metric_complete": False,
+            "worst_angular_residual_rows": [
+                {
+                    "dataset_label": "bg0",
+                    "pair_id": "pair-1",
+                    "hkl": [-1, 0, 10],
+                    "source_branch_index": 1,
+                    "angular_residual_norm_deg": 81.0,
+                }
+            ],
+            "dynamic_angular_failure_classification": "locked_qr_dynamic_authority_mismatch",
+            "recommended_next_fix": "repair_locked_qr_dynamic_authority",
+        },
+    )
+
+    reasons = geometry_fit.build_geometry_fit_rejection_reason_lines(result, rms=81.0)
+    joined = "\n".join(reasons)
+
+    assert "locked Qr/Qz dynamic-angle path changed caked coordinate authority" in joined
+    assert "internal projection-frame error, not a bad manual pick" in joined
+
+
 def test_gui_dynamic_caked_metric_enforces_same_frame_detector_thresholds() -> None:
     result = SimpleNamespace(
         success=True,

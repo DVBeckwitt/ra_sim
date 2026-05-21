@@ -1524,6 +1524,30 @@ Locked Qr/Qz dynamic-objective authority mismatch, 2026-05-21:
   revert of the dynamic resolver precedence change, regression tests, and this
   tracking update.
 
+Locked Qr/Qz dynamic authority guard follow-up, 2026-05-21:
+
+- Bug/error status: hardened. The dynamic angular objective now exposes the
+  caked prediction authority used for each locked Qr row and records whether
+  exact projection, refined caked payload, or nominal caked values were used.
+  Final worst-row summaries are checked against the same objective payload
+  fields, so stale-summary and stale-objective paths can be separated.
+- Internal failure status: if a locked Qr dynamic path still reaches nominal or
+  unknown caked authority, the failure class is
+  `locked_qr_dynamic_authority_mismatch` with
+  `repair_locked_qr_dynamic_authority`, not
+  `manual_outliers_or_physical_bad_fit`.
+- GUI status: rejection text now tells the operator this is an internal
+  locked-Qr dynamic-angle projection-frame error, not a bad manual pick.
+- Feature status: no new GUI control, CLI flag, public API, config key,
+  saved-state schema, artifact schema, dependency, CI workflow, deprecation, or
+  migration. Existing private row diagnostics were extended.
+- Validation: `python -m pytest -q tests/test_geometry_fitting.py -k "locked_qr or dynamic_prediction or caked_authority or detector_frame or phi_wrap"`,
+  `python -m pytest -q tests/test_geometry_fit_live_rows_signature_handoff.py tests/test_geometry_fit_manual_fit_space_classification.py tests/test_gui_geometry_fit_workflow.py -k "locked or caked or handoff or dynamic or authority_mismatch"`,
+  and `python -m ra_sim.dev check` pass.
+- Shipping status: safe as a diagnostic hardening bug-fix slice. Rollback is a
+  normal git revert of the objective-row authority fields, classification,
+  GUI message, regression tests, and this tracking update.
+
 Do not use `run_geometry_fit_quality_baseline.py` as the first optimizer debug
 tool. Run it only after the ladder identifies a stable parameter set.
 

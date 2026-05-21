@@ -795,6 +795,18 @@ def _classify_dynamic_angular_failure(summary: Mapping[str, object]) -> Dict[str
         for row in (summary.get("worst_angular_residual_rows", ()) or ())
         if isinstance(row, Mapping)
     ]
+    if any(
+        bool(row.get("used_sim_nominal_caked_for_objective", False))
+        or str(row.get("fit_prediction_caked_authority", "") or "")
+        in {"sim_nominal_caked", "saved_handoff_caked", "unknown"}
+        or str(row.get("locked_qr_prediction_caked_authority_reason", "") or "")
+        == "locked_qr_prediction_caked_authority_mismatch"
+        for row in worst_rows
+    ):
+        return {
+            "dynamic_angular_failure_classification": "locked_qr_dynamic_authority_mismatch",
+            "recommended_next_fix": "repair_locked_qr_dynamic_authority",
+        }
     if any(bool(row.get("phi_wrap_helped", False)) for row in worst_rows):
         return {
             "dynamic_angular_failure_classification": "phi_wrap_accounting_bug",
@@ -7234,8 +7246,21 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                 "source_table_index": diag.get("source_table_index"),
                 "source_row_index": diag.get("source_row_index"),
                 "source_peak_index": diag.get("source_peak_index"),
-                "observed_caked_deg": [float(measured_two_theta), float(measured_phi)],
-                "predicted_caked_deg": [float(sim_two_theta), float(sim_phi)],
+                "observed_caked_deg": manual_target_caked_deg,
+                "predicted_caked_deg": objective_sim_caked_deg,
+                "objective_sim_caked_deg": list(objective_sim_caked_deg),
+                "observed_caked_authority": "manual_target_caked_deg",
+                "fit_prediction_caked_authority": fit_prediction.get(
+                    "fit_prediction_caked_authority"
+                ),
+                "sim_refined_caked_authority": fit_prediction.get("sim_refined_caked_authority"),
+                "objective_source_authority": fit_prediction.get("objective_source_authority"),
+                "optimizer_source_source": fit_prediction.get("optimizer_source_source"),
+                "used_sim_nominal_caked_for_objective": bool(
+                    fit_prediction.get("used_sim_nominal_caked_for_objective", False)
+                ),
+                "used_sim_refined_caked": bool(fit_prediction.get("used_sim_refined_caked", False)),
+                "used_exact_projector": bool(fit_prediction.get("used_exact_projector", False)),
                 "delta_two_theta_deg": float(delta_two_theta),
                 "delta_phi_deg_unwrapped": float(sim_phi - measured_phi),
                 "wrapped_delta_phi_deg": float(delta_phi),
