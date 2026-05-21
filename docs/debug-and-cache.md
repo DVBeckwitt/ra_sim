@@ -258,21 +258,22 @@ Current status as of 2026-05-21:
   through `BACKGROUND_IMAGE_SUBTRACTION_DISABLED_OVERRIDE=1`; fitted peak
   models remain written separately for diagnostics
 - final-fit cache keys include
-  `fit_signature=joint_qz_labeled_marker_fit_specular_theta_i12_l8_v13`, and
-  pre-editor Qr-rod stages use
-  `qr_rod_pre_marker_profiles_hk0_l_defaults_v12`, so older cached joint fits
-  that could drop weak labeled markers, overfill the m=0 low-L full profile,
-  truncate HK=0 below the requested specular L window, draw the removed broad
-  HK=0 fallback support mask, predate the PbI2 sideband plot policy, or carry
-  marker-only HK=0 state without positive-pixel real `(0, "qz")` profile rows
-  are recomputed
+  `fit_signature=joint_qz_labeled_marker_fit_specular_roi_v18_caked_phi_m90_90_plane`,
+  and pre-editor Qr-rod stages use
+  `qr_rod_pre_marker_profiles_hk0_roi_v17_caked_phi_m90_90_plane`, so older
+  cached joint fits that could drop weak labeled markers, overfill the m=0
+  low-L full profile, truncate HK=0 below an obsolete specular L window, draw
+  the removed broad HK=0 fallback support mask, predate the PbI2 sideband plot
+  policy, or carry marker-only HK=0 state without positive-pixel real
+  `(0, "qz")` profile rows are recomputed
 - pre-editor and final-fit cache validation rejects HK=0 marker tables unless
   the matching rod profile table contains real `m=0`, `branch="qz"` rows with
   positive `pixel_count`
 - split Qr-rod marker editing loads imported edit JSON before the nonzero/HK=0
   phase split, writes edit JSON only after the final HK=0/specular phase is
-  accepted, and records the active HK=0/specular L bounds in the final-fit cache
-  key so stale specular-window fits are not reused
+  accepted, records nonzero L/theta_i controls in the final-fit cache key, and
+  records the HK=0/specular phi/2theta ROI in the cache key so stale ROI fits
+  are not reused
 - final nonlinear Pearson-VII Qz refinement minimizes the existing
   intensity-weighted residual plus a bounded log-intensity residual, matching
   the log-scaled Qr-rod plot without changing marker-table, CSV, CLI, or
@@ -290,9 +291,16 @@ Current status as of 2026-05-21:
   decisions` table but no longer suppress available m=3 or m=4 overlays.
 - PbI2 Qr-rod profile plots use a logarithmic intensity axis only for `HK=0`.
   Nonzero HK panels use linear intensity and the shared `0.5 <= L <= 3.0`
-  display window. PbI2 `HK=0` uses the material-specific defaults
-  `L_min=1.5` and `theta_i=12°`; the marker editor and detector companion
-  preview use the same HK=0 L bounds.
+  display window. The HK=0/specular editor, detector companion preview, and
+  pre-editor/profile refresh paths are controlled by phi/2theta ROI bounds; the
+  specular path no longer exposes or applies `L Min` / `L Max` bounds or
+  L-derived Qz clipping.
+- The nonzero HK Qr-rod marker editor has a numeric `theta_i` field. Editing
+  it rebuilds the detector Q maps used for nonzero rod profiles and the
+  detector companion preview, and the accepted value is part of the final
+  Qr-rod cache policy. During nonzero profile refresh, both plus/minus branches
+  for the same `m` rebuild their Qz bins from the same active L window and
+  common finite detector support, so their displayed L starts stay aligned.
 - PbI2 manuscript figures default to
   `C:\Users\Kenpo\OneDrive\Documents\GitHub\PhD Work\2D-Manuscript-Draft\figures\results_pbi2`.
   Other samples keep the `results_ordered` default, and
@@ -350,12 +358,13 @@ title used for that peak in the final Qr-rod figure; clicking another marker or
 accepting the popup preserves the edited title. Final Qr-rod figure labels are
 drawn above and to the right of the marked peak with a leader arrow pointing
 back to the peak, and generated fallback L labels are rounded to integers.
-The same popup now carries the Qr integration controls: `Delta Qr (+/- A^-1)`,
-`L Min`, and `L Max`. Moving Delta Qr refreshes the integrated profile table
-shown in every rod subplot by rerunning the existing detector Qr/Qz profile
-accumulator with the new width. The accepted Delta Qr and L window replace the
-profile rows sent to the final joint Qz fit and are included in the final-fit
-cache identity.
+The same popup carries Qr integration controls for nonzero HK rods: `Delta Qr
+(+/- A^-1)`, `L Min`, `L Max`, and `theta_i`. Moving Delta Qr refreshes the
+integrated profile table shown in every nonzero rod subplot by rerunning the
+existing detector Qr/Qz profile accumulator with the new width. The accepted
+Delta Qr, L window, and theta_i replace the nonzero profile rows sent to the
+final joint Qz fit and are included in the final-fit cache identity. The HK=0
+phase instead uses only `Phi Min`, `Phi Max`, `2theta Min`, and `2theta Max`.
 
 The detector selected-region label-position helper remains available for the
 `RA_SIM_DETECTOR_LABEL_SETTINGS` JSON schema, but the parallel diagnostic final

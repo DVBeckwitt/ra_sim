@@ -1060,7 +1060,9 @@ def test_apply_radial_background_subtraction_uses_caked_phi_plane_when_available
     assert "caked_fit_surface" in payload
     assert "caked_model_surface" in payload
     np.testing.assert_allclose(payload["background_model"], detector_image, atol=1.0e-9)
-    np.testing.assert_allclose(payload["corrected_image"], np.zeros_like(detector_image), atol=1.0e-9)
+    np.testing.assert_allclose(
+        payload["corrected_image"], np.zeros_like(detector_image), atol=1.0e-9
+    )
 
 
 def test_parallel_script_radial_background_popup_is_before_background_preps() -> None:
@@ -1068,9 +1070,7 @@ def test_parallel_script_radial_background_popup_is_before_background_preps() ->
 
     popup_call = "radial_background_subtraction_config = show_radial_background_subtraction_popup("
     assert popup_call in source
-    assert source.index(popup_call) < source.index(
-        "background_preps: list[dict[str, object]] = []"
-    )
+    assert source.index(popup_call) < source.index("background_preps: list[dict[str, object]] = []")
     popup_source = source[
         source.index("def show_radial_background_subtraction_popup(") : source.index(
             "\n@njit(fastmath=True, nogil=True)"
@@ -1163,12 +1163,12 @@ def test_parallel_script_applies_radial_subtraction_before_integrate2d() -> None
         )
     ]
 
-    assert prep_loop_source.index("raw_detector_image = detector_image.copy()") < prep_loop_source.index(
+    assert prep_loop_source.index(
+        "raw_detector_image = detector_image.copy()"
+    ) < prep_loop_source.index("apply_radial_background_subtraction_to_detector(")
+    assert prep_loop_source.index(
         "apply_radial_background_subtraction_to_detector("
-    )
-    assert prep_loop_source.index("apply_radial_background_subtraction_to_detector(") < prep_loop_source.index(
-        "\n    caked_result = ai.integrate2d("
-    )
+    ) < prep_loop_source.index("\n    caked_result = ai.integrate2d(")
     assert "raw_plane_caked_result = ai.integrate2d(" in prep_loop_source
     assert "caked_density_image_from_result(raw_plane_caked_result)" in prep_loop_source
     assert "phi_map=phi_map" in prep_loop_source
@@ -1180,15 +1180,13 @@ def test_parallel_script_applies_radial_subtraction_before_integrate2d() -> None
 def test_parallel_script_fit_one_peak_uses_corrected_caked_image() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     fit_source = source[
-        source.index("def _fit_global_peak_job(") : source.index(
-            "\ndef _run_local_peak_jobs("
-        )
+        source.index("def _fit_global_peak_job(") : source.index("\ndef _run_local_peak_jobs(")
     ]
 
     assert 'np.asarray(prep["caked_image"], dtype=np.float64)' in fit_source
-    assert source.index("detector_image = np.asarray(\n        radial_subtraction_payload") < source.index(
-        "caked_image = caked_density_image"
-    )
+    assert source.index(
+        "detector_image = np.asarray(\n        radial_subtraction_payload"
+    ) < source.index("caked_image = caked_density_image")
 
 
 def test_parallel_script_qr_rod_profiles_use_corrected_detector_image() -> None:
@@ -1220,9 +1218,7 @@ def test_parallel_script_radial_background_policy_changes_pre_editor_cache_key()
     cache_key = namespace["pre_editor_cache_key"]
 
     base = {"fit_settings": {"radial_background_subtraction": {"mode": "off", "scale": 0.0}}}
-    changed = {
-        "fit_settings": {"radial_background_subtraction": {"mode": "radial", "scale": 0.5}}
-    }
+    changed = {"fit_settings": {"radial_background_subtraction": {"mode": "radial", "scale": 0.5}}}
 
     assert cache_key("state.json", input_signature=base) != cache_key(
         "state.json", input_signature=changed
@@ -1298,7 +1294,9 @@ def test_parallel_script_qr_rod_peak_edits_validate_background_policy(tmp_path: 
         )
     legacy_path = tmp_path / "legacy_qr_rod_peak_edits.json"
     legacy_path.write_text(
-        json.dumps({"schema": "ra_sim.qr_rod_peak_edits.v1", "markers": markers.to_dict("records")}),
+        json.dumps(
+            {"schema": "ra_sim.qr_rod_peak_edits.v1", "markers": markers.to_dict("records")}
+        ),
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="different fitting policy"):
@@ -1320,8 +1318,9 @@ def test_parallel_script_qr_rod_peak_editor_rejects_stale_background_policy_edit
         )
     ]
     save_section = source[
-        source.index("if bool(qr_rod_specular_editor_result.get(\"accepted\", False))")
-        : source.index("\nrod_profile_table = rod_profile_table_for_l_window(")
+        source.index(
+            'if bool(qr_rod_specular_editor_result.get("accepted", False))'
+        ) : source.index("\nrod_profile_table = rod_profile_table_for_l_window(")
     ]
 
     assert "QR_ROD_PEAK_EDIT_CONTEXT_SIGNATURE" in source
@@ -1332,9 +1331,16 @@ def test_parallel_script_qr_rod_peak_editor_rejects_stale_background_policy_edit
 def test_parallel_script_radial_background_cache_signatures_reject_old_prefit_caches() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
 
-    assert 'QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_specular_roi_v18_caked_phi_m90_90_plane"' in source
-    assert 'PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE = "background_peak_fit_results_v5_caked_phi_m90_90_plane"' in source
-    assert 'PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_roi_v17_caked_phi_m90_90_plane"' in source
+    assert "QR_ROD_FINAL_FIT_CACHE_SIGNATURE = (" in source
+    assert "joint_qz_labeled_marker_fit_specular_roi_v18_caked_phi_m90_90_plane" in source
+    assert (
+        'PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE = "background_peak_fit_results_v5_caked_phi_m90_90_plane"'
+        in source
+    )
+    assert (
+        'PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_roi_v17_caked_phi_m90_90_plane"'
+        in source
+    )
 
 
 def test_parallel_script_qr_rod_final_cache_key_changes_with_background_debug_policy() -> None:
@@ -1663,6 +1669,7 @@ def test_parallel_script_final_profile_l_filter_uses_specular_editor_bounds() ->
         "l_reference_rows",
         "rod_profile_marker_l_mapping_is_valid",
         "qz_values_to_l_axis",
+        "qz_to_l_linear_coeff",
         "rod_profile_table_for_l_window",
     )
     filter_profile = namespace["rod_profile_table_for_l_window"]
@@ -1829,9 +1836,10 @@ def test_parallel_script_pbi2_specular_hk0_uses_l15_and_caked_roi() -> None:
         "        specular_detector_qz_map,\n"
         "    )"
     ) in source
-    assert "specular_profile_l_min, specular_profile_l_max = qr_rod_l_bounds_for_group(" in source
-    assert "l_min=specular_profile_l_min" in specular_profile_source
-    assert "l_max=specular_profile_l_max" in specular_profile_source
+    assert "initial_specular_profile = build_specular_qr_rod_profile()" in (specular_profile_source)
+    assert "specular_qz_edges_for_l_window" not in source
+    assert "specular_profile_l_min" not in specular_profile_source
+    assert "specular_profile_l_max" not in specular_profile_source
     assert "build_specular_qr_rod_profile(" in specular_profile_source
     assert '"specular_qr_rod_l_min"' in source
     assert '"specular_qr_rod_l_max"' in source
@@ -2387,13 +2395,12 @@ def test_detector_region_specular_visual_uses_integrated_qz_region() -> None:
     assert "SPECULAR_QR_ROD_L_MAX = 8.0" in source
     assert "PBI2_SPECULAR_QR_ROD_L_MIN = 1.5" in source
     assert "build_specular_qr_rod_profile(" in specular_profile_source
-    assert "specular_profile_l_min, specular_profile_l_max = qr_rod_l_bounds_for_group(" in (
-        specular_profile_source
-    )
-    assert "l_min=specular_profile_l_min" in specular_profile_source
-    assert "l_max=specular_profile_l_max" in specular_profile_source
+    assert "specular_profile_l_min" not in specular_profile_source
+    assert "specular_profile_l_max" not in specular_profile_source
+    assert "specular_qz_edges_for_l_window" not in specular_profile_source
     assert (
-        "specular_detector_region_mask = specular_detector_region_mask &" in specular_profile_source
+        "specular_detector_region_mask = specular_detector_region_mask &"
+        not in specular_profile_source
     )
     assert "profile_from_detector_phi_two_theta_roi(" in specular_profile_source
     assert "specular_fallback_region_mask" not in specular_profile_source
@@ -2521,7 +2528,6 @@ def _hk0_builder_test_namespace() -> dict[str, object]:
         "specular_qz_bounds_for_l_window",
         "specular_l_marker_rows_with_lattice_fallback",
         "active_specular_marker_rows_for_l_window",
-        "specular_qz_edges_for_l_window",
         "profile_from_detector_qr_qz",
         "detector_phi_two_theta_roi_mask",
         "profile_from_detector_phi_two_theta_roi",
@@ -2530,6 +2536,7 @@ def _hk0_builder_test_namespace() -> dict[str, object]:
         "rod_profile_marker_l_mapping_is_valid",
         "l_reference_rows",
         "qz_values_to_l_axis",
+        "qz_to_l_linear_coeff",
         "rod_profile_table_for_l_window",
         "qz_edges_from_profile_group",
         "recompute_qr_rod_region_profiles",
@@ -2662,16 +2669,7 @@ def test_parallel_script_builds_hk0_profile_from_active_markers_without_base_edg
     namespace = _hk0_builder_test_namespace()
     build_profile = namespace["build_specular_qr_rod_profile"]
 
-    profile = build_profile(
-        l_min=1.0,
-        l_max=2.0,
-        marker_source=pd.DataFrame(
-            [
-                {"m": 0, "branch": "qz", "qz_marker": 1.0, "fit_l": 1.0},
-                {"m": 0, "branch": "qz", "qz_marker": 2.0, "fit_l": 2.0},
-            ]
-        ),
-    )
+    profile = build_profile()
 
     assert not profile.empty
     assert profile["m"].astype(int).tolist() == [0, 0]
@@ -2710,6 +2708,308 @@ def test_parallel_script_recompute_creates_hk0_when_base_profiles_lack_hk0() -> 
     assert not profile.empty
     assert set(zip(profile["m"].astype(int), profile["branch"].astype(str))) == {(0, "qz")}
     assert int(pd.to_numeric(profile["pixel_count"], errors="coerce").sum()) == 8
+
+
+def test_parallel_script_recompute_nonzero_theta_i_changes_q_map_cache_key() -> None:
+    namespace = _hk0_builder_test_namespace()
+    recompute = namespace["recompute_qr_rod_region_profiles"]
+    namespace["qr_rod_editor_base_profiles"] = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_center": 1.0, "background_density": 4.0},
+            {"m": 1, "branch": "+", "qz_center": 2.0, "background_density": 5.0},
+        ]
+    )
+    namespace["qr_rod_editor_profile_cache"] = {}
+    namespace["phi_windows"] = [("+", 0.0, 90.0, "+"), ("-", -90.0, 0.0, "-")]
+    namespace["rod_entries"] = [{"m": 1, "qr": 1.0}]
+    namespace["marker_table"] = pd.DataFrame()
+    helper_calls: list[float] = []
+    profile_calls: list[tuple[float, float]] = []
+
+    def detector_q_maps_for_theta_initial(theta_initial_deg: object) -> tuple[np.ndarray, ...]:
+        theta = float(theta_initial_deg)
+        helper_calls.append(theta)
+        qr_map = np.full((2, 2), 1.0 + theta / 100.0, dtype=np.float64)
+        qz_map = np.full((2, 2), theta, dtype=np.float64)
+        return qr_map, qz_map, np.ones(qr_map.shape, dtype=bool)
+
+    def profile_from_detector_qr_qz(
+        _bg: dict[str, object],
+        _rod: dict[str, object],
+        *,
+        branch_name: str,
+        detector_q_maps: tuple[np.ndarray, ...],
+        theta_initial_deg_used_for_q: float,
+        **_kwargs: object,
+    ) -> pd.DataFrame:
+        profile_calls.append(
+            (
+                float(np.asarray(detector_q_maps[1], dtype=np.float64)[0, 0]),
+                theta_initial_deg_used_for_q,
+            )
+        )
+        return pd.DataFrame(
+            {
+                "m": [1],
+                "branch": [branch_name],
+                "qz_center": [1.5],
+                "background_density": [theta_initial_deg_used_for_q],
+                "theta_initial_deg_used_for_q": [theta_initial_deg_used_for_q],
+            }
+        )
+
+    namespace["detector_q_maps_for_theta_initial"] = detector_q_maps_for_theta_initial
+    namespace["profile_from_detector_qr_qz"] = profile_from_detector_qr_qz
+
+    first = recompute(0.10, 0.0, 3.0, editor_phase="nonzero", theta_initial_deg=11.25)
+    second = recompute(0.10, 0.0, 3.0, editor_phase="nonzero", theta_initial_deg=12.5)
+
+    assert helper_calls == [11.25, 12.5]
+    assert profile_calls == [(11.25, 11.25), (12.5, 12.5)]
+    assert first["theta_initial_deg_used_for_q"].tolist() == pytest.approx([11.25])
+    assert second["theta_initial_deg_used_for_q"].tolist() == pytest.approx([12.5])
+
+
+def test_parallel_script_recompute_nonzero_branches_use_same_l_start() -> None:
+    namespace = _hk0_builder_test_namespace()
+    recompute = namespace["recompute_qr_rod_region_profiles"]
+    qz_values_to_l_axis = namespace["qz_values_to_l_axis"]
+    namespace["ACTIVE_LATTICE_C"] = 2.0 * np.pi
+    namespace["ROD_PROFILE_QZ_BINS"] = 4
+    namespace["qr_rod_editor_base_profiles"] = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_center": 2.0, "background_density": 4.0},
+            {"m": 1, "branch": "+", "qz_center": 4.0, "background_density": 5.0},
+            {"m": 1, "branch": "-", "qz_center": 10.0, "background_density": 6.0},
+            {"m": 1, "branch": "-", "qz_center": 12.0, "background_density": 7.0},
+            {"m": 1, "branch": "-", "qz_center": 14.0, "background_density": 8.0},
+            {"m": 1, "branch": "-", "qz_center": 16.0, "background_density": 9.0},
+            {"m": 1, "branch": "-", "qz_center": 18.0, "background_density": 10.0},
+            {"m": 1, "branch": "-", "qz_center": 20.0, "background_density": 11.0},
+        ]
+    )
+    namespace["qr_rod_editor_profile_cache"] = {}
+    namespace["phi_windows"] = [("+", 0.0, 90.0, "+"), ("-", -90.0, 0.0, "-")]
+    namespace["rod_entries"] = [{"m": 1, "qr": 1.0}]
+    marker_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_marker": 2.0, "fit_l": 1.0},
+            {"m": 1, "branch": "+", "qz_marker": 4.0, "fit_l": 3.0},
+            {"m": 1, "branch": "-", "qz_marker": 10.0, "fit_l": 1.0},
+            {"m": 1, "branch": "-", "qz_marker": 20.0, "fit_l": 3.0},
+        ]
+    )
+    namespace["marker_table"] = marker_table
+
+    def detector_q_maps_for_theta_initial(_theta_initial_deg: object) -> tuple[np.ndarray, ...]:
+        qr_map = np.ones((2, 2), dtype=np.float64)
+        qz_map = np.ones((2, 2), dtype=np.float64)
+        return qr_map, qz_map, np.ones(qr_map.shape, dtype=bool)
+
+    def profile_from_detector_qr_qz(
+        _bg: dict[str, object],
+        _rod: dict[str, object],
+        *,
+        branch_name: str,
+        qz_edges: np.ndarray,
+        **_kwargs: object,
+    ) -> pd.DataFrame:
+        centers = 0.5 * (np.asarray(qz_edges[:-1]) + np.asarray(qz_edges[1:]))
+        return pd.DataFrame(
+            {
+                "m": [1] * int(centers.size),
+                "branch": [branch_name] * int(centers.size),
+                "qz_center": centers,
+                "background_density": np.ones(centers.size, dtype=np.float64),
+                "pixel_count": np.ones(centers.size, dtype=np.int64),
+            }
+        )
+
+    namespace["detector_q_maps_for_theta_initial"] = detector_q_maps_for_theta_initial
+    namespace["profile_from_detector_qr_qz"] = profile_from_detector_qr_qz
+
+    profile = recompute(
+        0.10,
+        1.0,
+        3.0,
+        editor_phase="nonzero",
+        marker_table=marker_table,
+    )
+
+    starts: dict[str, float] = {}
+    centers_by_branch: dict[str, np.ndarray] = {}
+    for branch_name, sub in profile.groupby("branch"):
+        l_values = qz_values_to_l_axis(
+            sub["qz_center"],
+            m_value=1,
+            branch_value=str(branch_name),
+            marker_source=marker_table,
+        )
+        starts[str(branch_name)] = float(np.nanmin(l_values))
+        centers_by_branch[str(branch_name)] = np.asarray(l_values, dtype=np.float64)
+    assert starts["+"] == pytest.approx(starts["-"])
+    assert centers_by_branch["+"] == pytest.approx(centers_by_branch["-"])
+
+
+def test_parallel_script_recompute_nonzero_visible_branch_starts_match_after_empty_bins() -> None:
+    namespace = _hk0_builder_test_namespace()
+    recompute = namespace["recompute_qr_rod_region_profiles"]
+    qz_values_to_l_axis = namespace["qz_values_to_l_axis"]
+    namespace["ACTIVE_LATTICE_C"] = 2.0 * np.pi
+    namespace["ROD_PROFILE_QZ_BINS"] = 4
+    namespace["qr_rod_editor_base_profiles"] = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_center": 2.0, "background_density": 4.0},
+            {"m": 1, "branch": "+", "qz_center": 4.0, "background_density": 5.0},
+            {"m": 1, "branch": "-", "qz_center": 10.0, "background_density": 6.0},
+            {"m": 1, "branch": "-", "qz_center": 20.0, "background_density": 7.0},
+        ]
+    )
+    namespace["qr_rod_editor_profile_cache"] = {}
+    namespace["phi_windows"] = [("+", 0.0, 90.0, "+"), ("-", -90.0, 0.0, "-")]
+    namespace["rod_entries"] = [{"m": 1, "qr": 1.0}]
+    marker_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_marker": 2.0, "fit_l": 1.0},
+            {"m": 1, "branch": "+", "qz_marker": 4.0, "fit_l": 3.0},
+            {"m": 1, "branch": "-", "qz_marker": 10.0, "fit_l": 1.0},
+            {"m": 1, "branch": "-", "qz_marker": 20.0, "fit_l": 3.0},
+        ]
+    )
+    namespace["marker_table"] = marker_table
+
+    def detector_q_maps_for_theta_initial(_theta_initial_deg: object) -> tuple[np.ndarray, ...]:
+        qr_map = np.ones((2, 2), dtype=np.float64)
+        qz_map = np.ones((2, 2), dtype=np.float64)
+        return qr_map, qz_map, np.ones(qr_map.shape, dtype=bool)
+
+    def profile_from_detector_qr_qz(
+        _bg: dict[str, object],
+        _rod: dict[str, object],
+        *,
+        branch_name: str,
+        qz_edges: np.ndarray,
+        **_kwargs: object,
+    ) -> pd.DataFrame:
+        centers = 0.5 * (np.asarray(qz_edges[:-1]) + np.asarray(qz_edges[1:]))
+        pixel_count = np.ones(centers.size, dtype=np.int64)
+        if branch_name == "-":
+            pixel_count[:1] = 0
+        return pd.DataFrame(
+            {
+                "m": [1] * int(centers.size),
+                "branch": [branch_name] * int(centers.size),
+                "qz_center": centers,
+                "background_density": np.ones(centers.size, dtype=np.float64),
+                "pixel_count": pixel_count,
+            }
+        )
+
+    namespace["detector_q_maps_for_theta_initial"] = detector_q_maps_for_theta_initial
+    namespace["profile_from_detector_qr_qz"] = profile_from_detector_qr_qz
+
+    profile = recompute(
+        0.10,
+        1.0,
+        3.0,
+        editor_phase="nonzero",
+        marker_table=marker_table,
+    )
+
+    starts: dict[str, float] = {}
+    for branch_name, sub in profile.groupby("branch"):
+        visible = sub[np.asarray(sub["pixel_count"], dtype=np.float64) > 0.0]
+        l_values = qz_values_to_l_axis(
+            visible["qz_center"],
+            m_value=1,
+            branch_value=str(branch_name),
+            marker_source=marker_table,
+        )
+        starts[str(branch_name)] = float(np.nanmin(l_values))
+    assert starts["+"] == pytest.approx(starts["-"])
+
+
+def test_parallel_script_recompute_specular_ignores_l_bounds_and_uses_two_theta_roi() -> None:
+    namespace = _hk0_builder_test_namespace()
+    recompute = namespace["recompute_qr_rod_region_profiles"]
+    qz_map = np.asarray(
+        [
+            [1.10, 1.20, 1.70, 1.80],
+            [1.30, 1.40, 1.90, 2.00],
+        ],
+        dtype=np.float64,
+    )
+    qr_map = np.zeros(qz_map.shape, dtype=np.float64)
+    theta_map = np.asarray(
+        [
+            [8.0, 9.0, 14.0, 15.0],
+            [8.5, 9.5, 14.5, 15.5],
+        ],
+        dtype=np.float64,
+    )
+    namespace["specular_detector_q_maps"] = (qr_map, qz_map, np.ones(qz_map.shape, dtype=bool))
+    namespace["profile_detector_phi_map"] = np.zeros(qz_map.shape, dtype=np.float64)
+    namespace["profile_detector_two_theta_map"] = theta_map
+    namespace["profile_bg"] = {
+        "detector_image": np.ones(qz_map.shape, dtype=np.float64),
+        "tilt_deg": 0.0,
+        "qr_overlay_config": type("QrOverlayConfig", (), {"theta_initial_deg": 0.0})(),
+    }
+    namespace["phi_windows"] = [("+", 0.0, 90.0, "+"), ("-", -90.0, 0.0, "-")]
+    namespace["rod_entries"] = []
+    namespace["qr_rod_editor_base_profiles"] = pd.DataFrame(
+        [
+            {"m": 0, "branch": "qz", "qz_center": 1.2, "background_density": 1.0},
+            {"m": 0, "branch": "qz", "qz_center": 1.8, "background_density": 1.0},
+        ]
+    )
+    marker_table = pd.DataFrame(
+        [
+            {"m": 0, "branch": "qz", "qz_marker": 1.0, "fit_l": 1.0},
+            {"m": 0, "branch": "qz", "qz_marker": 2.0, "fit_l": 2.0},
+        ]
+    )
+
+    namespace["qr_rod_editor_profile_cache"] = {}
+    low_l = recompute(
+        0.01,
+        1.0,
+        1.4,
+        editor_phase="specular",
+        marker_table=marker_table,
+        phi_min=-2.0,
+        phi_max=2.0,
+        two_theta_min=7.0,
+        two_theta_max=16.0,
+    )
+    namespace["qr_rod_editor_profile_cache"] = {}
+    high_l = recompute(
+        0.01,
+        1.6,
+        2.0,
+        editor_phase="specular",
+        marker_table=marker_table,
+        phi_min=-2.0,
+        phi_max=2.0,
+        two_theta_min=7.0,
+        two_theta_max=16.0,
+    )
+    namespace["qr_rod_editor_profile_cache"] = {}
+    low_theta = recompute(
+        0.01,
+        1.0,
+        1.4,
+        editor_phase="specular",
+        marker_table=marker_table,
+        phi_min=-2.0,
+        phi_max=2.0,
+        two_theta_min=7.0,
+        two_theta_max=10.0,
+    )
+
+    assert low_l["qz_center"].tolist() == pytest.approx(high_l["qz_center"].tolist())
+    assert low_l["pixel_count"].tolist() == pytest.approx(high_l["pixel_count"].tolist())
+    assert float(np.nansum(low_theta["pixel_count"])) < float(np.nansum(low_l["pixel_count"]))
 
 
 def test_parallel_script_specular_qz_bounds_for_l_window_limits_to_l8() -> None:
@@ -2810,6 +3110,9 @@ def test_parallel_script_specular_profile_uses_strict_qr_band_without_fallback_m
     assert "specular_qz_values.size >= 2" not in specular_profile_source
     assert "specular_fallback_region_mask" not in specular_profile_source
     assert "specular_profile_mask_override" not in specular_profile_source
+    assert "specular_qz_edges_for_l_window" not in specular_profile_source
+    assert "specular_profile_l_min" not in specular_profile_source
+    assert "specular_profile_l_max" not in specular_profile_source
 
 
 def test_detector_region_centerlines_clip_to_visual_qz_bounds() -> None:
@@ -3768,7 +4071,7 @@ def test_parallel_script_00l_region_output_is_wired() -> None:
     assert "hk0_l3_star" not in source
 
 
-def test_parallel_script_00l_region_uses_specular_editor_bounds_for_visual() -> None:
+def test_parallel_script_00l_region_uses_specular_two_theta_roi_for_visual() -> None:
     if not PARALLEL_SCRIPT_PATH.exists():
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
@@ -3778,9 +4081,10 @@ def test_parallel_script_00l_region_uses_specular_editor_bounds_for_visual() -> 
         )
     ]
 
-    assert "specular_visual_qz_bounds = specular_qz_bounds_for_l_window(" in detector_export
-    assert "l_min=qr_rod_specular_editor_l_min" in detector_export
-    assert "l_max=qr_rod_specular_editor_l_max" in detector_export
+    assert "specular_visual_qz_bounds = None" in detector_export
+    assert "specular_visual_qz_bounds = specular_qz_bounds_for_l_window(" not in detector_export
+    assert "l_min=qr_rod_specular_editor_l_min" not in detector_export
+    assert "l_max=qr_rod_specular_editor_l_max" not in detector_export
     assert "(specular_detector_qz_map >= float(specular_visual_qz_bounds[0]))" in detector_export
     assert "(specular_detector_qz_map <= float(specular_visual_qz_bounds[1]))" in detector_export
     assert "specular_detector_qz_values.size >= 2" in detector_export
@@ -3836,9 +4140,10 @@ def test_parallel_script_detector_hk0_delta_q_draw_uses_specular_style() -> None
     assert "fill_alpha=detector_region_specular_band_alpha" in specular_draw
     assert "boundary_alpha=detector_region_specular_boundary_alpha" in specular_draw
     assert "boundary_expand_px=detector_region_specular_boundary_expand_px" in specular_draw
-    assert "specular_roi_visual_mask = (" in source[
-        source.index("specular_delta_q_visual = None") : specular_draw_start
-    ]
+    assert (
+        "specular_roi_visual_mask = ("
+        in source[source.index("specular_delta_q_visual = None") : specular_draw_start]
+    )
 
 
 def test_parallel_script_hk0_delta_qr_does_not_replace_nonzero_delta_qr() -> None:
@@ -4082,7 +4387,7 @@ def test_parallel_script_final_rod_profile_figure_filters_empty_entries() -> Non
 
     assert helper_def < plot_keys < plot_entries < figure
     assert "plot_rod_entries = rod_entries + [specular_rod_entry]" not in source
-    assert "if (0, \"qz\") in drawable_profile_keys:" in source
+    assert 'if (0, "qz") in drawable_profile_keys:' in source
     assert "skipped HK=0 final figure row: no drawable real m=0/qz profile rows" in source
 
 
@@ -5140,6 +5445,11 @@ def test_parallel_script_unified_editor_has_region_controls() -> None:
         "l_max_box = TextBox(",
         "l_max_ax,",
         '"L Max"',
+        "theta_i_box = TextBox(",
+        "theta_i_ax,",
+        '"theta_i"',
+        "set_region_theta_initial",
+        "theta_initial_callback_kwargs(",
         "profile_update_callback",
         'region_control_state["rod_profile_table"]',
         "refresh_region_profile_table()",
@@ -5150,6 +5460,7 @@ def test_parallel_script_unified_editor_has_region_controls() -> None:
         assert token in function_source
     assert "region_state=region_control_state" in wrapper_source
     assert "profile_update_callback=profile_update_callback" in wrapper_source
+    assert "theta_initial_deg" in wrapper_source
 
 
 def test_parallel_script_qr_rod_peak_editor_draws_companion_figures_before_show(
@@ -5506,6 +5817,112 @@ def test_parallel_script_unified_editor_region_controls_update_preview(
     assert preview_calls[-1][3] == [1.0, 2.0]
 
 
+def test_parallel_script_nonzero_editor_theta_i_textbox_updates_profile_and_preview(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from matplotlib.backend_bases import KeyEvent
+
+    namespace = _script_functions(
+        "as_float",
+        "qr_rod_peak_edit_runtime_mode",
+        "show_qr_rod_peak_marker_popup",
+        "marker_table_with_specular_l_markers",
+        "qz_l_linear_coeff_from_marker_rows",
+        "marker_row_title",
+        "clean_marker_title",
+        "replace_qr_rod_marker_group_qz",
+        "positive_log_plot_values",
+        "apply_positive_log_y_axis",
+        "snap_qr_rod_markers_to_profile_peaks",
+        "l_tick_label",
+        "_safe_run_name",
+        "load_qr_rod_peak_edits",
+        "write_qr_rod_peak_edits",
+    )
+    show_editor = namespace["show_qr_rod_peak_marker_popup"]
+    region_state = {
+        "delta_qr": 0.01,
+        "l_min": 0.0,
+        "l_max": 3.0,
+        "theta_initial_deg": 6.0,
+    }
+    preview_calls: list[tuple[float, float, float, float | None]] = []
+    update_calls: list[tuple[float, float, float, float | None]] = []
+
+    def refresh_profiles(
+        delta_qr: float,
+        l_min: float,
+        l_max: float,
+        *,
+        theta_initial_deg: float | None = None,
+    ) -> pd.DataFrame:
+        update_calls.append((float(delta_qr), float(l_min), float(l_max), theta_initial_deg))
+        return pd.DataFrame(
+            {
+                "m": [1, 1],
+                "branch": ["+", "+"],
+                "qz_center": [1.0, 2.0],
+                "background_density": [10.0, 20.0],
+            }
+        )
+
+    def update_preview(
+        *,
+        delta_qr: float,
+        l_min: float,
+        l_max: float,
+        marker_table: pd.DataFrame,
+        theta_initial_deg: float | None = None,
+    ) -> None:
+        preview_calls.append((float(delta_qr), float(l_min), float(l_max), theta_initial_deg))
+
+    def fake_show(*_args, **_kwargs) -> None:
+        fig = plt.gcf()
+        boxes = {
+            getattr(getattr(widget, "label", None), "get_text", lambda: "")(): widget
+            for widget in list(getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets"))
+            if type(widget).__name__ == "TextBox"
+        }
+        assert "theta_i" in boxes
+        boxes["theta_i"].set_val("11.25")
+        fig.canvas.callbacks.process(
+            "key_press_event",
+            KeyEvent("key_press_event", fig.canvas, key="enter"),
+        )
+
+    marker_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_marker": 1.0, "fit_l": 1.0, "display_l": 1.0},
+            {"m": 1, "branch": "+", "qz_marker": 2.0, "fit_l": 2.0, "display_l": 2.0},
+        ]
+    )
+    rod_profile_table = pd.DataFrame(
+        {
+            "m": [1, 1],
+            "branch": ["+", "+"],
+            "qz_center": [1.0, 2.0],
+            "background_density": [1.0, 2.0],
+        }
+    )
+
+    monkeypatch.setattr(plt, "show", fake_show)
+    _edited, accepted = show_editor(
+        marker_table,
+        rod_profile_table,
+        backend_name="TkAgg",
+        region_state=region_state,
+        profile_update_callback=refresh_profiles,
+        region_preview_update_callback=update_preview,
+        editor_phase="nonzero",
+    )
+
+    assert accepted is True
+    assert region_state["theta_initial_deg"] == pytest.approx(11.25)
+    assert update_calls == [(0.01, 0.0, 3.0, 11.25)]
+    assert preview_calls
+    assert preview_calls[-1] == (0.01, 0.0, 3.0, 11.25)
+
+
 def test_parallel_script_unified_editor_l_bounds_reject_invalid_profile_refresh(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5589,7 +6006,7 @@ def test_parallel_script_unified_editor_l_bounds_reject_invalid_profile_refresh(
     assert refreshed["background_density"].tolist() == [1.0, 2.0]
 
 
-def test_parallel_script_unified_editor_l_bounds_keep_specular_rows_when_refresh_lacks_hk0(
+def test_parallel_script_unified_editor_roi_refresh_keeps_specular_rows_when_refresh_lacks_hk0(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from matplotlib.backend_bases import KeyEvent
@@ -5628,13 +6045,18 @@ def test_parallel_script_unified_editor_l_bounds_keep_specular_rows_when_refresh
 
     def fake_show(*_args, **_kwargs) -> None:
         fig = plt.gcf()
+        boxes = {
+            getattr(getattr(widget, "label", None), "get_text", lambda: "")(): widget
+            for widget in list(getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets"))
+            if type(widget).__name__ == "TextBox"
+        }
+        assert "L Min" not in boxes
+        assert "L Max" not in boxes
         for widget in list(getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets")):
             widget_type = type(widget).__name__
             label = getattr(getattr(widget, "label", None), "get_text", lambda: "")()
-            if widget_type == "TextBox" and label == "L Min":
-                widget.set_val("1.6")
-            elif widget_type == "TextBox" and label == "L Max":
-                widget.set_val("2.8")
+            if widget_type == "TextBox" and label == "2theta Min":
+                widget.set_val("8")
         fig.canvas.callbacks.process(
             "key_press_event",
             KeyEvent("key_press_event", fig.canvas, key="enter"),
@@ -5666,17 +6088,16 @@ def test_parallel_script_unified_editor_l_bounds_keep_specular_rows_when_refresh
     )
 
     assert accepted is True
-    assert update_calls == [(0.01, 1.5, 3.0), (0.01, 1.6, 2.8)]
+    assert update_calls == [(0.01, 1.5, 3.0), (0.01, 1.5, 3.0), (0.01, 1.5, 3.0)]
     assert "profile_update_error" in region_state
     refreshed = pd.DataFrame(region_state["rod_profile_table"])
     assert refreshed["m"].astype(int).tolist() == [0, 0, 0]
     assert refreshed["background_density"].tolist() == [4.0, 8.0, 5.0]
 
 
-def test_parallel_script_hk0_l_min_submit_defers_profile_refresh_until_accept(
+def test_parallel_script_hk0_two_theta_submit_refreshes_without_l_controls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from matplotlib.axes import Axes
     from matplotlib.backend_bases import KeyEvent
 
     namespace = _script_functions(
@@ -5697,19 +6118,34 @@ def test_parallel_script_hk0_l_min_submit_defers_profile_refresh_until_accept(
         "write_qr_rod_peak_edits",
     )
     show_editor = namespace["show_qr_rod_peak_marker_popup"]
-    region_state = {"delta_qr": 0.01, "l_min": 1.5, "l_max": 3.0}
-    update_calls: list[tuple[float, float, float]] = []
-    preview_calls: list[tuple[float, float, float]] = []
+    region_state = {
+        "delta_qr": 0.01,
+        "l_min": 1.5,
+        "l_max": 3.0,
+        "two_theta_min": 7.0,
+        "two_theta_max": 18.0,
+    }
+    update_calls: list[tuple[float, float, float, float, float]] = []
+    preview_calls: list[tuple[float, float, float, float, float]] = []
     observed: dict[str, object] = {}
-    clear_calls: list[object] = []
-    original_clear = Axes.clear
 
-    def counting_clear(self, *args, **kwargs):
-        clear_calls.append(self)
-        return original_clear(self, *args, **kwargs)
-
-    def refresh_profiles(delta_qr: float, l_min: float, l_max: float) -> pd.DataFrame:
-        update_calls.append((float(delta_qr), float(l_min), float(l_max)))
+    def refresh_profiles(
+        delta_qr: float,
+        l_min: float,
+        l_max: float,
+        *,
+        two_theta_min: float,
+        two_theta_max: float,
+    ) -> pd.DataFrame:
+        update_calls.append(
+            (
+                float(delta_qr),
+                float(l_min),
+                float(l_max),
+                float(two_theta_min),
+                float(two_theta_max),
+            )
+        )
         return pd.DataFrame(
             [
                 {"m": 0, "branch": "qz", "qz_center": 1.8, "background_density": 6.0},
@@ -5723,9 +6159,19 @@ def test_parallel_script_hk0_l_min_submit_defers_profile_refresh_until_accept(
         delta_qr: float,
         l_min: float,
         l_max: float,
+        two_theta_min: float,
+        two_theta_max: float,
         marker_table: pd.DataFrame,
     ) -> None:
-        preview_calls.append((float(delta_qr), float(l_min), float(l_max)))
+        preview_calls.append(
+            (
+                float(delta_qr),
+                float(l_min),
+                float(l_max),
+                float(two_theta_min),
+                float(two_theta_max),
+            )
+        )
 
     def fake_show(*_args, **_kwargs) -> None:
         fig = plt.gcf()
@@ -5736,16 +6182,15 @@ def test_parallel_script_hk0_l_min_submit_defers_profile_refresh_until_accept(
             for widget in list(getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets"))
             if type(widget).__name__ == "TextBox"
         }
-        initial_clear_count = len(clear_calls)
-        boxes["L Min"].set_val("1.8")
+        assert "L Min" not in boxes
+        assert "L Max" not in boxes
+        boxes["2theta Min"].set_val("9")
         observed["after_submit_xlim"] = hk0.get_xlim()
-        observed["clear_count_after_submit"] = len(clear_calls)
         observed["update_calls_after_submit"] = list(update_calls)
         fig.canvas.callbacks.process(
             "key_press_event",
             KeyEvent("key_press_event", fig.canvas, key="enter"),
         )
-        observed["initial_clear_count"] = initial_clear_count
 
     marker_table = pd.DataFrame(
         [
@@ -5761,7 +6206,6 @@ def test_parallel_script_hk0_l_min_submit_defers_profile_refresh_until_accept(
         ]
     )
 
-    monkeypatch.setattr(Axes, "clear", counting_clear)
     monkeypatch.setattr(plt, "show", fake_show)
     _edited, accepted = show_editor(
         marker_table,
@@ -5774,12 +6218,20 @@ def test_parallel_script_hk0_l_min_submit_defers_profile_refresh_until_accept(
     )
 
     assert accepted is True
-    assert region_state["l_min"] == pytest.approx(1.8)
-    assert preview_calls == [(0.01, 1.5, 3.0), (0.01, 1.8, 3.0)]
-    assert observed["after_submit_xlim"] == pytest.approx((1.8, 3.0))
-    assert observed["clear_count_after_submit"] == observed["initial_clear_count"]
-    assert observed["update_calls_after_submit"] == [(0.01, 1.5, 3.0)]
-    assert update_calls == [(0.01, 1.5, 3.0), (0.01, 1.8, 3.0)]
+    assert region_state["l_min"] == pytest.approx(1.5)
+    assert region_state["two_theta_min"] == pytest.approx(9.0)
+    assert preview_calls == [(0.01, 1.5, 3.0, 7.0, 18.0), (0.01, 1.5, 3.0, 9.0, 18.0)]
+    submitted_xmin, submitted_xmax = observed["after_submit_xlim"]
+    assert 1.5 < submitted_xmin < 1.8
+    assert 3.0 <= submitted_xmax < 3.2
+    assert observed["update_calls_after_submit"] == [
+        (0.01, 1.5, 3.0, 7.0, 18.0),
+        (0.01, 1.5, 3.0, 9.0, 18.0),
+    ]
+    assert update_calls == [
+        (0.01, 1.5, 3.0, 7.0, 18.0),
+        (0.01, 1.5, 3.0, 9.0, 18.0),
+    ]
     refreshed = pd.DataFrame(region_state["rod_profile_table"])
     assert refreshed["qz_center"].tolist() == pytest.approx([1.8, 2.4, 3.0])
 
@@ -6345,6 +6797,8 @@ def test_parallel_script_hk0_roi_textboxes_update_specular_state(
             for widget in list(getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets"))
         )
         assert "Theta i" not in boxes
+        for label in ("L Min", "L Max"):
+            assert label not in boxes
         for label in ("Phi Min", "Phi Max", "2theta Min", "2theta Max"):
             assert label in boxes
         boxes["Phi Min"].set_val("-8")
@@ -6491,6 +6945,7 @@ def test_parallel_script_qr_rod_peak_editor_passes_marker_table_to_profile_refre
     show_editor = namespace["show_qr_rod_peak_marker_popup"]
     received_marker_tables: list[pd.DataFrame] = []
     received_l_bounds: list[tuple[float, float]] = []
+    received_theta_mins: list[float] = []
 
     def refresh_profiles(
         delta_qr: float,
@@ -6498,10 +6953,12 @@ def test_parallel_script_qr_rod_peak_editor_passes_marker_table_to_profile_refre
         l_max: float,
         *,
         marker_table: pd.DataFrame,
+        two_theta_min: float,
         editor_phase: object,
     ) -> pd.DataFrame:
         received_marker_tables.append(pd.DataFrame(marker_table).copy())
         received_l_bounds.append((float(l_min), float(l_max)))
+        received_theta_mins.append(float(two_theta_min))
         assert float(delta_qr) == pytest.approx(0.01)
         assert str(editor_phase) == "specular"
         return pd.DataFrame(
@@ -6513,11 +6970,18 @@ def test_parallel_script_qr_rod_peak_editor_passes_marker_table_to_profile_refre
 
     def fake_show(*_args, **_kwargs) -> None:
         fig = plt.gcf()
+        boxes = {
+            getattr(getattr(widget, "label", None), "get_text", lambda: "")(): widget
+            for widget in list(getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets"))
+            if type(widget).__name__ == "TextBox"
+        }
+        assert "L Min" not in boxes
+        assert "L Max" not in boxes
         for widget in list(getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets")):
             widget_type = type(widget).__name__
             label = getattr(getattr(widget, "label", None), "get_text", lambda: "")()
-            if widget_type == "TextBox" and label == "L Min":
-                widget.set_val("1.6")
+            if widget_type == "TextBox" and label == "2theta Min":
+                widget.set_val("8")
         fig.canvas.callbacks.process(
             "key_press_event",
             KeyEvent("key_press_event", fig.canvas, key="enter"),
@@ -6547,7 +7011,8 @@ def test_parallel_script_qr_rod_peak_editor_passes_marker_table_to_profile_refre
     )
 
     assert accepted is True
-    assert received_l_bounds == [(1.5, 3.0), (1.6, 3.0)]
+    assert received_l_bounds == [(1.5, 3.0), (1.5, 3.0)]
+    assert received_theta_mins == pytest.approx([5.0, 8.0])
     assert len(received_marker_tables) == 2
     assert all(table is not marker_table for table in received_marker_tables)
     assert received_marker_tables[-1]["qz_marker"].tolist() == pytest.approx([1.5, 3.0])
@@ -6907,9 +7372,15 @@ def test_parallel_script_unified_editor_result_updates_final_profile_table() -> 
     assert 'qr_rod_specular_editor_result.get("rod_profile_table", rod_profile_table)' in section
     assert "merge_qr_rod_editor_phase_table(" in section
     assert "rod_profile_table_for_l_window(" in section
-    assert "specular_l_min=qr_rod_specular_editor_l_min" in section
-    assert "specular_editor_l_min" in section
-    assert "specular_editor_l_max" in section
+    assert "specular_l_min=qr_rod_specular_editor_l_min" not in section
+    assert '"theta_initial_deg": float(qr_rod_editor_theta_initial_deg)' in section
+    assert "editor_theta_initial_deg" in section
+    assert "specular_editor_l_min" not in section
+    assert "specular_editor_l_max" not in section
+    assert (
+        "qr_map, qz_map, valid_q_map = detector_q_maps_for_theta_initial("
+        "qr_rod_editor_theta_initial_deg)"
+    ) in source
     assert "delta_qr_override=delta_qr_value" in source
     assert nonzero_call < specular_call < combined_result < cache_key_call < final_fit_call
 
@@ -7018,8 +7489,9 @@ def test_parallel_script_detector_qr_preview_is_passed_to_unified_editor() -> No
     assert "preview_overlay_artists" in preview_helper_section
     assert ".remove()" in preview_helper_section
     assert "preview_fig.canvas.draw_idle()" in preview_helper_section
-    assert "l_bounds=qr_rod_l_bounds_for_group(" in preview_helper_section
-    assert "prefer_fallback=l_bounds is not None" in preview_helper_section
+    assert "l_bounds=qr_rod_l_bounds_for_group(" not in preview_helper_section
+    assert "prefer_fallback=l_bounds is not None" not in preview_helper_section
+    assert "specular_preview_roi_mask = detector_phi_two_theta_roi_mask(" in preview_helper_section
     assert "profile_mask_override=specular_profile_mask_override" not in preview_helper_section
     assert "override_visual = qr_rod_profile_mask_visual_payload(" not in preview_helper_section
 
@@ -7046,7 +7518,7 @@ def test_parallel_script_qr_rod_refresh_callbacks_filter_editor_phase() -> None:
     assert builder_call < base_loop
     assert "if m_int == 0:" in recompute_source
     assert "qr_rod_editor_phase_matches(m_int, editor_phase)" in recompute_source
-    assert 'delta_qr_cache_value = (\n        "specular_roi"' in recompute_source
+    assert 'delta_qr_cache_value = "specular_roi" if specular_phase' in recompute_source
     assert "else round(float(delta_qr), 12)" in recompute_source
     assert "profile_mask_override=specular_profile_mask_override" not in recompute_source
     assert "qr_integration_source_override=(" not in recompute_source
@@ -7195,7 +7667,7 @@ def test_parallel_script_qr_rod_peak_editor_shows_hk0_in_log_view() -> None:
     assert 'ax.set_yscale("linear")' in function_source
 
 
-def test_parallel_script_qr_rod_peak_editor_hk0_uses_specular_l_bounds(
+def test_parallel_script_qr_rod_peak_editor_hk0_uses_specular_rows_without_l_controls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     namespace = _script_functions(
@@ -7215,8 +7687,6 @@ def test_parallel_script_qr_rod_peak_editor_hk0_uses_specular_l_bounds(
         "load_qr_rod_peak_edits",
         "write_qr_rod_peak_edits",
     )
-    namespace["SPECULAR_QR_ROD_L_MIN"] = 1.5
-    namespace["SPECULAR_QR_ROD_L_MAX"] = 8.0
     namespace["PBI2_ROD_PROFILE_L_AXIS_MAX"] = 3.0
     namespace["IS_PBI2_SAMPLE_STEM"] = True
     show_editor = namespace["show_qr_rod_peak_marker_popup"]
@@ -7224,13 +7694,17 @@ def test_parallel_script_qr_rod_peak_editor_hk0_uses_specular_l_bounds(
 
     def fake_show(*_args, **_kwargs) -> None:
         fig = plt.gcf()
+        boxes = {
+            getattr(getattr(widget, "label", None), "get_text", lambda: "")(): widget
+            for widget in list(getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets"))
+            if type(widget).__name__ == "TextBox"
+        }
+        assert "L Min" not in boxes
+        assert "L Max" not in boxes
         panels = {ax.get_title(): ax for ax in fig.axes if ax.get_xlabel() == "L"}
         hk0 = panels["HK=0 qz"]
-        nonzero = panels["HK=1 +"]
         observed["hk0_xlim"] = hk0.get_xlim()
         observed["hk0_yscale"] = hk0.get_yscale()
-        observed["nonzero_xlim"] = nonzero.get_xlim()
-        observed["nonzero_yscale"] = nonzero.get_yscale()
         plt.close(fig)
 
     marker_table = pd.DataFrame(
@@ -7258,13 +7732,14 @@ def test_parallel_script_qr_rod_peak_editor_hk0_uses_specular_l_bounds(
         rod_profile_table,
         backend_name="TkAgg",
         region_state={"delta_qr": 0.01, "l_min": 0.5, "l_max": 3.0},
+        editor_phase="specular",
     )
 
     assert accepted is True
-    assert observed["hk0_xlim"] == pytest.approx((1.5, 3.0))
+    hk0_xmin, hk0_xmax = observed["hk0_xlim"]
+    assert 1.0 < hk0_xmin < 1.5
+    assert 3.0 <= hk0_xmax < 3.2
     assert observed["hk0_yscale"] == "log"
-    assert observed["nonzero_xlim"] == pytest.approx((0.5, 3.0))
-    assert observed["nonzero_yscale"] == "linear"
 
 
 def test_parallel_script_qr_rod_peak_editor_filters_phases_and_preserves_rows(
