@@ -18711,7 +18711,7 @@ def _build_trial_qr_source_rows_payload(
         cached = dict(cache[cache_key])
         cached["source_rows_rebuilt_or_reused"] = "reused_for_same_params_signature"
         cached["reuse_valid_for_same_params_signature"] = True
-        cached["objective_cache_mode"] = "full_simulation"
+        cached.setdefault("objective_cache_mode", "full_simulation")
         cached["objective_cache_hit"] = True
         cached["objective_cache_reject_reason"] = None
         cached["objective_process_peaks_called"] = False

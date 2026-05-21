@@ -9,6 +9,16 @@ Last updated: 2026-05-21
 
 ## Summary
 
+2026-05-21 locked Qr/Qz fit-speed slice: geometry-fit trial source rows now
+prefer zero-intensity required-pair ghost rows in caked/Qr fit space. When
+analytic ghost completion is enough, the trial builder skips source-row rebuild
+and reports `objective_cache_mode=ghost_only` with
+`objective_process_peaks_called=False`. When a rebuild is still needed, the
+trial route reports `objective_cache_mode=targeted_required_pairs`, keeps the
+required-branch filter, and no longer falls back to a broad fresh simulation if
+targeted ghost filtering is unavailable. GUI and headless paths both keep
+required-branch filtering for trial source-row rebuilds.
+
 New4 Mode A dynamic/refined Qr fitting is now guarded at the actual optimizer
 prediction path. For saved state `C:\Users\Kenpo\.local\share\ra_sim\new4.json`
 and background index `0`, all 14 first-image paired Qr branches resolve to

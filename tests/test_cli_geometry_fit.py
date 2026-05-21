@@ -61,6 +61,14 @@ def test_shared_headless_per_background_projector_accepts_caked_kwargs() -> None
     assert "strict_caked_projection: bool = True" in source
 
 
+def test_headless_trial_source_rebuild_keeps_required_branch_filter() -> None:
+    source = inspect.getsource(headless_geometry_fit.run_headless_geometry_fit)
+
+    assert 'consumer_name) != "geometry_fit_trial_source_rows"' not in source
+    assert 'str(preflight_mode or "full") == "manual_geometry_targeted"' in source
+    assert "_filter_hit_tables_for_required_branch_groups(" in source
+
+
 def test_saved_manual_caked_defaults_infer_bounded_point_only_policy() -> None:
     active_vars, seed_policy, inferred = (
         headless_geometry_fit._infer_headless_saved_manual_caked_defaults(

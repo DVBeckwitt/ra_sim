@@ -5600,10 +5600,7 @@ def run_headless_geometry_fit(
                 hit_tables_local = diffraction.intersection_cache_to_hit_tables(table_list)
             else:
                 hit_tables_local = _copy_hit_tables(table_list)
-            if (
-                str(preflight_mode or "full") == "manual_geometry_targeted"
-                and str(consumer or consumer_name) != "geometry_fit_trial_source_rows"
-            ):
+            if str(preflight_mode or "full") == "manual_geometry_targeted":
                 hit_tables_local = _filter_hit_tables_for_required_branch_groups(
                     hit_tables_local,
                     required_branch_group_keys=required_branch_group_keys,

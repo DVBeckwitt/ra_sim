@@ -5706,7 +5706,7 @@ def test_qr_caked_objective_prefers_live_sim_visual_caked_over_point_only_detect
         {
             "dataset_ctx": _point_only_qr_dataset_ctx(source_rows_builder, projector),
             "hit_tables": (),
-            "sim_buffer": np.zeros((4000, 4000), dtype=np.float64),
+            "sim_buffer": np.zeros((1, 1), dtype=np.float64),
             "image_size": 4000,
             "fit_center": [2000.0, 2000.0],
             "detector_distance": 0.1,
@@ -6303,6 +6303,70 @@ def test_qr_fit_point_only_projection_falls_back_to_source_rows_after_hit_table_
     assert prediction["sim_nominal_caked_deg"] == pytest.approx(list(expected))
     assert prediction["sim_refined_caked_deg"] == pytest.approx(list(expected))
     assert prediction["point_only_detector_coordinate_source"] == "live_caked_source"
+
+
+def test_qr_fit_point_only_projection_preserves_ghost_only_source_rows_payload() -> None:
+    source_rows_builder_calls = 0
+
+    def source_rows_builder(*, local_params=None):
+        nonlocal source_rows_builder_calls
+        source_rows_builder_calls += 1
+        two_theta, phi = _point_only_source_from_params(local_params)
+        payload = _locked_qr_source_rows_payload([_point_only_dynamic_qr_row(two_theta, phi)])
+        payload["source"] = "geometry_fit_trial_ghost_only_required_pairs"
+        payload["source_rows_rebuilt_or_reused"] = "ghost_only_for_trial_params"
+        payload["objective_cache_mode"] = "ghost_only"
+        payload["objective_process_peaks_called"] = False
+        return payload
+
+    def projector(cols, rows, *, local_params=None, **_kwargs):
+        raise AssertionError("source-row caked payload should not need detector projection")
+
+    locked = _locked_qr_fixed_source_entry()
+    prediction_source_rows_cache: dict[object, object] = {}
+    fit_context = {
+        "dataset_ctx": _point_only_qr_dataset_ctx(source_rows_builder, projector),
+        "hit_tables": [np.asarray([[1.0, 21.0, 22.0, 10.0, 999.0, 0.0, 0.0]], dtype=np.float64)],
+        "sim_buffer": opt._fit_hit_table_only_sim_buffer(),
+        "image_size": 30,
+        "fit_center": [15.0, 15.0],
+        "detector_distance": 0.1,
+        "pixel_size": 1.0,
+        "prediction_source_rows_cache": prediction_source_rows_cache,
+        "_qr_fit_point_only_projection": True,
+    }
+    prediction = opt._resolve_qr_fit_prediction_from_trial_params(
+        locked,
+        {"center_x": 4.0, "theta_initial": 0.5},
+        fit_context,
+        locked,
+    )
+    cached_prediction = opt._resolve_qr_fit_prediction_from_trial_params(
+        locked,
+        {"center_x": 4.0, "theta_initial": 0.5},
+        fit_context,
+        locked,
+    )
+
+    expected = _point_only_source_from_params({"center_x": 4.0, "theta_initial": 0.5})
+    assert source_rows_builder_calls == 1
+    assert prediction["available"] is True
+    assert prediction["trial_source_rows_source"] == "geometry_fit_trial_ghost_only_required_pairs"
+    assert prediction["source_rows_rebuilt_or_reused"] == "ghost_only_for_trial_params"
+    assert prediction["objective_cache_mode"] == "ghost_only"
+    assert prediction["objective_process_peaks_called"] is False
+    assert prediction["sim_nominal_caked_deg"] == pytest.approx(list(expected))
+    assert prediction["sim_refined_caked_deg"] == pytest.approx(list(expected))
+    assert prediction["point_only_detector_coordinate_source"] == "live_caked_source"
+    assert cached_prediction["available"] is True
+    assert cached_prediction["trial_source_rows_source"] == (
+        "geometry_fit_trial_ghost_only_required_pairs"
+    )
+    assert cached_prediction["source_rows_rebuilt_or_reused"] == (
+        "reused_for_same_params_signature"
+    )
+    assert cached_prediction["objective_cache_mode"] == "ghost_only"
+    assert cached_prediction["objective_process_peaks_called"] is False
 
 
 def test_qr_fit_point_only_projection_rejects_stale_hit_table_recovery_for_source_rows() -> None:

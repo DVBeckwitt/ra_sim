@@ -28297,9 +28297,7 @@ def test_qr_fit_trial_source_rows_builder_does_not_materialize_saved_required_co
     assert ((-1, 0, 16), 1, q16_key) not in coverage_keys
 
 
-def test_geometry_fit_trial_source_rows_use_click_pick_caked_candidate_pool_for_required_pairs() -> (
-    None
-):
+def test_geometry_fit_trial_source_rows_use_ghost_only_before_click_pick_candidate_pool() -> None:
     q003_key = ("q_group", "primary", 0, 3)
     q16_key = ("q_group", "primary", 1, 16)
     saved_entries = [
@@ -28390,7 +28388,7 @@ def test_geometry_fit_trial_source_rows_use_click_pick_caked_candidate_pool_for_
     dataset = geometry_fit.build_geometry_manual_fit_dataset(
         0,
         theta_base=1.5,
-        base_fit_params={"theta_offset": 0.0},
+        base_fit_params={"a": 10.0, "c": 40.0, "lambda": 0.1, "theta_offset": 0.0},
         manual_dataset_bindings=bindings,
         orientation_cfg={},
     )
@@ -28411,15 +28409,230 @@ def test_geometry_fit_trial_source_rows_use_click_pick_caked_candidate_pool_for_
     ) in coverage_keys
     assert ((-1, 0, 16), 1, q16_key) in coverage_keys
     assert diagnostics["missing_dynamic_trial_source_row_count"] == 0
+    assert payload["source"] == "geometry_fit_trial_ghost_only_required_pairs"
+    assert payload["objective_cache_mode"] == "ghost_only"
+    assert payload["objective_process_peaks_called"] is False
+    assert diagnostics["ghost_only_required_pair_count"] == 2
+    assert diagnostics["ghost_only_missing_pair_count"] == 0
     assert stages["source_rows_before_rebinding"]["dynamic_required_pair_count"] == 2
     assert stages["source_rows_before_rebinding"]["missing_required_pair_count"] == 0
     assert stages["source_rows_after_rebinding"]["dynamic_required_pair_count"] == 2
-    assert stages["caked_click_pick_candidate_inventory"]["dynamic_required_pair_count"] == 2
-    assert diagnostics["caked_click_pick_candidate_inventory"]["supplemental_row_count"] == 2
+    assert stages["caked_click_pick_candidate_inventory"]["dynamic_required_pair_count"] == 0
+    assert diagnostics["caked_click_pick_candidate_inventory"]["raw_candidate_row_count"] == 0
+    assert diagnostics["caked_click_pick_candidate_inventory"]["projected_candidate_row_count"] == 0
     assert all(
         row.get("coordinate_provenance") == "trial_geometry_projection"
         for row in rows
         if row.get("pair_id") in {"bg0:pair0", "bg0:pair1"}
+    )
+    assert all(
+        row.get("is_ghost_ray") is True
+        for row in rows
+        if row.get("pair_id") in {"bg0:pair0", "bg0:pair1"}
+    )
+
+
+def test_geometry_fit_trial_source_rows_use_ghost_only_required_pairs_without_full_simulation() -> (
+    None
+):
+    q11_key = ("q_group", "primary", 1, 1)
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "q_group_key": q11_key,
+            "source_table_index": 11,
+            "source_reflection_index": 11,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 110,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "hkl": (-1, 0, 1),
+            "x": 30.0,
+            "y": 40.0,
+            "background_two_theta_deg": 8.0,
+            "background_phi_deg": -35.0,
+            "caked_x": 8.0,
+            "caked_y": -35.0,
+        },
+        {
+            "pair_id": "bg0:pair1",
+            "q_group_key": q11_key,
+            "source_table_index": 11,
+            "source_reflection_index": 11,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 111,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 1),
+            "x": 50.0,
+            "y": 60.0,
+            "background_two_theta_deg": 8.0,
+            "background_phi_deg": 35.0,
+            "caked_x": 8.0,
+            "caked_y": 35.0,
+        },
+    ]
+    unrelated_rows = [
+        _targeted_source_row(
+            hkl=(2, 0, 2),
+            branch_index=1,
+            q_group_key=("q_group", "primary", 2, 2),
+            sim_col=22.0,
+            sim_row=22.0,
+            source_peak_index=1,
+        )
+    ]
+    rebuild_calls: list[dict[str, object]] = []
+    simulated_peak_calls: list[dict[str, object]] = []
+
+    def _rebuild(_background_index, _params, **kwargs):
+        rebuild_calls.append(dict(kwargs))
+        return [dict(row) for row in unrelated_rows]
+
+    def _simulated_peaks_for_params(_params, *, prefer_cache):
+        simulated_peak_calls.append({"prefer_cache": bool(prefer_cache)})
+        return [dict(row) for row in unrelated_rows]
+
+    bindings = replace(
+        _make_legacy_dense_manual_dataset_bindings(
+            saved_entries=saved_entries,
+            simulated_rows=unrelated_rows,
+            refresh_pairs=False,
+        ),
+        geometry_manual_rebuild_source_rows_for_background=_rebuild,
+        geometry_manual_simulated_peaks_for_params=_simulated_peaks_for_params,
+        pick_uses_caked_space=lambda: True,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"a": 10.0, "c": 10.0, "lambda": 1.0, "theta_offset": 0.0},
+        manual_dataset_bindings=bindings,
+        orientation_cfg={},
+    )
+    payload = dataset["spec"]["qr_fit_trial_source_rows_builder"](
+        local_params={"theta_offset": 0.25}
+    )
+    rows = [dict(row) for row in payload["rows"] if isinstance(row, Mapping)]
+    coverage_keys = {
+        key for row in rows for key in geometry_fit._geometry_fit_source_coverage_alias_keys(row)
+    }
+    diagnostics = payload["source_diagnostics"]
+
+    assert rebuild_calls == []
+    assert all(call["prefer_cache"] is True for call in simulated_peak_calls)
+    assert payload["available"] is True
+    assert payload["source"] == "geometry_fit_trial_ghost_only_required_pairs"
+    assert payload["source_rows_rebuilt_or_reused"] == "ghost_only_for_trial_params"
+    assert payload["objective_cache_mode"] == "ghost_only"
+    assert payload["objective_process_peaks_called"] is False
+    assert payload["row_count"] == 2
+    assert ((-1, 0, 1), 0, q11_key) in coverage_keys
+    assert ((-1, 0, 1), 1, q11_key) in coverage_keys
+    assert ((2, 0, 2), 1, ("q_group", "primary", 2, 2)) not in coverage_keys
+    assert diagnostics["ghost_only_required_pair_count"] == 2
+    assert diagnostics["ghost_only_missing_pair_count"] == 0
+    assert diagnostics["missing_dynamic_trial_source_row_count"] == 0
+    assert all(row.get("is_ghost_ray") is True for row in rows)
+    assert all(float(row.get("intensity", 1.0)) == 0.0 for row in rows)
+
+
+def test_geometry_fit_trial_source_rows_fail_closed_when_required_ghost_rows_unavailable() -> None:
+    q11_key = ("q_group", "primary", 1, 1)
+    saved_entries = [
+        {
+            "pair_id": "bg0:pair0",
+            "q_group_key": q11_key,
+            "source_table_index": 11,
+            "source_reflection_index": 11,
+            "source_row_index": 110,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "hkl": (-1, 0, 1),
+            "x": 30.0,
+            "y": 40.0,
+            "background_two_theta_deg": 8.0,
+            "background_phi_deg": -35.0,
+            "caked_x": 8.0,
+            "caked_y": -35.0,
+        },
+        {
+            "pair_id": "bg0:pair1",
+            "q_group_key": q11_key,
+            "source_table_index": 11,
+            "source_reflection_index": 11,
+            "source_row_index": 111,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "hkl": (-1, 0, 1),
+            "x": 50.0,
+            "y": 60.0,
+            "background_two_theta_deg": 8.0,
+            "background_phi_deg": 35.0,
+            "caked_x": 8.0,
+            "caked_y": 35.0,
+        },
+    ]
+    unrelated_rows = [
+        _targeted_source_row(
+            hkl=(2, 0, 2),
+            branch_index=1,
+            q_group_key=("q_group", "primary", 2, 2),
+            sim_col=22.0,
+            sim_row=22.0,
+            source_peak_index=1,
+        )
+    ]
+    rebuild_calls: list[dict[str, object]] = []
+    simulated_peak_calls: list[dict[str, object]] = []
+
+    def _rebuild(_background_index, _params, **kwargs):
+        rebuild_calls.append(dict(kwargs))
+        return [dict(row) for row in unrelated_rows]
+
+    def _simulated_peaks_for_params(_params, *, prefer_cache):
+        simulated_peak_calls.append({"prefer_cache": bool(prefer_cache)})
+        return [dict(row) for row in unrelated_rows]
+
+    bindings = replace(
+        _make_legacy_dense_manual_dataset_bindings(
+            saved_entries=saved_entries,
+            simulated_rows=unrelated_rows,
+            refresh_pairs=False,
+        ),
+        geometry_manual_rebuild_source_rows_for_background=_rebuild,
+        geometry_manual_simulated_peaks_for_params=_simulated_peaks_for_params,
+        pick_uses_caked_space=lambda: True,
+    )
+
+    dataset = geometry_fit.build_geometry_manual_fit_dataset(
+        0,
+        theta_base=1.5,
+        base_fit_params={"theta_offset": 0.0},
+        manual_dataset_bindings=bindings,
+        orientation_cfg={},
+    )
+    payload = dataset["spec"]["qr_fit_trial_source_rows_builder"](
+        local_params={"theta_offset": 0.25}
+    )
+    diagnostics = payload["source_diagnostics"]
+
+    assert len(rebuild_calls) == 1
+    assert rebuild_calls[0]["consumer"] == "geometry_fit_trial_source_rows"
+    assert len(rebuild_calls[0]["required_pairs"]) == 2
+    assert all(call["prefer_cache"] is True for call in simulated_peak_calls)
+    assert payload["available"] is False
+    assert payload["source"] == "geometry_manual_rebuild_source_rows_for_background"
+    assert payload["objective_cache_mode"] == "targeted_required_pairs"
+    assert payload["objective_process_peaks_called"] is False
+    assert diagnostics["ghost_only_required_pair_count"] == 0
+    assert diagnostics["ghost_only_missing_pair_count"] == 2
+    assert (
+        diagnostics["caked_click_pick_candidate_inventory"]["skip_reason"]
+        == "ghost_only_candidate_pool_disabled"
     )
 
 
@@ -29560,6 +29773,69 @@ def test_targeted_fresh_simulation_requires_required_branch_group_filter_support
         "simulator_filter_not_supported"
     )
     assert result.diagnostics["full_fresh_simulation_fallback_used"] is True
+    assert result.diagnostics["targeted_performance_gate"]["ok"] is False
+
+
+def test_trial_source_rows_do_not_fallback_to_full_simulation_without_targeted_support() -> None:
+    required_pairs = [
+        _targeted_required_pair(
+            pair_id="bg0:pair0",
+            hkl=(1, 0, 0),
+            branch_index=1,
+            q_group_key=("q", 1),
+        )
+    ]
+    simulate_calls = 0
+
+    def _simulate_without_targeting(_params):
+        nonlocal simulate_calls
+        simulate_calls += 1
+        return [object()]
+
+    result = geometry_fit.rebuild_geometry_fit_source_rows(
+        background_index=0,
+        background_label="bg0.osc",
+        params_local={"a": 4.143, "c": 28.64},
+        consumer="geometry_fit_trial_source_rows",
+        prior_diagnostics={"status": "snapshot_empty"},
+        requested_signature=("sig", 0),
+        requested_signature_summary="sig-summary",
+        can_use_live_runtime_cache=False,
+        build_live_rows=None,
+        get_memory_intersection_cache=lambda: [],
+        load_logged_intersection_cache_metadata=lambda: None,
+        load_logged_intersection_cache=lambda: pytest.fail(
+            "trial rows without targeted support should not load logged cache"
+        ),
+        logged_cache_matches_params=lambda _meta, _params: {
+            "matches": False,
+            "mismatch_reason": "empty_cache",
+            "heavy_hit_table_load_attempted": False,
+        },
+        build_source_rows_from_hit_tables=lambda _tables, **_kwargs: pytest.fail(
+            "no full hit tables should be built for trial source rows"
+        ),
+        simulate_hit_tables=_simulate_without_targeting,
+        last_runtime_simulation_diagnostics=lambda: {"status": "success"},
+        project_rows=lambda rows: list(rows or ()),
+        required_pairs=required_pairs,
+        required_manual_fit_targets=geometry_fit.collect_geometry_fit_required_manual_fit_targets(
+            required_pairs,
+            background_index=0,
+        ),
+        preflight_mode="manual_geometry_targeted",
+        live_cache_inventory={"source_snapshot_count": 0},
+    )
+
+    assert simulate_calls == 0
+    assert result.projected_rows == []
+    assert result.diagnostics["consumer"] == "geometry_fit_trial_source_rows"
+    assert result.diagnostics["targeted_simulation_supported"] is False
+    assert result.diagnostics["targeted_simulation_used"] is False
+    assert result.diagnostics["targeted_simulation_fallback_reason"] == (
+        "simulator_filter_not_supported"
+    )
+    assert result.diagnostics["full_fresh_simulation_fallback_used"] is False
     assert result.diagnostics["targeted_performance_gate"]["ok"] is False
 
 

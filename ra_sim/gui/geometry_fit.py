@@ -8340,10 +8340,13 @@ def rebuild_geometry_fit_source_rows(
                             or "positional argument" in error_text
                             or "got an unexpected keyword" in error_text
                         ):
-                            fresh_hit_tables = _call_fresh_simulation(
-                                lambda: simulate_hit_tables(normalized_params)
-                            )
-                            full_fallback_already_loaded = True
+                            if force_fresh_simulation:
+                                fresh_hit_tables = []
+                            else:
+                                fresh_hit_tables = _call_fresh_simulation(
+                                    lambda: simulate_hit_tables(normalized_params)
+                                )
+                                full_fallback_already_loaded = True
                             targeted_keyword_support = False
                         else:
                             raise
@@ -8380,31 +8383,32 @@ def rebuild_geometry_fit_source_rows(
                         targeted_simulation_supported=False,
                         targeted_simulation_used=False,
                         targeted_simulation_fallback_reason="simulator_filter_not_supported",
-                        full_fresh_simulation_fallback_used=True,
+                        full_fresh_simulation_fallback_used=not bool(force_fresh_simulation),
                     )
-                    fallback_started_at = perf_counter()
                     _emit_rebuild_stage(
                         "source_cache_targeted_fresh_simulation_unsupported",
                         cache_source="fresh_simulation",
                         preflight_mode=normalized_preflight_mode,
                         status="simulator_filter_not_supported",
                     )
-                    _emit_rebuild_stage(
-                        "source_cache_full_simulation_fallback_start",
-                        cache_source="fresh_simulation",
-                        preflight_mode=normalized_preflight_mode,
-                    )
-                    if not full_fallback_already_loaded:
-                        fresh_hit_tables = _call_fresh_simulation(
-                            lambda: simulate_hit_tables(normalized_params)
+                    if not force_fresh_simulation:
+                        fallback_started_at = perf_counter()
+                        _emit_rebuild_stage(
+                            "source_cache_full_simulation_fallback_start",
+                            cache_source="fresh_simulation",
+                            preflight_mode=normalized_preflight_mode,
                         )
-                    _emit_rebuild_stage(
-                        "source_cache_full_simulation_fallback_ready",
-                        stage_started_at=fallback_started_at,
-                        cache_source="fresh_simulation",
-                        preflight_mode=normalized_preflight_mode,
-                        hit_table_count=int(len(fresh_hit_tables or ())),
-                    )
+                        if not full_fallback_already_loaded:
+                            fresh_hit_tables = _call_fresh_simulation(
+                                lambda: simulate_hit_tables(normalized_params)
+                            )
+                        _emit_rebuild_stage(
+                            "source_cache_full_simulation_fallback_ready",
+                            stage_started_at=fallback_started_at,
+                            cache_source="fresh_simulation",
+                            preflight_mode=normalized_preflight_mode,
+                            hit_table_count=int(len(fresh_hit_tables or ())),
+                        )
                 else:
                     _update_targeted_runtime_flags(
                         targeted_simulation_supported=True,
@@ -8462,7 +8466,7 @@ def rebuild_geometry_fit_source_rows(
         ),
         late=bool(fresh_timeout_fired.is_set()),
     )
-    if fresh_simulation_exception is None:
+    if fresh_simulation_exception is None and fresh_hit_tables:
         fresh_rows, fresh_lattice, fresh_hit_tables, fresh_source_reflection_indices = (
             _build_source_rows_result(
                 fresh_hit_tables,
@@ -12785,6 +12789,15 @@ def build_geometry_manual_fit_dataset(
             "projection_frame": "caked_display",
             "coordinate_provenance": "trial_geometry_projection",
             "is_dynamic_trial_row": True,
+            "is_ghost_ray": True,
+            "ghost_ray": True,
+            "ghost_ray_role": "geometry_fit_trial_required_pair",
+            "intensity": 0.0,
+            "representative_intensity": 0.0,
+            "beam_x": 0.0,
+            "beam_y": 0.0,
+            "theta": 0.0,
+            "phi": 0.0,
             "row_origin": "geometry_fit_trial_dynamic_completion",
             "dynamic_completion_reason": completion_reason,
             "consumer": "geometry_fit_trial_source_rows",
@@ -12804,6 +12817,15 @@ def build_geometry_manual_fit_dataset(
             "sim_visual_deg": (float(caked_point[0]), float(caked_point[1])),
             "sim_caked": (float(caked_point[0]), float(caked_point[1])),
         }
+        wavelength = _finite_float(
+            active_params.get(
+                "lambda",
+                active_params.get("wavelength", active_params.get("wavelength_angstrom")),
+            )
+        )
+        if wavelength is not None:
+            row["wavelength"] = float(wavelength)
+            row["wavelength_angstrom"] = float(wavelength)
         for key in (
             "pair_id",
             "source_table_index",
@@ -12842,6 +12864,7 @@ def build_geometry_manual_fit_dataset(
         existing_rows: Sequence[object] | None,
         *,
         active_params: Mapping[str, object],
+        allow_candidate_pool: bool = True,
     ) -> tuple[list[dict[str, object]], dict[str, object]]:
         diag: dict[str, object] = {
             "attempted": False,
@@ -12851,12 +12874,27 @@ def build_geometry_manual_fit_dataset(
             "missing_after_count": 0,
             "per_pair": [],
         }
-        if not callable(manual_dataset_bindings.geometry_manual_simulated_peaks_for_params):
-            diag["skip_reason"] = "simulated_peaks_provider_unavailable"
-            return [], diag
-
         current_rows = [dict(row) for row in (existing_rows or ()) if isinstance(row, Mapping)]
         missing_targets: list[tuple[int, dict[str, object], object]] = []
+        supplemental: list[dict[str, object]] = []
+
+        def _finish_supplemental(
+            remaining_targets_for_count: Sequence[object],
+            *,
+            skip_reason: str | None = None,
+            include_candidate_pool_counts: bool = False,
+        ) -> tuple[list[dict[str, object]], dict[str, object]]:
+            if skip_reason is not None:
+                diag["skip_reason"] = str(skip_reason)
+            if include_candidate_pool_counts:
+                diag["raw_candidate_row_count"] = 0
+                diag["projected_candidate_row_count"] = 0
+                diag["candidate_row_count"] = 0
+                diag["_candidate_pool_rows_for_stage"] = []
+            diag["supplemental_row_count"] = int(len(supplemental))
+            diag["missing_after_count"] = int(len(remaining_targets_for_count))
+            return supplemental, diag
+
         for pair_idx, selected_input in enumerate(selected_entry_inputs):
             raw_entry = selected_input.get("entry")
             if not isinstance(raw_entry, Mapping):
@@ -12878,7 +12916,6 @@ def build_geometry_manual_fit_dataset(
             return [], diag
 
         diag["attempted"] = True
-        supplemental: list[dict[str, object]] = []
         remaining_targets: list[tuple[int, dict[str, object], object]] = []
         for pair_idx, target, target_key in missing_targets:
             completion_row, completion_reason = _build_dynamic_trial_completion_row(
@@ -12918,13 +12955,23 @@ def build_geometry_manual_fit_dataset(
                     for row in combined_rows
                 ):
                     remaining_missing += 1
-            diag["raw_candidate_row_count"] = 0
-            diag["projected_candidate_row_count"] = 0
-            diag["candidate_row_count"] = 0
-            diag["_candidate_pool_rows_for_stage"] = []
-            diag["supplemental_row_count"] = int(len(supplemental))
-            diag["missing_after_count"] = int(remaining_missing)
-            return supplemental, diag
+            return _finish_supplemental(
+                range(remaining_missing),
+                include_candidate_pool_counts=True,
+            )
+
+        if not bool(allow_candidate_pool):
+            return _finish_supplemental(
+                remaining_targets,
+                skip_reason="ghost_only_candidate_pool_disabled",
+                include_candidate_pool_counts=True,
+            )
+
+        if not callable(manual_dataset_bindings.geometry_manual_simulated_peaks_for_params):
+            return _finish_supplemental(
+                remaining_targets,
+                skip_reason="simulated_peaks_provider_unavailable",
+            )
 
         try:
             raw_candidates = (
@@ -12943,11 +12990,15 @@ def build_geometry_manual_fit_dataset(
                     or []
                 )
             except Exception as exc:
-                diag["skip_reason"] = f"simulated_peaks_provider_error:{type(exc).__name__}"
-                return [], diag
+                return _finish_supplemental(
+                    remaining_targets,
+                    skip_reason=f"simulated_peaks_provider_error:{type(exc).__name__}",
+                )
         except Exception as exc:
-            diag["skip_reason"] = f"simulated_peaks_provider_error:{type(exc).__name__}"
-            return [], diag
+            return _finish_supplemental(
+                remaining_targets,
+                skip_reason=f"simulated_peaks_provider_error:{type(exc).__name__}",
+            )
 
         raw_candidate_rows = [
             dict(row) for row in (raw_candidates or ()) if isinstance(row, Mapping)
@@ -13084,7 +13135,31 @@ def build_geometry_manual_fit_dataset(
         source = "unavailable"
         rebuild_attempted = False
         detector_source_rows = False
-        if callable(manual_dataset_bindings.geometry_manual_rebuild_source_rows_for_background):
+        caked_trial_rows = bool(
+            use_caked_display or geometry_manual_pairs_use_caked_fit_space(selected_entries)
+        )
+        projected_rows: list[dict[str, object]] = []
+        supplemental_rows: list[dict[str, object]] = []
+        supplemental_diag: dict[str, object] = {}
+        candidate_pool_rows: list[dict[str, object]] = []
+        ghost_only_trial_rows = False
+        if caked_trial_rows:
+            supplemental_rows, supplemental_diag = (
+                _supplement_dynamic_trial_rows_from_candidate_pool(
+                    [],
+                    active_params=active_params,
+                    allow_candidate_pool=False,
+                )
+            )
+            if supplemental_rows and int(supplemental_diag.get("missing_after_count") or 0) == 0:
+                source = "geometry_fit_trial_ghost_only_required_pairs"
+                projected_rows = [dict(row) for row in supplemental_rows]
+                ghost_only_trial_rows = True
+            else:
+                supplemental_rows = []
+        if not ghost_only_trial_rows and callable(
+            manual_dataset_bindings.geometry_manual_rebuild_source_rows_for_background
+        ):
             rebuild_attempted = True
             try:
                 raw_rows = (
@@ -13112,8 +13187,10 @@ def build_geometry_manual_fit_dataset(
                     raw_rows = []
             except Exception:
                 raw_rows = []
-        if not raw_rows and callable(
-            manual_dataset_bindings.geometry_manual_source_rows_for_background
+        if (
+            not ghost_only_trial_rows
+            and not raw_rows
+            and callable(manual_dataset_bindings.geometry_manual_source_rows_for_background)
         ):
             try:
                 raw_rows = (
@@ -13140,7 +13217,7 @@ def build_geometry_manual_fit_dataset(
                     raw_rows = []
             except Exception:
                 raw_rows = []
-        if not raw_rows:
+        if not ghost_only_trial_rows and not raw_rows and not caked_trial_rows:
             try:
                 raw_rows = (
                     manual_dataset_bindings.geometry_manual_simulated_peaks_for_params(
@@ -13163,28 +13240,39 @@ def build_geometry_manual_fit_dataset(
                     raw_rows = []
             except Exception:
                 raw_rows = []
-        caked_trial_rows = bool(
-            use_caked_display or geometry_manual_pairs_use_caked_fit_space(selected_entries)
-        )
-        projected_rows = (
-            _project_source_rows_for_current_view(raw_rows)
-            if caked_trial_rows or not detector_source_rows
-            else [dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)]
-        )
+        if not ghost_only_trial_rows:
+            projected_rows = (
+                _project_source_rows_for_current_view(raw_rows)
+                if caked_trial_rows or not detector_source_rows
+                else [dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)]
+            )
         if caked_trial_rows and source in {
             "geometry_manual_rebuild_source_rows_for_background",
             "geometry_manual_simulated_peaks_for_params(prefer_cache=False)",
             "geometry_manual_simulated_peaks_for_params",
         }:
             projected_rows = _mark_dynamic_trial_source_rows(projected_rows)
-        supplemental_rows: list[dict[str, object]] = []
-        supplemental_diag: dict[str, object] = {}
-        candidate_pool_rows: list[dict[str, object]] = []
-        if caked_trial_rows:
+        if caked_trial_rows and not ghost_only_trial_rows:
+            target_keys = [
+                normalize_new4_source_coverage_key(selected_input.get("entry"))
+                for selected_input in selected_entry_inputs
+                if isinstance(selected_input.get("entry"), Mapping)
+            ]
+            projected_rows = [
+                dict(row)
+                for row in (projected_rows or ())
+                if isinstance(row, Mapping)
+                and any(
+                    target_key is not None and _trial_row_matches_target_key(row, target_key)
+                    for target_key in target_keys
+                )
+            ]
+        if caked_trial_rows and not ghost_only_trial_rows:
             supplemental_rows, supplemental_diag = (
                 _supplement_dynamic_trial_rows_from_candidate_pool(
                     projected_rows,
                     active_params=active_params,
+                    allow_candidate_pool=False,
                 )
             )
             if isinstance(supplemental_diag, Mapping):
@@ -13246,6 +13334,13 @@ def build_geometry_manual_fit_dataset(
             diagnostics["caked_click_pick_candidate_inventory"] = copy.deepcopy(
                 dict(supplemental_diag)
             )
+        if caked_trial_rows and supplemental_diag and collect_diagnostics:
+            diagnostics["ghost_only_required_pair_count"] = int(
+                supplemental_diag.get("supplemental_row_count") or 0
+            )
+            diagnostics["ghost_only_missing_pair_count"] = int(
+                supplemental_diag.get("missing_after_count") or 0
+            )
         trial_geometry_hash = _geometry_fit_digest_payload(active_params)
         for row in rows:
             row["trial_geometry_hash"] = str(trial_geometry_hash)
@@ -13298,12 +13393,24 @@ def build_geometry_manual_fit_dataset(
             "available": bool(rows),
             "rows": rows,
             "source": source,
-            "source_rows_rebuilt_or_reused": "rebuilt_for_trial_params",
+            "source_rows_rebuilt_or_reused": (
+                "ghost_only_for_trial_params"
+                if ghost_only_trial_rows
+                else "rebuilt_for_trial_params"
+            ),
             "reuse_valid_for_same_params_signature": True,
             "rebuild_attempted": bool(rebuild_attempted),
             "row_count": int(len(rows)),
             "source_rows_signature": _trial_source_rows_signature(rows),
             "source_diagnostics": diagnostics,
+            "objective_cache_mode": (
+                "ghost_only"
+                if ghost_only_trial_rows
+                else "targeted_required_pairs"
+                if caked_trial_rows
+                else "full_simulation"
+            ),
+            "objective_process_peaks_called": not bool(caked_trial_rows),
         }
 
     qr_fit_trial_source_rows_builder = _qr_fit_trial_source_rows_builder
