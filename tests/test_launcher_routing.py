@@ -521,7 +521,7 @@ def test_launch_mosaic_specular_visualizer_uses_seeded_state(monkeypatch) -> Non
     monkeypatch.setattr(launcher, "_pick_available_local_port", lambda: 8123)
 
     launcher.launch_mosaic_specular_visualizer(
-        {"specular-view": {"H": 1, "K": 0, "L": 2, "theta_i": 8.5}}
+        {"specular-view": {"m": 7, "L": 5, "theta_i": 8.5}}
     )
 
     assert calls == [
@@ -535,7 +535,7 @@ def test_launch_mosaic_specular_visualizer_uses_seeded_state(monkeypatch) -> Non
                 "--port",
                 "8123",
                 "--state-json",
-                '{"specular-view": {"H": 1, "K": 0, "L": 2, "theta_i": 8.5}}',
+                '{"specular-view": {"m": 7, "L": 5, "theta_i": 8.5}}',
             ],
             None,
         )

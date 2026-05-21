@@ -2969,7 +2969,7 @@ def test_open_selected_peak_intersection_figure_launches_seeded_specular_visuali
             "wavelength_array": [1.5406, 1.5410],
         },
         selected_peak_record={
-            "hkl": (1, 0, 2),
+            "hkl": (1, 2, 5),
             "av": 4.1,
             "cv": 6.2,
             "source_label": "primary",
@@ -2992,9 +2992,10 @@ def test_open_selected_peak_intersection_figure_launches_seeded_specular_visuali
 
     assert ok is True
     specular = captured["state"]["specular-view"]
-    assert specular["H"] == 1
-    assert specular["K"] == 0
-    assert specular["L"] == 2
+    assert specular["m"] == 7
+    assert specular["L"] == 5
+    assert "H" not in specular
+    assert "K" not in specular
     assert specular["sigma_deg"] == 0.25
     assert specular["mosaic_gamma_deg"] == 0.5
     assert specular["eta"] == 0.75
@@ -3035,7 +3036,7 @@ def test_open_selected_peak_intersection_figure_launches_seeded_specular_visuali
     np.testing.assert_allclose(specular["lattice_a_m"], 4.1e-10)
     np.testing.assert_allclose(specular["lattice_c_m"], 6.2e-10)
     assert status_messages[-1] == (
-        "Opened 2D Mosaic specular view for HKL=(1 0 2) from source=primary."
+        "Opened 2D Mosaic specular view for HKL=(1 2 5) from source=primary."
     )
 
 

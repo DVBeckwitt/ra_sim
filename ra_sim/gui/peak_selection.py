@@ -4399,6 +4399,7 @@ def _build_selected_peak_specular_initial_state(
     lattice_a_angstrom = _finite_float(selected_peak.get("av"), 4.143)
     lattice_c_angstrom = _finite_float(selected_peak.get("cv"), 28.636)
     h, k, l = tuple(int(v) for v in selected_peak["hkl"])
+    m = h * h + h * k + k * k
 
     return {
         "specular-view": {
@@ -4443,9 +4444,8 @@ def _build_selected_peak_specular_initial_state(
             "pixel_v": pixel_size_mm,
             "i0": _finite_float(config.center_col, 0.0),
             "j0": _finite_float(config.center_row, 0.0),
-            "H": int(h),
-            "K": int(k),
-            "L": int(l),
+            "m": m,
+            "L": l,
             "sigma_deg": _finite_float(config.sigma_mosaic_deg, 0.8),
             "mosaic_gamma_deg": _finite_float(config.gamma_mosaic_deg, 5.0),
             "eta": _finite_float(config.eta, 0.5),
