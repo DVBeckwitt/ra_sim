@@ -9,6 +9,19 @@ Last updated: 2026-05-20
 
 ## Current status
 
+- 2026-05-20 code-simplification and quality-gate follow-up completed. The
+  caked dynamic debug-line formatter now uses one local weighted-metric helper
+  for main seed, solve-progress, and solve-progress trace labels, preserving the
+  existing `weighted_deg`/`weighted_rms_px` behavior while deleting duplicate
+  caked-vs-detector formatting branches. Bug/error status: unchanged from the
+  fixed manual caked Qr/Qz routing path; this is behavior-preserving cleanup
+  after the route/metric fix. Feature/API status: no GUI control, CLI flag,
+  config key, saved-state field, artifact schema, dependency, migration,
+  deprecation, ADR, version bump, or CI workflow change. Validation status:
+  focused dynamic debug-line regression passed, the focused geometry/checker
+  group passed, `python -m ra_sim.dev check` passed, and `git diff --check`
+  reported no whitespace errors. Shipping status: safe internal refactor,
+  rollback by git revert.
 - 2026-05-20 manual caked optimizer-routing follow-up completed. The latest
   live evidence changed the remaining root cause: observed caked projection is
   now finite, but tuple-style `fit_observed_caked_deg` anchors were not counted

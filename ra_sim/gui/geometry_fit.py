@@ -22393,6 +22393,17 @@ def build_geometry_fit_debug_lines(result: object) -> list[str]:
         final_metric_space == "caked_deg" or final_metric_name == "dynamic_angular_point_match"
     )
 
+    def _weighted_metric_part(
+        value: object,
+        *,
+        caked_name: str = "weighted_objective_rms",
+        pixel_name: str = "weighted_rms_px",
+    ) -> str:
+        text = _geometry_fit_debug_value_text(value)
+        if caked_debug_metric:
+            return f"{caked_name}={text} {weighted_objective_unit}"
+        return f"{pixel_name}={text}"
+
     lines: list[str] = [
         "point_match_mode={mode} datasets={datasets} vars={vars}".format(
             mode=bool(debug_summary.get("point_match_mode", False)),
@@ -22556,21 +22567,12 @@ def build_geometry_fit_debug_lines(result: object) -> list[str]:
 
     main_seed = debug_summary.get("main_solve_seed", None)
     if isinstance(main_seed, Mapping):
-        if caked_debug_metric:
-            main_seed_metric_part = ("weighted_objective_rms={rms} {weighted_unit}").format(
-                rms=_geometry_fit_debug_value_text(main_seed.get("weighted_rms_px", np.nan)),
-                weighted_unit=weighted_objective_unit,
-            )
-        else:
-            main_seed_metric_part = "weighted_rms_px={rms}".format(
-                rms=_geometry_fit_debug_value_text(main_seed.get("weighted_rms_px", np.nan))
-            )
         lines.append(
             "main_seed kind={kind} label={label} cost={cost} {metric_part}".format(
                 kind=str(main_seed.get("seed_kind", "") or "?"),
                 label=str(main_seed.get("seed_label", "") or "?"),
                 cost=_geometry_fit_debug_value_text(main_seed.get("cost", np.nan)),
-                metric_part=main_seed_metric_part,
+                metric_part=_weighted_metric_part(main_seed.get("weighted_rms_px", np.nan)),
             )
         )
         point_seed = main_seed.get("point_match_summary", None)
@@ -22712,30 +22714,18 @@ def build_geometry_fit_debug_lines(result: object) -> list[str]:
 
     solve_progress = debug_summary.get("solve_progress", None)
     if isinstance(solve_progress, Mapping):
-        if caked_debug_metric:
-            progress_metric_part = (
-                "best_weighted_objective_rms={best_rms} {weighted_unit} "
-                "last_weighted_objective_rms={last_rms} {weighted_unit}"
-            ).format(
-                best_rms=_geometry_fit_debug_value_text(
-                    solve_progress.get("best_weighted_rms_px", np.nan)
-                ),
-                last_rms=_geometry_fit_debug_value_text(
-                    solve_progress.get("last_weighted_rms_px", np.nan)
-                ),
-                weighted_unit=weighted_objective_unit,
-            )
-        else:
-            progress_metric_part = (
-                "best_weighted_rms_px={best_rms} last_weighted_rms_px={last_rms}"
-            ).format(
-                best_rms=_geometry_fit_debug_value_text(
-                    solve_progress.get("best_weighted_rms_px", np.nan)
-                ),
-                last_rms=_geometry_fit_debug_value_text(
-                    solve_progress.get("last_weighted_rms_px", np.nan)
-                ),
-            )
+        progress_metric_part = "{best} {last}".format(
+            best=_weighted_metric_part(
+                solve_progress.get("best_weighted_rms_px", np.nan),
+                caked_name="best_weighted_objective_rms",
+                pixel_name="best_weighted_rms_px",
+            ),
+            last=_weighted_metric_part(
+                solve_progress.get("last_weighted_rms_px", np.nan),
+                caked_name="last_weighted_objective_rms",
+                pixel_name="last_weighted_rms_px",
+            ),
+        )
         lines.append(
             "solve_progress label={label} evaluations={evals} best_cost={best_cost} "
             "last_cost={last_cost} {metric_part} status_updates={updates} "
@@ -22766,31 +22756,17 @@ def build_geometry_fit_debug_lines(result: object) -> list[str]:
         for idx, event in enumerate(solve_progress.get("trace", []) or []):
             if not isinstance(event, Mapping):
                 continue
-            if caked_debug_metric:
-                lines.append(
-                    "solve_progress[{idx}] eval={eval} reason={reason} cost={cost} "
-                    "best_cost={best_cost} weighted_objective_rms={rms} {weighted_unit}".format(
-                        idx=int(idx),
-                        eval=_geometry_fit_debug_value_text(event.get("eval", 0), float_digits=0),
-                        reason=str(event.get("reason", "")),
-                        cost=_geometry_fit_debug_value_text(event.get("current_cost", np.nan)),
-                        best_cost=_geometry_fit_debug_value_text(event.get("best_cost", np.nan)),
-                        rms=_geometry_fit_debug_value_text(event.get("weighted_rms_px", np.nan)),
-                        weighted_unit=weighted_objective_unit,
-                    )
+            lines.append(
+                "solve_progress[{idx}] eval={eval} reason={reason} cost={cost} "
+                "best_cost={best_cost} {metric_part}".format(
+                    idx=int(idx),
+                    eval=_geometry_fit_debug_value_text(event.get("eval", 0), float_digits=0),
+                    reason=str(event.get("reason", "")),
+                    cost=_geometry_fit_debug_value_text(event.get("current_cost", np.nan)),
+                    best_cost=_geometry_fit_debug_value_text(event.get("best_cost", np.nan)),
+                    metric_part=_weighted_metric_part(event.get("weighted_rms_px", np.nan)),
                 )
-            else:
-                lines.append(
-                    "solve_progress[{idx}] eval={eval} reason={reason} cost={cost} "
-                    "best_cost={best_cost} weighted_rms_px={rms}".format(
-                        idx=int(idx),
-                        eval=_geometry_fit_debug_value_text(event.get("eval", 0), float_digits=0),
-                        reason=str(event.get("reason", "")),
-                        cost=_geometry_fit_debug_value_text(event.get("current_cost", np.nan)),
-                        best_cost=_geometry_fit_debug_value_text(event.get("best_cost", np.nan)),
-                        rms=_geometry_fit_debug_value_text(event.get("weighted_rms_px", np.nan)),
-                    )
-                )
+            )
 
     return lines
 
