@@ -120,12 +120,12 @@ def _safe_run_name(value: object) -> str:
 
 
 QR_ROD_PROFILE_CACHE_SCHEMA = "ra_sim.qr_rod_profile_cache.v1"
-QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_specular_theta_i0_l8_v12"
+QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_specular_theta_i12_l8_v13"
 PRE_EDITOR_CACHE_SCHEMA = "ra_sim.background_pre_editor_cache.v1"
 PRE_EDITOR_CACHE_SIGNATURE = "pre_qr_rod_marker_editor_inputs_v1"
 PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE = "background_peak_fit_results_v1"
 PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE = "profile_fit_cache_v1"
-PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_l_defaults_v11"
+PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_l_defaults_v12"
 
 
 def _cache_normalize_value(value: object) -> object:
@@ -298,6 +298,46 @@ def profile_fit_stage_is_valid(
     )
 
 
+def hk0_qz_marker_count(marker_table: object) -> int:
+    table = pd.DataFrame(marker_table).copy()
+    if table.empty or not {"m", "branch", "qz_marker"}.issubset(table.columns):
+        return 0
+    m_values = pd.to_numeric(table["m"], errors="coerce").to_numpy(dtype=np.float64)
+    qz_values = pd.to_numeric(table["qz_marker"], errors="coerce").to_numpy(dtype=np.float64)
+    branch_values = table["branch"].astype(str)
+    return int(
+        np.count_nonzero(
+            np.isfinite(m_values)
+            & (m_values == 0.0)
+            & (branch_values == "qz")
+            & np.isfinite(qz_values)
+        )
+    )
+
+
+def rod_profile_has_real_hk0_qz_rows(rod_profile_table: object) -> bool:
+    table = pd.DataFrame(rod_profile_table).copy()
+    required = {"m", "branch", "qz_center", "pixel_count"}
+    if table.empty or not required.issubset(table.columns):
+        return False
+    m_values = pd.to_numeric(table["m"], errors="coerce").to_numpy(dtype=np.float64)
+    qz_values = pd.to_numeric(table["qz_center"], errors="coerce").to_numpy(dtype=np.float64)
+    pixel_counts = pd.to_numeric(table["pixel_count"], errors="coerce").to_numpy(
+        dtype=np.float64
+    )
+    branch_values = table["branch"].astype(str)
+    return bool(
+        np.any(
+            np.isfinite(m_values)
+            & (m_values == 0.0)
+            & (branch_values == "qz")
+            & np.isfinite(qz_values)
+            & np.isfinite(pixel_counts)
+            & (pixel_counts > 0.0)
+        )
+    )
+
+
 def qr_rod_pre_editor_stage_is_valid(stage_payload: dict[str, object] | None) -> bool:
     if not isinstance(stage_payload, dict):
         return False
@@ -313,6 +353,11 @@ def qr_rod_pre_editor_stage_is_valid(stage_payload: dict[str, object] | None) ->
         return False
     rod_profile_table = pd.DataFrame(stage_payload["rod_profile_table"])
     marker_table = pd.DataFrame(stage_payload["marker_table"])
+    specular_markers = pd.DataFrame(stage_payload.get("specular_l_marker_table", pd.DataFrame()))
+    if hk0_qz_marker_count(specular_markers) > 0 and not rod_profile_has_real_hk0_qz_rows(
+        rod_profile_table
+    ):
+        return False
     return (
         not rod_profile_table.empty
         and "qz_center" in rod_profile_table
@@ -548,42 +593,19 @@ def specular_qz_bounds_for_l_window(
 ) -> tuple[float, float] | None:
     marker_table = pd.DataFrame(marker_rows).copy()
     if not marker_table.empty and "qz_marker" in marker_table:
-        l_col = (
-            "fit_l"
-            if "fit_l" in marker_table
-            else "l"
-            if "l" in marker_table
-            else "display_l"
+        slope, intercept = qz_l_linear_coeff_from_marker_rows(
+            marker_table,
+            fallback=(np.nan, np.nan),
         )
-        if l_col in marker_table:
-            ref_qz = pd.to_numeric(
-                marker_table["qz_marker"], errors="coerce"
-            ).to_numpy(dtype=np.float64)
-            ref_l = pd.to_numeric(marker_table[l_col], errors="coerce").to_numpy(
-                dtype=np.float64
-            )
-            if np.count_nonzero(np.isfinite(ref_qz) & np.isfinite(ref_l)) >= 1:
-                slope, intercept = qz_l_linear_coeff_from_marker_rows(
-                    marker_table,
-                    fallback=(np.nan, np.nan),
-                )
-                if (
-                    np.isfinite(slope)
-                    and np.isfinite(intercept)
-                    and abs(float(slope)) > 1.0e-12
-                ):
-                    l_lo, l_hi = sorted((float(l_min), float(l_max)))
-                    qz_l_lo = (l_lo - float(intercept)) / float(slope)
-                    qz_l_hi = (l_hi - float(intercept)) / float(slope)
-                    if np.isfinite(qz_l_lo) and np.isfinite(qz_l_hi):
-                        qz_lo, qz_hi = sorted((float(qz_l_lo), float(qz_l_hi)))
-                        qz_lo = max(qz_lo, float(positive_qz_min))
-                        if (
-                            np.isfinite(qz_lo)
-                            and np.isfinite(qz_hi)
-                            and qz_hi > qz_lo
-                        ):
-                            return float(qz_lo), float(qz_hi)
+        if np.isfinite(slope) and np.isfinite(intercept) and float(slope) > 1.0e-12:
+            l_lo, l_hi = sorted((float(l_min), float(l_max)))
+            qz_l_lo = (l_lo - float(intercept)) / float(slope)
+            qz_l_hi = (l_hi - float(intercept)) / float(slope)
+            if np.isfinite(qz_l_lo) and np.isfinite(qz_l_hi):
+                qz_lo, qz_hi = sorted((float(qz_l_lo), float(qz_l_hi)))
+                qz_lo = max(qz_lo, float(positive_qz_min))
+                if np.isfinite(qz_lo) and np.isfinite(qz_hi) and qz_hi > qz_lo:
+                    return float(qz_lo), float(qz_hi)
     lattice_c_value = as_float(lattice_c, np.nan)
     if np.isfinite(lattice_c_value) and lattice_c_value > 0.0:
         l_lo, l_hi = sorted((float(l_min), float(l_max)))
@@ -866,6 +888,10 @@ def qr_rod_profile_cache_has_final_fit(
         return False
     marker_table = pd.DataFrame(payload["final_marker_table"])
     if marker_table.empty or not {"qz_marker", "fit_l", "display_l"}.issubset(marker_table.columns):
+        return False
+    if hk0_qz_marker_count(marker_table) > 0 and not rod_profile_has_real_hk0_qz_rows(
+        rod_profile_table
+    ):
         return False
     return payload.get("final_peak_edit_cache_key") == peak_edit_cache_key
 
@@ -1566,6 +1592,8 @@ def show_qr_rod_peak_marker_popup(
             update_kwargs = {}
             if callback_accepts_keyword(profile_update_callback, "editor_phase"):
                 update_kwargs["editor_phase"] = editor_phase
+            if callback_accepts_keyword(profile_update_callback, "marker_table"):
+                update_kwargs["marker_table"] = edited.copy()
             updated = profile_update_callback(
                 delta_qr_value, l_min_value, l_max_value, **update_kwargs
             )
@@ -1655,6 +1683,13 @@ def show_qr_rod_peak_marker_popup(
         region_profile_refresh_pending = True
         region_profile_refresh_sources.add(str(source))
         region_control_state["profile_refresh_pending"] = True
+
+    def mark_marker_table_changed(group: tuple[int, str] | None) -> None:
+        if group is None:
+            return
+        if region_controls_enabled and qr_rod_editor_phase_matches(int(group[0]), editor_phase):
+            mark_region_profile_refresh_pending("marker_table")
+            refresh_detector_region_preview()
 
     def flush_region_profile_refresh(*, redraw_figure: bool = True) -> None:
         if not region_profile_refresh_pending:
@@ -2217,10 +2252,16 @@ def show_qr_rod_peak_marker_popup(
         markers.append(qz_value)
         set_group_markers(group[0], group[1], markers)
         select_nearest(group, float(x_value))
+        mark_marker_table_changed(group)
         redraw(preserve_limits=True)
 
     def set_selected_marker_position(
-        m_value: int, branch_value: str, index: int, x_value: float
+        m_value: int,
+        branch_value: str,
+        index: int,
+        x_value: float,
+        *,
+        refresh_preview: bool = True,
     ) -> bool:
         selected_rows = group_marker_rows(m_value, branch_value)
         if int(index) < 0 or int(index) >= len(selected_rows):
@@ -2239,6 +2280,10 @@ def show_qr_rod_peak_marker_popup(
         edited.loc[source_index, "display_l"] = float(x_value)
         edited.loc[source_index, "l"] = float(x_value)
         edited.loc[source_index, "marker_source"] = "manual_edit"
+        if refresh_preview:
+            mark_marker_table_changed((int(m_value), str(branch_value)))
+        elif region_controls_enabled and qr_rod_editor_phase_matches(int(m_value), editor_phase):
+            mark_region_profile_refresh_pending("marker_table")
         return True
 
     def move_selected(x_value: float) -> None:
@@ -2248,7 +2293,11 @@ def show_qr_rod_peak_marker_popup(
             return
         m_value, branch_value = group
         if not set_selected_marker_position(
-            int(m_value), str(branch_value), int(index), float(x_value)
+            int(m_value),
+            str(branch_value),
+            int(index),
+            float(x_value),
+            refresh_preview=False,
         ):
             return
         select_nearest((int(m_value), str(branch_value)), float(x_value), sync_title=False)
@@ -2270,6 +2319,7 @@ def show_qr_rod_peak_marker_popup(
         set_group_markers(m_value, branch_value, markers)
         selected["index"] = None
         sync_title_box()
+        mark_marker_table_changed((int(m_value), str(branch_value)))
         redraw(preserve_limits=True)
 
     def snap_selected_group() -> None:
@@ -2293,6 +2343,7 @@ def show_qr_rod_peak_marker_popup(
         if selected_marker is not None:
             selected_l = float(qz_to_editor_l(m_value, branch_value, [selected_marker])[0])
             select_nearest((int(m_value), str(branch_value)), selected_l)
+        mark_marker_table_changed((int(m_value), str(branch_value)))
         redraw(preserve_limits=True)
 
     def import_peak_edits(_event) -> None:
@@ -2306,9 +2357,19 @@ def show_qr_rod_peak_marker_popup(
             if required_marker_table is not None:
                 imported = marker_table_with_specular_l_markers(imported, required_marker_table)
             edited = imported.copy()
+            imported_groups = (
+                [
+                    (int(row["m"]), str(row["branch"]))
+                    for row in edited[["m", "branch"]].drop_duplicates().to_dict("records")
+                ]
+                if not edited.empty and {"m", "branch"}.issubset(edited.columns)
+                else []
+            )
             selected["group"] = None
             selected["index"] = None
             sync_title_box()
+            for imported_group in imported_groups:
+                mark_marker_table_changed(imported_group)
             redraw()
             print(f"imported Qr-rod peak edits={import_path}; click Accept to continue")
         except Exception as exc:
@@ -2374,6 +2435,15 @@ def show_qr_rod_peak_marker_popup(
                     redraw(preserve_limits=True)
         finally:
             restore_group_axis_limits(limits)
+        group = selected.get("group")
+        if (
+            needs_redraw
+            and "marker_table" in region_profile_refresh_sources
+            and group is not None
+            and region_controls_enabled
+            and qr_rod_editor_phase_matches(int(group[0]), editor_phase)
+        ):
+            refresh_detector_region_preview()
         if should_flush_region_profile_on_release():
             flush_region_profile_refresh()
 
@@ -2850,7 +2920,7 @@ NONZERO_QR_ROD_L_MIN = 0.5
 NONZERO_QR_ROD_L_MAX = 3.0
 SPECULAR_QR_ROD_L_MAX = 8.0
 PBI2_SPECULAR_QR_ROD_L_MIN = 1.5
-PBI2_SPECULAR_THETA_INITIAL_DEG = 40.0
+PBI2_SPECULAR_THETA_INITIAL_DEG = 12.0
 ALLOW_GENERATED_ROD_REFERENCES = _truthy_setting(
     "ALLOW_GENERATED_ROD_REFERENCES_OVERRIDE", "RA_SIM_ALLOW_GENERATED_ROD_REFERENCES", False
 )
@@ -9306,7 +9376,7 @@ def specular_detector_theta_initial_for_sample(
     sample_stem: object,
     tilt_deg: object,
     *,
-    pbi2_theta_initial_deg: float = 40.0,
+    pbi2_theta_initial_deg: float = 12.0,
 ) -> float:
     if sample_uses_pbi2_rod_plot_policy(sample_stem):
         return float(pbi2_theta_initial_deg)
@@ -12196,10 +12266,14 @@ def specular_l_marker_rows_with_lattice_fallback(
     l_min_value = as_float(l_min, 0.0)
     if not np.isfinite(l_min_value):
         l_min_value = 0.0
+    l_max_value = as_float(l_max, np.nan)
     records = []
     for row in table.to_dict("records") if not table.empty else []:
         l_value = as_float(row.get("fit_l", row.get("l", row.get("display_l"))))
-        if np.isfinite(l_value) and float(l_value) < float(l_min_value):
+        if np.isfinite(l_value) and (
+            float(l_value) < float(l_min_value)
+            or (np.isfinite(l_max_value) and float(l_value) > float(l_max_value))
+        ):
             continue
         records.append(row)
     existing_l: set[int] = set()
@@ -12241,6 +12315,88 @@ def specular_l_marker_rows_with_lattice_fallback(
         out.sort_values(["_sort_l", "qz_marker"], kind="mergesort")
         .drop(columns=["_sort_l"])
         .reset_index(drop=True)
+    )
+
+
+def active_specular_marker_rows_for_l_window(
+    marker_source: object, *, l_min: object, l_max: object
+) -> pd.DataFrame:
+    source = pd.DataFrame(marker_source).copy()
+    required = pd.DataFrame(globals().get("specular_l_marker_table", pd.DataFrame())).copy()
+    merged = marker_table_with_specular_l_markers(source, required)
+    specular = pd.DataFrame()
+    if not merged.empty and {"m", "branch", "qz_marker"}.issubset(merged.columns):
+        m_values = pd.to_numeric(merged["m"], errors="coerce").to_numpy(dtype=np.float64)
+        branch_values = merged["branch"].astype(str)
+        specular = merged.loc[
+            np.isfinite(m_values) & (m_values == 0.0) & (branch_values == "qz")
+        ].copy()
+    return specular_l_marker_rows_with_lattice_fallback(
+        specular,
+        lattice_c=ACTIVE_LATTICE_C,
+        l_min=l_min,
+        l_max=l_max,
+    )
+
+
+def specular_qz_edges_for_l_window(
+    marker_source: object, *, l_min: object, l_max: object
+) -> np.ndarray | None:
+    marker_rows = active_specular_marker_rows_for_l_window(
+        marker_source,
+        l_min=l_min,
+        l_max=l_max,
+    )
+    qz_values = np.asarray(globals().get("specular_detector_qz_map", []), dtype=np.float64)
+    qz_bounds = specular_qz_bounds_for_l_window(
+        qz_values[np.isfinite(qz_values)],
+        marker_rows,
+        l_min=as_float(l_min, 0.0),
+        l_max=as_float(l_max, np.nan),
+        lattice_c=ACTIVE_LATTICE_C,
+        positive_qz_min=POSITIVE_QZ_MIN,
+    )
+    if qz_bounds is None:
+        return None
+    qz_lo, qz_hi = qz_bounds
+    if not (np.isfinite(qz_lo) and np.isfinite(qz_hi)) or float(qz_hi) <= float(qz_lo):
+        return None
+    return np.linspace(
+        float(qz_lo),
+        float(qz_hi),
+        ROD_PROFILE_QZ_BINS + 1,
+        dtype=np.float64,
+    )
+
+
+def build_specular_qr_rod_profile(
+    *,
+    delta_qr: object,
+    l_min: object,
+    l_max: object,
+    marker_source: object,
+) -> pd.DataFrame:
+    qz_edges = specular_qz_edges_for_l_window(
+        marker_source,
+        l_min=l_min,
+        l_max=l_max,
+    )
+    if qz_edges is None:
+        return pd.DataFrame()
+    return profile_from_detector_qr_qz(
+        profile_bg,
+        specular_rod_entry,
+        branch_name="qz",
+        branch_label="m = 0",
+        qz_edges=qz_edges,
+        phi_min=float(specular_phi_min_deg),
+        phi_max=float(specular_phi_max_deg),
+        detector_q_maps=specular_detector_q_maps,
+        detector_phi_map=profile_detector_phi_map,
+        detector_solid_angle=profile_detector_solid_angle,
+        detector_two_theta_map=profile_detector_two_theta_map,
+        theta_initial_deg_used_for_q=specular_detector_theta_initial_deg,
+        delta_qr_override=delta_qr,
     )
 
 
@@ -12337,16 +12493,15 @@ specular_profile_l_min, specular_profile_l_max = qr_rod_l_bounds_for_group(
     0,
     (float(SPECULAR_QR_ROD_L_MIN), float(SPECULAR_QR_ROD_L_MAX)),
 )
-specular_all_qz_values = specular_detector_qz_map[
-    specular_detector_region_mask & np.isfinite(specular_detector_qz_map)
-]
-specular_qz_bounds = specular_qz_bounds_for_l_window(
-    specular_all_qz_values,
+specular_qz_edges = specular_qz_edges_for_l_window(
     specular_l_marker_table,
     l_min=specular_profile_l_min,
     l_max=specular_profile_l_max,
-    lattice_c=ACTIVE_LATTICE_C,
-    positive_qz_min=POSITIVE_QZ_MIN,
+)
+specular_qz_bounds = (
+    None
+    if specular_qz_edges is None
+    else (float(specular_qz_edges[0]), float(specular_qz_edges[-1]))
 )
 if specular_qz_bounds is None:
     specular_qz_values = np.asarray([], dtype=np.float64)
@@ -12360,36 +12515,96 @@ else:
         specular_detector_region_mask & np.isfinite(specular_detector_qz_map)
     ]
 if not qr_rod_pre_editor_cache_hit:
-    if specular_qz_bounds is not None and specular_qz_values.size >= 2:
-        specular_edges = np.linspace(
-            float(specular_qz_bounds[0]),
-            float(specular_qz_bounds[1]),
-            ROD_PROFILE_QZ_BINS + 1,
-            dtype=np.float64,
+    initial_specular_profile = build_specular_qr_rod_profile(
+        delta_qr=qr_rod_delta_qr,
+        l_min=specular_profile_l_min,
+        l_max=specular_profile_l_max,
+        marker_source=specular_l_marker_table,
+    )
+    if not initial_specular_profile.empty and int(
+        np.nansum(initial_specular_profile.get("pixel_count", []))
+    ) > 0:
+        profile_rows.append(initial_specular_profile)
+    else:
+        specular_qr_band_mask = (
+            specular_detector_valid_q
+            & np.isfinite(specular_detector_qr_map)
+            & np.isfinite(specular_detector_qz_map)
+            & (specular_detector_qz_map > POSITIVE_QZ_MIN)
+            & (specular_detector_qr_map >= -float(qr_rod_delta_qr))
+            & (specular_detector_qr_map <= float(qr_rod_delta_qr))
         )
-        profile_rows.append(
-            profile_from_detector_qr_qz(
-                profile_bg,
-                specular_rod_entry,
-                branch_name="qz",
-                branch_label="m = 0",
-                qz_edges=specular_edges,
-                phi_min=float(specular_phi_min_deg),
-                phi_max=float(specular_phi_max_deg),
-                detector_q_maps=specular_detector_q_maps,
-                detector_phi_map=profile_detector_phi_map,
-                detector_solid_angle=profile_detector_solid_angle,
-                detector_two_theta_map=profile_detector_two_theta_map,
-                theta_initial_deg_used_for_q=specular_detector_theta_initial_deg,
+        specular_phi_two_theta_mask = (
+            specular_qr_band_mask
+            & specular_detector_phi_mask
+            & np.isfinite(profile_detector_two_theta_map)
+            & (
+                np.asarray(profile_detector_two_theta_map, dtype=np.float64)
+                <= float(ROD_PROFILE_MAX_TWO_THETA_DEG)
             )
         )
-    else:
+        specular_qz_window_mask = (
+            specular_qr_band_mask
+            if specular_qz_bounds is None
+            else (
+                specular_qr_band_mask
+                & (specular_detector_qz_map >= float(specular_qz_bounds[0]))
+                & (specular_detector_qz_map <= float(specular_qz_bounds[1]))
+            )
+        )
+        specular_full_profile_mask = (
+            specular_phi_two_theta_mask
+            if specular_qz_bounds is None
+            else (
+                specular_phi_two_theta_mask
+                & (specular_detector_qz_map >= float(specular_qz_bounds[0]))
+                & (specular_detector_qz_map <= float(specular_qz_bounds[1]))
+            )
+        )
+        specular_qz_only_mask = (
+            specular_detector_valid_q
+            & specular_detector_phi_mask
+            & np.isfinite(specular_detector_qr_map)
+            & np.isfinite(specular_detector_qz_map)
+            & np.isfinite(profile_detector_two_theta_map)
+            & (
+                np.asarray(profile_detector_two_theta_map, dtype=np.float64)
+                <= float(ROD_PROFILE_MAX_TWO_THETA_DEG)
+            )
+            & (specular_detector_qz_map > POSITIVE_QZ_MIN)
+        )
+        if specular_qz_bounds is not None:
+            specular_qz_only_mask = (
+                specular_qz_only_mask
+                & (specular_detector_qz_map >= float(specular_qz_bounds[0]))
+                & (specular_detector_qz_map <= float(specular_qz_bounds[1]))
+            )
+
+        def map_range_for_mask(values: object, mask: object) -> tuple[float, float] | None:
+            selected = np.asarray(values, dtype=np.float64)[np.asarray(mask, dtype=bool)]
+            selected = selected[np.isfinite(selected)]
+            if selected.size < 1:
+                return None
+            return float(np.nanmin(selected)), float(np.nanmax(selected))
+
         profile_failures.append(
             (
                 ROD_PROFILE_TILT_DEG,
                 0.0,
                 "(0,L)",
-                f"no detector Qr/Qz values in dynamic specular window for {specular_profile_l_min:g} <= L <= {specular_profile_l_max:g}",
+                "empty detector HK=0 Qr/Qz profile "
+                f"delta_qr={float(qr_rod_delta_qr):.6g} "
+                f"l_min={float(specular_profile_l_min):.6g} "
+                f"l_max={float(specular_profile_l_max):.6g} "
+                f"qz_bounds={None if specular_qz_bounds is None else tuple(float(value) for value in specular_qz_bounds)} "
+                f"qr_band_pixels={int(np.count_nonzero(specular_qr_band_mask))} "
+                f"phi_two_theta_pixels={int(np.count_nonzero(specular_phi_two_theta_mask))} "
+                f"qz_window_pixels={int(np.count_nonzero(specular_qz_window_mask))} "
+                f"full_profile_pixels={int(np.count_nonzero(specular_full_profile_mask))} "
+                f"qr_band_qz_range={map_range_for_mask(specular_detector_qz_map, specular_qr_band_mask)} "
+                f"phi_two_theta_qz_range={map_range_for_mask(specular_detector_qz_map, specular_phi_two_theta_mask)} "
+                f"qz_only_pixels={int(np.count_nonzero(specular_qz_only_mask))} "
+                f"qz_only_qr_range={map_range_for_mask(specular_detector_qr_map, specular_qz_only_mask)}",
             )
         )
 
@@ -12789,7 +13004,7 @@ def rod_profile_table_for_l_window(
 
 
 qr_rod_editor_base_profiles = rod_profile_table.copy()
-qr_rod_editor_profile_cache: dict[tuple[float, float, float], pd.DataFrame] = {}
+qr_rod_editor_profile_cache: dict[tuple[object, ...], pd.DataFrame] = {}
 
 
 def recompute_qr_rod_region_profiles(
@@ -12798,15 +13013,39 @@ def recompute_qr_rod_region_profiles(
     l_max_value: object,
     *,
     editor_phase: object = None,
+    marker_table: object = None,
 ) -> pd.DataFrame:
     delta_qr = max(1.0e-9, as_float(delta_qr_value, qr_rod_delta_qr))
     l_min_number = as_float(l_min_value, 0.0)
     l_max_number = as_float(l_max_value, np.nan)
+    active_marker_source = (
+        pd.DataFrame(globals().get("marker_table", pd.DataFrame())).copy()
+        if marker_table is None
+        else pd.DataFrame(marker_table).copy()
+    )
+    active_marker_source = marker_table_with_specular_l_markers(
+        active_marker_source,
+        specular_l_marker_table,
+    )
+    active_specular_markers = active_specular_marker_rows_for_l_window(
+        active_marker_source,
+        l_min=l_min_number,
+        l_max=l_max_number,
+    )
+    specular_marker_signature = tuple(
+        (
+            round(float(row.get("qz_marker", np.nan)), 9),
+            round(as_float(row.get("fit_l", row.get("l", row.get("display_l", np.nan))), np.nan), 9),
+        )
+        for row in active_specular_markers.to_dict("records")
+        if np.isfinite(as_float(row.get("qz_marker", np.nan)))
+    )
     cache_key = (
         round(float(delta_qr), 12),
         str(editor_phase if editor_phase is not None else "all").strip().lower(),
         round(float(l_min_number), 9) if np.isfinite(l_min_number) else float("nan"),
         round(float(l_max_number), 9) if np.isfinite(l_max_number) else float("nan"),
+        specular_marker_signature,
     )
     cached = qr_rod_editor_profile_cache.get(cache_key)
     if cached is not None:
@@ -12818,6 +13057,15 @@ def recompute_qr_rod_region_profiles(
     }
     rod_lookup = {int(rod["m"]): dict(rod) for rod in rod_entries}
     rebuilt_rows: list[pd.DataFrame] = []
+    if qr_rod_editor_phase_matches(0, editor_phase):
+        specular_profile = build_specular_qr_rod_profile(
+            delta_qr=delta_qr,
+            l_min=l_min_number,
+            l_max=l_max_number,
+            marker_source=active_marker_source,
+        )
+        if not specular_profile.empty:
+            rebuilt_rows.append(specular_profile)
     for (m_value, branch_value), sub in qr_rod_editor_base_profiles.groupby(
         ["m", "branch"], sort=False
     ):
@@ -12828,23 +13076,9 @@ def recompute_qr_rod_region_profiles(
         branch_text = str(branch_value)
         if not qr_rod_editor_phase_matches(m_int, editor_phase):
             continue
-        if m_int == 0 and branch_text == "qz":
-            rebuilt = profile_from_detector_qr_qz(
-                profile_bg,
-                specular_rod_entry,
-                branch_name="qz",
-                branch_label="m = 0",
-                qz_edges=edges,
-                phi_min=float(specular_phi_min_deg),
-                phi_max=float(specular_phi_max_deg),
-                detector_q_maps=specular_detector_q_maps,
-                detector_phi_map=profile_detector_phi_map,
-                detector_solid_angle=profile_detector_solid_angle,
-                detector_two_theta_map=profile_detector_two_theta_map,
-                theta_initial_deg_used_for_q=specular_detector_theta_initial_deg,
-                delta_qr_override=delta_qr_value,
-            )
-        elif m_int in rod_lookup and branch_text in branch_lookup:
+        if m_int == 0:
+            continue
+        if m_int in rod_lookup and branch_text in branch_lookup:
             phi_min, phi_max, branch_label = branch_lookup[branch_text]
             rebuilt = profile_from_detector_qr_qz(
                 profile_bg,
@@ -12872,7 +13106,12 @@ def recompute_qr_rod_region_profiles(
         ].copy()
     else:
         refreshed = qr_rod_editor_base_profiles.copy()
-    refreshed = rod_profile_table_for_l_window(refreshed, marker_table, l_min_number, l_max_number)
+    refreshed = rod_profile_table_for_l_window(
+        refreshed,
+        active_marker_source,
+        l_min_number,
+        l_max_number,
+    )
     if refreshed.empty:
         refreshed = qr_rod_editor_base_profiles.copy()
     qr_rod_editor_profile_cache[cache_key] = refreshed.copy()
@@ -13838,6 +14077,38 @@ skipped_empty_plot_hk = [
 ]
 if (0, "qz") in drawable_profile_keys:
     plot_rod_entries.append(specular_rod_entry)
+else:
+    final_hk0_marker_count = hk0_qz_marker_count(marker_table)
+    if final_hk0_marker_count > 0:
+        final_hk0_profile_rows = 0
+        final_hk0_positive_pixel_rows = 0
+        if not rod_profile_table.empty and {"m", "branch"}.issubset(rod_profile_table.columns):
+            final_profile_m = pd.to_numeric(rod_profile_table["m"], errors="coerce").to_numpy(
+                dtype=np.float64
+            )
+            final_hk0_mask = (
+                np.isfinite(final_profile_m)
+                & (final_profile_m == 0.0)
+                & (rod_profile_table["branch"].astype(str) == "qz")
+            )
+            final_hk0_profile_rows = int(np.count_nonzero(final_hk0_mask))
+            if "pixel_count" in rod_profile_table:
+                final_profile_pixels = pd.to_numeric(
+                    rod_profile_table["pixel_count"], errors="coerce"
+                ).to_numpy(dtype=np.float64)
+                final_hk0_positive_pixel_rows = int(
+                    np.count_nonzero(
+                        final_hk0_mask
+                        & np.isfinite(final_profile_pixels)
+                        & (final_profile_pixels > 0.0)
+                    )
+                )
+        print(
+            "skipped HK=0 final figure row: no drawable real m=0/qz profile rows "
+            f"rows={final_hk0_profile_rows} "
+            f"positive_pixel_rows={final_hk0_positive_pixel_rows} "
+            f"marker_count={final_hk0_marker_count}"
+        )
 if skipped_hidden_plot_hk:
     print(
         "skipped configured-hidden Qr-rod final figure rows: "

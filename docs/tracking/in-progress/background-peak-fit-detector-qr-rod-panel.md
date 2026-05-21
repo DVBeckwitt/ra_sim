@@ -4,7 +4,7 @@ Type: bug/feature
 Owner: -
 Issue: none
 Priority: p1
-Last updated: 2026-05-20
+Last updated: 2026-05-21
 Status: implemented locally, Qr-rod editor startup and L-bound callback crash
 fixed, detector label editing/import/export restored through a responsive Tk
 canvas popup, detector companion preview/deferred Delta Qr validation passing,
@@ -15,7 +15,8 @@ guard added, PbI2 final HK=0 row restored, split editor persistence/cache
 guarded, PbI2 manuscript figures routed to `results_pbi2`, and HK=4 minus
 marker edits preserve the active editor panel range, HK=0/specular editor
 refreshes are phase-scoped, and PbI2 `m=7` Qr-rod rows are hidden before
-artifacts
+artifacts; real HK=0/qz profile rebuilding is restored from active 00L markers,
+active L bounds, detector Q maps, and Delta-Qr independent of cached base rows
 
 ## Problem
 
@@ -182,7 +183,7 @@ to make the Qr rod detector and integration figures source-consistent:
 - Background image subtraction is temporarily disabled by default for saved
   background images. The generated `peak_subtracted` detector/caked images stay
   raw while fitted peak models remain saved separately for inspection.
-- PbI2 `HK=0` now uses `L_min=1.5` and `theta_i=40°`; nonzero HK rods use the
+- PbI2 `HK=0` now uses `L_min=1.5` and `theta_i=12°`; nonzero HK rods use the
   shared `0.5 <= L <= 3.0` display window and linear y axes. The Qr-rod editor,
   detector companion preview, and final profile figure use the same HK-specific
   L-bound helper, so the preview no longer shows the specular band with nonzero
@@ -216,6 +217,13 @@ to make the Qr rod detector and integration figures source-consistent:
   out, and active-lattice fallback markers are generated only through the
   active HK=0 display maximum, so the final figure can include the `m=0`
   integration row below the nonzero rods.
+- Real HK=0/qz profile construction now uses a dedicated builder that merges
+  active edited markers with specular lattice markers, filters the active
+  `L_min`/`L_max` window, derives fresh qz bins from the active L-to-qz mapping,
+  and integrates detector Qr/Qz pixels with the current Delta-Qr. The
+  recompute path calls this builder for `m=0`, `branch="qz"` before iterating
+  cached/base nonzero profile groups, and edited `00L` markers are passed into
+  the recompute callback.
 - Split Qr-rod marker editing now imports saved edit JSON before launching the
   nonzero and `HK=0` phases, keeps edit-file writes until the final specular
   phase is accepted, carries the detector companion preview across both phases,
@@ -283,9 +291,9 @@ Bug/error status:
 - The missing PbI2 final `m=0` integration row is fixed by removing stale
   specular marker rows outside the active HK=0 L window before computing the
   detector Qr/Qz specular profile. HK=0 marker rows are now seeded from the
-  same theta=40 specular detector Qz map used for integration, and the
+  same theta=12 specular detector Qz map used for integration, and the
   pre-editor Qr-rod cache signature was advanced so stale cached marker tables
-  are not reused. If the PbI2 theta=40 `Qr=0 +/- DeltaQr` detector band has no
+  are not reused. If the PbI2 theta=12 `Qr=0 +/- DeltaQr` detector band has no
   pixels in the active L window, the HK=0 profile falls back to the same
   detector-space specular L-window strip so the final m=0 row is still drawn.
 - Partial edit-file overwrite is fixed. The nonzero phase no longer writes
@@ -743,6 +751,28 @@ Passing checks:
   Feature status: no new operator control, dependency, config key, saved-state
   field, artifact schema, CI workflow, version bump, ADR, or user migration is
   required. Rollback is a normal git revert.
+- 2026-05-21 real HK=0/qz rebuild closeout: the blank PbI2 HK=0 editor path was
+  traced to marker-only fallback rows, recompute depending on pre-existing
+  `qr_rod_editor_base_profiles`, and edited `00L` markers not being passed into
+  profile recompute. The fix builds `m=0`, `branch="qz"` profiles directly from
+  active marker/L-window state and detector Q maps, filters stale specular
+  markers above and below the active window, advances
+  `PRE_EDITOR_QR_ROD_STAGE_SIGNATURE=v12` and
+  `QR_ROD_FINAL_FIT_CACHE_SIGNATURE=v13`, and rejects stale caches that contain
+  HK=0 markers without positive-pixel real HK=0 profile rows. Focused
+  validation passed with
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "hk0 or specular or qr_rod_peak_editor or final_profile_l_filter or final_cache" -ra`
+  (`54 passed, 133 deselected`), scoped compileall, scoped Ruff, and
+  `git diff --check`. A headless PbI2 diagnostic rerun with stale caches reset
+  completed under `C:\asr_work\ra_sim_hk0_final_20260521_015538`; the
+  final rod profile table contained 96 HK=0/qz rows, 69 positive-pixel HK=0/qz
+  rows, and the new "skipped HK=0 final figure row" diagnostic did not appear.
+  Bug/error status: fixed for missing real HK=0 intensity traces, fixed for
+  HK=0 controls being unable to create real rows when base profiles lacked
+  HK=0, and fixed for stale cache reuse of no-m0 states. Feature status: no new
+  operator control, dependency, config key, saved-state field, artifact schema,
+  CI workflow, version bump, ADR, or user migration is required. Rollback is a
+  normal git revert.
 
 Known validation limits:
 

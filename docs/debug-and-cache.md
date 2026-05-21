@@ -217,7 +217,7 @@ report `backend=process_pool` with multiple PIDs. Use
 `BACKGROUND_FIT_BACKEND=thread` or `BACKGROUND_FIT_BACKEND=serial` to opt out
 of that relaunch for debugging.
 
-Current status as of 2026-05-12:
+Current status as of 2026-05-21:
 
 - pre-editor cache filename:
   `<state-stem>_pre_qr_rod_marker_editor_cache.pkl`
@@ -258,11 +258,17 @@ Current status as of 2026-05-12:
   through `BACKGROUND_IMAGE_SUBTRACTION_DISABLED_OVERRIDE=1`; fitted peak
   models remain written separately for diagnostics
 - final-fit cache keys include
-  `fit_signature=joint_qz_labeled_marker_fit_specular_theta_i0_l8_v12` so older
-  cached joint fits that could drop weak labeled markers, overfill the m=0
-  low-L full profile, truncate HK=0 below the requested specular L window, draw
-  the removed broad HK=0 fallback support mask, or predate the PbI2 sideband
-  plot policy are recomputed
+  `fit_signature=joint_qz_labeled_marker_fit_specular_theta_i12_l8_v13`, and
+  pre-editor Qr-rod stages use
+  `qr_rod_pre_marker_profiles_hk0_l_defaults_v12`, so older cached joint fits
+  that could drop weak labeled markers, overfill the m=0 low-L full profile,
+  truncate HK=0 below the requested specular L window, draw the removed broad
+  HK=0 fallback support mask, predate the PbI2 sideband plot policy, or carry
+  marker-only HK=0 state without positive-pixel real `(0, "qz")` profile rows
+  are recomputed
+- pre-editor and final-fit cache validation rejects HK=0 marker tables unless
+  the matching rod profile table contains real `m=0`, `branch="qz"` rows with
+  positive `pixel_count`
 - split Qr-rod marker editing loads imported edit JSON before the nonzero/HK=0
   phase split, writes edit JSON only after the final HK=0/specular phase is
   accepted, and records the active HK=0/specular L bounds in the final-fit cache
@@ -285,7 +291,7 @@ Current status as of 2026-05-12:
 - PbI2 Qr-rod profile plots use a logarithmic intensity axis only for `HK=0`.
   Nonzero HK panels use linear intensity and the shared `0.5 <= L <= 3.0`
   display window. PbI2 `HK=0` uses the material-specific defaults
-  `L_min=1.5` and `theta_i=40°`; the marker editor and detector companion
+  `L_min=1.5` and `theta_i=12°`; the marker editor and detector companion
   preview use the same HK=0 L bounds.
 - PbI2 manuscript figures default to
   `C:\Users\Kenpo\OneDrive\Documents\GitHub\PhD Work\2D-Manuscript-Draft\figures\results_pbi2`.

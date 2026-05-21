@@ -81,6 +81,11 @@
     the accepted L window while profile integration, editor preview, and
     `00L_region` detector figures stay on the strict `Qr=0` Delta-Qr band
     instead of a broad specular fallback mask.
+  - Fixed missing real PbI2 HK=0 Qr-rod profiles by rebuilding `m=0`,
+    `branch="qz"` rows from active `00L` markers, active L bounds, detector Q
+    maps, and the current Delta-Qr independent of cached base profile rows;
+    edited HK=0 markers now flow into recompute and stale pre-editor/final
+    caches missing positive-pixel HK=0 rows are rejected.
   - Added opt-in exact manual-pair exclusion and dry-run parameter-combo
     sweeps for headless Bi2Se3 geometry recovery fits, including per-combo
     JSON/PNG artifacts, top-level sweep reports, fail-closed combo results,
@@ -142,11 +147,11 @@
     not leave stale active fit backgrounds behind.
   - Added a popup-mode detector Qr-region companion preview beside the Qr-rod peak marker editor in the parallel background peak-fit diagnostic script, explicitly showing the companion window, refreshing detector overlays live during Delta Qr/L-window edits, and deferring expensive Delta Qr profile reintegration until slider release or accept.
   - Fixed the parallel Qr-rod marker editor so `L Min` / `L Max` submissions reject malformed profile-refresh tables, keep redraw errors inside the editor callback, and no longer let the global Enter shortcut close the popup while an L-bound text box is being edited.
-  - Fixed PbI2 Qr-rod profile/editor defaults so `HK=0` uses `L_min=1.5` and `theta_i=40°`, nonzero HK rods use `0.5 <= L <= 3.0` with linear y axes, the detector companion preview uses the same HK-specific L bounds, and configured-hidden rows such as `HK=7` stay out of editor/support/final plots.
+  - Fixed PbI2 Qr-rod profile/editor defaults so `HK=0` uses `L_min=1.5` and `theta_i=12°`, nonzero HK rods use `0.5 <= L <= 3.0` with linear y axes, the detector companion preview uses the same HK-specific L bounds, and configured-hidden rows such as `HK=7` stay out of editor/support/final plots.
   - Fixed the PbI2 `00L` detector/editor region fallback so the specular rod still appears when cached marker rows are missing, split Qr-rod marker editing into nonzero-HK and HK=0 phases before detector-label placement, and kept Qr-rod marker clicks from changing subplot min/max limits.
   - Fixed the HK=0 Qr-rod editor phase so it seeds from the pre-editor real intensity profile, keeps that last valid specular profile when an L-bound refresh returns only nonzero rows, and reports marker-only fallback explicitly when real HK=0 intensity rows are unavailable.
   - Fixed PbI2 nonzero Qr-rod profile plotting so collapsed marker-derived L mappings, such as the observed `m=4 -` branch, are rejected and the panel falls back to the lattice/Qz L axis instead of compressing the full profile into a narrow L window.
-  - Restored the PbI2 final HK=0 integration row by filtering stale specular markers below the active `L_min=1.5` window, generating fallback specular marker rows only through the active HK=0 display maximum, seeding HK=0 markers from the same theta=40 detector Qz map used for integration, and falling back to the detector-space specular L-window strip when the theta=40 `Qr=0` band has no pixels.
+  - Restored the PbI2 final HK=0 integration row by filtering stale specular markers below the active `L_min=1.5` window, generating fallback specular marker rows only through the active HK=0 display maximum, seeding HK=0 markers from the same theta=12 detector Qz map used for integration, and falling back to the detector-space specular L-window strip when the theta=12 `Qr=0` band has no pixels.
   - Routed PbI2 background peak-fit manuscript figures to `figures/results_pbi2` by default while keeping other samples on `figures/results_ordered` and preserving `RA_SIM_ALL_BACKGROUND_FIGURE_OUT_DIR` as the explicit override.
   - Fixed the split Qr-rod marker editor persistence and cache contract so imported edits load before the nonzero/HK=0 phase split, intermediate phases no longer write partial edit JSON, the detector companion preview is available across both phases, and final fit cache keys include the active HK=0/specular L bounds.
   - Disabled saved background-image peak subtraction by default in the parallel background peak-fit diagnostic while keeping fitted peak models saved separately.
