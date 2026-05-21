@@ -258,7 +258,7 @@ Current status as of 2026-05-12:
   through `BACKGROUND_IMAGE_SUBTRACTION_DISABLED_OVERRIDE=1`; fitted peak
   models remain written separately for diagnostics
 - final-fit cache keys include
-  `fit_signature=joint_qz_labeled_marker_fit_specular_theta_i0_l8_v11` so older
+  `fit_signature=joint_qz_labeled_marker_fit_specular_theta_i0_l8_v12` so older
   cached joint fits that could drop weak labeled markers, overfill the m=0
   low-L full profile, truncate HK=0 below the requested specular L window, draw
   the removed broad HK=0 fallback support mask, or predate the PbI2 sideband

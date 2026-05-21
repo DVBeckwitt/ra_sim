@@ -120,12 +120,12 @@ def _safe_run_name(value: object) -> str:
 
 
 QR_ROD_PROFILE_CACHE_SCHEMA = "ra_sim.qr_rod_profile_cache.v1"
-QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_specular_theta_i0_l8_v11"
+QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_specular_theta_i0_l8_v12"
 PRE_EDITOR_CACHE_SCHEMA = "ra_sim.background_pre_editor_cache.v1"
 PRE_EDITOR_CACHE_SIGNATURE = "pre_qr_rod_marker_editor_inputs_v1"
 PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE = "background_peak_fit_results_v1"
 PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE = "profile_fit_cache_v1"
-PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_l_defaults_v10"
+PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_l_defaults_v11"
 
 
 def _cache_normalize_value(value: object) -> object:
@@ -153,9 +153,10 @@ def _cache_normalize_value(value: object) -> object:
 
 
 def pre_editor_cache_path(output_dir: Path | str, state_path: Path | str) -> Path:
+    state_name = Path(str(state_path).replace("\\", "/")).expanduser().stem
     return (
         Path(output_dir).expanduser()
-        / f"{_safe_run_name(Path(str(state_path)).stem)}_pre_qr_rod_marker_editor_cache.pkl"
+        / f"{_safe_run_name(state_name)}_pre_qr_rod_marker_editor_cache.pkl"
     )
 
 
@@ -165,7 +166,7 @@ def pre_editor_cache_key(
     normalized_inputs = _cache_normalize_value(input_signature or {})
     data = json.dumps(normalized_inputs, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return {
-        "state_name": Path(state_path).expanduser().name,
+        "state_name": Path(str(state_path).replace("\\", "/")).expanduser().name,
         "signature": PRE_EDITOR_CACHE_SIGNATURE,
         "input_sha256": hashlib.sha256(data).hexdigest(),
         "inputs": normalized_inputs,
@@ -2734,7 +2735,9 @@ def figure_output_dir_for_sample(
             r"C:\Users\Kenpo\OneDrive\Documents\GitHub\PhD Work\2D-Manuscript-Draft\figures\results_ordered"
         )
     output_dir = output_dir.expanduser()
-    if not output_dir.is_absolute():
+    output_text = str(output_dir)
+    has_windows_drive = bool(re.match(r"^[A-Za-z]:[\\/]", output_text))
+    if not output_dir.is_absolute() and not has_windows_drive:
         output_dir = Path(root) / output_dir
     return output_dir
 
@@ -8711,7 +8714,7 @@ def profile_from_detector_qr_qz(
 
     qr0 = float(rod["qr"])
     delta_qr = max(1.0e-9, as_float(delta_qr_override, qr_rod_delta_qr))
-    qr_lo = max(0.0, qr0 - delta_qr)
+    qr_lo = qr0 - delta_qr
     qr_hi = qr0 + delta_qr
     theta_initial_for_q = (
         float(bg["qr_overlay_config"].theta_initial_deg)
@@ -12181,7 +12184,7 @@ specular_detector_region_mask = (
         <= float(ROD_PROFILE_MAX_TWO_THETA_DEG)
     )
     & (specular_detector_qz_map > POSITIVE_QZ_MIN)
-    & (specular_detector_qr_map >= 0.0)
+    & (specular_detector_qr_map >= -float(qr_rod_delta_qr))
     & (specular_detector_qr_map <= float(qr_rod_delta_qr))
 )
 

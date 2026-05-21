@@ -724,16 +724,22 @@ Passing checks:
   detector region. HK=0/specular qz bounds now come from the accepted L-window
   marker/lattice mapping without clipping to the selected pixel min/max, while
   profile integration, editor preview, and the final `00L_region` detector
-  figure stay on the strict `Qr=0` Delta-Qr band. The normal
+  figure stay on the strict symmetric `Qr=0 +/- Delta-Qr` band. The normal
   `specular_profile_mask_override` and broad fallback-mask path were removed.
-  Cache signatures were advanced to `PRE_EDITOR_QR_ROD_STAGE_SIGNATURE=v10` and
-  `QR_ROD_FINAL_FIT_CACHE_SIGNATURE=v11` so stale truncated or broad-fallback
-  profiles/fits are recomputed automatically. Validation passed with
+  Cache signatures were advanced to `PRE_EDITOR_QR_ROD_STAGE_SIGNATURE=v11` and
+  `QR_ROD_FINAL_FIT_CACHE_SIGNATURE=v12` so stale truncated or broad-fallback
+  profiles/fits are recomputed automatically. A follow-up HK=0 disappearance
+  regression fixed the detector-profile Qr lower bound so negative-Qr detector
+  pixels inside the symmetric m=0 band are integrated instead of being clipped
+  at `Qr=0`. Validation passed with
   `python -m pytest tests/test_background_peak_fits_notebook.py -ra`
-  (`170 passed, 8 skipped`), `python -m ra_sim.dev check` (`294 passed`),
-  scoped compileall, and `git diff --check`. Bug/error status: fixed for HK=0
-  integrated-region calculations not extending below the observed cutoff and
-  fixed for the HK=0 detector region rendering as a broad fallback wedge.
+  (`172 passed, 8 skipped`), focused HK=0/cache tests (`5 passed`), scoped
+  compileall, scoped Ruff, and `git diff --check`. `python -m ra_sim.dev check`
+  was not clean because an unrelated staged `ra_sim/fitting/optimization.py`
+  formatting change predates this slice. Bug/error status: fixed for HK=0
+  integrated-region calculations not extending below the observed cutoff, fixed
+  for the HK=0 detector region rendering as a broad fallback wedge, and fixed
+  for the m=0 profile disappearing when only negative-Qr detector pixels remain.
   Feature status: no new operator control, dependency, config key, saved-state
   field, artifact schema, CI workflow, version bump, ADR, or user migration is
   required. Rollback is a normal git revert.
