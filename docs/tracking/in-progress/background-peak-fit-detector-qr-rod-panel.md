@@ -89,7 +89,8 @@ to make the Qr rod detector and integration figures source-consistent:
   `RA_SIM_RADIAL_BACKGROUND_SUBTRACTION_*` overrides or the popup. The raw
   detector image remains available, the radial model and corrected detector are
   saved as diagnostics, and the pre-editor/final Qr-rod cache signatures include
-  the radial policy.
+  the radial policy. The radial editor uses a Tk/Pillow canvas popup instead of
+  Matplotlib widgets so scale changes update from the cached radial model.
 - The generated `.py` diagnostic opens the Qr-rod peak marker editor by default
   before the final joint Qz fit. `RA_SIM_QR_ROD_PEAK_EDIT_MODE=skip` disables
   the popup for unattended runs, `popup` is the default-on mode, and accepted
@@ -801,7 +802,7 @@ Passing checks:
 - 2026-05-21 radial pre-fit background feature closeout: the parallel
   diagnostic now has a separate pre-fit radial detector background reducer,
   independent from the existing post-fit/sideband background flags. It is off by
-  default, can be previewed in a Matplotlib popup, accepts environment
+  default, can be previewed in a Tk/Pillow popup, accepts environment
   overrides for mode/scale/percentile/smoothing/clip behavior, preserves the raw
   detector image, saves radial model/corrected detector arrays, and invalidates
   peak-fit/Qr-rod caches when the radial policy changes. Focused validation
@@ -812,6 +813,19 @@ Passing checks:
   optional feature. Feature status: implemented locally, automated source/helper
   coverage is passing, and manual popup acceptance against a real detector run
   remains the launch check.
+- 2026-05-21 radial popup responsiveness follow-up: the radial pre-fit editor
+  no longer uses Matplotlib widgets or a Matplotlib figure for interaction. It
+  now renders downsampled detector previews through Pillow `ImageTk.PhotoImage`
+  on Tk canvases, keeps the accepted config interface stable, and still
+  recomputes the radial model only for percentile/smoothing changes. Focused
+  validation passed with
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "radial_background or background_subtraction or qr_rod_peak_editor or hk0 or final_cache" -ra`
+  (`46 passed, 155 deselected`), after the narrower radial check
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "radial_background or background_subtraction" -ra`
+  (`9 passed, 192 deselected`), scoped compileall, scoped Ruff, and
+  `git diff --check`. Bug/error status: fixed for the radial editor being too
+  laggy to use. Feature status: implemented locally; manual real-data popup
+  validation remains pending.
 
 Known validation limits:
 

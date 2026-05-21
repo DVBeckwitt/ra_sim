@@ -981,11 +981,27 @@ def test_parallel_script_radial_background_popup_is_before_background_preps() ->
             "\n@njit(fastmath=True, nogil=True)"
         )
     ]
-    assert "from matplotlib.widgets import Button, CheckButtons, Slider, TextBox" in popup_source
-    assert '"Subtract scale"' in popup_source
+    assert "import tkinter as tk" in popup_source
+    assert "from tkinter import ttk" in popup_source
+    assert "from PIL import Image, ImageTk" in popup_source
+    assert "tk.Canvas(" in popup_source
+    assert "ttk.Scale(" in popup_source
+    assert "ttk.Entry(" in popup_source
+    assert "ttk.Checkbutton(" in popup_source
+    assert "ttk.Button(" in popup_source
+    assert "ImageTk.PhotoImage(" in popup_source
+    assert "image_refs" in popup_source
+    assert "def detector_preview_image(" in popup_source
+    assert "def draw_radial_profile(" in popup_source
+    assert "profile_canvas.create_line" in popup_source
+    assert "root.mainloop()" in popup_source
+    assert "from matplotlib.widgets" not in popup_source
+    assert "plt.subplots(" not in popup_source
+    assert "Subtract scale" in popup_source
     assert '"Percentile"' in popup_source
     assert '"Smooth sigma"' in popup_source
-    assert '["Enabled", "Clip < 0"]' in popup_source
+    assert '"Enabled"' in popup_source
+    assert '"Clip < 0"' in popup_source
     for label in ('"Accept"', '"Off"', '"Cancel"'):
         assert label in popup_source
     assert "RA_SIM_RADIAL_BACKGROUND_SUBTRACTION_EDIT_MODE" in source

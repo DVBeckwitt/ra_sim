@@ -3763,16 +3763,19 @@ def show_radial_background_subtraction_popup(
     initial_config: dict[str, object],
     backend_name: object = None,
 ) -> dict[str, object]:
-    backend = str(backend_name if backend_name is not None else mpl.get_backend())
-    if qr_rod_peak_edit_runtime_mode("auto", backend_name=backend, env={}) != "popup":
-        raise RuntimeError(f"Matplotlib backend {backend!r} is not interactive")
     try:
-        from matplotlib.widgets import Button, CheckButtons, Slider, TextBox
+        import tkinter as tk
+        from tkinter import ttk
+
+        from PIL import Image, ImageTk
     except Exception as exc:
-        raise RuntimeError(f"Matplotlib editor widgets are unavailable: {exc}") from exc
+        raise RuntimeError(f"Tk radial background editor is unavailable: {exc}") from exc
 
     if not background_files:
         return dict(initial_config)
+
+    max_preview_width = 360
+    max_preview_height = 280
 
     def finite_display_limits(values: np.ndarray) -> tuple[float, float]:
         finite = values[np.isfinite(values)]
@@ -3784,6 +3787,33 @@ def show_radial_background_subtraction_popup(
             width = max(abs(center) * 0.1, 1.0)
             return center - width, center + width
         return float(vmin), float(vmax)
+
+    def preview_stride(shape: tuple[int, int]) -> int:
+        rows, cols = int(shape[0]), int(shape[1])
+        if rows <= 0 or cols <= 0:
+            return 1
+        return max(
+            1,
+            int(math.ceil(rows / float(max_preview_height))),
+            int(math.ceil(cols / float(max_preview_width))),
+        )
+
+    def detector_preview_image(values: object) -> object:
+        array = np.asarray(values, dtype=np.float64)
+        if array.ndim != 2:
+            array = np.reshape(array, (1, -1))
+        step = preview_stride((int(array.shape[0]), int(array.shape[1])))
+        preview = np.asarray(array[::step, ::step], dtype=np.float64)
+        if preview.size == 0:
+            preview = np.zeros((1, 1), dtype=np.float64)
+        vmin, vmax = finite_display_limits(preview)
+        finite = np.isfinite(preview)
+        scaled = np.zeros(preview.shape, dtype=np.uint8)
+        if vmax > vmin and np.any(finite):
+            normalized = np.clip((preview[finite] - vmin) / (vmax - vmin), 0.0, 1.0)
+            scaled[finite] = np.asarray(np.round(normalized * 255.0), dtype=np.uint8)
+        rgb = np.stack([scaled, scaled, scaled], axis=-1)
+        return Image.fromarray(rgb)
 
     def first_valid_background_index() -> int:
         for key in (
@@ -3824,66 +3854,12 @@ def show_radial_background_subtraction_popup(
     clip_zero = bool(current_config["clip_zero"])
     percentile_value = float(current_config["percentile"])
     smooth_sigma_value = float(current_config["smooth_sigma"])
-    syncing_check_buttons = False
-
-    fig, axes = plt.subplots(2, 2, figsize=(11.0, 7.5), num="Radial background subtraction")
-    fig.subplots_adjust(left=0.07, right=0.98, top=0.92, bottom=0.23, wspace=0.28, hspace=0.34)
-    raw_ax, model_ax, corrected_ax, profile_ax = axes.ravel()
-    raw_vmin, raw_vmax = finite_display_limits(raw_detector)
-    raw_artist = raw_ax.imshow(raw_detector, cmap=JOURNAL_DETECTOR_CMAP, vmin=raw_vmin, vmax=raw_vmax)
-    model_artist = model_ax.imshow(np.zeros_like(raw_detector), cmap=JOURNAL_DETECTOR_CMAP)
-    corrected_artist = corrected_ax.imshow(
-        raw_detector,
-        cmap=JOURNAL_DETECTOR_CMAP,
-        vmin=raw_vmin,
-        vmax=raw_vmax,
-    )
-    (radial_line,) = profile_ax.plot([], [], color=OKABE_ITO["blue"], linewidth=1.3, label="model")
-    (raw_line,) = profile_ax.plot([], [], color=OKABE_ITO["black"], linewidth=0.8, label="raw")
-    profile_ax.set_xlabel("2theta (deg)")
-    profile_ax.set_ylabel("Intensity")
-    profile_ax.legend(loc="best", fontsize=8)
-    raw_ax.set_title(f"Raw detector image ({preview_idx}: {preview_path.name})")
-    model_ax.set_title("Radial background model")
-    corrected_ax.set_title("Corrected detector image")
-    profile_ax.set_title("Lower-envelope radial profile")
-    for ax in (raw_ax, model_ax, corrected_ax):
-        ax.set_xticks([])
-        ax.set_yticks([])
-    fig.colorbar(raw_artist, ax=raw_ax, fraction=0.046, pad=0.02)
-    fig.colorbar(model_artist, ax=model_ax, fraction=0.046, pad=0.02)
-    fig.colorbar(corrected_artist, ax=corrected_ax, fraction=0.046, pad=0.02)
-
-    scale_slider = Slider(
-        fig.add_axes([0.09, 0.145, 0.32, 0.035]),
-        "Subtract scale",
-        0.0,
-        2.0,
-        valinit=float(current_config["scale"]),
-    )
-    percentile_box = TextBox(
-        fig.add_axes([0.50, 0.145, 0.08, 0.04]),
-        "Percentile",
-        initial=f"{float(current_config['percentile']):.6g}",
-    )
-    smooth_box = TextBox(
-        fig.add_axes([0.70, 0.145, 0.08, 0.04]),
-        "Smooth sigma",
-        initial=f"{float(current_config['smooth_sigma']):.6g}",
-    )
-    checks = CheckButtons(
-        fig.add_axes([0.09, 0.045, 0.18, 0.075]),
-        ["Enabled", "Clip < 0"],
-        [bool(enabled), bool(clip_zero)],
-    )
-    accept_button = Button(fig.add_axes([0.63, 0.055, 0.09, 0.045]), "Accept")
-    off_button = Button(fig.add_axes([0.74, 0.055, 0.09, 0.045]), "Off")
-    cancel_button = Button(fig.add_axes([0.85, 0.055, 0.09, 0.045]), "Cancel")
+    root = None
 
     def current_preview_config() -> dict[str, object]:
         return {
             "mode": "radial" if bool(enabled) else "off",
-            "scale": float(scale_slider.val) if bool(enabled) else 0.0,
+            "scale": float(scale_var.get()) if bool(enabled) else 0.0,
             "percentile": float(percentile_value),
             "smooth_sigma": float(smooth_sigma_value),
             "clip_zero": bool(clip_zero),
@@ -3906,6 +3882,107 @@ def show_radial_background_subtraction_popup(
         )
         return cached_radial_payload
 
+    def finite_profile_limits(*series: np.ndarray) -> tuple[float, float]:
+        finite_values: list[np.ndarray] = []
+        for values in series:
+            array = np.asarray(values, dtype=np.float64)
+            finite = array[np.isfinite(array)]
+            if finite.size:
+                finite_values.append(finite)
+        if not finite_values:
+            return 0.0, 1.0
+        combined = np.concatenate(finite_values)
+        ymin, ymax = np.nanpercentile(combined, [1.0, 99.0])
+        if not np.isfinite(ymin) or not np.isfinite(ymax) or ymax <= ymin:
+            center = float(np.nanmedian(combined))
+            width = max(abs(center) * 0.1, 1.0)
+            return center - width, center + width
+        padding = max((float(ymax) - float(ymin)) * 0.05, 1.0e-9)
+        return float(ymin) - padding, float(ymax) + padding
+
+    def draw_radial_profile(
+        theta_centers: np.ndarray,
+        radial_profile: np.ndarray,
+        smoothed_profile: np.ndarray,
+    ) -> None:
+        profile_canvas.delete("profile")
+        width = max(1, int(profile_canvas.winfo_width() or profile_width))
+        height = max(1, int(profile_canvas.winfo_height() or profile_height))
+        margin_left = 34
+        margin_right = 10
+        margin_top = 12
+        margin_bottom = 24
+        x0 = margin_left
+        x1 = max(margin_left + 1, width - margin_right)
+        y0 = margin_top
+        y1 = max(margin_top + 1, height - margin_bottom)
+        profile_canvas.create_rectangle(
+            x0,
+            y0,
+            x1,
+            y1,
+            outline="#b8b8b8",
+            width=1,
+            tags="profile",
+        )
+        theta = np.asarray(theta_centers, dtype=np.float64)
+        raw_profile = np.asarray(radial_profile, dtype=np.float64)
+        smooth_profile = np.asarray(smoothed_profile, dtype=np.float64)
+        valid_theta = theta[np.isfinite(theta)]
+        if valid_theta.size == 0 or smooth_profile.size == 0:
+            return
+        xmin = float(np.nanmin(valid_theta))
+        xmax = float(np.nanmax(valid_theta))
+        if not np.isfinite(xmin) or not np.isfinite(xmax) or xmax <= xmin:
+            return
+        ymin, ymax = finite_profile_limits(raw_profile, smooth_profile)
+        if ymax <= ymin:
+            return
+
+        def points_for(values: np.ndarray) -> list[float]:
+            values = np.asarray(values, dtype=np.float64)
+            count = min(theta.size, values.size)
+            if count == 0:
+                return []
+            x_values = theta[:count]
+            y_values = values[:count]
+            finite = np.isfinite(x_values) & np.isfinite(y_values)
+            if np.count_nonzero(finite) < 2:
+                return []
+            x_scaled = x0 + (x_values[finite] - xmin) / (xmax - xmin) * (x1 - x0)
+            y_scaled = y1 - (y_values[finite] - ymin) / (ymax - ymin) * (y1 - y0)
+            points = np.column_stack([x_scaled, y_scaled]).reshape(-1)
+            return [float(value) for value in points]
+
+        raw_points = points_for(raw_profile)
+        smooth_points = points_for(smooth_profile)
+        if len(raw_points) >= 4:
+            profile_canvas.create_line(*raw_points, fill="#6a6a6a", width=1, tags="profile")
+        if len(smooth_points) >= 4:
+            profile_canvas.create_line(*smooth_points, fill="#0072b2", width=2, tags="profile")
+        profile_canvas.create_text(
+            x0,
+            height - 12,
+            text=f"{xmin:.3g}",
+            anchor="w",
+            fill="#444444",
+            tags="profile",
+        )
+        profile_canvas.create_text(
+            x1,
+            height - 12,
+            text=f"{xmax:.3g}",
+            anchor="e",
+            fill="#444444",
+            tags="profile",
+        )
+
+    def update_panel_image(name: str, values: object) -> None:
+        pil_image = detector_preview_image(values)
+        photo = ImageTk.PhotoImage(pil_image, master=root)
+        image_refs[name] = photo
+        image_canvases[name].itemconfigure(image_items[name], image=photo)
+
     def update_preview(*, recompute_model: bool = False) -> None:
         config = current_preview_config()
         scale = float(config["scale"])
@@ -3927,97 +4004,206 @@ def show_radial_background_subtraction_popup(
             theta_centers = np.asarray([], dtype=np.float64)
             radial_profile = np.asarray([], dtype=np.float64)
             smoothed_profile = np.asarray([], dtype=np.float64)
-        model_vmin, model_vmax = finite_display_limits(model)
-        corrected_vmin, corrected_vmax = finite_display_limits(corrected)
-        model_artist.set_data(model)
-        model_artist.set_clim(model_vmin, model_vmax)
-        corrected_artist.set_data(corrected)
-        corrected_artist.set_clim(corrected_vmin, corrected_vmax)
-        radial_line.set_data(theta_centers, smoothed_profile)
-        raw_line.set_data(theta_centers, radial_profile)
-        if theta_centers.size and smoothed_profile.size:
-            profile_ax.relim()
-            profile_ax.autoscale_view()
-        fig.canvas.draw_idle()
+        update_panel_image("model", model)
+        update_panel_image("corrected", corrected)
+        draw_radial_profile(theta_centers, radial_profile, smoothed_profile)
 
     def set_scale(_value: float) -> None:
-        nonlocal enabled, syncing_check_buttons
-        if scale_slider.val > 0.0 and not bool(enabled):
+        nonlocal enabled
+        scale_value = float(scale_var.get())
+        scale_value = min(2.0, max(0.0, scale_value))
+        scale_var.set(scale_value)
+        scale_label_var.set(f"Subtract scale {scale_value:.3g}")
+        if scale_value > 0.0 and not bool(enabled):
             enabled = True
-            if not bool(checks.get_status()[0]):
-                syncing_check_buttons = True
-                try:
-                    checks.set_active(0)
-                finally:
-                    syncing_check_buttons = False
+            enabled_var.set(True)
         update_preview()
 
-    def set_percentile(text: str) -> None:
+    def set_percentile(_event: object | None = None) -> None:
         nonlocal cached_radial_payload, percentile_value
-        percentile_value = min(100.0, max(0.0, as_float(text, percentile_value)))
+        percentile_value = min(100.0, max(0.0, as_float(percentile_var.get(), percentile_value)))
+        percentile_var.set(f"{percentile_value:.6g}")
         cached_radial_payload = None
         update_preview(recompute_model=True)
 
-    def set_smooth_sigma(text: str) -> None:
+    def set_smooth_sigma(_event: object | None = None) -> None:
         nonlocal cached_radial_payload, smooth_sigma_value
-        smooth_sigma_value = max(0.0, as_float(text, smooth_sigma_value))
+        smooth_sigma_value = max(0.0, as_float(smooth_sigma_var.get(), smooth_sigma_value))
+        smooth_sigma_var.set(f"{smooth_sigma_value:.6g}")
         cached_radial_payload = None
         update_preview(recompute_model=True)
 
-    def toggle_check(label: str) -> None:
+    def toggle_check() -> None:
         nonlocal enabled, clip_zero
-        if bool(syncing_check_buttons):
-            return
-        states = list(checks.get_status())
-        enabled = bool(states[0])
-        clip_zero = bool(states[1])
-        if str(label) == "Enabled" and enabled and scale_slider.val <= 0.0:
-            scale_slider.set_val(1.0)
-            return
-        update_preview()
+        was_enabled = bool(enabled)
+        enabled = bool(enabled_var.get())
+        clip_zero = bool(clip_zero_var.get())
+        if bool(enabled) and float(scale_var.get()) <= 0.0:
+            scale_var.set(1.0)
+            scale_label_var.set("Subtract scale 1")
+        recompute = bool(enabled) and not was_enabled and cached_radial_payload is None
+        update_preview(recompute_model=recompute)
 
-    def accept(_event: object) -> None:
-        result["config"] = current_preview_config()
-        plt.close(fig)
+    def finish_with_config(config: dict[str, object]) -> None:
+        result["config"] = dict(config)
+        if root is not None:
+            root.quit()
 
-    def off(_event: object) -> None:
-        result["config"] = {
+    def accept() -> None:
+        finish_with_config(current_preview_config())
+
+    def off() -> None:
+        finish_with_config({
             **current_preview_config(),
             "mode": "off",
             "scale": 0.0,
             "clip_zero": bool(clip_zero),
-        }
-        plt.close(fig)
+        })
 
-    def cancel(_event: object) -> None:
-        result["config"] = dict(initial_config)
-        plt.close(fig)
+    def cancel() -> None:
+        finish_with_config(dict(initial_config))
 
-    scale_slider.on_changed(set_scale)
-    percentile_box.on_submit(set_percentile)
-    smooth_box.on_submit(set_smooth_sigma)
-    checks.on_clicked(toggle_check)
-    accept_button.on_clicked(accept)
-    off_button.on_clicked(off)
-    cancel_button.on_clicked(cancel)
-    fig._ra_sim_radial_background_widgets = [
-        scale_slider,
-        percentile_box,
-        smooth_box,
-        checks,
-        accept_button,
-        off_button,
-        cancel_button,
-    ]
-    update_preview()
+    raw_preview = detector_preview_image(raw_detector)
+    preview_width, preview_height = raw_preview.size
+    profile_width = int(preview_width)
+    profile_height = int(preview_height)
+    image_refs: dict[str, object] = {}
+    image_canvases: dict[str, object] = {}
+    image_items: dict[str, int] = {}
     title_tilt = background_tilt_deg.get(preview_idx, float("nan"))
-    print(
-        "opening radial background subtraction editor "
-        f"for {preview_path.name} tilt={format_angle_value(title_tilt)} deg; "
-        "click Accept to continue",
-        flush=True,
-    )
-    plt.show(block=True)
+    try:
+        root = tk.Tk()
+        root.title("Radial background subtraction")
+        root.protocol("WM_DELETE_WINDOW", cancel)
+        root.columnconfigure(0, weight=1)
+        root.rowconfigure(0, weight=1)
+
+        main = ttk.Frame(root, padding=8)
+        main.grid(row=0, column=0, sticky="nsew")
+        for col in range(2):
+            main.columnconfigure(col, weight=1)
+        for row in range(2):
+            main.rowconfigure(row, weight=1)
+
+        def add_image_panel(name: str, title: str, row: int, column: int, image: object) -> None:
+            panel = ttk.Frame(main, padding=(0, 0, 8, 8))
+            panel.grid(row=row, column=column, sticky="nsew")
+            panel.columnconfigure(0, weight=1)
+            panel.rowconfigure(1, weight=1)
+            ttk.Label(panel, text=title).grid(row=0, column=0, sticky="w")
+            canvas = tk.Canvas(
+                panel,
+                width=preview_width,
+                height=preview_height,
+                background="black",
+                highlightthickness=1,
+                highlightbackground="#8a8a8a",
+            )
+            canvas.grid(row=1, column=0, sticky="nsew")
+            photo = ImageTk.PhotoImage(image, master=root)
+            image_refs[name] = photo
+            image_canvases[name] = canvas
+            image_items[name] = int(canvas.create_image(0, 0, image=photo, anchor="nw"))
+
+        add_image_panel(
+            "raw",
+            f"Raw detector image ({preview_idx}: {preview_path.name})",
+            0,
+            0,
+            raw_preview,
+        )
+        add_image_panel(
+            "model",
+            "Radial background model",
+            0,
+            1,
+            detector_preview_image(np.zeros_like(raw_detector, dtype=np.float64)),
+        )
+        add_image_panel("corrected", "Corrected detector image", 1, 0, raw_preview)
+
+        profile_panel = ttk.Frame(main, padding=(0, 0, 8, 8))
+        profile_panel.grid(row=1, column=1, sticky="nsew")
+        profile_panel.columnconfigure(0, weight=1)
+        profile_panel.rowconfigure(1, weight=1)
+        ttk.Label(profile_panel, text="Lower-envelope radial profile").grid(
+            row=0, column=0, sticky="w"
+        )
+        profile_canvas = tk.Canvas(
+            profile_panel,
+            width=profile_width,
+            height=profile_height,
+            background="white",
+            highlightthickness=1,
+            highlightbackground="#8a8a8a",
+        )
+        profile_canvas.grid(row=1, column=0, sticky="nsew")
+
+        controls = ttk.Frame(main)
+        controls.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        controls.columnconfigure(1, weight=1)
+        controls.columnconfigure(4, weight=1)
+
+        enabled_var = tk.BooleanVar(root, value=bool(enabled))
+        clip_zero_var = tk.BooleanVar(root, value=bool(clip_zero))
+        scale_var = tk.DoubleVar(root, value=float(current_config["scale"]))
+        scale_label_var = tk.StringVar(root, value=f"Subtract scale {float(scale_var.get()):.3g}")
+        percentile_var = tk.StringVar(root, value=f"{float(current_config['percentile']):.6g}")
+        smooth_sigma_var = tk.StringVar(root, value=f"{float(current_config['smooth_sigma']):.6g}")
+
+        ttk.Checkbutton(
+            controls,
+            text="Enabled",
+            variable=enabled_var,
+            command=toggle_check,
+        ).grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Label(controls, textvariable=scale_label_var).grid(row=0, column=1, sticky="w")
+        ttk.Scale(
+            controls,
+            from_=0.0,
+            to=2.0,
+            variable=scale_var,
+            command=set_scale,
+        ).grid(row=0, column=2, columnspan=2, sticky="ew", padx=(8, 12))
+        ttk.Checkbutton(
+            controls,
+            text="Clip < 0",
+            variable=clip_zero_var,
+            command=toggle_check,
+        ).grid(row=0, column=4, sticky="w")
+
+        ttk.Label(controls, text="Percentile").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        percentile_entry = ttk.Entry(controls, textvariable=percentile_var, width=10)
+        percentile_entry.grid(row=1, column=1, sticky="w", pady=(6, 0))
+        ttk.Label(controls, text="Smooth sigma").grid(
+            row=1, column=2, sticky="e", padx=(12, 4), pady=(6, 0)
+        )
+        smooth_entry = ttk.Entry(controls, textvariable=smooth_sigma_var, width=10)
+        smooth_entry.grid(row=1, column=3, sticky="w", pady=(6, 0))
+        percentile_entry.bind("<Return>", set_percentile)
+        percentile_entry.bind("<FocusOut>", set_percentile)
+        smooth_entry.bind("<Return>", set_smooth_sigma)
+        smooth_entry.bind("<FocusOut>", set_smooth_sigma)
+
+        button_frame = ttk.Frame(controls)
+        button_frame.grid(row=1, column=4, sticky="e", pady=(6, 0))
+        ttk.Button(button_frame, text="Accept", command=accept).grid(row=0, column=0, padx=2)
+        ttk.Button(button_frame, text="Off", command=off).grid(row=0, column=1, padx=2)
+        ttk.Button(button_frame, text="Cancel", command=cancel).grid(row=0, column=2, padx=2)
+
+        update_preview(recompute_model=bool(enabled) and float(scale_var.get()) > 0.0)
+        print(
+            "opening radial background subtraction editor "
+            f"for {preview_path.name} tilt={format_angle_value(title_tilt)} deg; "
+            "click Accept to continue",
+            flush=True,
+        )
+        root.mainloop()
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
     return dict(result["config"])
 
 
