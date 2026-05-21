@@ -66,7 +66,9 @@ def _record_from_text_line(text: str, line_number: int, parse_error: str) -> dic
         "_text_line": text,
         "parse_error": parse_error,
     }
-    if "objective_space=caked_deg" in lowered:
+    if "objective_space=caked_deg" in lowered or (
+        "objective_space" in lowered and "caked_deg" in lowered
+    ):
         record["objective_space"] = "caked_deg"
     if (
         "fit_observed_caked_deg=<unavailable" in lowered
@@ -75,7 +77,11 @@ def _record_from_text_line(text: str, line_number: int, parse_error: str) -> dic
         record["fit_observed_caked_unavailable"] = True
     if "fit_observed_caked_deg=(" in lowered:
         record["fit_observed_caked_finite"] = True
+    if "observed_caked_deg" in lowered and "[" in lowered and "<unavailable" not in lowered:
+        record["fit_observed_caked_finite"] = True
     if "fit_prediction_caked_deg=(" in lowered:
+        record["fit_prediction_caked_finite"] = True
+    if "predicted_caked_deg" in lowered and "[" in lowered and "<unavailable" not in lowered:
         record["fit_prediction_caked_finite"] = True
     if "detector_to_caked_unavailable=true" in lowered:
         record["detector_to_caked_unavailable"] = True
@@ -83,7 +89,7 @@ def _record_from_text_line(text: str, line_number: int, parse_error: str) -> dic
         record["preflight_ready"] = True
     if "geometry fit: setup" in lowered or "optimizer_started=true" in lowered:
         record["optimizer_started"] = True
-    if "weighted_rms=" in lowered and " px" in lowered:
+    if ("weighted_rms=" in lowered and "px" in lowered) or "weighted_rms_px" in lowered:
         record["weighted_rms_unit"] = "px"
     if (
         "metric=central_point_match" in lowered
@@ -189,9 +195,10 @@ def violations_for_trace(path: Path) -> list[str]:
             violations.append(f"{path}:{line}: objective_space=caked_deg used metric_unit=px")
         if objective_space == "caked_deg" and final_metric_name == "central_point_match":
             violations.append(f"{path}:{line}: objective_space=caked_deg used central_point_match")
-        if objective_space == "caked_deg" and str(
-            record.get("weighted_rms_unit") or ""
-        ).strip().lower() == "px":
+        if (
+            objective_space == "caked_deg"
+            and str(record.get("weighted_rms_unit") or "").strip().lower() == "px"
+        ):
             violations.append(f"{path}:{line}: objective_space=caked_deg used weighted_rms in px")
         if objective_space == "caked_deg" and _is_false(caked_required):
             violations.append(
@@ -223,9 +230,7 @@ def violations_for_trace(path: Path) -> list[str]:
         violations.append(f"{path}: objective_space=caked_deg used weighted_rms in px")
     if saw_caked_objective and saw_finite_observed_caked and saw_finite_predicted_caked:
         if saw_central_point_match:
-            violations.append(
-                f"{path}: finite caked manual anchors used central_point_match"
-            )
+            violations.append(f"{path}: finite caked manual anchors used central_point_match")
         if saw_px_rms:
             violations.append(f"{path}: finite caked manual anchors used weighted_rms in px")
         if saw_metric_px:
@@ -233,9 +238,7 @@ def violations_for_trace(path: Path) -> list[str]:
     if saw_caked_objective and saw_optimizer_run and saw_matched_zero:
         violations.append(f"{path}: objective_space=caked_deg reached optimizer with matched=0")
     if saw_caked_objective and saw_missing_observed_caked and saw_preflight_ready:
-        violations.append(
-            f"{path}: missing observed caked coordinates reached preflight ready"
-        )
+        violations.append(f"{path}: missing observed caked coordinates reached preflight ready")
     if saw_caked_not_required_missing_rows and saw_central_px:
         violations.append(
             f"{path}: broken signature present: manual_caked_fit_space_required=false, "

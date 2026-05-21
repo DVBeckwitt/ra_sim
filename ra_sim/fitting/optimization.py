@@ -27226,7 +27226,9 @@ def fit_geometry_parameters(
         return summary
 
     def _weighted_rms_status_unit() -> str:
-        return "weighted_deg" if dynamic_point_geometry_fit else "px"
+        return (
+            "weighted_deg" if (dynamic_point_geometry_fit or manual_caked_fit_space_ready) else "px"
+        )
 
     def _emit_seed_status(
         status_label: str,
@@ -34668,6 +34670,13 @@ def fit_geometry_parameters(
                     if bool(point_match_summary.get("detector_pixel_metric_complete", False))
                     else float("nan")
                 )
+                result.weighted_objective_rms = float(
+                    point_match_summary.get("weighted_objective_rms", weighted_residual_rms)
+                )
+                result.weighted_objective_rms_units = str(
+                    point_match_summary.get("weighted_objective_rms_units", "weighted_deg")
+                    or "weighted_deg"
+                )
             else:
                 result.final_metric_space = "detector_px" if point_match_mode else ""
                 result.final_metric_units = "px" if point_match_mode else ""
@@ -35192,6 +35201,14 @@ def fit_geometry_parameters(
             entry["delta"] = (
                 float(final_value - start_value) if np.isfinite(start_value) else float("nan")
             )
+    result_metric_name = str(getattr(result, "final_metric_name", "") or "")
+    result_metric_space = str(getattr(result, "final_metric_space", "") or "")
+    result_metric_units = str(getattr(result, "final_metric_units", "") or "")
+    if result_metric_name == "dynamic_angular_point_match":
+        result_metric_space = "caked_deg"
+        result_metric_units = "deg"
+        result.final_metric_space = result_metric_space
+        result.final_metric_units = result_metric_units
     debug_summary_result["final"] = {
         "cost": float(getattr(result, "cost", np.nan)),
         "robust_cost": float(getattr(result, "robust_cost", np.nan)),
@@ -35202,9 +35219,9 @@ def fit_geometry_parameters(
         "display_rms_deg": float(getattr(result, "rms_deg", np.nan)),
         "seed_rms_px": float(full_beam_polish_summary.get("seed_rms_px", np.nan)),
         "final_full_beam_rms_px": float(getattr(result, "rms_px", np.nan)),
-        "metric_name": str(getattr(result, "final_metric_name", "")),
-        "metric_space": str(getattr(result, "final_metric_space", "")),
-        "metric_units": str(getattr(result, "final_metric_units", "")),
+        "metric_name": result_metric_name,
+        "metric_space": result_metric_space,
+        "metric_units": result_metric_units,
     }
     if isinstance(getattr(result, "point_match_summary", None), Mapping):
         debug_summary_result["final_point_match_summary"] = copy.deepcopy(
@@ -35240,7 +35257,7 @@ def fit_geometry_parameters(
     metric_name_text = str(getattr(result, "final_metric_name", "") or "").strip()
     metric_part = f", metric={metric_name_text}" if metric_name_text else ""
     metric_space_text = str(getattr(result, "final_metric_space", "") or "").strip()
-    if metric_space_text == "caked_deg":
+    if metric_space_text == "caked_deg" or metric_name_text == "dynamic_angular_point_match":
         completion_metric_text = f"rms={float(getattr(result, 'rms_deg', np.nan)):.4f}deg"
         detector_rms = float("nan")
         if isinstance(point_match_summary, Mapping):

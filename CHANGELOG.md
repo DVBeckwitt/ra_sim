@@ -68,7 +68,9 @@
     `fit_observed_caked_deg` anchors now count as caked fit-space readiness,
     the optimizer logs an explicit manual-caked route check, final metrics stay
     in degrees, and the trace checker rejects finite-anchor caked fits that
-    fall back to pixel `central_point_match`.
+    fall back to pixel `central_point_match`; caked dynamic progress and debug
+    summaries now label the weighted objective in `weighted_deg` instead of
+    stale `weighted_rms_px` text.
   - Fixed PbI2 Qr-rod marker editor edits so `HK=4 -` marker
     add/move/delete/snap interactions preserve the current panel x/y limits;
     explicit Delta-Qr and L-window controls remain the scope-changing path.

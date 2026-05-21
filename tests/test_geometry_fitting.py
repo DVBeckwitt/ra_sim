@@ -7449,9 +7449,10 @@ def test_caked_manual_fixed_pairs_missing_observed_caked_anchor_fail_before_opti
     assert result.point_match_summary["metric_name"] == "manual_caked_fit_space_missing"
     assert result.point_match_summary.get("metric_unit") != "px"
     assert result.geometry_fit_debug_summary["manual_caked_fit_space_ready"] is False
-    assert "missing_observed_caked_anchor" in result.geometry_fit_debug_summary[
-        "manual_caked_fit_missing_reasons"
-    ]
+    assert (
+        "missing_observed_caked_anchor"
+        in result.geometry_fit_debug_summary["manual_caked_fit_missing_reasons"]
+    )
 
 
 def test_manual_caked_rejection_text_does_not_suggest_missing_detector_matches() -> None:
@@ -7500,6 +7501,56 @@ def test_final_summary_does_not_label_dynamic_objective_rms_as_px(monkeypatch) -
     assert hasattr(result, "weighted_objective_rms")
     assert result.weighted_objective_rms_units in {"deg", "weighted_deg"}
     assert result.point_match_summary["weighted_objective_rms_units"] != "px"
+
+
+def test_caked_dynamic_debug_lines_use_degree_units_for_objective_rms() -> None:
+    from ra_sim.gui import geometry_fit as gui_geometry_fit
+
+    result = SimpleNamespace(
+        geometry_fit_debug_summary={
+            "point_match_mode": True,
+            "dataset_count": 1,
+            "var_names": ["gamma", "Gamma"],
+            "final": {
+                "metric_name": "dynamic_angular_point_match",
+                "metric_space": "caked_deg",
+                "metric_units": "deg",
+                "cost": 112.578512,
+                "robust_cost": 112.578512,
+                "weighted_objective_rms": 1.0941667,
+                "weighted_objective_rms_units": "weighted_deg",
+                "weighted_rms_px": 3.128807,
+                "display_rms_deg": 1.0941667,
+                "final_full_beam_rms_px": 914.494855,
+            },
+            "solve_progress": {
+                "label": "identity seed 1",
+                "evaluation_count": 49,
+                "best_cost_seen": 112.578154,
+                "last_cost_seen": 112.578686,
+                "best_weighted_rms_px": 3.128802,
+                "last_weighted_rms_px": 3.128810,
+                "status_emit_count": 8,
+                "aborted_early": False,
+                "trace": [
+                    {
+                        "eval": 40,
+                        "reason": "improved",
+                        "current_cost": 112.578512,
+                        "best_cost": 112.578512,
+                        "weighted_rms_px": 3.128807,
+                    }
+                ],
+            },
+        }
+    )
+
+    lines = gui_geometry_fit.build_geometry_fit_debug_lines(result)
+
+    assert any("weighted_objective_rms=1.094167 weighted_deg" in line for line in lines)
+    assert any("best_weighted_objective_rms=3.128802 weighted_deg" in line for line in lines)
+    assert any("weighted_objective_rms=3.128807 weighted_deg" in line for line in lines)
+    assert not any("weighted_rms_px" in line for line in lines)
 
 
 def test_rung3_objective_changes_dynamic_sim_source_when_trial_params_change(

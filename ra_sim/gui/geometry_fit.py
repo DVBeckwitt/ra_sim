@@ -16698,9 +16698,7 @@ def build_geometry_manual_fit_dataset(
                     projected.get("two_theta_deg", []),
                     dtype=np.float64,
                 ).reshape(-1)
-                phi_values = np.asarray(projected.get("phi_deg", []), dtype=np.float64).reshape(
-                    -1
-                )
+                phi_values = np.asarray(projected.get("phi_deg", []), dtype=np.float64).reshape(-1)
                 two_theta = float(two_theta_values[0])
                 phi = float(phi_values[0])
             except Exception:
@@ -22380,6 +22378,20 @@ def build_geometry_fit_debug_lines(result: object) -> list[str]:
     debug_summary = getattr(result, "geometry_fit_debug_summary", None)
     if not isinstance(debug_summary, Mapping):
         return []
+    final_summary = debug_summary.get("final", None)
+    final_metric_name = ""
+    final_metric_space = ""
+    weighted_objective_unit = "weighted_deg"
+    if isinstance(final_summary, Mapping):
+        final_metric_name = str(final_summary.get("metric_name", "") or "").strip()
+        final_metric_space = str(final_summary.get("metric_space", "") or "").strip()
+        weighted_objective_unit = (
+            str(final_summary.get("weighted_objective_rms_units", "") or "").strip()
+            or "weighted_deg"
+        )
+    caked_debug_metric = bool(
+        final_metric_space == "caked_deg" or final_metric_name == "dynamic_angular_point_match"
+    )
 
     lines: list[str] = [
         "point_match_mode={mode} datasets={datasets} vars={vars}".format(
@@ -22544,12 +22556,21 @@ def build_geometry_fit_debug_lines(result: object) -> list[str]:
 
     main_seed = debug_summary.get("main_solve_seed", None)
     if isinstance(main_seed, Mapping):
+        if caked_debug_metric:
+            main_seed_metric_part = ("weighted_objective_rms={rms} {weighted_unit}").format(
+                rms=_geometry_fit_debug_value_text(main_seed.get("weighted_rms_px", np.nan)),
+                weighted_unit=weighted_objective_unit,
+            )
+        else:
+            main_seed_metric_part = "weighted_rms_px={rms}".format(
+                rms=_geometry_fit_debug_value_text(main_seed.get("weighted_rms_px", np.nan))
+            )
         lines.append(
-            "main_seed kind={kind} label={label} cost={cost} weighted_rms_px={rms}".format(
+            "main_seed kind={kind} label={label} cost={cost} {metric_part}".format(
                 kind=str(main_seed.get("seed_kind", "") or "?"),
                 label=str(main_seed.get("seed_label", "") or "?"),
                 cost=_geometry_fit_debug_value_text(main_seed.get("cost", np.nan)),
-                rms=_geometry_fit_debug_value_text(main_seed.get("weighted_rms_px", np.nan)),
+                metric_part=main_seed_metric_part,
             )
         )
         point_seed = main_seed.get("point_match_summary", None)
@@ -22626,25 +22647,53 @@ def build_geometry_fit_debug_lines(result: object) -> list[str]:
             )
         lines.append(line)
 
-    final_summary = debug_summary.get("final", None)
     if isinstance(final_summary, Mapping):
-        lines.append(
-            "final metric={metric} cost={cost} robust_cost={robust} "
-            "weighted_rms_px={weighted_rms} final_full_beam_rms_px={display_rms}".format(
-                metric=str(final_summary.get("metric_name", "") or "<unknown>"),
-                cost=_geometry_fit_debug_value_text(final_summary.get("cost", np.nan)),
-                robust=_geometry_fit_debug_value_text(final_summary.get("robust_cost", np.nan)),
-                weighted_rms=_geometry_fit_debug_value_text(
-                    final_summary.get("weighted_rms_px", np.nan)
-                ),
-                display_rms=_geometry_fit_debug_value_text(
-                    final_summary.get(
-                        "final_full_beam_rms_px",
-                        final_summary.get("display_rms_px", np.nan),
-                    )
-                ),
+        if caked_debug_metric:
+            line = (
+                "final metric={metric} cost={cost} robust_cost={robust} "
+                "weighted_objective_rms={weighted_rms} {weighted_unit} "
+                "display_rms_deg={display_rms}".format(
+                    metric=str(final_summary.get("metric_name", "") or "<unknown>"),
+                    cost=_geometry_fit_debug_value_text(final_summary.get("cost", np.nan)),
+                    robust=_geometry_fit_debug_value_text(final_summary.get("robust_cost", np.nan)),
+                    weighted_rms=_geometry_fit_debug_value_text(
+                        final_summary.get(
+                            "weighted_objective_rms",
+                            final_summary.get("weighted_rms_px", np.nan),
+                        )
+                    ),
+                    weighted_unit=weighted_objective_unit,
+                    display_rms=_geometry_fit_debug_value_text(
+                        final_summary.get("display_rms_deg", np.nan)
+                    ),
+                )
             )
-        )
+            diagnostic_full_beam = _geometry_fit_metric_float(
+                final_summary.get("final_full_beam_rms_px", np.nan)
+            )
+            if np.isfinite(diagnostic_full_beam):
+                line += " diagnostic_full_beam_rms_px={display_rms}".format(
+                    display_rms=_geometry_fit_debug_value_text(diagnostic_full_beam)
+                )
+            lines.append(line)
+        else:
+            lines.append(
+                "final metric={metric} cost={cost} robust_cost={robust} "
+                "weighted_rms_px={weighted_rms} final_full_beam_rms_px={display_rms}".format(
+                    metric=str(final_summary.get("metric_name", "") or "<unknown>"),
+                    cost=_geometry_fit_debug_value_text(final_summary.get("cost", np.nan)),
+                    robust=_geometry_fit_debug_value_text(final_summary.get("robust_cost", np.nan)),
+                    weighted_rms=_geometry_fit_debug_value_text(
+                        final_summary.get("weighted_rms_px", np.nan)
+                    ),
+                    display_rms=_geometry_fit_debug_value_text(
+                        final_summary.get(
+                            "final_full_beam_rms_px",
+                            final_summary.get("display_rms_px", np.nan),
+                        )
+                    ),
+                )
+            )
 
     solve_counts = debug_summary.get("solve_counts", None)
     if isinstance(solve_counts, Mapping):
@@ -22663,10 +22712,33 @@ def build_geometry_fit_debug_lines(result: object) -> list[str]:
 
     solve_progress = debug_summary.get("solve_progress", None)
     if isinstance(solve_progress, Mapping):
+        if caked_debug_metric:
+            progress_metric_part = (
+                "best_weighted_objective_rms={best_rms} {weighted_unit} "
+                "last_weighted_objective_rms={last_rms} {weighted_unit}"
+            ).format(
+                best_rms=_geometry_fit_debug_value_text(
+                    solve_progress.get("best_weighted_rms_px", np.nan)
+                ),
+                last_rms=_geometry_fit_debug_value_text(
+                    solve_progress.get("last_weighted_rms_px", np.nan)
+                ),
+                weighted_unit=weighted_objective_unit,
+            )
+        else:
+            progress_metric_part = (
+                "best_weighted_rms_px={best_rms} last_weighted_rms_px={last_rms}"
+            ).format(
+                best_rms=_geometry_fit_debug_value_text(
+                    solve_progress.get("best_weighted_rms_px", np.nan)
+                ),
+                last_rms=_geometry_fit_debug_value_text(
+                    solve_progress.get("last_weighted_rms_px", np.nan)
+                ),
+            )
         lines.append(
             "solve_progress label={label} evaluations={evals} best_cost={best_cost} "
-            "last_cost={last_cost} best_weighted_rms_px={best_rms} "
-            "last_weighted_rms_px={last_rms} status_updates={updates} "
+            "last_cost={last_cost} {metric_part} status_updates={updates} "
             "aborted_early={aborted}".format(
                 label=str(solve_progress.get("label", "")),
                 evals=_geometry_fit_debug_value_text(
@@ -22678,12 +22750,7 @@ def build_geometry_fit_debug_lines(result: object) -> list[str]:
                 last_cost=_geometry_fit_debug_value_text(
                     solve_progress.get("last_cost_seen", np.nan)
                 ),
-                best_rms=_geometry_fit_debug_value_text(
-                    solve_progress.get("best_weighted_rms_px", np.nan)
-                ),
-                last_rms=_geometry_fit_debug_value_text(
-                    solve_progress.get("last_weighted_rms_px", np.nan)
-                ),
+                metric_part=progress_metric_part,
                 updates=_geometry_fit_debug_value_text(
                     solve_progress.get("status_emit_count", 0), float_digits=0
                 ),
@@ -22699,17 +22766,31 @@ def build_geometry_fit_debug_lines(result: object) -> list[str]:
         for idx, event in enumerate(solve_progress.get("trace", []) or []):
             if not isinstance(event, Mapping):
                 continue
-            lines.append(
-                "solve_progress[{idx}] eval={eval} reason={reason} cost={cost} "
-                "best_cost={best_cost} weighted_rms_px={rms}".format(
-                    idx=int(idx),
-                    eval=_geometry_fit_debug_value_text(event.get("eval", 0), float_digits=0),
-                    reason=str(event.get("reason", "")),
-                    cost=_geometry_fit_debug_value_text(event.get("current_cost", np.nan)),
-                    best_cost=_geometry_fit_debug_value_text(event.get("best_cost", np.nan)),
-                    rms=_geometry_fit_debug_value_text(event.get("weighted_rms_px", np.nan)),
+            if caked_debug_metric:
+                lines.append(
+                    "solve_progress[{idx}] eval={eval} reason={reason} cost={cost} "
+                    "best_cost={best_cost} weighted_objective_rms={rms} {weighted_unit}".format(
+                        idx=int(idx),
+                        eval=_geometry_fit_debug_value_text(event.get("eval", 0), float_digits=0),
+                        reason=str(event.get("reason", "")),
+                        cost=_geometry_fit_debug_value_text(event.get("current_cost", np.nan)),
+                        best_cost=_geometry_fit_debug_value_text(event.get("best_cost", np.nan)),
+                        rms=_geometry_fit_debug_value_text(event.get("weighted_rms_px", np.nan)),
+                        weighted_unit=weighted_objective_unit,
+                    )
                 )
-            )
+            else:
+                lines.append(
+                    "solve_progress[{idx}] eval={eval} reason={reason} cost={cost} "
+                    "best_cost={best_cost} weighted_rms_px={rms}".format(
+                        idx=int(idx),
+                        eval=_geometry_fit_debug_value_text(event.get("eval", 0), float_digits=0),
+                        reason=str(event.get("reason", "")),
+                        cost=_geometry_fit_debug_value_text(event.get("current_cost", np.nan)),
+                        best_cost=_geometry_fit_debug_value_text(event.get("best_cost", np.nan)),
+                        rms=_geometry_fit_debug_value_text(event.get("weighted_rms_px", np.nan)),
+                    )
+                )
 
     return lines
 

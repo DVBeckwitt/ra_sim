@@ -20,7 +20,13 @@ Last updated: 2026-05-20
   degree-based final metrics. The GUI rejection text no longer tells operators
   to add points when caked manual pairs exist and the failure is caked angular
   residual/routing. The trace checker now rejects the finite-anchor caked
-  objective followed by `weighted_rms=... px` or `central_point_match`.
+  objective followed by `weighted_rms=... px` or `central_point_match`, and
+  dynamic caked progress/debug summaries now report the weighted objective in
+  `weighted_deg` rather than stale `weighted_rms_px` labels. Headless New4
+  replay from `artifacts/geometry_fit_gui_states/new4.json` now produces
+  `manual_caked_route_check objective_space=caked_deg required=true ready=true`,
+  `dynamic_angular_point_match`, `matched=7`, and `RMS residual = 1.094167 deg`
+  while passing the text-log and JSONL handoff checker.
   Bug/error status: fixed in source and targeted regression tests for the
   finite-anchor optimizer-routing half of the manual caked Qr/Qz loop. Feature
   status: no GUI control, CLI flag, config key, saved-state field, artifact
