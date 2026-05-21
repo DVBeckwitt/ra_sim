@@ -4105,16 +4105,7 @@ def _prepare_reflection_subset(
         return None
 
     def _local_provider_peak_index(entry: Mapping[str, object]) -> Optional[int]:
-        branch_idx, _branch_source = _measured_source_peak_index_with_source(entry)
-        if branch_idx in {0, 1}:
-            return int(branch_idx)
-        peak_idx = _coerce_index(entry.get("source_peak_index"))
-        if peak_idx in {0, 1}:
-            return int(peak_idx)
-        resolved_peak_idx = _coerce_index(entry.get("resolved_peak_index"))
-        if resolved_peak_idx in {0, 1}:
-            return int(resolved_peak_idx)
-        return None
+        return _provider_local_effective_branch_index(entry)
 
     def _is_provider_local_fixed_source(entry: Mapping[str, object]) -> bool:
         fit_kind = str(entry.get("fit_source_resolution_kind", "") or "").strip().lower()
@@ -4398,7 +4389,7 @@ def _prepare_reflection_subset(
                     remapped_entry["source_row_index"] = int(row_idx)
                 else:
                     remapped_entry.pop("source_row_index", None)
-                branch_idx, _branch_source = _measured_source_peak_index_with_source(entry)
+                branch_idx = _provider_local_effective_branch_index(entry)
                 if branch_idx in {0, 1}:
                     remapped_entry["source_branch_index"] = int(branch_idx)
                     remapped_entry["resolved_peak_index"] = int(branch_idx)
@@ -4458,10 +4449,7 @@ def _prepare_reflection_subset(
             peak_idx = _local_provider_peak_index(entry)
             if peak_idx in {0, 1}:
                 remapped_entry["resolved_peak_index"] = int(peak_idx)
-                if _coerce_index(entry.get("source_branch_index")) in {0, 1}:
-                    remapped_entry["source_branch_index"] = int(peak_idx)
-                else:
-                    remapped_entry.pop("source_branch_index", None)
+                remapped_entry["source_branch_index"] = int(peak_idx)
                 remapped_entry["source_peak_index"] = int(peak_idx)
             else:
                 remapped_entry.pop("resolved_peak_index", None)
@@ -4486,11 +4474,10 @@ def _prepare_reflection_subset(
                     remapped_entry["source_row_index"] = int(row_idx)
                 else:
                     remapped_entry.pop("source_row_index", None)
-                branch_idx, _branch_source = _measured_source_peak_index_with_source(entry)
+                branch_idx = _provider_local_effective_branch_index(entry)
                 if branch_idx in {0, 1}:
                     remapped_entry["resolved_peak_index"] = int(branch_idx)
-                    if "source_branch_index" in entry:
-                        remapped_entry["source_branch_index"] = int(branch_idx)
+                    remapped_entry["source_branch_index"] = int(branch_idx)
                     remapped_entry["source_peak_index"] = int(branch_idx)
                 else:
                     remapped_entry.pop("resolved_peak_index", None)
@@ -13170,6 +13157,11 @@ _SOURCE_IDENTITY_CANONICAL_KEYS = (
     "selected_source_identity_canonical",
     "manual_picker_selected_source_identity_canonical",
 )
+_PROVIDER_LOCAL_BRANCH_IDENTITY_KEYS = (
+    "source_branch_index",
+    "source_peak_index",
+    "resolved_peak_index",
+)
 
 
 def _identity_names_full_reflection(identity: Mapping[str, object]) -> bool:
@@ -13822,20 +13814,87 @@ def _provider_local_subset_provenance(entry: Mapping[str, object]) -> bool:
     return assignment.startswith("provider_local_")
 
 
+def _provider_local_effective_branch_identity(
+    entry: Mapping[str, object],
+) -> Tuple[Optional[int], Optional[str], Optional[str]]:
+    branch_idx: Optional[int] = None
+    branch_source: Optional[str] = None
+
+    def _collect(source_name: str, value: object) -> Optional[str]:
+        nonlocal branch_idx, branch_source
+        candidate = _nonnegative_index(value)
+        if candidate not in {0, 1}:
+            return None
+        if branch_idx is None:
+            branch_idx = int(candidate)
+            branch_source = str(source_name)
+            return None
+        if int(candidate) != int(branch_idx):
+            return "provider_local_branch_identity_conflict"
+        return None
+
+    for key in _PROVIDER_LOCAL_BRANCH_IDENTITY_KEYS:
+        conflict = _collect(key, entry.get(key))
+        if conflict is not None:
+            return None, branch_source, conflict
+    for identity_key in _SOURCE_IDENTITY_CANONICAL_KEYS:
+        identity = entry.get(identity_key)
+        if not isinstance(identity, Mapping):
+            continue
+        for key in _PROVIDER_LOCAL_BRANCH_IDENTITY_KEYS:
+            conflict = _collect(f"{identity_key}.{key}", identity.get(key))
+            if conflict is not None:
+                return None, branch_source, conflict
+
+    if branch_idx is None:
+        return None, None, None
+    return int(branch_idx), str(branch_source), None
+
+
+def _provider_local_effective_branch_index(entry: Mapping[str, object]) -> Optional[int]:
+    branch_idx, _branch_source, branch_conflict = _provider_local_effective_branch_identity(entry)
+    return int(branch_idx) if branch_conflict is None and branch_idx in {0, 1} else None
+
+
+def _provider_local_effective_q_group_key(
+    entry: Mapping[str, object],
+) -> Optional[Tuple[object, ...]]:
+    q_group_key = _normalized_q_group_key(entry.get("q_group_key"))
+    if q_group_key is not None:
+        return q_group_key
+    for identity_key in _SOURCE_IDENTITY_CANONICAL_KEYS:
+        identity = entry.get(identity_key)
+        if not isinstance(identity, Mapping):
+            continue
+        q_group_key = _normalized_q_group_key(identity.get("q_group_key"))
+        if q_group_key is not None:
+            return q_group_key
+    return None
+
+
+def _provider_local_effective_source_identity_index(
+    entry: Mapping[str, object],
+    key: str,
+) -> Optional[int]:
+    idx = _nonnegative_index(entry.get(key))
+    if idx is not None:
+        return int(idx)
+    for identity_key in _SOURCE_IDENTITY_CANONICAL_KEYS:
+        identity = entry.get(identity_key)
+        if not isinstance(identity, Mapping):
+            continue
+        idx = _nonnegative_index(identity.get(key))
+        if idx is not None:
+            return int(idx)
+    return None
+
+
 def _provider_local_branch_identity_conflict(entry: Mapping[str, object]) -> bool:
     fit_kind = str(entry.get("fit_source_resolution_kind", "") or "").strip().lower()
     if fit_kind != "provider_fixed_source_local":
         return False
-    requested_values = [
-        int(value)
-        for value in (
-            _nonnegative_index(entry.get("source_branch_index")),
-            _nonnegative_index(entry.get("source_peak_index")),
-            _nonnegative_index(entry.get("resolved_peak_index")),
-        )
-        if value in {0, 1}
-    ]
-    return len(set(requested_values)) > 1
+    _branch_idx, _branch_source, branch_conflict = _provider_local_effective_branch_identity(entry)
+    return branch_conflict is not None
 
 
 def _provider_local_requires_branch_proof(entry: Mapping[str, object]) -> bool:
@@ -13890,7 +13949,7 @@ def _fixed_manual_pair_requires_exact_source_row(entry: Mapping[str, object]) ->
 def _fixed_manual_qr_pair_requires_shared_resolver(entry: Mapping[str, object]) -> bool:
     if not _fixed_manual_pair_requires_exact_source_row(entry):
         return False
-    q_group_key = _normalized_q_group_key(entry.get("q_group_key"))
+    q_group_key = _provider_local_effective_q_group_key(entry)
     if q_group_key is not None:
         _, source_missing, source_payload = _fit_qr_branch_key_payload(entry)
         has_source_identity = source_payload.get("source_row_index") is not None and (
@@ -13924,7 +13983,7 @@ def _fixed_manual_qr_pair_blocks_direct_projection(entry: Mapping[str, object]) 
         return True
     if not _fixed_manual_pair_requires_exact_source_row(entry):
         return False
-    return _normalized_q_group_key(entry.get("q_group_key")) is not None
+    return _provider_local_effective_q_group_key(entry) is not None
 
 
 def _resolve_exact_fixed_manual_source_row(
@@ -13933,11 +13992,11 @@ def _resolve_exact_fixed_manual_source_row(
 ) -> Tuple[Optional[np.ndarray], Dict[str, object], str]:
     row_idx = _nonnegative_index(entry.get("source_row_index"))
     requested_hkl = _normalized_hkl_key(entry.get("hkl"))
-    requested_branch = _nonnegative_index(entry.get("source_branch_index"))
-    if requested_branch not in {0, 1}:
-        requested_branch = _nonnegative_index(entry.get("source_peak_index"))
-    if requested_branch not in {0, 1}:
-        requested_branch = _nonnegative_index(entry.get("resolved_peak_index"))
+    requested_branch, _branch_source, branch_conflict = _provider_local_effective_branch_identity(
+        entry
+    )
+    if branch_conflict is not None:
+        requested_branch = None
     payload: Dict[str, object] = {
         "source_row_resolution_required": True,
         "requested_source_table_index": _nonnegative_index(entry.get("source_table_index")),
@@ -13988,7 +14047,7 @@ def _resolve_exact_fixed_manual_source_row(
     )
     if requested_hkl is not None and tuple(source_row_hkl or ()) != tuple(requested_hkl):
         source_row_q_group_ml = _q_group_ml_from_hkl(source_row_hkl)
-        requested_q_group_ml = _q_group_ml_from_key(entry.get("q_group_key"))
+        requested_q_group_ml = _q_group_ml_from_key(_provider_local_effective_q_group_key(entry))
         source_row_q_group_equivalent = (
             requested_q_group_ml is not None and source_row_q_group_ml == requested_q_group_ml
         )
@@ -14164,8 +14223,17 @@ def _provider_local_resolve_stale_fixed_source_row(
         payload["prediction_source_status"] = "unavailable"
         return None, payload, "provider_local_subset_provenance_missing"
     if assignment == "provider_local_duplicate_hkl_unproven":
-        payload["prediction_source_status"] = "unavailable_ambiguous"
-        return None, payload, "provider_local_duplicate_hkl_unproven"
+        effective_branch, _branch_source, branch_conflict = (
+            _provider_local_effective_branch_identity(entry)
+        )
+        effective_q_group = _provider_local_effective_q_group_key(entry)
+        if branch_conflict is not None or effective_branch not in {0, 1}:
+            payload["prediction_source_status"] = "unavailable_ambiguous"
+            return None, payload, "provider_local_duplicate_hkl_unproven"
+        if effective_q_group is None:
+            payload["prediction_source_status"] = "unavailable_ambiguous"
+            return None, payload, "provider_local_duplicate_hkl_unproven"
+        payload["provider_local_duplicate_hkl_unproven_branch_recheck"] = True
 
     requested_hkl = _normalized_hkl_key(entry.get("hkl"))
     if requested_hkl is None:
@@ -14176,18 +14244,16 @@ def _provider_local_resolve_stale_fixed_source_row(
         entry.get("resolved_table_index")
     )
 
-    requested_branch_values = [
-        int(value)
-        for value in (
-            _nonnegative_index(entry.get("source_branch_index")),
-            _nonnegative_index(entry.get("source_peak_index")),
-            _nonnegative_index(entry.get("resolved_peak_index")),
-        )
-        if value in {0, 1}
-    ]
-    requested_branch = int(requested_branch_values[0]) if requested_branch_values else None
+    requested_branch, branch_source, branch_conflict = _provider_local_effective_branch_identity(
+        entry
+    )
+    if branch_conflict is not None:
+        payload["prediction_source_status"] = "unavailable_ambiguous"
+        return None, payload, "provider_local_branch_identity_conflict"
+    if requested_branch in {0, 1}:
+        payload["provider_local_effective_branch_source"] = str(branch_source)
 
-    requested_q_group_ml = _q_group_ml_from_key(entry.get("q_group_key"))
+    requested_q_group_ml = _q_group_ml_from_key(_provider_local_effective_q_group_key(entry))
     valid_records: List[Tuple[Mapping[str, object], np.ndarray, Optional[int]]] = []
     hkl_records: List[Tuple[Mapping[str, object], np.ndarray, Optional[int]]] = []
     q_group_records: List[Tuple[Mapping[str, object], np.ndarray, Optional[int]]] = []
@@ -14274,6 +14340,13 @@ def _provider_local_resolve_stale_fixed_source_row(
 
     if len(row_records) == 1:
         record, row, row_branch = matched_records[0]
+        if payload.get("provider_local_duplicate_hkl_unproven_branch_recheck"):
+            if row_branch not in {0, 1}:
+                payload["prediction_source_status"] = "unavailable_ambiguous"
+                return None, payload, "provider_local_branch_match_zero"
+            if requested_branch not in {0, 1} or int(row_branch) != int(requested_branch):
+                payload["prediction_source_status"] = "unavailable_ambiguous"
+                return None, payload, "provider_local_branch_match_zero"
         reason = (
             "provider_local_stale_row_index_q_group_single_row_resolved"
             if matched_by_q_group
@@ -14346,45 +14419,42 @@ def _provider_local_saved_sim_detector_point(
     if requested_hkl is None:
         payload["prediction_source_status"] = "unavailable"
         return None, payload, "provider_local_hkl_missing"
-    requested_branch_values = [
-        int(value)
-        for value in (
-            _nonnegative_index(entry.get("source_branch_index")),
-            _nonnegative_index(entry.get("source_peak_index")),
-            _nonnegative_index(entry.get("resolved_peak_index")),
-        )
-        if value in {0, 1}
-    ]
-    if not requested_branch_values:
-        payload["prediction_source_status"] = "unavailable_ambiguous"
-        return None, payload, "missing_provider_local_branch_identity"
-    if len(set(requested_branch_values)) > 1:
+    requested_branch, branch_source, branch_conflict = _provider_local_effective_branch_identity(
+        entry
+    )
+    if branch_conflict is not None:
         payload["prediction_source_status"] = "unavailable_ambiguous"
         return None, payload, "provider_local_branch_identity_conflict"
-    requested_branch = int(requested_branch_values[0])
+    if requested_branch not in {0, 1}:
+        payload["prediction_source_status"] = "unavailable_ambiguous"
+        return None, payload, "missing_provider_local_branch_identity"
+    payload["provider_local_effective_branch_source"] = str(branch_source)
 
     assignment = str(entry.get("provider_local_subset_assignment", "") or "").strip().lower()
     duplicate_hkl_unproven = assignment == "provider_local_duplicate_hkl_unproven"
     payload["provider_local_duplicate_hkl_unproven"] = bool(duplicate_hkl_unproven)
-    if duplicate_hkl_unproven:
+    if duplicate_hkl_unproven and _provider_local_effective_q_group_key(entry) is None:
         payload["prediction_source_status"] = "unavailable_ambiguous"
         return None, payload, "provider_local_duplicate_hkl_unproven"
     stale_row_proof_available = bool(entry.get("provider_local_stale_row_proof_available", False))
     saved_identity_proven = _provider_local_saved_sim_identity_proven(
         entry,
         requested_hkl=requested_hkl,
-        requested_branch=requested_branch,
+        requested_branch=int(requested_branch),
     )
     payload["provider_local_saved_sim_identity_proven"] = bool(saved_identity_proven)
-    if not saved_identity_proven:
-        payload["prediction_source_status"] = "unavailable"
-        return None, payload, "provider_local_hkl_mismatch"
     row_proof_available = bool(
         entry.get("provider_local_exact_source_row_proof_available", False)
         or entry.get("provider_local_stale_row_proof_available", False)
         or entry.get("provider_local_branch_representative_proof_available", False)
     )
     payload["provider_local_saved_sim_detector_row_proof_available"] = bool(row_proof_available)
+    if duplicate_hkl_unproven and not row_proof_available:
+        payload["prediction_source_status"] = "unavailable_ambiguous"
+        return None, payload, "provider_local_duplicate_hkl_unproven"
+    if not saved_identity_proven:
+        payload["prediction_source_status"] = "unavailable"
+        return None, payload, "provider_local_hkl_mismatch"
     if not row_proof_available:
         payload["prediction_source_status"] = "unavailable"
         return None, payload, "provider_local_saved_sim_detector_row_proof_missing"
@@ -14631,7 +14701,7 @@ def _provider_local_saved_sim_identity_proven(
     )
     entry_table = _nonnegative_index(entry.get("source_table_index"))
     entry_row = _nonnegative_index(entry.get("source_row_index"))
-    entry_q_group = _normalized_q_group_key(entry.get("q_group_key"))
+    entry_q_group = _provider_local_effective_q_group_key(entry)
     for raw_identity in candidates:
         if not isinstance(raw_identity, Mapping):
             continue
@@ -14705,13 +14775,14 @@ def _provider_local_saved_sim_offset_key(
     entry: Mapping[str, object],
     fallback_index: int,
 ) -> Tuple[object, ...]:
+    branch_value = _provider_local_effective_branch_index(entry)
     return (
-        _normalized_q_group_key(entry.get("q_group_key")),
+        _provider_local_effective_q_group_key(entry),
         _normalized_hkl_key(entry.get("hkl")),
         _nonnegative_index(entry.get("source_table_index")),
         _nonnegative_index(entry.get("source_row_index")),
-        _nonnegative_index(entry.get("source_branch_index")),
-        _nonnegative_index(entry.get("source_peak_index")),
+        branch_value,
+        branch_value,
         int(fallback_index),
     )
 
@@ -14773,19 +14844,28 @@ def _resolve_fixed_source_matches(
         if _trusted_full_reflection_identity_payload(entry) is None:
             return None, None, {}, "nested_full_identity_missing"
         requested_hkl = _normalized_hkl_key(entry.get("hkl"))
-        requested_q_group_ml = _q_group_ml_from_key(entry.get("q_group_key"))
-        requested_branch_values = [
-            int(value)
-            for value in (
-                _nonnegative_index(entry.get("source_branch_index")),
-                _nonnegative_index(entry.get("source_peak_index")),
-                _nonnegative_index(entry.get("resolved_peak_index")),
-            )
-            if value in {0, 1}
-        ]
-        if not requested_branch_values or len(set(requested_branch_values)) > 1:
+        requested_q_group_ml = _q_group_ml_from_key(_provider_local_effective_q_group_key(entry))
+        requested_branch, branch_source, branch_conflict = (
+            _provider_local_effective_branch_identity(entry)
+        )
+        if branch_conflict is not None or requested_branch not in {0, 1}:
             return None, None, {}, "nested_full_identity_branch_missing"
-        requested_branch = int(requested_branch_values[0])
+        requested_branch = int(requested_branch)
+        source_reflection_idx = _provider_local_effective_source_identity_index(
+            entry,
+            "source_reflection_index",
+        )
+        source_table_idx = _provider_local_effective_source_identity_index(
+            entry,
+            "source_table_index",
+        )
+        source_row_idx = _provider_local_effective_source_identity_index(
+            entry,
+            "source_row_index",
+        )
+        source_indices = {
+            int(idx) for idx in (source_reflection_idx, source_table_idx) if idx is not None
+        }
 
         matches: List[Tuple[int, Mapping[str, object], np.ndarray, bool]] = []
         valid_row_count = 0
@@ -14825,7 +14905,111 @@ def _resolve_fixed_source_matches(
             "nested_full_identity_valid_row_count": int(valid_row_count),
             "nested_full_identity_branch_match_count": int(len(matches)),
             "requested_branch_index": int(requested_branch),
+            "requested_branch_source": str(branch_source),
+            "requested_source_reflection_index": (
+                int(source_reflection_idx) if source_reflection_idx is not None else None
+            ),
+            "requested_source_table_index": (
+                int(source_table_idx) if source_table_idx is not None else None
+            ),
+            "requested_source_row_index": (
+                int(source_row_idx) if source_row_idx is not None else None
+            ),
         }
+
+        def _matching_source_table(record: Mapping[str, object]) -> bool:
+            record_table_idx = _nonnegative_index(record.get("source_table_index"))
+            return bool(record_table_idx is not None and int(record_table_idx) in source_indices)
+
+        def _matching_source_row(record: Mapping[str, object]) -> bool:
+            record_row_idx = _nonnegative_index(record.get("source_row_index"))
+            return bool(
+                source_row_idx is not None
+                and record_row_idx is not None
+                and int(record_row_idx) == int(source_row_idx)
+            )
+
+        def _resolve_match(
+            match: Tuple[int, Mapping[str, object], np.ndarray, bool],
+            *,
+            tier: str,
+        ) -> Tuple[int, np.ndarray, Dict[str, object], str]:
+            table_idx, record, row, q_group_equivalent = match
+            row_position = _nonnegative_index(record.get("row_position"))
+            resolved_source_row_index = _nonnegative_index(record.get("source_row_index"))
+            reason = (
+                "provider_local_nested_full_identity_q_group_branch_resolved"
+                if q_group_equivalent
+                else "provider_local_nested_full_identity_branch_resolved"
+            )
+            extra = dict(payload)
+            extra.update(
+                {
+                    "resolution_kind": "fixed_source",
+                    "resolution_reason": reason,
+                    "prediction_source_status": "available",
+                    "nested_full_identity_resolution_tier": str(tier),
+                    "resolved_table_index": int(table_idx),
+                    "resolved_peak_index": int(requested_branch),
+                    "resolved_source_row_position": (
+                        int(row_position) if row_position is not None else None
+                    ),
+                    "resolved_source_row_index": (
+                        int(resolved_source_row_index)
+                        if resolved_source_row_index is not None
+                        else None
+                    ),
+                    "source_row_rejection_reason": None,
+                    "source_row_hkl_q_group_equivalent": bool(q_group_equivalent),
+                    "source_row_hkl_q_group_ml": (
+                        requested_q_group_ml if q_group_equivalent else None
+                    ),
+                    "provider_local_stale_row_proof_available": True,
+                    "provider_local_stale_row_proof_reason": reason,
+                    "provider_local_saved_sim_detector_diagnostic_only": True,
+                    "provider_local_saved_sim_detector_branch_resolved": True,
+                    "provider_local_saved_sim_detector_uses_canonical_projection": False,
+                    "source_row_preferred_over_branch_representative": True,
+                    "locked_manual_qr_resolver_required": True,
+                }
+            )
+            return int(table_idx), row, extra, reason
+
+        resolved_table_idx = _nonnegative_index(entry.get("resolved_table_index"))
+        if resolved_table_idx is not None and int(resolved_table_idx) < len(hit_tables):
+            resolved_table_matches = [
+                match for match in matches if int(match[0]) == int(resolved_table_idx)
+            ]
+            payload["nested_full_identity_resolved_table_match_count"] = int(
+                len(resolved_table_matches)
+            )
+            if len(resolved_table_matches) == 1:
+                return _resolve_match(resolved_table_matches[0], tier="resolved_table_index")
+            resolved_table_row_matches = [
+                match for match in resolved_table_matches if _matching_source_row(match[1])
+            ]
+            payload["nested_full_identity_resolved_table_source_row_match_count"] = int(
+                len(resolved_table_row_matches)
+            )
+            if len(resolved_table_row_matches) == 1:
+                return _resolve_match(
+                    resolved_table_row_matches[0],
+                    tier="resolved_table_index_source_row",
+                )
+
+        source_table_matches = [match for match in matches if _matching_source_table(match[1])]
+        payload["nested_full_identity_source_table_match_count"] = int(len(source_table_matches))
+        source_row_matches = [
+            match
+            for match in (source_table_matches if source_table_matches else matches)
+            if _matching_source_row(match[1])
+        ]
+        payload["nested_full_identity_source_row_match_count"] = int(len(source_row_matches))
+        if len(source_row_matches) == 1:
+            return _resolve_match(source_row_matches[0], tier="source_row_index")
+        if len(source_table_matches) == 1:
+            return _resolve_match(source_table_matches[0], tier="source_reflection_index")
+
         if len(matches) != 1:
             status = (
                 "nested_full_identity_branch_ambiguous"
@@ -14837,40 +15021,7 @@ def _resolve_fixed_source_matches(
             )
             return None, None, payload, status
 
-        table_idx, record, row, q_group_equivalent = matches[0]
-        row_position = _nonnegative_index(record.get("row_position"))
-        source_row_index = _nonnegative_index(record.get("source_row_index"))
-        reason = (
-            "provider_local_nested_full_identity_q_group_branch_resolved"
-            if q_group_equivalent
-            else "provider_local_nested_full_identity_branch_resolved"
-        )
-        payload.update(
-            {
-                "resolution_kind": "fixed_source",
-                "resolution_reason": reason,
-                "prediction_source_status": "available",
-                "resolved_table_index": int(table_idx),
-                "resolved_peak_index": int(requested_branch),
-                "resolved_source_row_position": (
-                    int(row_position) if row_position is not None else None
-                ),
-                "resolved_source_row_index": (
-                    int(source_row_index) if source_row_index is not None else None
-                ),
-                "source_row_rejection_reason": None,
-                "source_row_hkl_q_group_equivalent": bool(q_group_equivalent),
-                "source_row_hkl_q_group_ml": (requested_q_group_ml if q_group_equivalent else None),
-                "provider_local_stale_row_proof_available": True,
-                "provider_local_stale_row_proof_reason": reason,
-                "provider_local_saved_sim_detector_diagnostic_only": True,
-                "provider_local_saved_sim_detector_branch_resolved": True,
-                "provider_local_saved_sim_detector_uses_canonical_projection": False,
-                "source_row_preferred_over_branch_representative": True,
-                "locked_manual_qr_resolver_required": True,
-            }
-        )
-        return int(table_idx), row, payload, reason
+        return _resolve_match(matches[0], tier="global_unique")
 
     for match_input_index, entry in enumerate(measured_entries):
         overlay_match_index = _overlay_index(entry, match_input_index)
@@ -15813,16 +15964,29 @@ def _resolve_geometry_fit_correspondence(
             }
         )
         if assignment == "provider_local_duplicate_hkl_unproven":
-            return None, payload, "provider_local_duplicate_hkl_unproven"
+            effective_q_group = _provider_local_effective_q_group_key(correspondence)
+            if effective_q_group is None:
+                return None, payload, "provider_local_duplicate_hkl_unproven"
+            payload["provider_local_duplicate_hkl_unproven_branch_recheck"] = True
         if (
-            correspondence.get("q_group_key") is not None
-            or correspondence.get("branch_group_key") is not None
-        ) and not branch_provenance:
+            (
+                correspondence.get("q_group_key") is not None
+                or correspondence.get("branch_group_key") is not None
+            )
+            and not branch_provenance
+            and not payload.get(
+                "provider_local_duplicate_hkl_unproven_branch_recheck",
+                False,
+            )
+        ):
             return None, payload, "provider_local_group_unproven"
 
         requested_hkl = _normalized_hkl_key(correspondence.get("hkl"))
         if requested_hkl is None:
             return None, payload, "provider_local_branch_hkl_missing"
+        requested_q_group_ml = _q_group_ml_from_key(
+            _provider_local_effective_q_group_key(correspondence)
+        )
 
         hkl_records: List[Mapping[str, object]] = []
         branch_records: List[Tuple[Mapping[str, object], np.ndarray]] = []
@@ -15835,7 +15999,12 @@ def _resolve_geometry_fit_correspondence(
                 continue
             if row.shape[0] < 7:
                 continue
-            if _hit_row_hkl(row) != requested_hkl:
+            row_hkl = _hit_row_hkl(row)
+            q_group_equivalent = (
+                requested_q_group_ml is not None
+                and _q_group_ml_from_hkl(row_hkl) == requested_q_group_ml
+            )
+            if row_hkl != requested_hkl and not q_group_equivalent:
                 continue
             hkl_records.append(record)
             row_branch = source_branch_index_from_phi_deg(row[3])
@@ -16013,11 +16182,7 @@ def _resolve_geometry_fit_correspondence(
                         table_idx=table_idx,
                         extra=trace,
                     )
-                recovered_peak_idx = _nonnegative_index(correspondence.get("source_branch_index"))
-                if recovered_peak_idx not in {0, 1}:
-                    recovered_peak_idx = _nonnegative_index(
-                        correspondence.get("resolved_peak_index")
-                    )
+                recovered_peak_idx = _provider_local_effective_branch_index(correspondence)
                 if recovered_peak_idx not in {0, 1}:
                     trace = _assigned_table_branch_trace(
                         table_idx_value=table_idx,

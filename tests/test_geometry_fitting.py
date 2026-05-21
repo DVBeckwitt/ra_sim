@@ -4138,6 +4138,22 @@ def _locked_qr_fixed_source_entry(**overrides: object) -> dict[str, object]:
         selection_reason="manual_pick",
     )
     entry.update(overrides)
+    if "provider_selected_source_identity_canonical" not in overrides:
+        canonical = dict(entry.get("provider_selected_source_identity_canonical") or {})
+        branch_idx = entry.get("source_branch_index", entry.get("source_peak_index"))
+        if branch_idx in {0, 1}:
+            if "resolved_peak_index" not in overrides:
+                entry["resolved_peak_index"] = int(branch_idx)
+            canonical["source_branch_index"] = int(branch_idx)
+            canonical["source_peak_index"] = int(branch_idx)
+        canonical["q_group_key"] = list(entry["q_group_key"])
+        canonical["normalized_hkl"] = list(entry["hkl"])
+        canonical["source_table_index"] = entry.get("source_table_index")
+        canonical["source_row_index"] = entry.get("source_row_index")
+        canonical["source_reflection_index"] = entry.get("source_reflection_index")
+        canonical["source_reflection_namespace"] = entry.get("source_reflection_namespace")
+        canonical["source_reflection_is_full"] = entry.get("source_reflection_is_full")
+        entry["provider_selected_source_identity_canonical"] = canonical
     return entry
 
 
@@ -8152,6 +8168,86 @@ def test_resolve_fixed_source_matches_provider_local_stale_row_unique_branch() -
     assert diag["prediction_source_status"] == "available"
 
 
+def test_resolve_fixed_source_matches_accepts_two_locked_q_group_branches_same_hkl() -> None:
+    miller = np.asarray(
+        [
+            [-1.0, 0.0, 10.0],
+            [-1.0, 0.0, 10.0],
+        ],
+        dtype=np.float64,
+    )
+    measured = []
+    for branch_idx, point in ((0, (4.0, 4.0)), (1, (8.0, 8.0))):
+        measured.append(
+            {
+                "hkl": (-1, 0, 10),
+                "label": "-1,0,10",
+                "x": float(point[0]),
+                "y": float(point[1]),
+                "source_table_index": 90 + int(branch_idx),
+                "source_row_index": 24 + int(branch_idx),
+                "q_group_key": ("q_group", "primary", 1, 10),
+                "fit_source_resolution_kind": "provider_fixed_source_local",
+                "optimizer_request_source": "provider_pair",
+                "optimizer_request_has_fixed_source": True,
+                "optimizer_request_fallback_row": False,
+                "provider_selected_source_identity_canonical": {
+                    "normalized_hkl": [-1, 0, 10],
+                    "q_group_key": ["q_group", "primary", 1, 10],
+                    "source_table_index": 90 + int(branch_idx),
+                    "source_row_index": 24 + int(branch_idx),
+                    "source_branch_index": int(branch_idx),
+                    "source_peak_index": int(branch_idx),
+                },
+            }
+        )
+
+    subset = opt._prepare_reflection_subset(miller, np.ones(2, dtype=np.float64), measured)
+    assert subset.fixed_source_reflection_count == 2
+    assert subset.fallback_hkl_count == 0
+    assert np.array_equal(subset.original_indices, np.asarray([0, 1], dtype=np.int64))
+    assert [entry["provider_local_subset_assignment"] for entry in subset.measured_entries] == [
+        "provider_local_duplicate_hkl_branch",
+        "provider_local_duplicate_hkl_branch",
+    ]
+    assert all(
+        entry["provider_local_subset_branch_provenance"] is True
+        for entry in subset.measured_entries
+    )
+
+    hit_tables = [
+        np.asarray(
+            [
+                [1.0, 100.0, 200.0, -10.0, -1.0, 0.0, 10.0],
+                [1.0, 150.0, 250.0, 10.0, -1.0, 0.0, 10.0],
+            ],
+            dtype=np.float64,
+        ),
+        np.asarray(
+            [
+                [1.0, 300.0, 400.0, -10.0, -1.0, 0.0, 10.0],
+                [1.0, 500.0, 600.0, 10.0, -1.0, 0.0, 10.0],
+            ],
+            dtype=np.float64,
+        ),
+    ]
+
+    resolved, fallback_entries, resolution_lookup = opt._resolve_fixed_source_matches(
+        subset.measured_entries,
+        hit_tables,
+    )
+
+    assert len(resolved) == 2
+    assert fallback_entries == []
+    assert resolved[0][1] == (100.0, 200.0)
+    assert resolved[1][1] == (500.0, 600.0)
+    reasons = [
+        resolution_lookup[id(entry)]["resolution_reason"] for entry in subset.measured_entries
+    ]
+    assert "nested_full_identity_branch_ambiguous" not in reasons
+    assert "provider_local_duplicate_hkl_unproven" not in reasons
+
+
 def test_resolve_fixed_source_matches_saved_detector_is_diagnostic_after_stale_row_proof() -> None:
     entry = _provider_local_singleton_entry(
         source_row_index=24,
@@ -8219,6 +8315,48 @@ def test_resolve_fixed_source_matches_provider_local_duplicate_hkl_ambiguous_rej
     assert diag["provider_local_branch_match_row_count"] == 2
 
 
+def test_duplicate_hkl_same_branch_without_unique_table_still_rejects() -> None:
+    entry = _provider_local_singleton_entry(
+        hkl=(-1, 0, 10),
+        label="-1,0,10",
+        q_group_key=("q_group", "primary", 1, 10),
+        source_row_index=24,
+        source_branch_index=1,
+        source_peak_index=1,
+        resolved_peak_index=1,
+        provider_local_subset_assignment="provider_local_duplicate_hkl_unproven",
+        provider_local_subset_branch_provenance=False,
+        provider_selected_source_identity_canonical={
+            "normalized_hkl": [-1, 0, 10],
+            "q_group_key": ["q_group", "primary", 1, 10],
+            "source_row_index": 24,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+        },
+    )
+    hit_tables = [
+        np.asarray(
+            [
+                [1.0, 4.0, 4.0, 10.0, -1.0, 0.0, 10.0],
+                [1.0, 5.0, 5.0, 12.0, -1.0, 0.0, 10.0],
+            ],
+            dtype=np.float64,
+        )
+    ]
+
+    resolved, fallback_entries, resolution_lookup = opt._resolve_fixed_source_matches(
+        [entry],
+        hit_tables,
+    )
+
+    assert resolved == []
+    assert fallback_entries == []
+    diag = resolution_lookup[id(entry)]
+    assert diag["resolution_reason"] == "provider_local_duplicate_hkl_unproven"
+    assert diag["prediction_source_status"] == "unavailable_ambiguous"
+    assert diag["provider_local_branch_match_row_count"] == 2
+
+
 def test_resolve_fixed_source_matches_provider_local_duplicate_hkl_saved_px_rejects() -> None:
     entry = _provider_local_singleton_entry(
         source_row_index=24,
@@ -8231,8 +8369,8 @@ def test_resolve_fixed_source_matches_provider_local_duplicate_hkl_saved_px_reje
             "normalized_hkl": [2, 0, 0],
             "source_table_index": 99,
             "source_row_index": 24,
-            "source_peak_index": 0,
-            "source_branch_index": 0,
+            "source_peak_index": 1,
+            "source_branch_index": 1,
         },
         sim_visual_detector_native_px=(9.0, 8.0),
     )
@@ -8562,6 +8700,49 @@ def test_resolve_fixed_source_matches_uses_nested_full_reflection_identity_for_l
     )
     assert diag["source_row_hkl_q_group_equivalent"] is True
     assert diag["resolution_reason"] != "prediction_branch_source_switched"
+
+
+def test_recover_nested_full_identity_prefers_resolved_table_over_global_duplicate_hkl() -> None:
+    entry = _provider_local_singleton_entry(
+        hkl=(-1, 0, 10),
+        label="-1,0,10",
+        q_group_key=("q_group", "primary", 1, 10),
+        source_table_index=160,
+        resolved_table_index=1,
+        source_row_index=120,
+        source_branch_index=1,
+        source_peak_index=1,
+        resolved_peak_index=1,
+        provider_local_subset_provenance=False,
+        provider_selected_source_identity_canonical={
+            "normalized_hkl": [-1, 0, 10],
+            "q_group_key": ["q_group", "primary", 1, 10],
+            "source_table_index": 160,
+            "source_row_index": 120,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "source_reflection_index": 160,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+        },
+    )
+    hit_tables = [
+        np.asarray([[1.0, 111.0, 222.0, 10.0, -1.0, 0.0, 10.0]], dtype=np.float64),
+        np.asarray([[1.0, 333.0, 444.0, 10.0, -1.0, 0.0, 10.0]], dtype=np.float64),
+    ]
+
+    resolved, fallback_entries, resolution_lookup = opt._resolve_fixed_source_matches(
+        [entry],
+        hit_tables,
+    )
+
+    assert fallback_entries == []
+    assert len(resolved) == 1
+    assert resolved[0][1] == (333.0, 444.0)
+    diag = resolution_lookup[id(entry)]
+    assert diag["resolved_table_index"] == 1
+    assert diag["resolution_reason"] == "provider_local_nested_full_identity_branch_resolved"
+    assert diag["resolution_reason"] != "nested_full_identity_branch_ambiguous"
 
 
 def test_prediction_branch_source_switched_for_locked_qr_row_unavailable() -> None:
@@ -8899,6 +9080,10 @@ def test_geometry_fit_correspondence_local_branch_invalid_frozen_missing_identit
         source_branch_index=None,
         source_peak_index=None,
         resolved_peak_index=None,
+        provider_selected_source_identity_canonical={
+            "normalized_hkl": [2, 0, 0],
+            "source_table_index": 99,
+        },
     )
 
     point, payload = opt._geometry_fit_correspondence_simulated_point_payload(

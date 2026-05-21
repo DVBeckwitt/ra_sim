@@ -1445,6 +1445,31 @@ Dynamic angular rejection localization, 2026-05-12:
 - Shipping status: safe as a diagnostic bug-fix slice. Rollback is a normal git
   revert of the row-summary, sensitivity, classification, GUI text, and tests.
 
+Branch-proven duplicate HKL resolver, 2026-05-21:
+
+- Bug/error status: fixed for locked manual Qr/Qz provider pairs where two
+  rows intentionally share one HKL but represent the two physical Qr branches.
+  The failing signature dropped both pairs as
+  `nested_full_identity_branch_ambiguous` or
+  `provider_local_duplicate_hkl_unproven`, leaving `matched_pair_count == 0`.
+- The geometry-fit acceptance resolver now treats duplicate HKL rows as safe
+  only when explicit, non-conflicting branch identity and q-group/source
+  provenance prove the selected simulated row. The effective identity for this
+  path is HKL plus `q_group_key` plus branch, refined by resolved table/source
+  row provenance when available.
+- Saved detector pixels remain secondary evidence. They are not accepted as
+  proof by themselves for duplicate HKL rows; branch/source row proof must
+  already exist.
+- Feature status: no new GUI control, CLI flag, public API, config key,
+  saved-state schema, artifact schema, dependency, CI workflow, deprecation, or
+  migration. Unproven or conflicting duplicate HKL rows still reject.
+- Validation: the focused duplicate-HKL resolver test target passed, the
+  broader locked/fixed/matched-pair geometry workflow target passed, full
+  `tests/test_geometry_fitting.py` passed, and `python -m ra_sim.dev check`
+  passed.
+- Shipping status: ready as a normal bug-fix slice. Rollback is a normal git
+  revert of the resolver and regression-test changes.
+
 Do not use `run_geometry_fit_quality_baseline.py` as the first optimizer debug
 tool. Run it only after the ladder identifies a stable parameter set.
 
