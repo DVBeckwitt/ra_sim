@@ -1049,6 +1049,7 @@ def write_qr_rod_peak_edits(
     marker_table: pd.DataFrame,
     *,
     metadata: object = None,
+    parameters: object = None,
 ) -> Path:
     path = Path(path_value).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1057,6 +1058,8 @@ def write_qr_rod_peak_edits(
     payload = {"schema": "ra_sim.qr_rod_peak_edits.v1", "markers": records}
     if metadata is not None:
         payload["metadata"] = _cache_normalize_value(metadata)
+    if isinstance(parameters, dict):
+        payload["parameters"] = json.loads(json.dumps(parameters, default=str))
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     return path
 
@@ -1075,12 +1078,17 @@ def load_qr_rod_peak_edits(
         )
         if actual != expected:
             raise ValueError("Qr-rod peak edits were saved for a different fitting policy")
+    parameter_payload = payload.get("parameters", {}) if isinstance(payload, dict) else {}
+    if not isinstance(parameter_payload, dict):
+        parameter_payload = {}
     records = payload.get("markers", []) if isinstance(payload, dict) else payload
     if not isinstance(records, list):
         raise ValueError("Qr-rod peak edits must be a JSON list or contain a markers list")
     table = pd.DataFrame(records)
     if table.empty:
-        return pd.DataFrame(columns=["m", "branch", "qz_marker", "marker_title"])
+        table = pd.DataFrame(columns=["m", "branch", "qz_marker", "marker_title"])
+        table.attrs["qr_rod_peak_edit_parameters"] = dict(parameter_payload)
+        return table
     required = {"m", "branch", "qz_marker"}
     missing = required - set(table.columns)
     if missing:
@@ -1093,7 +1101,9 @@ def load_qr_rod_peak_edits(
     if "marker_title" in table:
         table["marker_title"] = [clean_marker_title(value) for value in table["marker_title"]]
     table = table[np.isfinite(np.asarray(table["qz_marker"], dtype=np.float64))].copy()
-    return table.sort_values(["m", "branch", "qz_marker"], kind="mergesort").reset_index(drop=True)
+    table = table.sort_values(["m", "branch", "qz_marker"], kind="mergesort").reset_index(drop=True)
+    table.attrs["qr_rod_peak_edit_parameters"] = dict(parameter_payload)
+    return table
 
 
 def marker_table_with_specular_l_markers(
@@ -1415,7 +1425,8 @@ def show_qr_rod_peak_marker_popup(
         raise RuntimeError(f"Matplotlib editor widgets are unavailable: {exc}") from exc
 
     edited = pd.DataFrame(marker_table).copy()
-    if required_marker_table is not None:
+    has_hk0_markers = hk0_qz_marker_count(edited) > 0
+    if required_marker_table is not None and not has_hk0_markers:
         edited = marker_table_with_specular_l_markers(edited, required_marker_table)
     original = edited.copy()
     profiles = pd.DataFrame(rod_profile_table).copy()
@@ -1565,6 +1576,7 @@ def show_qr_rod_peak_marker_popup(
     selected: dict[str, object] = {"group": None, "index": None, "dragging": False}
     title_box_state: dict[str, object] = {"box": None, "syncing": False}
     text_input_widgets: list[object] = []
+    region_parameter_widgets: dict[str, object] = {}
     marker_scatter_by_group: dict[tuple[int, str], object | None] = {}
     marker_annotations_by_group: dict[tuple[int, str], list[object]] = {}
     group_plot_cache: dict[
@@ -1743,6 +1755,98 @@ def show_qr_rod_peak_marker_popup(
             return {}
         if callback_accepts_keyword(callback, "theta_initial_deg"):
             return {"theta_initial_deg": float(current_theta_initial_deg())}
+        return {}
+
+    def set_region_widget_value(key: str, value: object) -> None:
+        widget = region_parameter_widgets.get(str(key))
+        if widget is None:
+            return
+        eventson = getattr(widget, "eventson", None)
+        if eventson is not None:
+            widget.eventson = False
+        try:
+            if str(key) == "delta_qr":
+                widget.set_val(float(value))
+            else:
+                widget.set_val(f"{float(value):.6g}")
+        finally:
+            if eventson is not None:
+                widget.eventson = eventson
+
+    def sync_region_parameter_widgets(*keys: str) -> None:
+        for key in keys:
+            if key in region_control_state:
+                set_region_widget_value(key, region_control_state[key])
+
+    def current_phase_parameter_group() -> tuple[str, tuple[str, ...]] | None:
+        if nonzero_theta_i_controls_enabled():
+            return "nonzero", ("delta_qr", "l_min", "l_max", "theta_initial_deg")
+        if hk0_roi_controls_enabled():
+            return "specular", ("phi_min", "phi_max", "two_theta_min", "two_theta_max")
+        return None
+
+    def apply_imported_peak_edit_parameters(parameters: object) -> bool:
+        if not region_controls_enabled or not isinstance(parameters, dict):
+            return False
+        phase_group = current_phase_parameter_group()
+        if phase_group is None:
+            return False
+        phase_name, keys = phase_group
+        phase_parameters = parameters.get(phase_name, {})
+        if not isinstance(phase_parameters, dict):
+            return False
+        applied_keys: list[str] = []
+        changed = False
+        for key in keys:
+            value = as_float(phase_parameters.get(key), np.nan)
+            if not np.isfinite(value):
+                continue
+            if key == "delta_qr":
+                value = max(1.0e-9, float(value))
+            old_value = as_float(region_control_state.get(key), np.nan)
+            if not np.isfinite(old_value) or not np.isclose(float(old_value), float(value)):
+                changed = True
+            region_control_state[key] = float(value)
+            applied_keys.append(key)
+        if not applied_keys:
+            return False
+        sync_region_parameter_widgets(*applied_keys)
+        if changed:
+            clear_group_plot_cache()
+            mark_region_profile_refresh_pending("import_parameters")
+            mark_detector_preview_refresh_pending()
+        return changed
+
+    def current_phase_peak_edit_parameters() -> dict[str, dict[str, float]]:
+        if not region_controls_enabled:
+            return {}
+        phase_group = current_phase_parameter_group()
+        if phase_group is None:
+            return {}
+        phase_name, _keys = phase_group
+        if phase_name == "nonzero":
+            l_bounds = current_l_bounds() or (
+                as_float(region_control_state.get("l_min"), 0.0),
+                as_float(region_control_state.get("l_max"), 8.0),
+            )
+            return {
+                "nonzero": {
+                    "delta_qr": max(1.0e-9, as_float(region_control_state.get("delta_qr"), 1.0e-3)),
+                    "l_min": float(l_bounds[0]),
+                    "l_max": float(l_bounds[1]),
+                    "theta_initial_deg": float(current_theta_initial_deg()),
+                }
+            }
+        if phase_name == "specular":
+            phi_min, phi_max, theta_min, theta_max = current_hk0_roi_bounds()
+            return {
+                "specular": {
+                    "phi_min": float(phi_min),
+                    "phi_max": float(phi_max),
+                    "two_theta_min": float(theta_min),
+                    "two_theta_max": float(theta_max),
+                }
+            }
         return {}
 
     def editor_l_bounds_for_group(m_value: int) -> tuple[float, float] | None:
@@ -1974,11 +2078,7 @@ def show_qr_rod_peak_marker_popup(
         slope, intercept = qz_to_l_linear_coeff(
             m_value=int(m_value), branch_value=str(branch_value), marker_source=edited.copy()
         )
-        if (
-            not np.isfinite(slope)
-            or not np.isfinite(intercept)
-            or abs(float(slope)) <= 1.0e-12
-        ):
+        if not np.isfinite(slope) or not np.isfinite(intercept) or abs(float(slope)) <= 1.0e-12:
             slope, intercept = 1.0, 0.0
         coeff = (float(slope), float(intercept))
         group_l_coeff_cache[key] = coeff
@@ -2658,11 +2758,18 @@ def show_qr_rod_peak_marker_popup(
             return
         try:
             imported = load_qr_rod_peak_edits(import_path)
-            if required_marker_table is not None:
+            import_parameters = dict(
+                getattr(imported, "attrs", {}).get("qr_rod_peak_edit_parameters", {}) or {}
+            )
+            import_replaces_required_hk0 = hk0_qz_marker_count(imported) > 0
+            if required_marker_table is not None and not import_replaces_required_hk0:
                 imported = marker_table_with_specular_l_markers(imported, required_marker_table)
+                imported.attrs["qr_rod_peak_edit_parameters"] = import_parameters
             edited = imported.copy()
+            edited.attrs["qr_rod_peak_edit_parameters"] = import_parameters
             clear_group_plot_cache()
             clear_group_l_coeff_cache()
+            apply_imported_peak_edit_parameters(import_parameters)
             imported_groups = (
                 [
                     (int(row["m"]), str(row["branch"]))
@@ -2693,7 +2800,11 @@ def show_qr_rod_peak_marker_popup(
         if export_path is None:
             return
         try:
-            saved_path = write_qr_rod_peak_edits(export_path, edited)
+            saved_path = write_qr_rod_peak_edits(
+                export_path,
+                edited,
+                parameters=current_phase_peak_edit_parameters(),
+            )
             edit_file_state["path"] = str(saved_path)
             print(f"exported Qr-rod peak edits={saved_path}")
         except Exception as exc:
@@ -2821,11 +2932,14 @@ def show_qr_rod_peak_marker_popup(
                 max(delta_qr_value * 4.0, delta_qr_value + 1.0e-6),
                 valinit=delta_qr_value,
             )
+            region_parameter_widgets["delta_qr"] = delta_qr_slider
             delta_qr_slider.on_changed(set_region_delta_qr)
             l_min_initial = f"{as_float(region_control_state.get('l_min'), 0.0):.6g}"
             l_max_initial = f"{as_float(region_control_state.get('l_max'), 8.0):.6g}"
             l_min_box = TextBox(l_min_ax, "L Min", initial=l_min_initial)
             l_max_box = TextBox(l_max_ax, "L Max", initial=l_max_initial)
+            region_parameter_widgets["l_min"] = l_min_box
+            region_parameter_widgets["l_max"] = l_max_box
             suppress_inactive_text_box_stop_draw(l_min_box)
             suppress_inactive_text_box_stop_draw(l_max_box)
             l_min_box.on_submit(set_region_l_min)
@@ -2836,6 +2950,7 @@ def show_qr_rod_peak_marker_popup(
                 "theta_i",
                 initial=f"{current_theta_initial_deg():.6g}",
             )
+            region_parameter_widgets["theta_initial_deg"] = theta_i_box
             suppress_inactive_text_box_stop_draw(theta_i_box)
             theta_i_box.on_submit(set_region_theta_initial)
         if delta_qr_slider is not None:
@@ -2858,6 +2973,7 @@ def show_qr_rod_peak_marker_popup(
             ]
             for key, label, value, bounds in roi_specs:
                 box = TextBox(fig.add_axes(bounds), label, initial=f"{float(value):.6g}")
+                region_parameter_widgets[str(key)] = box
                 suppress_inactive_text_box_stop_draw(box)
                 box.on_submit(lambda text, key=key: set_region_roi_bound(key, text))
                 region_widgets.append(box)
@@ -2951,7 +3067,7 @@ def edit_qr_rod_region_editor(
     if path_text:
         try:
             table = load_qr_rod_peak_edits(path_text)
-            if required_marker_table is not None:
+            if required_marker_table is not None and hk0_qz_marker_count(table) <= 0:
                 table = marker_table_with_specular_l_markers(table, required_marker_table)
             source_mode = "imported_edits"
             print(f"loaded Qr-rod peak edits={Path(path_text).expanduser()}")
@@ -15248,17 +15364,41 @@ if (
         ) = qr_rod_detector_region_preview
         qr_rod_detector_region_preview_figures.append(qr_rod_detector_region_preview_figure)
 qr_rod_peak_edit_source = "last_cached"
+qr_rod_imported_peak_edit_parameters: dict[str, object] = {}
 if qr_rod_peak_edits_path:
     try:
-        marker_table = load_qr_rod_peak_edits(
+        imported_marker_table = load_qr_rod_peak_edits(
             qr_rod_peak_edits_path,
             expected_metadata=QR_ROD_PEAK_EDIT_CONTEXT_SIGNATURE,
         )
-        marker_table = marker_table_with_specular_l_markers(marker_table, specular_l_marker_table)
+        qr_rod_imported_peak_edit_parameters = dict(
+            getattr(imported_marker_table, "attrs", {}).get("qr_rod_peak_edit_parameters", {}) or {}
+        )
+        if hk0_qz_marker_count(imported_marker_table) > 0:
+            marker_table = imported_marker_table.copy()
+        else:
+            marker_table = marker_table_with_specular_l_markers(
+                imported_marker_table, specular_l_marker_table
+            )
         qr_rod_peak_edit_source = "imported_edits"
         print(f"loaded Qr-rod peak edits={Path(qr_rod_peak_edits_path).expanduser()}")
     except Exception as exc:
         print(f"ignored Qr-rod peak edits={Path(qr_rod_peak_edits_path).expanduser()}: {exc}")
+qr_rod_imported_nonzero_parameters = qr_rod_imported_peak_edit_parameters.get("nonzero", {})
+if isinstance(qr_rod_imported_nonzero_parameters, dict):
+    qr_rod_delta_qr = max(
+        1.0e-9, as_float(qr_rod_imported_nonzero_parameters.get("delta_qr"), qr_rod_delta_qr)
+    )
+    qr_rod_editor_initial_l_min = as_float(
+        qr_rod_imported_nonzero_parameters.get("l_min"), qr_rod_editor_initial_l_min
+    )
+    qr_rod_editor_initial_l_max = as_float(
+        qr_rod_imported_nonzero_parameters.get("l_max"), qr_rod_editor_initial_l_max
+    )
+    qr_rod_editor_initial_theta_initial_deg = as_float(
+        qr_rod_imported_nonzero_parameters.get("theta_initial_deg"),
+        qr_rod_editor_initial_theta_initial_deg,
+    )
 qr_rod_nonzero_editor_result = edit_qr_rod_region_editor(
     marker_table,
     rod_profile_table,
@@ -15296,6 +15436,20 @@ qr_rod_editor_theta_initial_deg = as_float(
 rod_profile_table = pd.DataFrame(
     qr_rod_nonzero_editor_result.get("rod_profile_table", rod_profile_table)
 ).copy()
+qr_rod_imported_specular_parameters = qr_rod_imported_peak_edit_parameters.get("specular", {})
+if isinstance(qr_rod_imported_specular_parameters, dict):
+    specular_phi_min_deg = as_float(
+        qr_rod_imported_specular_parameters.get("phi_min"), specular_phi_min_deg
+    )
+    specular_phi_max_deg = as_float(
+        qr_rod_imported_specular_parameters.get("phi_max"), specular_phi_max_deg
+    )
+    specular_theta_min_deg = as_float(
+        qr_rod_imported_specular_parameters.get("two_theta_min"), specular_theta_min_deg
+    )
+    specular_theta_max_deg = as_float(
+        qr_rod_imported_specular_parameters.get("two_theta_max"), specular_theta_max_deg
+    )
 qr_rod_specular_editor_initial_l_min, qr_rod_specular_editor_initial_l_max = (
     qr_rod_l_bounds_for_group(
         0,
@@ -15398,6 +15552,20 @@ marker_table = filter_hidden_qr_rod_table(
 rod_profile_table = filter_hidden_qr_rod_table(
     rod_profile_table, SAMPLE_STEM, hidden_hk=PBI2_HIDDEN_QR_ROD_HK
 )
+qr_rod_peak_edit_parameters = {
+    "nonzero": {
+        "delta_qr": float(qr_rod_delta_qr),
+        "l_min": float(qr_rod_editor_l_min),
+        "l_max": float(qr_rod_editor_l_max),
+        "theta_initial_deg": float(qr_rod_editor_theta_initial_deg),
+    },
+    "specular": {
+        "phi_min": float(specular_phi_min_deg),
+        "phi_max": float(specular_phi_max_deg),
+        "two_theta_min": float(specular_theta_min_deg),
+        "two_theta_max": float(specular_theta_max_deg),
+    },
+}
 qr_rod_region_editor_result = {
     **qr_rod_specular_editor_result,
     "marker_table": marker_table,
@@ -15406,6 +15574,7 @@ qr_rod_region_editor_result = {
     "l_min": float(qr_rod_editor_l_min),
     "l_max": float(qr_rod_editor_l_max),
     "theta_initial_deg": float(qr_rod_editor_theta_initial_deg),
+    "peak_edit_parameters": qr_rod_peak_edit_parameters,
     "specular_roi": dict(SPECULAR_ROI_SIGNATURE),
     "accepted": bool(qr_rod_nonzero_editor_result.get("accepted", False))
     or bool(qr_rod_specular_editor_result.get("accepted", False)),
@@ -15417,6 +15586,7 @@ if bool(qr_rod_specular_editor_result.get("accepted", False)) and qr_rod_peak_ed
             qr_rod_peak_edits_path,
             marker_table,
             metadata=QR_ROD_PEAK_EDIT_CONTEXT_SIGNATURE,
+            parameters=qr_rod_peak_edit_parameters,
         )
         print(f"saved final Qr-rod peak edits={saved_path}")
     except Exception as exc:

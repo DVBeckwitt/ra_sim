@@ -307,9 +307,14 @@ Current status as of 2026-05-21:
   shared L window. The editor also freezes each panel's Qz-to-L mapping for
   the popup session, so dragging a marker in `m=1`, `branch="-"` updates only
   the selected marker and does not refit the panel coordinate transform from
-  the mutated marker table. Accepted HK=0/specular profile rows are also
-  hashed into the final Qr-rod cache identity, so the final figure cannot
-  reuse stale cached `m=0` data after the GUI selection changes.
+  the mutated marker table. Qr-rod peak-edit import/export now round-trips
+  nonzero `Delta Qr`, `L Min`, `L Max`, and `theta_i` values plus HK=0
+  `Phi`/`2theta` ROI bounds, and HK=0 imports with their own markers replace
+  stale required ROI rows instead of merging them into the imported set, even
+  when the nonzero editor phase runs before the HK=0 phase. Accepted
+  HK=0/specular profile rows are also hashed into the final Qr-rod cache
+  identity, so the final figure cannot reuse stale cached `m=0` data after the
+  GUI selection changes.
 - PbI2 manuscript figures default to
   `C:\Users\Kenpo\OneDrive\Documents\GitHub\PhD Work\2D-Manuscript-Draft\figures\results_pbi2`.
   Other samples keep the `results_ordered` default, and

@@ -27,6 +27,7 @@
   - Fixed nonzero Qr-rod profile refreshes so `m` plus/minus branches rebuild from the same active L grid and common finite detector support, preventing different displayed L starts after empty-bin filtering.
   - Fixed the nonzero Qr-rod marker editor so clicking or dragging the `m=1 -` panel cannot submit a focused `L Min` text box and accidentally change the shared L window.
   - Fixed the `m=1 -` Qr-rod marker editor drift by freezing each panel's Qz-to-L mapping for the editor session, so marker edits no longer refit the panel coordinate transform while dragging.
+  - Fixed Qr-rod peak-edit import/export so nonzero parameters (`Delta Qr`, `L Min`, `L Max`, `theta_i`) and HK=0 ROI parameters (`Phi`, `2theta`) round-trip with marker edits, while imported HK=0 markers are not merged with stale required ROI rows.
   - Fixed final Qr-rod fit cache identity so accepted HK=0 profile rows from the specular editor cannot be replaced by stale cached final-figure data.
   - Linked the Qr-rod marker editor and detector-preview windows so closing either window also closes the other.
 
@@ -301,6 +302,9 @@
   - Fixed headless `fit-geometry` per-background caked projector compatibility so Bi2Se3 and Bi2Te3 saved manual-caked states can run constrained `gamma,Gamma` direct fits through the shared dataset builder.
 
 - **GUI and UX updates**
+  - Made the startup background max-intensity default use a brighter tail-aware
+    percentile so sparse detector peaks are not clipped by a too-low 99th
+    percentile while the slider still reaches the true finite image maximum.
   - Made fresh simulation-GUI startup pin the geometry-adjustment controls
     `cor_angle`, `gamma`, `Gamma`, `chi`, `psi_z`, `zs`, and `zb` to zero
     while preserving restored saved-state values.

@@ -91,6 +91,7 @@ def _script_functions(*names: str) -> dict[str, object]:
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
     wanted = set(names)
     if "show_qr_rod_peak_marker_popup" in wanted:
+        wanted.add("hk0_qz_marker_count")
         wanted.add("qr_rod_l_bounds_for_group")
         wanted.add("qr_rod_editor_phase_matches")
         wanted.add("qr_rod_editor_phase_title")
@@ -1281,6 +1282,14 @@ def test_parallel_script_qr_rod_peak_edits_validate_background_policy(tmp_path: 
         edit_path,
         markers,
         metadata={"radial_background_subtraction": {"mode": "off", "scale": 0.0}},
+        parameters={
+            "nonzero": {
+                "delta_qr": 0.04,
+                "l_min": 0.6,
+                "l_max": 4.2,
+                "theta_initial_deg": 12.5,
+            }
+        },
     )
 
     loaded = load_edits(
@@ -1308,6 +1317,9 @@ def test_parallel_script_qr_rod_peak_edits_validate_background_policy(tmp_path: 
     assert loaded[["m", "branch", "qz_marker"]].to_dict("records") == [
         {"m": 1, "branch": "+", "qz_marker": 1.0}
     ]
+    assert loaded.attrs["qr_rod_peak_edit_parameters"]["nonzero"] == pytest.approx(
+        {"delta_qr": 0.04, "l_min": 0.6, "l_max": 4.2, "theta_initial_deg": 12.5}
+    )
 
 
 def test_parallel_script_qr_rod_peak_editor_rejects_stale_background_policy_edits() -> None:
@@ -1326,6 +1338,7 @@ def test_parallel_script_qr_rod_peak_editor_rejects_stale_background_policy_edit
     assert "QR_ROD_PEAK_EDIT_CONTEXT_SIGNATURE" in source
     assert "expected_metadata=QR_ROD_PEAK_EDIT_CONTEXT_SIGNATURE" in load_section
     assert "metadata=QR_ROD_PEAK_EDIT_CONTEXT_SIGNATURE" in save_section
+    assert "parameters=qr_rod_peak_edit_parameters" in save_section
 
 
 def test_parallel_script_radial_background_cache_signatures_reject_old_prefit_caches() -> None:
@@ -7184,6 +7197,533 @@ def test_parallel_script_qr_rod_peak_editor_import_refreshes_nonzero_preview_onc
     assert update_calls[0]["qz_marker"].tolist() == pytest.approx([1.0, 1.1, 1.2, 1.3])
 
 
+def test_parallel_script_qr_rod_peak_editor_nonzero_phase_keeps_imported_hk0_markers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from matplotlib.backend_bases import KeyEvent
+
+    namespace = _script_functions(
+        "as_float",
+        "qr_rod_peak_edit_runtime_mode",
+        "show_qr_rod_peak_marker_popup",
+        "marker_table_with_specular_l_markers",
+        "qz_l_linear_coeff_from_marker_rows",
+        "marker_row_title",
+        "clean_marker_title",
+        "replace_qr_rod_marker_group_qz",
+        "positive_log_plot_values",
+        "apply_positive_log_y_axis",
+        "snap_qr_rod_markers_to_profile_peaks",
+        "l_tick_label",
+        "_safe_run_name",
+        "load_qr_rod_peak_edits",
+        "write_qr_rod_peak_edits",
+    )
+    show_editor = namespace["show_qr_rod_peak_marker_popup"]
+
+    def fake_show(*_args, **_kwargs) -> None:
+        fig = plt.gcf()
+        fig.canvas.callbacks.process(
+            "key_press_event",
+            KeyEvent("key_press_event", fig.canvas, key="enter"),
+        )
+
+    marker_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_marker": 1.2, "fit_l": 1.2, "display_l": 1.2},
+            {"m": 0, "branch": "qz", "qz_marker": 1.8, "fit_l": 1.8, "display_l": 1.8},
+        ]
+    )
+    required_marker_table = pd.DataFrame(
+        [{"m": 0, "branch": "qz", "qz_marker": 9.9, "fit_l": 9.9, "display_l": 9.9}]
+    )
+    rod_profile_table = pd.DataFrame(
+        [{"m": 1, "branch": "+", "qz_center": 1.2, "background_density": 1.0}]
+    )
+
+    monkeypatch.setattr(plt, "show", fake_show)
+    edited, accepted = show_editor(
+        marker_table,
+        rod_profile_table,
+        backend_name="TkAgg",
+        region_state={"delta_qr": 0.01, "l_min": 0.0, "l_max": 3.0},
+        required_marker_table=required_marker_table,
+        editor_phase="nonzero",
+    )
+
+    assert accepted is True
+    hk0_markers = edited.loc[
+        (edited["m"].astype(int) == 0) & (edited["branch"].astype(str) == "qz"), "qz_marker"
+    ].tolist()
+    assert hk0_markers == pytest.approx([1.8])
+
+
+def test_parallel_script_qr_rod_peak_editor_import_applies_nonzero_parameters(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from matplotlib.backend_bases import KeyEvent
+    import tkinter.filedialog as filedialog
+
+    namespace = _script_functions(
+        "as_float",
+        "qr_rod_peak_edit_runtime_mode",
+        "show_qr_rod_peak_marker_popup",
+        "marker_table_with_specular_l_markers",
+        "qz_l_linear_coeff_from_marker_rows",
+        "marker_row_title",
+        "clean_marker_title",
+        "replace_qr_rod_marker_group_qz",
+        "positive_log_plot_values",
+        "apply_positive_log_y_axis",
+        "snap_qr_rod_markers_to_profile_peaks",
+        "l_tick_label",
+        "_safe_run_name",
+        "load_qr_rod_peak_edits",
+        "write_qr_rod_peak_edits",
+    )
+    show_editor = namespace["show_qr_rod_peak_marker_popup"]
+    import_path = tmp_path / "nonzero_peak_edits_with_parameters.json"
+    imported_rows = [
+        {"m": 1, "branch": "+", "qz_marker": 1.2, "fit_l": 1.2, "display_l": 1.2},
+        {"m": 1, "branch": "-", "qz_marker": 1.4, "fit_l": 1.4, "display_l": 1.4},
+    ]
+    import_path.write_text(
+        json.dumps(
+            {
+                "schema": "ra_sim.qr_rod_peak_edits.v1",
+                "markers": imported_rows,
+                "parameters": {
+                    "nonzero": {
+                        "delta_qr": 0.04,
+                        "l_min": 0.6,
+                        "l_max": 4.2,
+                        "theta_initial_deg": 12.5,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(filedialog, "askopenfilename", lambda **_kwargs: str(import_path))
+    region_state = {"delta_qr": 0.01, "l_min": 0.0, "l_max": 3.0, "theta_initial_deg": 6.0}
+    preview_calls: list[tuple[float, float, float, float, pd.DataFrame]] = []
+    update_calls: list[tuple[float, float, float, float, pd.DataFrame]] = []
+
+    def refresh_preview(
+        *,
+        delta_qr: float,
+        l_min: float,
+        l_max: float,
+        marker_table: pd.DataFrame,
+        theta_initial_deg: float,
+        editor_phase: object,
+    ) -> None:
+        assert str(editor_phase) == "nonzero"
+        preview_calls.append(
+            (
+                float(delta_qr),
+                float(l_min),
+                float(l_max),
+                float(theta_initial_deg),
+                pd.DataFrame(marker_table).copy(),
+            )
+        )
+
+    def refresh_profiles(
+        delta_qr: float,
+        l_min: float,
+        l_max: float,
+        *,
+        marker_table: pd.DataFrame,
+        theta_initial_deg: float,
+        editor_phase: object,
+    ) -> pd.DataFrame:
+        assert str(editor_phase) == "nonzero"
+        update_calls.append(
+            (
+                float(delta_qr),
+                float(l_min),
+                float(l_max),
+                float(theta_initial_deg),
+                pd.DataFrame(marker_table).copy(),
+            )
+        )
+        return pd.DataFrame(
+            [
+                {
+                    "m": row["m"],
+                    "branch": row["branch"],
+                    "qz_center": row["qz_marker"],
+                    "background_density": 10.0,
+                }
+                for row in imported_rows
+            ]
+        )
+
+    def fake_show(*_args, **_kwargs) -> None:
+        fig = plt.gcf()
+        import_button = next(
+            widget
+            for widget in getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets")
+            if type(widget).__name__ == "Button"
+            and getattr(getattr(widget, "label", None), "get_text", lambda: "")() == "Import"
+        )
+        update_count_before_import = len(update_calls)
+        import_button._observers.process("clicked", None)
+        assert len(update_calls) == update_count_before_import
+        fig.canvas.callbacks.process(
+            "key_press_event",
+            KeyEvent("key_press_event", fig.canvas, key="enter"),
+        )
+
+    marker_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_marker": 0.9, "fit_l": 0.9, "display_l": 0.9},
+            {"m": 1, "branch": "-", "qz_marker": 1.0, "fit_l": 1.0, "display_l": 1.0},
+        ]
+    )
+    rod_profile_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "+", "qz_center": 0.9, "background_density": 1.0},
+            {"m": 1, "branch": "-", "qz_center": 1.0, "background_density": 1.0},
+        ]
+    )
+
+    monkeypatch.setattr(plt, "show", fake_show)
+    _edited, accepted = show_editor(
+        marker_table,
+        rod_profile_table,
+        backend_name="TkAgg",
+        region_state=region_state,
+        profile_update_callback=refresh_profiles,
+        region_preview_update_callback=refresh_preview,
+        editor_phase="nonzero",
+    )
+
+    assert accepted is True
+    assert {
+        "delta_qr": region_state["delta_qr"],
+        "l_min": region_state["l_min"],
+        "l_max": region_state["l_max"],
+        "theta_initial_deg": region_state["theta_initial_deg"],
+    } == pytest.approx({"delta_qr": 0.04, "l_min": 0.6, "l_max": 4.2, "theta_initial_deg": 12.5})
+    assert [(call[0], call[1], call[2], call[3]) for call in preview_calls] == pytest.approx(
+        [(0.04, 0.6, 4.2, 12.5)]
+    )
+    assert [(call[0], call[1], call[2], call[3]) for call in update_calls] == pytest.approx(
+        [(0.04, 0.6, 4.2, 12.5)]
+    )
+    assert update_calls[0][4]["qz_marker"].tolist() == pytest.approx([1.2, 1.4])
+
+
+def test_parallel_script_qr_rod_peak_editor_import_applies_hk0_parameters(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from matplotlib.backend_bases import KeyEvent
+    import tkinter.filedialog as filedialog
+
+    namespace = _script_functions(
+        "as_float",
+        "qr_rod_peak_edit_runtime_mode",
+        "show_qr_rod_peak_marker_popup",
+        "marker_table_with_specular_l_markers",
+        "qz_l_linear_coeff_from_marker_rows",
+        "marker_row_title",
+        "clean_marker_title",
+        "replace_qr_rod_marker_group_qz",
+        "positive_log_plot_values",
+        "apply_positive_log_y_axis",
+        "snap_qr_rod_markers_to_profile_peaks",
+        "l_tick_label",
+        "_safe_run_name",
+        "load_qr_rod_peak_edits",
+        "write_qr_rod_peak_edits",
+    )
+    show_editor = namespace["show_qr_rod_peak_marker_popup"]
+    import_path = tmp_path / "hk0_peak_edits_with_parameters.json"
+    imported_rows = [
+        {"m": 0, "branch": "qz", "qz_marker": 1.8, "fit_l": 1.8, "display_l": 1.8},
+        {"m": 0, "branch": "qz", "qz_marker": 2.4, "fit_l": 2.4, "display_l": 2.4},
+    ]
+    import_path.write_text(
+        json.dumps(
+            {
+                "schema": "ra_sim.qr_rod_peak_edits.v1",
+                "markers": imported_rows,
+                "parameters": {
+                    "specular": {
+                        "phi_min": -4.5,
+                        "phi_max": 6.5,
+                        "two_theta_min": 8.5,
+                        "two_theta_max": 18.5,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(filedialog, "askopenfilename", lambda **_kwargs: str(import_path))
+    region_state = {
+        "delta_qr": 0.01,
+        "l_min": 1.0,
+        "l_max": 3.0,
+        "phi_min": -2.0,
+        "phi_max": 2.0,
+        "two_theta_min": 7.0,
+        "two_theta_max": 12.0,
+    }
+    preview_calls: list[tuple[float, float, float, float, pd.DataFrame]] = []
+    update_calls: list[tuple[float, float, float, float, pd.DataFrame]] = []
+
+    def refresh_preview(
+        *,
+        delta_qr: float,
+        l_min: float,
+        l_max: float,
+        marker_table: pd.DataFrame,
+        phi_min: float,
+        phi_max: float,
+        two_theta_min: float,
+        two_theta_max: float,
+        editor_phase: object,
+    ) -> None:
+        assert str(editor_phase) == "specular"
+        del delta_qr, l_min, l_max
+        preview_calls.append(
+            (
+                float(phi_min),
+                float(phi_max),
+                float(two_theta_min),
+                float(two_theta_max),
+                pd.DataFrame(marker_table).copy(),
+            )
+        )
+
+    def refresh_profiles(
+        delta_qr: float,
+        l_min: float,
+        l_max: float,
+        *,
+        marker_table: pd.DataFrame,
+        phi_min: float,
+        phi_max: float,
+        two_theta_min: float,
+        two_theta_max: float,
+        editor_phase: object,
+    ) -> pd.DataFrame:
+        assert str(editor_phase) == "specular"
+        del delta_qr, l_min, l_max
+        update_calls.append(
+            (
+                float(phi_min),
+                float(phi_max),
+                float(two_theta_min),
+                float(two_theta_max),
+                pd.DataFrame(marker_table).copy(),
+            )
+        )
+        return pd.DataFrame(
+            [
+                {
+                    "m": row["m"],
+                    "branch": row["branch"],
+                    "qz_center": row["qz_marker"],
+                    "background_density": 10.0,
+                }
+                for row in imported_rows
+            ]
+        )
+
+    def fake_show(*_args, **_kwargs) -> None:
+        fig = plt.gcf()
+        boxes = {
+            getattr(getattr(widget, "label", None), "get_text", lambda: "")(): widget
+            for widget in list(getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets"))
+            if type(widget).__name__ == "TextBox"
+        }
+        assert "L Min" not in boxes
+        assert "L Max" not in boxes
+        import_button = next(
+            widget
+            for widget in getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets")
+            if type(widget).__name__ == "Button"
+            and getattr(getattr(widget, "label", None), "get_text", lambda: "")() == "Import"
+        )
+        update_count_before_import = len(update_calls)
+        import_button._observers.process("clicked", None)
+        assert len(update_calls) == update_count_before_import
+        fig.canvas.callbacks.process(
+            "key_press_event",
+            KeyEvent("key_press_event", fig.canvas, key="enter"),
+        )
+
+    marker_table = pd.DataFrame(
+        [
+            {"m": 0, "branch": "qz", "qz_marker": 1.5, "fit_l": 1.5, "display_l": 1.5},
+            {"m": 0, "branch": "qz", "qz_marker": 3.0, "fit_l": 3.0, "display_l": 3.0},
+        ]
+    )
+    rod_profile_table = pd.DataFrame(
+        [
+            {"m": 0, "branch": "qz", "qz_center": 1.5, "background_density": 1.0},
+            {"m": 0, "branch": "qz", "qz_center": 3.0, "background_density": 1.0},
+        ]
+    )
+
+    monkeypatch.setattr(plt, "show", fake_show)
+    _edited, accepted = show_editor(
+        marker_table,
+        rod_profile_table,
+        backend_name="TkAgg",
+        region_state=region_state,
+        profile_update_callback=refresh_profiles,
+        region_preview_update_callback=refresh_preview,
+        required_marker_table=marker_table,
+        editor_phase="specular",
+    )
+
+    assert accepted is True
+    assert {
+        "phi_min": region_state["phi_min"],
+        "phi_max": region_state["phi_max"],
+        "two_theta_min": region_state["two_theta_min"],
+        "two_theta_max": region_state["two_theta_max"],
+    } == pytest.approx(
+        {"phi_min": -4.5, "phi_max": 6.5, "two_theta_min": 8.5, "two_theta_max": 18.5}
+    )
+    assert (
+        preview_calls[-1][0],
+        preview_calls[-1][1],
+        preview_calls[-1][2],
+        preview_calls[-1][3],
+    ) == pytest.approx((-4.5, 6.5, 8.5, 18.5))
+    assert (
+        update_calls[-1][0],
+        update_calls[-1][1],
+        update_calls[-1][2],
+        update_calls[-1][3],
+    ) == pytest.approx((-4.5, 6.5, 8.5, 18.5))
+    assert update_calls[-1][4]["qz_marker"].tolist() == pytest.approx([1.8, 2.4])
+
+
+def test_parallel_script_qr_rod_peak_editor_export_writes_phase_parameters(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from matplotlib.backend_bases import KeyEvent
+    import tkinter.filedialog as filedialog
+
+    namespace = _script_functions(
+        "as_float",
+        "qr_rod_peak_edit_runtime_mode",
+        "show_qr_rod_peak_marker_popup",
+        "marker_table_with_specular_l_markers",
+        "qz_l_linear_coeff_from_marker_rows",
+        "marker_row_title",
+        "clean_marker_title",
+        "replace_qr_rod_marker_group_qz",
+        "positive_log_plot_values",
+        "apply_positive_log_y_axis",
+        "snap_qr_rod_markers_to_profile_peaks",
+        "l_tick_label",
+        "_safe_run_name",
+        "load_qr_rod_peak_edits",
+        "write_qr_rod_peak_edits",
+    )
+    show_editor = namespace["show_qr_rod_peak_marker_popup"]
+
+    def export_phase(
+        *,
+        marker_table: pd.DataFrame,
+        rod_profile_table: pd.DataFrame,
+        region_state: dict[str, object],
+        editor_phase: str,
+        export_name: str,
+    ) -> dict[str, object]:
+        export_path = tmp_path / export_name
+        monkeypatch.setattr(filedialog, "asksaveasfilename", lambda **_kwargs: str(export_path))
+
+        def fake_show(*_args, **_kwargs) -> None:
+            fig = plt.gcf()
+            export_button = next(
+                widget
+                for widget in getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets")
+                if type(widget).__name__ == "Button"
+                and getattr(getattr(widget, "label", None), "get_text", lambda: "")() == "Export"
+            )
+            export_button._observers.process("clicked", None)
+            fig.canvas.callbacks.process(
+                "key_press_event",
+                KeyEvent("key_press_event", fig.canvas, key="enter"),
+            )
+
+        monkeypatch.setattr(plt, "show", fake_show)
+        _edited, accepted = show_editor(
+            marker_table,
+            rod_profile_table,
+            backend_name="TkAgg",
+            region_state=region_state,
+            editor_phase=editor_phase,
+        )
+
+        assert accepted is True
+        return json.loads(export_path.read_text(encoding="utf-8"))
+
+    nonzero_payload = export_phase(
+        marker_table=pd.DataFrame(
+            [
+                {"m": 1, "branch": "+", "qz_marker": 1.2, "fit_l": 1.2, "display_l": 1.2},
+                {"m": 1, "branch": "-", "qz_marker": 1.4, "fit_l": 1.4, "display_l": 1.4},
+            ]
+        ),
+        rod_profile_table=pd.DataFrame(
+            [
+                {"m": 1, "branch": "+", "qz_center": 1.2, "background_density": 1.0},
+                {"m": 1, "branch": "-", "qz_center": 1.4, "background_density": 1.0},
+            ]
+        ),
+        region_state={"delta_qr": 0.04, "l_min": 0.6, "l_max": 4.2, "theta_initial_deg": 12.5},
+        editor_phase="nonzero",
+        export_name="nonzero_export.json",
+    )
+    assert nonzero_payload["parameters"]["nonzero"] == pytest.approx(
+        {"delta_qr": 0.04, "l_min": 0.6, "l_max": 4.2, "theta_initial_deg": 12.5}
+    )
+    assert "specular" not in nonzero_payload["parameters"]
+
+    hk0_payload = export_phase(
+        marker_table=pd.DataFrame(
+            [
+                {"m": 0, "branch": "qz", "qz_marker": 1.8, "fit_l": 1.8, "display_l": 1.8},
+                {"m": 0, "branch": "qz", "qz_marker": 2.4, "fit_l": 2.4, "display_l": 2.4},
+            ]
+        ),
+        rod_profile_table=pd.DataFrame(
+            [
+                {"m": 0, "branch": "qz", "qz_center": 1.8, "background_density": 1.0},
+                {"m": 0, "branch": "qz", "qz_center": 2.4, "background_density": 1.0},
+            ]
+        ),
+        region_state={
+            "delta_qr": 0.01,
+            "l_min": 1.0,
+            "l_max": 3.0,
+            "phi_min": -4.5,
+            "phi_max": 6.5,
+            "two_theta_min": 8.5,
+            "two_theta_max": 18.5,
+        },
+        editor_phase="specular",
+        export_name="hk0_export.json",
+    )
+    assert hk0_payload["parameters"]["specular"] == pytest.approx(
+        {"phi_min": -4.5, "phi_max": 6.5, "two_theta_min": 8.5, "two_theta_max": 18.5}
+    )
+    assert "nonzero" not in hk0_payload["parameters"]
+
+
 def test_parallel_script_qr_rod_peak_editor_marks_hk0_marker_changes_dirty() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     function_source = source[
@@ -7221,7 +7761,7 @@ def test_parallel_script_qr_rod_peak_editor_freezes_panel_l_axis_mapping() -> No
     )
     assert "def clear_group_l_coeff_cache(" in function_source
     assert "marker_source=edited.copy()" in function_source
-    assert "for column in (\"fit_l\", \"display_l\", \"l\"):" in function_source
+    assert 'for column in ("fit_l", "display_l", "l"):' in function_source
     assert "clear_group_l_coeff_cache()" in import_section
 
 
@@ -7704,7 +8244,8 @@ def test_parallel_script_qr_rod_peak_editor_has_import_export_buttons() -> None:
         "filedialog.askopenfilename(",
         "filedialog.asksaveasfilename(",
         "load_qr_rod_peak_edits(import_path)",
-        "write_qr_rod_peak_edits(export_path, edited)",
+        "write_qr_rod_peak_edits(",
+        "parameters=current_phase_peak_edit_parameters()",
     ):
         assert token in function_source
 
@@ -7719,7 +8260,8 @@ def test_parallel_script_qr_rod_peak_editor_shows_hk0_in_log_view() -> None:
         )
     ]
 
-    assert "if required_marker_table is not None:" in function_source
+    assert "has_hk0_markers = hk0_qz_marker_count(edited) > 0" in function_source
+    assert "if required_marker_table is not None and not has_hk0_markers:" in function_source
     assert (
         "edited = marker_table_with_specular_l_markers(edited, required_marker_table)"
         in function_source
