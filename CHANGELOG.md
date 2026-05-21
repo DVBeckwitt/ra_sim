@@ -14,6 +14,7 @@
   - Vectorized primary-cache hit-table rematerialization, filtered impossible off-detector rows before integer casts, and skipped optional last-intersection cache builds when retention is disabled.
   - Optimized diffraction simulation with low-discrepancy antithetic beam sampling, weighted beam clustering, nominal detector culling, local-arc `solve_q`, sparse bilinear accumulation, and a fast-mode optics lookup table.
   - Moved the normal weighted-event diffraction path back onto a compiled runtime in `ra_sim.simulation.diffraction`: `_process_peaks_parallel_impl(...)` now drives Numba pass-1/pass-2 candidate rescans, off-detector or bilinear-unsupported candidates are excluded before entering the event PDF, solve-`q` reuse is limited to pure `All_Q` geometry within one call, image deposits can aggregate duplicate ordinals without collapsing duplicate hit/cache rows, and weighted-event debug stats now expose solve/project/select counters plus pass-1/pass-2 mass totals.
+  - Added deterministic zero-intensity center ghost representatives for weighted-event mosaic branches so fitter-facing intersection caches use beam-center/default-wavelength branch anchors instead of sampled nearest rays, including primary-fill cache carry-through and detector-center remap handling.
   - Replaced the threaded weighted-event dense Q table with the serial packed Q-set layout, split threaded chunk wall time into `time_chunk_compute`, and added scalar-equivalent beam-phase/event-count diagnostics.
   - Restored the Python cache/stat compatibility surface around `process_peaks_parallel_safe(...)` in `ra_sim.simulation.diffraction`, including `_PHASE_SPACE_CACHE`, `_SOURCE_TEMPLATE_CACHE`, `_Q_VECTOR_CACHE`, and `get_last_process_peaks_safe_stats()`, so the source-template cache regression coverage passes again.
   - Scoped the default Numba cache directory by Python cache tag and moved diagnostic intersection analysis off the unstable compiled `solve_q`/intensity path to avoid stale-cache and full-suite compile failures.
@@ -86,6 +87,10 @@
     maps, and the current Delta-Qr independent of cached base profile rows;
     edited HK=0 markers now flow into recompute and stale pre-editor/final
     caches missing positive-pixel HK=0 rows are rejected.
+  - Fixed Qr-rod marker-edit import responsiveness so imported nonzero-HK
+    marker tables mark profile data dirty once and refresh the detector
+    companion preview once, instead of repeating the expensive preview update
+    for every imported branch group.
   - Added opt-in exact manual-pair exclusion and dry-run parameter-combo
     sweeps for headless Bi2Se3 geometry recovery fits, including per-combo
     JSON/PNG artifacts, top-level sweep reports, fail-closed combo results,
@@ -262,6 +267,7 @@
   - Fixed cold-start caked manual geometry-fit preflight so exact caked projection metadata is cached separately from display intensity images, allowing zero-support density NaNs without discarding the geometric projector.
   - Fixed Analyze local linear background subtraction so peak fits project each corrected caked ROI locally, reject peak-wing outliers before fitting the 2D plane, and fall back to uncorrected 1D curves instead of fitting through peak-contaminated pixels.
   - Changed Analyze peak-fit overlays so applied linear background subtraction hides the raw/background-bearing 1D radial and azimuthal lines and displays only the corrected data curve plus fit overlays for that axis.
+  - Added optional pre-fit radial detector background reduction to the parallel background peak-fit diagnostic, with popup/environment controls, raw detector preservation, model/corrected detector diagnostics, and cache signatures that change with the radial policy.
   - Fixed generated and noncurrent caked manual-fit projection payload handling so empty payloads can use generated fallback, invalid axes-only payloads fail closed, and caked row rebuilds never receive a missing exact projector.
   - Fixed live GUI caked geometry-fit source-row fallback so first-fit preflight logs unambiguous internal/UI background indices, validates live rows before targeted cache lookup, accepts current-hit fallback only from `stored_max_positions_local` provenance, keeps `last_intersection_cache` memory-only, rejects stale/forged row caches with explicit reasons, and reports late fresh-simulation status instead of appearing stuck.
   - Validated Bi2Se3 and Bi2Te3 saved manual-caked geometry states through the direct fixed-manual path: Bi2Se3 matched 82/82 fixed pairs and Bi2Te3 matched 84/84 fixed pairs, with zero missing pairs, zero branch mismatches, exact-caked fit-space projectors, and reduced direct residuals.

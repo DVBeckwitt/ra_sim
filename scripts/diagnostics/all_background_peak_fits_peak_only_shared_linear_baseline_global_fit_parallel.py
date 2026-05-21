@@ -23,6 +23,12 @@ DETECTOR_LABEL_SETTINGS_PATH_OVERRIDE = ""
 RESET_PRE_EDITOR_CACHE_OVERRIDE = ""
 PBI2_DISABLE_BACKGROUND_SUBTRACTION_OVERRIDE = ""
 BACKGROUND_IMAGE_SUBTRACTION_DISABLED_OVERRIDE = "1"
+RADIAL_BACKGROUND_SUBTRACTION_EDIT_MODE_OVERRIDE = ""
+RADIAL_BACKGROUND_SUBTRACTION_MODE_OVERRIDE = ""
+RADIAL_BACKGROUND_SUBTRACTION_SCALE_OVERRIDE = ""
+RADIAL_BACKGROUND_SUBTRACTION_PERCENTILE_OVERRIDE = ""
+RADIAL_BACKGROUND_SUBTRACTION_SMOOTH_SIGMA_OVERRIDE = ""
+RADIAL_BACKGROUND_SUBTRACTION_CLIP_ZERO_OVERRIDE = ""
 
 # Faster development output. Use 300 / 1 for final vector figures.
 FIGURE_DPI_OVERRIDE = "200"
@@ -58,7 +64,7 @@ from matplotlib.colors import ListedColormap, LogNorm
 import numpy as np
 import pandas as pd
 from IPython.display import Image, display
-from scipy.ndimage import binary_dilation
+from scipy.ndimage import binary_dilation, gaussian_filter1d
 from scipy.optimize import least_squares, nnls
 
 try:
@@ -120,12 +126,12 @@ def _safe_run_name(value: object) -> str:
 
 
 QR_ROD_PROFILE_CACHE_SCHEMA = "ra_sim.qr_rod_profile_cache.v1"
-QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_specular_theta_i12_l8_v13"
+QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_specular_theta_i12_l8_v14_radial_prefit"
 PRE_EDITOR_CACHE_SCHEMA = "ra_sim.background_pre_editor_cache.v1"
 PRE_EDITOR_CACHE_SIGNATURE = "pre_qr_rod_marker_editor_inputs_v1"
-PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE = "background_peak_fit_results_v1"
+PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE = "background_peak_fit_results_v2_radial_prefit"
 PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE = "profile_fit_cache_v1"
-PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_l_defaults_v12"
+PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_l_defaults_v13_radial_prefit"
 
 
 def _cache_normalize_value(value: object) -> object:
@@ -1684,12 +1690,19 @@ def show_qr_rod_peak_marker_popup(
         region_profile_refresh_sources.add(str(source))
         region_control_state["profile_refresh_pending"] = True
 
-    def mark_marker_table_changed(group: tuple[int, str] | None) -> None:
+    def mark_marker_table_changed(
+        group: tuple[int, str] | None,
+        *,
+        refresh_preview: bool = True,
+    ) -> bool:
         if group is None:
-            return
+            return False
         if region_controls_enabled and qr_rod_editor_phase_matches(int(group[0]), editor_phase):
             mark_region_profile_refresh_pending("marker_table")
-            refresh_detector_region_preview()
+            if refresh_preview:
+                refresh_detector_region_preview()
+            return True
+        return False
 
     def flush_region_profile_refresh(*, redraw_figure: bool = True) -> None:
         if not region_profile_refresh_pending:
@@ -2368,8 +2381,14 @@ def show_qr_rod_peak_marker_popup(
             selected["group"] = None
             selected["index"] = None
             sync_title_box()
+            needs_preview_refresh = False
             for imported_group in imported_groups:
-                mark_marker_table_changed(imported_group)
+                needs_preview_refresh = (
+                    mark_marker_table_changed(imported_group, refresh_preview=False)
+                    or needs_preview_refresh
+                )
+            if needs_preview_refresh:
+                refresh_detector_region_preview()
             redraw()
             print(f"imported Qr-rod peak edits={import_path}; click Accept to continue")
         except Exception as exc:
@@ -3117,9 +3136,9 @@ print(
     "fit backend: background peak fits use the selected safe backend; process pool is used only when requested and supported; CuPy is used only for detector Qr/Qz rod-profile accumulation"
 )
 
-# No diffuse/radial/lower-envelope background is subtracted in this notebook.
-# Temporarily keep saved background image products raw; fit models are still
-# generated separately for overlays and diagnostics.
+# Optional pre-fit radial detector background reduction is available through
+# the diagnostic popup and environment overrides. Peak model subtraction still
+# happens only after peak fits are generated.
 BACKGROUND_IMAGE_SUBTRACTION_DISABLED = _truthy_setting(
     "BACKGROUND_IMAGE_SUBTRACTION_DISABLED_OVERRIDE",
     "RA_SIM_BACKGROUND_IMAGE_SUBTRACTION_DISABLED",
@@ -3452,6 +3471,554 @@ def caked_image_for_intensity_mode(
     valid = np.isfinite(signal) & np.isfinite(normalization) & (normalization > 0.0)
     density[valid] = signal[valid] / normalization[valid]
     return density
+
+
+def radial_background_subtraction_config_from_state(
+    variables: dict[str, object],
+    *,
+    mode_override: object = None,
+    scale_override: object = None,
+    percentile_override: object = None,
+    smooth_sigma_override: object = None,
+    clip_zero_override: object = None,
+) -> dict[str, object]:
+    def clean_text(value: object) -> str:
+        return "" if value is None else str(value).strip()
+
+    def clean_mode(value: object, fallback: str) -> str:
+        text = clean_text(value).lower().replace("_", "-")
+        if text in {"radial", "on", "true", "yes", "1"}:
+            return "radial"
+        if text in {"off", "none", "false", "no", "0", "skip"}:
+            return "off"
+        return str(fallback)
+
+    def clean_float(value: object, fallback: float, *, minimum: float | None = None) -> float:
+        text = clean_text(value)
+        if not text:
+            return float(fallback)
+        try:
+            out = float(text)
+        except Exception:
+            return float(fallback)
+        if not np.isfinite(out):
+            return float(fallback)
+        if minimum is not None:
+            out = max(float(minimum), out)
+        return float(out)
+
+    def clean_percentile(value: object, fallback: float) -> float:
+        return min(100.0, max(0.0, clean_float(value, fallback)))
+
+    def clean_bool(value: object, fallback: bool) -> bool:
+        if isinstance(value, bool):
+            return bool(value)
+        text = clean_text(value).lower()
+        if not text:
+            return bool(fallback)
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off", "none"}:
+            return False
+        return bool(fallback)
+
+    variables = variables if isinstance(variables, dict) else {}
+    legacy_enabled = clean_bool(variables.get("background_subtraction_enabled_var"), False)
+    legacy_mode = clean_mode(
+        variables.get("background_subtraction_mode_var"),
+        "radial" if legacy_enabled else "off",
+    )
+    mode = "radial" if legacy_enabled or legacy_mode == "radial" else "off"
+    scale = clean_float(variables.get("background_subtraction_scale_var"), 0.0, minimum=0.0)
+    percentile = 20.0
+    smooth_sigma = 6.0
+    clip_zero = False
+
+    if clean_text(mode_override):
+        mode = clean_mode(mode_override, mode)
+    if clean_text(scale_override):
+        scale = clean_float(scale_override, scale, minimum=0.0)
+    if clean_text(percentile_override):
+        percentile = clean_percentile(percentile_override, percentile)
+    if clean_text(smooth_sigma_override):
+        smooth_sigma = clean_float(smooth_sigma_override, smooth_sigma, minimum=0.0)
+    if clean_text(clip_zero_override):
+        clip_zero = clean_bool(clip_zero_override, clip_zero)
+    if mode != "radial":
+        scale = 0.0
+
+    return {
+        "mode": mode,
+        "scale": float(scale),
+        "percentile": float(percentile),
+        "smooth_sigma": float(smooth_sigma),
+        "clip_zero": bool(clip_zero),
+    }
+
+
+def _radial_background_subtraction_config_from_mapping(
+    config: dict[str, object],
+) -> dict[str, object]:
+    return radial_background_subtraction_config_from_state(
+        {},
+        mode_override=config.get("mode"),
+        scale_override=config.get("scale"),
+        percentile_override=config.get("percentile"),
+        smooth_sigma_override=config.get("smooth_sigma"),
+        clip_zero_override=config.get("clip_zero"),
+    )
+
+
+def radial_background_subtraction_policy_signature(config: dict[str, object]) -> dict[str, object]:
+    normalized = _radial_background_subtraction_config_from_mapping(config)
+    return {
+        "mode": str(normalized["mode"]),
+        "scale": round(float(normalized["scale"]), 12),
+        "percentile": round(float(normalized["percentile"]), 12),
+        "smooth_sigma": round(float(normalized["smooth_sigma"]), 12),
+        "clip_zero": bool(normalized["clip_zero"]),
+    }
+
+
+def radial_background_profile_from_detector(
+    image: object,
+    theta_map: object,
+    *,
+    n_bins: int,
+    percentile: float,
+    min_pixels: int = 64,
+    smooth_sigma: float = 6.0,
+) -> dict[str, np.ndarray]:
+    image_array = np.asarray(image, dtype=np.float64)
+    theta = np.asarray(theta_map, dtype=np.float64)
+    if image_array.shape != theta.shape:
+        raise RuntimeError("detector image and theta map must have matching shapes")
+    bins = max(1, int(n_bins))
+    finite = np.isfinite(image_array) & np.isfinite(theta)
+    if not np.any(finite):
+        theta_centers = np.linspace(0.0, 1.0, bins, dtype=np.float64)
+        profile = np.zeros(bins, dtype=np.float64)
+        return {
+            "theta_centers": theta_centers,
+            "radial_profile": profile.copy(),
+            "smoothed_profile": profile.copy(),
+        }
+
+    theta_values = np.asarray(theta[finite], dtype=np.float64)
+    image_values = np.asarray(image_array[finite], dtype=np.float64)
+    theta_min = float(np.nanmin(theta_values))
+    theta_max = float(np.nanmax(theta_values))
+    if theta_max <= theta_min:
+        half_width = 0.5 if theta_min == 0.0 else max(abs(theta_min) * 1.0e-6, 0.5)
+        edges = np.linspace(theta_min - half_width, theta_max + half_width, bins + 1)
+    else:
+        edges = np.linspace(theta_min, theta_max, bins + 1)
+    theta_centers = 0.5 * (edges[:-1] + edges[1:])
+    bin_index = np.searchsorted(edges, theta_values, side="right") - 1
+    bin_index = np.clip(bin_index, 0, bins - 1)
+    order = np.argsort(bin_index, kind="stable")
+    bin_index = bin_index[order]
+    sorted_values = image_values[order]
+
+    profile = np.full(bins, np.nan, dtype=np.float64)
+    counts = np.bincount(bin_index, minlength=bins)
+    starts = np.r_[0, np.cumsum(counts[:-1])]
+    stops = np.cumsum(counts)
+    min_count = max(1, int(min_pixels))
+    for idx, start, stop in zip(range(bins), starts, stops):
+        if stop - start < min_count:
+            continue
+        profile[idx] = float(np.nanpercentile(sorted_values[start:stop], float(percentile)))
+
+    valid_profile = np.isfinite(profile)
+    if not np.any(valid_profile):
+        filled = np.zeros(bins, dtype=np.float64)
+    elif np.count_nonzero(valid_profile) == 1:
+        filled = np.full(bins, float(profile[valid_profile][0]), dtype=np.float64)
+    else:
+        filled = np.interp(
+            theta_centers,
+            theta_centers[valid_profile],
+            profile[valid_profile],
+        )
+    sigma = max(0.0, float(smooth_sigma))
+    smoothed = (
+        gaussian_filter1d(filled, sigma=sigma, mode="nearest")
+        if sigma > 0.0 and filled.size > 1
+        else filled.copy()
+    )
+    return {
+        "theta_centers": theta_centers,
+        "radial_profile": filled,
+        "smoothed_profile": np.asarray(smoothed, dtype=np.float64),
+    }
+
+
+def radial_background_model_from_detector(
+    image: object,
+    theta_map: object,
+    *,
+    n_bins: int,
+    percentile: float,
+    smooth_sigma: float,
+    min_pixels: int = 64,
+) -> dict[str, object]:
+    theta = np.asarray(theta_map, dtype=np.float64)
+    profile = radial_background_profile_from_detector(
+        image,
+        theta,
+        n_bins=n_bins,
+        percentile=percentile,
+        min_pixels=min_pixels,
+        smooth_sigma=smooth_sigma,
+    )
+    model = np.zeros(theta.shape, dtype=np.float64)
+    centers = np.asarray(profile["theta_centers"], dtype=np.float64)
+    smoothed = np.asarray(profile["smoothed_profile"], dtype=np.float64)
+    valid = np.isfinite(theta)
+    if centers.size and smoothed.size and np.any(valid):
+        model[valid] = np.interp(
+            theta[valid],
+            centers,
+            smoothed,
+            left=smoothed[0],
+            right=smoothed[-1],
+        )
+    return {
+        **profile,
+        "background_model": model,
+    }
+
+
+def apply_radial_background_subtraction_to_detector(
+    detector_image: object,
+    theta_map: object,
+    config: dict[str, object],
+) -> dict[str, object]:
+    image = np.asarray(detector_image, dtype=np.float64)
+    theta = np.asarray(theta_map, dtype=np.float64)
+    if image.shape != theta.shape:
+        raise RuntimeError("detector image and theta map must have matching shapes")
+    normalized = _radial_background_subtraction_config_from_mapping(config)
+    corrected = image.copy()
+    zero_model = np.zeros_like(image, dtype=np.float64)
+    if str(normalized["mode"]) != "radial" or float(normalized["scale"]) <= 0.0:
+        return {
+            "corrected_image": corrected,
+            "background_model": zero_model,
+            "enabled": False,
+            **normalized,
+        }
+
+    finite_count = int(np.count_nonzero(np.isfinite(image) & np.isfinite(theta)))
+    default_bins = max(64, min(2048, max(image.shape) if image.ndim else 64))
+    try:
+        n_bins = int(config.get("n_bins", default_bins))
+    except Exception:
+        n_bins = int(default_bins)
+    n_bins = max(1, int(n_bins))
+    default_min_pixels = max(1, min(64, finite_count // max(n_bins, 1)))
+    try:
+        min_pixels = int(config.get("min_pixels", default_min_pixels))
+    except Exception:
+        min_pixels = int(default_min_pixels)
+    model_payload = radial_background_model_from_detector(
+        image,
+        theta,
+        n_bins=n_bins,
+        percentile=float(normalized["percentile"]),
+        smooth_sigma=float(normalized["smooth_sigma"]),
+        min_pixels=max(1, int(min_pixels)),
+    )
+    background_model = np.asarray(model_payload["background_model"], dtype=np.float64)
+    corrected = image - float(normalized["scale"]) * background_model
+    if bool(normalized["clip_zero"]):
+        corrected = np.where(np.isfinite(corrected), np.maximum(corrected, 0.0), corrected)
+    return {
+        "corrected_image": corrected,
+        "background_model": background_model,
+        "enabled": True,
+        "n_bins": int(n_bins),
+        "min_pixels": max(1, int(min_pixels)),
+        **normalized,
+        "theta_centers": model_payload["theta_centers"],
+        "radial_profile": model_payload["radial_profile"],
+        "smoothed_profile": model_payload["smoothed_profile"],
+    }
+
+
+def show_radial_background_subtraction_popup(
+    *,
+    background_files: list[str],
+    background_tilt_deg: dict[int, float],
+    variables: dict[str, object],
+    backend_rotation_k: int,
+    backend_flip_x: bool,
+    backend_flip_y: bool,
+    center_row_px: float,
+    center_col_px: float,
+    distance_m: float,
+    pixel_size_m: float,
+    wavelength_m: float,
+    initial_config: dict[str, object],
+    backend_name: object = None,
+) -> dict[str, object]:
+    backend = str(backend_name if backend_name is not None else mpl.get_backend())
+    if qr_rod_peak_edit_runtime_mode("auto", backend_name=backend, env={}) != "popup":
+        raise RuntimeError(f"Matplotlib backend {backend!r} is not interactive")
+    try:
+        from matplotlib.widgets import Button, CheckButtons, Slider, TextBox
+    except Exception as exc:
+        raise RuntimeError(f"Matplotlib editor widgets are unavailable: {exc}") from exc
+
+    if not background_files:
+        return dict(initial_config)
+
+    def finite_display_limits(values: np.ndarray) -> tuple[float, float]:
+        finite = values[np.isfinite(values)]
+        if finite.size == 0:
+            return 0.0, 1.0
+        vmin, vmax = np.nanpercentile(finite, [1.0, 99.0])
+        if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
+            center = float(np.nanmedian(finite))
+            width = max(abs(center) * 0.1, 1.0)
+            return center - width, center + width
+        return float(vmin), float(vmax)
+
+    def first_valid_background_index() -> int:
+        for key in (
+            "current_background_index_var",
+            "selected_background_index_var",
+            "background_index_var",
+        ):
+            try:
+                idx = int(float(str(variables.get(key, "")).strip()))
+            except Exception:
+                continue
+            if 0 <= idx < len(background_files):
+                return idx
+        return 0
+
+    preview_idx = first_valid_background_index()
+    preview_path = Path(background_files[preview_idx]).expanduser()
+    native = np.asarray(read_osc(preview_path), dtype=np.float64)
+    raw_detector = apply_background_backend_orientation(
+        native,
+        flip_x=backend_flip_x,
+        flip_y=backend_flip_y,
+        rotation_k=backend_rotation_k,
+    )
+    raw_detector = np.asarray(raw_detector, dtype=np.float64)
+    ai = FastAzimuthalIntegrator(
+        dist=float(distance_m),
+        poni1=float(center_row_px) * float(pixel_size_m),
+        poni2=float(center_col_px) * float(pixel_size_m),
+        pixel1=float(pixel_size_m),
+        pixel2=float(pixel_size_m),
+        wavelength=float(wavelength_m),
+    )
+    theta_map, _raw_phi_map = detector_pixel_angular_maps(raw_detector.shape, ai.geometry)
+    current_config = _radial_background_subtraction_config_from_mapping(initial_config)
+    result = {"config": dict(initial_config)}
+    enabled = str(current_config["mode"]) == "radial"
+    clip_zero = bool(current_config["clip_zero"])
+    percentile_value = float(current_config["percentile"])
+    smooth_sigma_value = float(current_config["smooth_sigma"])
+    syncing_check_buttons = False
+
+    fig, axes = plt.subplots(2, 2, figsize=(11.0, 7.5), num="Radial background subtraction")
+    fig.subplots_adjust(left=0.07, right=0.98, top=0.92, bottom=0.23, wspace=0.28, hspace=0.34)
+    raw_ax, model_ax, corrected_ax, profile_ax = axes.ravel()
+    raw_vmin, raw_vmax = finite_display_limits(raw_detector)
+    raw_artist = raw_ax.imshow(raw_detector, cmap=JOURNAL_DETECTOR_CMAP, vmin=raw_vmin, vmax=raw_vmax)
+    model_artist = model_ax.imshow(np.zeros_like(raw_detector), cmap=JOURNAL_DETECTOR_CMAP)
+    corrected_artist = corrected_ax.imshow(
+        raw_detector,
+        cmap=JOURNAL_DETECTOR_CMAP,
+        vmin=raw_vmin,
+        vmax=raw_vmax,
+    )
+    (radial_line,) = profile_ax.plot([], [], color=OKABE_ITO["blue"], linewidth=1.3, label="model")
+    (raw_line,) = profile_ax.plot([], [], color=OKABE_ITO["black"], linewidth=0.8, label="raw")
+    profile_ax.set_xlabel("2theta (deg)")
+    profile_ax.set_ylabel("Intensity")
+    profile_ax.legend(loc="best", fontsize=8)
+    raw_ax.set_title(f"Raw detector image ({preview_idx}: {preview_path.name})")
+    model_ax.set_title("Radial background model")
+    corrected_ax.set_title("Corrected detector image")
+    profile_ax.set_title("Lower-envelope radial profile")
+    for ax in (raw_ax, model_ax, corrected_ax):
+        ax.set_xticks([])
+        ax.set_yticks([])
+    fig.colorbar(raw_artist, ax=raw_ax, fraction=0.046, pad=0.02)
+    fig.colorbar(model_artist, ax=model_ax, fraction=0.046, pad=0.02)
+    fig.colorbar(corrected_artist, ax=corrected_ax, fraction=0.046, pad=0.02)
+
+    scale_slider = Slider(
+        fig.add_axes([0.09, 0.145, 0.32, 0.035]),
+        "Subtract scale",
+        0.0,
+        2.0,
+        valinit=float(current_config["scale"]),
+    )
+    percentile_box = TextBox(
+        fig.add_axes([0.50, 0.145, 0.08, 0.04]),
+        "Percentile",
+        initial=f"{float(current_config['percentile']):.6g}",
+    )
+    smooth_box = TextBox(
+        fig.add_axes([0.70, 0.145, 0.08, 0.04]),
+        "Smooth sigma",
+        initial=f"{float(current_config['smooth_sigma']):.6g}",
+    )
+    checks = CheckButtons(
+        fig.add_axes([0.09, 0.045, 0.18, 0.075]),
+        ["Enabled", "Clip < 0"],
+        [bool(enabled), bool(clip_zero)],
+    )
+    accept_button = Button(fig.add_axes([0.63, 0.055, 0.09, 0.045]), "Accept")
+    off_button = Button(fig.add_axes([0.74, 0.055, 0.09, 0.045]), "Off")
+    cancel_button = Button(fig.add_axes([0.85, 0.055, 0.09, 0.045]), "Cancel")
+
+    def current_preview_config() -> dict[str, object]:
+        return {
+            "mode": "radial" if bool(enabled) else "off",
+            "scale": float(scale_slider.val) if bool(enabled) else 0.0,
+            "percentile": float(percentile_value),
+            "smooth_sigma": float(smooth_sigma_value),
+            "clip_zero": bool(clip_zero),
+        }
+
+    cached_radial_payload: dict[str, object] | None = None
+
+    def recompute_radial_payload() -> dict[str, object]:
+        nonlocal cached_radial_payload
+        cached_radial_payload = apply_radial_background_subtraction_to_detector(
+            raw_detector,
+            theta_map,
+            {
+                "mode": "radial",
+                "scale": 1.0,
+                "percentile": float(percentile_value),
+                "smooth_sigma": float(smooth_sigma_value),
+                "clip_zero": False,
+            },
+        )
+        return cached_radial_payload
+
+    def update_preview(*, recompute_model: bool = False) -> None:
+        config = current_preview_config()
+        scale = float(config["scale"])
+        if str(config["mode"]) == "radial" and scale > 0.0:
+            if bool(recompute_model) or cached_radial_payload is None:
+                payload = recompute_radial_payload()
+            else:
+                payload = cached_radial_payload
+            model = np.asarray(payload["background_model"], dtype=np.float64)
+            corrected = raw_detector - scale * model
+            if bool(config["clip_zero"]):
+                corrected = np.where(np.isfinite(corrected), np.maximum(corrected, 0.0), corrected)
+            theta_centers = np.asarray(payload.get("theta_centers", []), dtype=np.float64)
+            radial_profile = np.asarray(payload.get("radial_profile", []), dtype=np.float64)
+            smoothed_profile = np.asarray(payload.get("smoothed_profile", []), dtype=np.float64)
+        else:
+            model = np.zeros_like(raw_detector, dtype=np.float64)
+            corrected = raw_detector.copy()
+            theta_centers = np.asarray([], dtype=np.float64)
+            radial_profile = np.asarray([], dtype=np.float64)
+            smoothed_profile = np.asarray([], dtype=np.float64)
+        model_vmin, model_vmax = finite_display_limits(model)
+        corrected_vmin, corrected_vmax = finite_display_limits(corrected)
+        model_artist.set_data(model)
+        model_artist.set_clim(model_vmin, model_vmax)
+        corrected_artist.set_data(corrected)
+        corrected_artist.set_clim(corrected_vmin, corrected_vmax)
+        radial_line.set_data(theta_centers, smoothed_profile)
+        raw_line.set_data(theta_centers, radial_profile)
+        if theta_centers.size and smoothed_profile.size:
+            profile_ax.relim()
+            profile_ax.autoscale_view()
+        fig.canvas.draw_idle()
+
+    def set_scale(_value: float) -> None:
+        nonlocal enabled, syncing_check_buttons
+        if scale_slider.val > 0.0 and not bool(enabled):
+            enabled = True
+            if not bool(checks.get_status()[0]):
+                syncing_check_buttons = True
+                try:
+                    checks.set_active(0)
+                finally:
+                    syncing_check_buttons = False
+        update_preview()
+
+    def set_percentile(text: str) -> None:
+        nonlocal cached_radial_payload, percentile_value
+        percentile_value = min(100.0, max(0.0, as_float(text, percentile_value)))
+        cached_radial_payload = None
+        update_preview(recompute_model=True)
+
+    def set_smooth_sigma(text: str) -> None:
+        nonlocal cached_radial_payload, smooth_sigma_value
+        smooth_sigma_value = max(0.0, as_float(text, smooth_sigma_value))
+        cached_radial_payload = None
+        update_preview(recompute_model=True)
+
+    def toggle_check(label: str) -> None:
+        nonlocal enabled, clip_zero
+        if bool(syncing_check_buttons):
+            return
+        states = list(checks.get_status())
+        enabled = bool(states[0])
+        clip_zero = bool(states[1])
+        if str(label) == "Enabled" and enabled and scale_slider.val <= 0.0:
+            scale_slider.set_val(1.0)
+            return
+        update_preview()
+
+    def accept(_event: object) -> None:
+        result["config"] = current_preview_config()
+        plt.close(fig)
+
+    def off(_event: object) -> None:
+        result["config"] = {
+            **current_preview_config(),
+            "mode": "off",
+            "scale": 0.0,
+            "clip_zero": bool(clip_zero),
+        }
+        plt.close(fig)
+
+    def cancel(_event: object) -> None:
+        result["config"] = dict(initial_config)
+        plt.close(fig)
+
+    scale_slider.on_changed(set_scale)
+    percentile_box.on_submit(set_percentile)
+    smooth_box.on_submit(set_smooth_sigma)
+    checks.on_clicked(toggle_check)
+    accept_button.on_clicked(accept)
+    off_button.on_clicked(off)
+    cancel_button.on_clicked(cancel)
+    fig._ra_sim_radial_background_widgets = [
+        scale_slider,
+        percentile_box,
+        smooth_box,
+        checks,
+        accept_button,
+        off_button,
+        cancel_button,
+    ]
+    update_preview()
+    title_tilt = background_tilt_deg.get(preview_idx, float("nan"))
+    print(
+        "opening radial background subtraction editor "
+        f"for {preview_path.name} tilt={format_angle_value(title_tilt)} deg; "
+        "click Accept to continue",
+        flush=True,
+    )
+    plt.show(block=True)
+    return dict(result["config"])
 
 
 @njit(fastmath=True, nogil=True)
@@ -4219,7 +4786,82 @@ PBI2_PLOT_BASELINE_TO_PEAK_CANCEL_RATIO = 0.50
 PBI2_NONZERO_MARKER_L_MIN_SPAN_RATIO = 0.5
 PBI2_ROD_PROFILE_L_AXIS_MAX = 3.0
 SPECULAR_QR_ROD_L_MIN = PBI2_SPECULAR_QR_ROD_L_MIN if IS_PBI2_SAMPLE_STEM else 0.0
+radial_background_subtraction_config = radial_background_subtraction_config_from_state(
+    variables,
+    mode_override=_setting_text(
+        "RADIAL_BACKGROUND_SUBTRACTION_MODE_OVERRIDE",
+        "RA_SIM_RADIAL_BACKGROUND_SUBTRACTION_MODE",
+        "",
+    ),
+    scale_override=_setting_text(
+        "RADIAL_BACKGROUND_SUBTRACTION_SCALE_OVERRIDE",
+        "RA_SIM_RADIAL_BACKGROUND_SUBTRACTION_SCALE",
+        "",
+    ),
+    percentile_override=_setting_text(
+        "RADIAL_BACKGROUND_SUBTRACTION_PERCENTILE_OVERRIDE",
+        "RA_SIM_RADIAL_BACKGROUND_SUBTRACTION_PERCENTILE",
+        "",
+    ),
+    smooth_sigma_override=_setting_text(
+        "RADIAL_BACKGROUND_SUBTRACTION_SMOOTH_SIGMA_OVERRIDE",
+        "RA_SIM_RADIAL_BACKGROUND_SUBTRACTION_SMOOTH_SIGMA",
+        "",
+    ),
+    clip_zero_override=_setting_text(
+        "RADIAL_BACKGROUND_SUBTRACTION_CLIP_ZERO_OVERRIDE",
+        "RA_SIM_RADIAL_BACKGROUND_SUBTRACTION_CLIP_ZERO",
+        "",
+    ),
+)
+radial_bg_edit_mode = _setting_text(
+    "RADIAL_BACKGROUND_SUBTRACTION_EDIT_MODE_OVERRIDE",
+    "RA_SIM_RADIAL_BACKGROUND_SUBTRACTION_EDIT_MODE",
+    "auto",
+)
+radial_bg_runtime_mode = qr_rod_peak_edit_runtime_mode(
+    radial_bg_edit_mode,
+    backend_name=mpl.get_backend(),
+    env=os.environ,
+)
+if radial_bg_runtime_mode == "popup":
+    try:
+        radial_background_subtraction_config = show_radial_background_subtraction_popup(
+            background_files=background_files,
+            background_tilt_deg=BACKGROUND_TILT_DEG,
+            variables=variables,
+            backend_rotation_k=backend_rotation_k,
+            backend_flip_x=backend_flip_x,
+            backend_flip_y=backend_flip_y,
+            center_row_px=center_row_px,
+            center_col_px=center_col_px,
+            distance_m=distance_m,
+            pixel_size_m=PIXEL_SIZE_M,
+            wavelength_m=WAVELENGTH_M,
+            initial_config=radial_background_subtraction_config,
+            backend_name=mpl.get_backend(),
+        )
+    except Exception as exc:
+        if str(radial_bg_edit_mode or "auto").strip().lower() == "popup":
+            raise RuntimeError(f"radial background subtraction popup unavailable: {exc}") from exc
+        print(f"skipped radial background subtraction popup: {exc}")
+RADIAL_BACKGROUND_SUBTRACTION_CONFIG = _radial_background_subtraction_config_from_mapping(
+    radial_background_subtraction_config
+)
+RADIAL_BACKGROUND_SUBTRACTION_POLICY_SIGNATURE = radial_background_subtraction_policy_signature(
+    RADIAL_BACKGROUND_SUBTRACTION_CONFIG
+)
+print(
+    "radial detector background subtraction: "
+    f"mode={RADIAL_BACKGROUND_SUBTRACTION_CONFIG['mode']} "
+    f"scale={float(RADIAL_BACKGROUND_SUBTRACTION_CONFIG['scale']):.4g} "
+    f"percentile={float(RADIAL_BACKGROUND_SUBTRACTION_CONFIG['percentile']):.4g} "
+    f"smooth_sigma={float(RADIAL_BACKGROUND_SUBTRACTION_CONFIG['smooth_sigma']):.4g} "
+    f"clip_zero={bool(RADIAL_BACKGROUND_SUBTRACTION_CONFIG['clip_zero'])} "
+    f"edit_mode={radial_bg_runtime_mode}"
+)
 ROD_PROFILE_BACKGROUND_POLICY_SIGNATURE = {
+    "radial_background_subtraction": RADIAL_BACKGROUND_SUBTRACTION_POLICY_SIGNATURE,
     "background_image_subtraction_disabled": bool(BACKGROUND_IMAGE_SUBTRACTION_DISABLED),
     "pbi2_disable_background_subtraction": bool(PBI2_DISABLE_BACKGROUND_SUBTRACTION),
     "pbi2_shared_nonzero_branch_qz_bounds": bool(IS_PBI2_SAMPLE_STEM),
@@ -4868,8 +5510,21 @@ for bg_idx, bg_path_text in enumerate(background_files):
     theta_map, raw_phi_map = detector_pixel_angular_maps(detector_image.shape, ai.geometry)
     phi_map = raw_phi_to_gui_phi(raw_phi_map)
     raw_detector_image = detector_image.copy()
-    # No diffuse/radial detector background is subtracted before caking or fitting.
-    # Peak-subtracted products are generated only after fitted peak models are built.
+    # Apply optional pre-fit radial detector background reduction before caking
+    # and before all peak and rod intensity fits.
+    radial_subtraction_payload = apply_radial_background_subtraction_to_detector(
+        raw_detector_image,
+        theta_map,
+        RADIAL_BACKGROUND_SUBTRACTION_CONFIG,
+    )
+    detector_image = np.asarray(
+        radial_subtraction_payload["corrected_image"],
+        dtype=np.float64,
+    )
+    radial_background_model = np.asarray(
+        radial_subtraction_payload["background_model"],
+        dtype=np.float64,
+    )
 
     caked_result = ai.integrate2d(
         detector_image,
@@ -4990,6 +5645,9 @@ for bg_idx, bg_path_text in enumerate(background_files):
         "background_name": Path(bg_path).name,
         "detector_image": detector_image,
         "raw_detector_image": raw_detector_image,
+        "radial_background_model": radial_background_model,
+        "radial_background_subtraction": dict(radial_subtraction_payload),
+        "radial_background_subtraction_config": dict(RADIAL_BACKGROUND_SUBTRACTION_CONFIG),
         "caked_image": caked_image,
         "caked_integrated_intensity": caked_integrated_intensity,
         "caked_density_image": caked_density_image,
@@ -5076,6 +5734,7 @@ PRE_EDITOR_CACHE_INPUT_SIGNATURE = {
         "rod_phi_samples": int(rod_phi_samples),
         "rod_qz_shared_linear_baseline": bool(ROD_QZ_SHARED_LINEAR_BASELINE_ENABLED),
         "rod_qz_nonlinear_refinement": bool(ROD_QZ_NONLINEAR_REFINEMENT_ENABLED),
+        "radial_background_subtraction": RADIAL_BACKGROUND_SUBTRACTION_POLICY_SIGNATURE,
         "background_image_subtraction_disabled": bool(BACKGROUND_IMAGE_SUBTRACTION_DISABLED),
         "pbi2_disable_background_subtraction": bool(PBI2_DISABLE_BACKGROUND_SUBTRACTION),
         "specular_qr_rod_l_min": float(SPECULAR_QR_ROD_L_MIN),
@@ -5429,6 +6088,7 @@ for prep in background_preps:
 
     caked_density_image = np.asarray(prep["caked_density_image"], dtype=np.float64)
     detector_image = np.asarray(prep["detector_image"], dtype=np.float64)
+    radial_background_model = np.asarray(prep["radial_background_model"], dtype=np.float64)
     theta_map = np.asarray(prep["theta_map"], dtype=np.float64)
     phi_map = np.asarray(prep["phi_map"], dtype=np.float64)
     caked_peak_model = np.zeros_like(caked_density_image, dtype=np.float64)
@@ -5453,6 +6113,14 @@ for prep in background_preps:
         OUT_DIR / f"background_{bg_idx:02d}_detector_peak_subtracted_density.npy",
         detector_peak_subtracted_image,
     )
+    np.save(
+        OUT_DIR / f"background_{bg_idx:02d}_detector_radial_background_model.npy",
+        radial_background_model,
+    )
+    np.save(
+        OUT_DIR / f"background_{bg_idx:02d}_detector_radial_background_corrected.npy",
+        detector_image,
+    )
     background_results.append(
         {
             "sample_name": SAMPLE_NAME,
@@ -5462,6 +6130,11 @@ for prep in background_preps:
             "background_name": str(prep["background_name"]),
             "detector_image": detector_image,
             "raw_detector_image": prep["raw_detector_image"],
+            "radial_background_model": radial_background_model,
+            "radial_background_subtraction": dict(prep["radial_background_subtraction"]),
+            "radial_background_subtraction_config": dict(
+                prep["radial_background_subtraction_config"]
+            ),
             "caked_image": caked_density_image,
             "caked_integrated_intensity": prep["caked_integrated_intensity"],
             "caked_density_image": caked_density_image,
@@ -5493,7 +6166,12 @@ for prep in background_preps:
     )
     print(
         f"{display_label}: fit={len(fit_results)} fail={len(failures)} "
-        f"tth_max={float(prep['tth_max']):.3f} background_subtraction=none "
+        f"tth_max={float(prep['tth_max']):.3f} "
+        f"radial_background={RADIAL_BACKGROUND_SUBTRACTION_CONFIG['mode']} "
+        f"scale={float(RADIAL_BACKGROUND_SUBTRACTION_CONFIG['scale']):.4g} "
+        f"percentile={float(RADIAL_BACKGROUND_SUBTRACTION_CONFIG['percentile']):.4g} "
+        f"smooth_sigma={float(RADIAL_BACKGROUND_SUBTRACTION_CONFIG['smooth_sigma']):.4g} "
+        f"clip_zero={bool(RADIAL_BACKGROUND_SUBTRACTION_CONFIG['clip_zero'])} "
         f"peak_subtraction_only={bool(PEAK_SUBTRACTION_ONLY)} "
         f"background_image_subtraction_disabled={bool(BACKGROUND_IMAGE_SUBTRACTION_DISABLED)} "
         f"solid_angle_correction={bool(BACKGROUND_SOLID_ANGLE_CORRECTION)} "
