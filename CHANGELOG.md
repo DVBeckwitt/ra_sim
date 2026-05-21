@@ -21,6 +21,7 @@
   - Fixed the background peak-fit prefit subtraction editor to fit a `-90 <= phi <= 90` caked `(phi, 2theta)` 2D background plane, show cropped caked previews with axis labels, subtract the plane before peak and Qr-rod fitting, and invalidate stale prefit caches.
   - Set the PbI2 Qr-rod editor default active Delta Qr to `0.13` and tied saved Qr-rod peak-edit files to the current background/profile policy so stale raw-image marker points are rejected after prefit background subtraction changes.
   - Smoothed the Qr-rod peak marker editor by coalescing Delta Qr detector-preview redraws until release/accept, caching per-panel marker/profile plot inputs, and keeping preview-refresh failures inside the editor state instead of interrupting marker edits.
+  - Fixed locked manual Qr/Qz branch-pair geometry fits so detector-origin picks force the exact-caked route, preserve same-HKL branch identity, and reject internal route loss before pixel central matching.
 
 - **Config and path migration**
   - Renamed background-path keys in config from `dark_image`/`osc_files` to `simulation_dark_osc_file`/`simulation_background_osc_files`.

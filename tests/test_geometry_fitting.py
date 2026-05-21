@@ -7144,7 +7144,7 @@ def test_manual_caked_qr_fit_auto_enables_dynamic_point_path(monkeypatch) -> Non
     assert result.point_match_summary["qr_fit_resolved_count"] == 1
 
 
-def test_manual_tk_two_pair_caked_objective_with_finite_anchors_cannot_route_to_pixel_central_match(
+def test_same_hkl_two_branch_detector_origin_locked_qr_fit_uses_two_pairs(
     monkeypatch,
 ) -> None:
     def fake_process(*args, **kwargs):
@@ -7199,8 +7199,13 @@ def test_manual_tk_two_pair_caked_objective_with_finite_anchors_cannot_route_to_
         branch = int(pair["branch"])
         measured.append(
             _locked_qr_fixed_source_entry(
+                hkl=(-1, 0, 10),
                 native_col=float(pair["native_col"]),
                 native_row=float(pair["native_row"]),
+                background_detector_x=float(pair["native_col"]),
+                background_detector_y=float(pair["native_row"]),
+                background_detector_input_frame="native_detector",
+                manual_background_input_origin="detector",
                 source_branch_index=branch,
                 source_peak_index=int(pair["source_peak_index"]),
                 source_row_index=int(pair["source_row_index"]),
@@ -7224,6 +7229,7 @@ def test_manual_tk_two_pair_caked_objective_with_finite_anchors_cannot_route_to_
             branch = int(pair["branch"])
             predicted = pair["predicted"]
             row = _locked_qr_trial_source_row(
+                hkl=(-1, 0, 10),
                 native_col=float(pair["native_col"]) + 4.0,
                 native_row=float(pair["native_row"]) + 4.0,
                 source_table_index=99,
@@ -7293,7 +7299,7 @@ def test_manual_tk_two_pair_caked_objective_with_finite_anchors_cannot_route_to_
     experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
     status_messages: list[str] = []
     result = opt.fit_geometry_parameters(
-        np.array([[2.0, 0.0, 0.0]], dtype=np.float64),
+        np.array([[-1.0, 0.0, 10.0]], dtype=np.float64),
         np.array([1.0], dtype=np.float64),
         image_size,
         _base_params(image_size, optics_mode=1),
@@ -7345,6 +7351,7 @@ def test_manual_tk_two_pair_caked_objective_with_finite_anchors_cannot_route_to_
     assert result.final_metric_units == "deg"
     assert result.point_match_summary["metric_unit"] == "deg"
     assert result.point_match_summary["matched_pair_count"] == 2
+    assert result.point_match_summary.get("final_matched_pair_count", 2) == 2
     assert bool(result.geometry_fit_debug_summary["manual_caked_fit_space_required"]) is True
     assert bool(result.geometry_fit_debug_summary["manual_caked_fit_space_ready"]) is True
     assert result.geometry_fit_debug_summary["manual_caked_fit_pair_count"] == 2
@@ -7410,10 +7417,10 @@ def test_manual_caked_qr_fit_required_flag_rejects_missing_exact_projector(monke
     )
 
     assert not result.success
-    assert result.status == -10
-    assert result.final_metric_name == "manual_caked_fit_space_missing"
-    assert "manual caked fit-space requires exact caked anchors/projector" in result.message
-    assert result.point_match_summary["reason"] == "manual_caked_fit_space_missing"
+    assert result.status == -12
+    assert result.final_metric_name == "locked_manual_qr_missing_exact_caked_projector"
+    assert "locked manual Qr/Qz pairs require an exact caked projector" in result.message
+    assert result.point_match_summary["reason"] == "locked_manual_qr_missing_exact_caked_projector"
 
 
 def test_caked_manual_fixed_pairs_missing_observed_caked_anchor_fail_before_optimizer(
@@ -7545,11 +7552,320 @@ def test_manual_caked_route_invariant_rejection_text_names_caked_route_block() -
     )
 
     assert rejection_reasons == [
-        "Geometry fit blocked before optimization.",
-        "The requested Qr/Qz fit could not select a caked angular evaluator.",
+        "Geometry fit rejected because final validation lost the locked manual Qr/Qz pair route.",
+        "Expected 2 locked pairs but final validation matched 0.",
+        "This is an internal route error, not a bad manual pick.",
         "No geometry parameters were changed.",
     ]
     assert "No matched peak pairs were available for the fitted solution." not in rejection_reasons
+
+
+def test_locked_qr_route_invariant_rejection_text_names_internal_route_error() -> None:
+    from ra_sim.gui import geometry_fit as gui_geometry_fit
+
+    result = SimpleNamespace(
+        success=False,
+        final_metric_name="locked_manual_qr_identity_loss",
+        final_metric_space="caked_deg",
+        final_metric_units="deg",
+        rms_deg=float("nan"),
+        max_deg=float("nan"),
+        point_match_summary={
+            "reason": "locked_manual_qr_identity_loss",
+            "metric_name": "locked_manual_qr_identity_loss",
+            "metric_unit": "deg",
+            "expected_fixed_qr_pair_count": 2,
+            "final_matched_pair_count": 1,
+            "matched_pair_count": 1,
+        },
+    )
+
+    rejection_reasons = gui_geometry_fit.build_geometry_fit_rejection_reason_lines(
+        result,
+        rms=float("nan"),
+    )
+
+    assert rejection_reasons == [
+        "Geometry fit rejected because final validation lost the locked manual Qr/Qz pair route.",
+        "Expected 2 locked pairs but final validation matched 1.",
+        "This is an internal route error, not a bad manual pick.",
+        "No geometry parameters were changed.",
+    ]
+    assert "No matched peak pairs were available for the fitted solution." not in rejection_reasons
+
+
+def test_locked_qr_fixed_pairs_cannot_finalize_as_central_point_match(monkeypatch) -> None:
+    monkeypatch.setattr(
+        opt,
+        "_process_peaks_parallel_safe",
+        lambda *_args, **_kwargs: pytest.fail("locked Qr route must reject before simulation"),
+    )
+
+    image_size = 24
+    measured = [
+        _locked_qr_fixed_source_entry(
+            hkl=(-1, 0, 10),
+            source_branch_index=0,
+            source_peak_index=0,
+            source_row_index=42,
+            source_reflection_index=910,
+            native_col=8.0,
+            native_row=9.0,
+            background_detector_x=8.0,
+            background_detector_y=9.0,
+            background_detector_input_frame="native_detector",
+        ),
+        _locked_qr_fixed_source_entry(
+            hkl=(-1, 0, 10),
+            source_branch_index=1,
+            source_peak_index=1,
+            source_row_index=43,
+            source_reflection_index=911,
+            native_col=10.0,
+            native_row=11.0,
+            background_detector_x=10.0,
+            background_detector_y=11.0,
+            background_detector_input_frame="native_detector",
+        ),
+    ]
+
+    def projector(cols, rows, **_kwargs):
+        return {
+            "two_theta_deg": np.asarray(cols, dtype=np.float64),
+            "phi_deg": np.asarray(rows, dtype=np.float64),
+            "valid": True,
+        }
+
+    result = opt.fit_geometry_parameters(
+        np.array([[-1.0, 0.0, 10.0]], dtype=np.float64),
+        np.array([1.0], dtype=np.float64),
+        image_size,
+        _base_params(image_size, optics_mode=1),
+        measured_peaks=measured,
+        var_names=["gamma", "Gamma"],
+        experimental_image=np.zeros((image_size, image_size), dtype=np.float64),
+        dataset_specs=[
+            {
+                "label": "bg0.osc",
+                "measured_peaks": measured,
+                "fit_space_projector": projector,
+                "fit_space_projector_kind": "exact_caked_bundle",
+            }
+        ],
+        refinement_config={
+            "solver": {
+                "manual_point_fit_mode": True,
+                "dynamic_point_geometry_fit": False,
+                "restarts": 0,
+            },
+            "single_ray": {"enabled": False},
+            "identifiability": {"enabled": False},
+            "full_beam_polish": {"enabled": False},
+            "image_refinement": {"enabled": False},
+        },
+    )
+
+    assert not result.success
+    assert result.final_metric_name == "locked_manual_qr_route_invariant_violation"
+    assert result.point_match_summary["reason"] == "locked_manual_qr_route_invariant_violation"
+    assert result.point_match_summary["expected_fixed_qr_pair_count"] == 2
+    assert result.point_match_summary.get("metric_unit") != "px"
+
+
+def test_locked_qr_fixed_pairs_require_exact_caked_projector(monkeypatch) -> None:
+    monkeypatch.setattr(
+        opt,
+        "_process_peaks_parallel_safe",
+        lambda *_args, **_kwargs: pytest.fail("locked Qr route must reject before simulation"),
+    )
+
+    image_size = 24
+    locked = _locked_qr_fixed_source_entry(
+        hkl=(-1, 0, 10),
+        source_branch_index=0,
+        source_peak_index=0,
+        source_row_index=42,
+        source_reflection_index=910,
+        background_detector_x=8.0,
+        background_detector_y=9.0,
+        background_detector_input_frame="native_detector",
+    )
+    for key in ("hkl", "q_group_key", "source_row_index", "source_branch_index"):
+        locked.pop(key, None)
+    measured = [locked]
+
+    result = opt.fit_geometry_parameters(
+        np.array([[2.0, 0.0, 0.0]], dtype=np.float64),
+        np.array([1.0], dtype=np.float64),
+        image_size,
+        _base_params(image_size, optics_mode=1),
+        measured_peaks=measured,
+        var_names=["gamma", "Gamma"],
+        experimental_image=np.zeros((image_size, image_size), dtype=np.float64),
+        dataset_specs=[
+            {
+                "label": "bg0.osc",
+                "measured_peaks": measured,
+                "_manual_caked_fit_space_required": True,
+                "fit_space_projector_kind": None,
+                "fit_space_projector_unavailable_reason": "missing_exact_caked_bundle",
+            }
+        ],
+        refinement_config={
+            "solver": {
+                "manual_point_fit_mode": True,
+                "dynamic_point_geometry_fit": False,
+                "restarts": 0,
+            },
+            "single_ray": {"enabled": False},
+            "identifiability": {"enabled": False},
+            "full_beam_polish": {"enabled": False},
+            "image_refinement": {"enabled": False},
+        },
+    )
+
+    assert not result.success
+    assert result.final_metric_name == "locked_manual_qr_missing_exact_caked_projector"
+    assert result.point_match_summary["reason"] == "locked_manual_qr_missing_exact_caked_projector"
+    assert result.point_match_summary["expected_fixed_qr_pair_count"] == 1
+
+
+def test_locked_qr_final_validation_requires_all_fixed_pairs(monkeypatch) -> None:
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        return (
+            np.zeros((image_size, image_size), dtype=np.float64),
+            [],
+            np.empty((0, 0, 0)),
+            np.empty(0),
+            np.empty(0),
+            [],
+        )
+
+    def fake_least_squares(residual_fn, x0, **_kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 24
+    measured = [
+        _locked_qr_fixed_source_entry(
+            hkl=(-1, 0, 10),
+            source_branch_index=0,
+            source_peak_index=0,
+            source_row_index=42,
+            source_reflection_index=910,
+            background_two_theta_deg=33.0,
+            background_phi_deg=130.0,
+        ),
+        _locked_qr_fixed_source_entry(
+            hkl=(-1, 0, 10),
+            source_branch_index=1,
+            source_peak_index=1,
+            source_row_index=43,
+            source_reflection_index=911,
+            background_two_theta_deg=37.0,
+            background_phi_deg=40.0,
+        ),
+    ]
+
+    def source_rows_builder(*, local_params=None):
+        row = _locked_qr_trial_source_row(
+            hkl=(-1, 0, 10),
+            source_table_index=99,
+            source_row_index=42,
+            source_branch_index=0,
+            source_peak_index=0,
+            source_reflection_index=910,
+            caked_x=33.0,
+            caked_y=130.0,
+            two_theta_deg=33.0,
+            phi_deg=130.0,
+            sim_visual_caked_deg=[33.0, 130.0],
+            actual_source="sim_visual_caked_deg",
+            source_kind="sim_visual_caked_deg",
+            projection_frame="caked_display",
+            coordinate_provenance="trial_geometry_projection",
+            is_dynamic_trial_row=True,
+            physical_branch_slot=0,
+        )
+        row["fit_qr_branch_key"] = {
+            "q_group_key": list(row["q_group_key"]),
+            "hkl": list(row["hkl"]),
+            "physical_branch_slot": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "source_table_index": int(row["source_table_index"]),
+            "source_row_index": int(row["source_row_index"]),
+            "source_reflection_index": int(row["source_reflection_index"]),
+            "source_reflection_namespace": row["source_reflection_namespace"],
+            "source_reflection_is_full": bool(row["source_reflection_is_full"]),
+            "branch_id": row["branch_id"],
+            "best_sample_index": int(row["best_sample_index"]),
+            "mosaic_top_rank_key": list(row["mosaic_top_rank_key"]),
+            "selection_reason": row["selection_reason"],
+        }
+        return _locked_qr_source_rows_payload([row])
+
+    def projector(cols, rows, **_kwargs):
+        return {
+            "two_theta_deg": np.asarray(cols, dtype=np.float64),
+            "phi_deg": np.asarray(rows, dtype=np.float64),
+            "valid": True,
+        }
+
+    result = opt.fit_geometry_parameters(
+        np.array([[-1.0, 0.0, 10.0]], dtype=np.float64),
+        np.array([1.0], dtype=np.float64),
+        image_size,
+        _base_params(image_size, optics_mode=1),
+        measured_peaks=measured,
+        var_names=["gamma", "Gamma"],
+        experimental_image=np.zeros((image_size, image_size), dtype=np.float64),
+        dataset_specs=[
+            {
+                "label": "bg0.osc",
+                "measured_peaks": measured,
+                "_manual_caked_fit_space_required": True,
+                "fit_space_projector": projector,
+                "fit_space_projector_kind": "exact_caked_bundle",
+                "qr_fit_trial_source_rows_builder": source_rows_builder,
+                "qr_fit_trial_source_rows_builder_kind": "unit_test_dynamic_rows",
+            }
+        ],
+        refinement_config={
+            "solver": {
+                "manual_point_fit_mode": True,
+                "dynamic_point_geometry_fit": True,
+                "restarts": 0,
+                "weighted_matching": False,
+                "use_measurement_uncertainty": False,
+                "max_nfev": 1,
+            },
+            "single_ray": {"enabled": False},
+            "identifiability": {"enabled": False},
+            "full_beam_polish": {"enabled": False},
+            "image_refinement": {"enabled": False},
+        },
+    )
+
+    assert not result.success
+    assert result.final_metric_name == "locked_manual_qr_identity_loss"
+    assert result.point_match_summary["reason"] == "locked_manual_qr_identity_loss"
+    assert result.point_match_summary["expected_fixed_qr_pair_count"] == 2
+    assert result.point_match_summary["final_matched_pair_count"] < 2
+    assert result.point_match_summary["final_metric_name"] != "central_point_match"
 
 
 def test_final_summary_does_not_label_dynamic_objective_rms_as_px(monkeypatch) -> None:

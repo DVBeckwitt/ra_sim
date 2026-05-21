@@ -267,7 +267,9 @@ def test_qr_handoff_audit_projects_detector_origin_observed_caked_anchor() -> No
     assert rows[0]["fit_observed_caked_deg"] == pytest.approx(observed_caked)
     assert rows[0]["fit_prediction_caked_deg"] == pytest.approx(prediction_caked)
     assert rows[0]["observed_caked_deg"] == pytest.approx(observed_caked)
-    assert rows[0]["objective_space"] == "caked_deg"
+    assert rows[0]["handoff_available_fit_space"] == "caked_deg"
+    assert rows[0]["solver_requested_objective_space"] == "detector_native_px"
+    assert rows[0]["objective_space"] == "detector_native_px"
     assert ("measured", observed_native[0], observed_native[1]) in projector_calls
     assert ("simulated", prediction_native[0], prediction_native[1]) in projector_calls
 

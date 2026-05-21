@@ -2111,6 +2111,27 @@ The saved pair contains:
 - the measured display-frame peak
 - bookkeeping indices for overlay reconstruction
 
+For manual Qr/Qz picks, the selected simulated source is not identified by HKL
+alone. Non-`00l` Qr groups can legitimately contain two detector-side branches
+for the same HKL. The durable source identity is:
+
+- `q_group_key`
+- normalized HKL
+- `source_branch_index`
+- source row/reflection provenance when available
+
+Branch identity is normally derived from signed hit-row `phi`: negative `phi`
+is branch `0`, positive `phi` is branch `1`, and values inside the near-zero
+deadband are ambiguous. Therefore two saved rows such as `[-1,0,10]` branch
+`0` and `[-1,0,10]` branch `1` are expected, not duplicate bad data.
+
+When `Pick Qr Sets` runs after a current main simulation/cache exists, the
+selected simulated rows should come from the fitter-facing representative
+cache. In weighted-event simulation these representatives are zero-intensity
+ghost rays at beam center, with zero divergence/beam offsets and the scalar
+default wavelength. The ghost ray fixes source identity; it does not freeze the
+predicted detector pixel.
+
 ### Dataset preparation and orientation resolution
 
 [`build_geometry_manual_fit_dataset`](../ra_sim/gui/geometry_fit.py) prepares one dataset for the optimizer.
@@ -2190,11 +2211,25 @@ The fixed residual length is important. The code explicitly keeps the residual v
 
 Manual geometry fit therefore no longer behaves as one frozen pair list after
 the first click collection. The saved source identity is still respected, but
-the live simulated detector point is rebuilt from the current simulation and the
-measured/background anchor is re-refined from the current background image each
+the live simulated detector point is rebuilt from the current simulation each
 time detector geometry, lattice constants, wavelength, or shared theta move.
-That iterative re-anchoring continues until the nonlinear solve converges or its
-iteration limit is reached.
+For saved Qr/Qz fixed-source fits, the measured/background point is a fixed
+observation: the fit does not re-pick, drag, or move that anchor during the
+optimizer solve. Only the predicted simulated source position moves under trial
+parameters.
+
+The residual space is controlled by the objective. A `caked_deg` objective must
+use finite observed and predicted caked angular anchors and report angular
+residuals in degrees, or fail preflight before optimizer start. Detector-space
+manual point mode can still use pixel residuals.
+
+Status: locked manual Qr/Qz fixed-source pairs are a caked-angle route even
+when the operator clicked their measured points in detector view. If branch
+identity and Qr/source provenance are present, the GUI prepares the exact caked
+fit-space dataset and the optimizer refuses to finalize through
+`central_point_match`. Final validation must preserve every locked pair; if it
+does not, the result is rejected as `locked_manual_qr_identity_loss`, an
+internal route error rather than a bad pick.
 
 For one matched point in the saved-manual fixed-source path,
 

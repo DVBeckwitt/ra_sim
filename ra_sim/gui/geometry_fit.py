@@ -3383,6 +3383,13 @@ def build_geometry_fit_qr_handoff_audit_rows(
     if not isinstance(dataset, Mapping):
         return []
     spec = dataset.get("spec") if isinstance(dataset.get("spec"), Mapping) else {}
+    solver_requested_objective_space = (
+        "caked_deg"
+        if bool(spec.get("_manual_caked_fit_space_required", False))
+        or str(spec.get("solver_requested_objective_space") or "").strip().lower()
+        == "caked_deg"
+        else "detector_native_px"
+    )
     fit_space_projector = spec.get("fit_space_projector") if isinstance(spec, Mapping) else None
     provider_pairs = [
         dict(row) for row in dataset.get("provider_pairs", ()) or () if isinstance(row, Mapping)
@@ -3764,12 +3771,13 @@ def build_geometry_fit_qr_handoff_audit_rows(
         )
         fit_residual_detector_norm = _qr_residual_norm(fit_residual_detector_native)
         fit_residual_caked_norm = _qr_residual_norm(fit_residual_caked)
-        objective_space = (
+        handoff_available_fit_space = (
             "caked_deg"
             if fit_observed_caked is not None
             or bool(spec.get("fit_space_projector_kind") if isinstance(spec, Mapping) else None)
             else "detector_native_px"
         )
+        objective_space = str(solver_requested_objective_space)
         objective_units = "deg" if objective_space == "caked_deg" else "px"
         first_divergence = ""
         if not observed_match:
@@ -3864,6 +3872,8 @@ def build_geometry_fit_qr_handoff_audit_rows(
             "residual_sign_convention": "predicted - observed",
             "residual_detector_native_units": "px",
             "residual_caked_units": "deg",
+            "handoff_available_fit_space": handoff_available_fit_space,
+            "solver_requested_objective_space": solver_requested_objective_space,
             "objective_space": objective_space,
             "objective_residual_units": objective_units,
             "objective_mixes_detector_px_and_caked_deg": "no",
@@ -3974,6 +3984,8 @@ def build_geometry_fit_qr_handoff_audit_lines(
         "residual_sign_convention",
         "residual_detector_native_units",
         "residual_caked_units",
+        "handoff_available_fit_space",
+        "solver_requested_objective_space",
         "objective_space",
         "objective_residual_units",
         "objective_mixes_detector_px_and_caked_deg",
@@ -16832,6 +16844,10 @@ def build_geometry_manual_fit_dataset(
             "qr_fit_trial_source_rows_builder": qr_fit_trial_source_rows_builder,
             "qr_fit_trial_source_rows_builder_kind": (qr_fit_trial_source_rows_builder_kind),
             "baseline_fit_params": dict(baseline_fit_params_i),
+            "_manual_caked_fit_space_required": bool(manual_fit_requires_caked_space),
+            "solver_requested_objective_space": (
+                "caked_deg" if bool(manual_fit_requires_caked_space) else "detector_native_px"
+            ),
         },
     }
     dataset_payload["manual_point_pairs"] = _geometry_fit_dataset_pairs_from_handoff(
@@ -17168,6 +17184,7 @@ def prepare_geometry_fit_run(
         if build_all_selected_backgrounds
         else [int(primary_index)]
     )
+    enabled_pairs_by_background: dict[int, list[Mapping[str, object]]] = {}
     missing_indices = []
     for idx in selected_background_indices:
         enabled_pairs = [
@@ -17175,6 +17192,7 @@ def prepare_geometry_fit_run(
             for entry in (geometry_manual_pairs_for_index(int(idx)) or ())
             if geometry_manual_pair_enabled_for_geometry_fit(entry)
         ]
+        enabled_pairs_by_background[int(idx)] = enabled_pairs
         if not enabled_pairs:
             missing_indices.append(idx)
     if missing_indices:
@@ -17208,6 +17226,21 @@ def prepare_geometry_fit_run(
             if bool(explicit_caked_required_by_background.get(int(idx), False))
         }
     )
+    locked_qr_required_indices = sorted(
+        {
+            int(idx)
+            for idx in selected_background_indices
+            if geometry_fit_fixed_manual_caked_qr_row_count(
+                manual_pair_rows=enabled_pairs_by_background.get(int(idx), ()),
+                require_explicit_branch=True,
+            )
+            > 0
+        }
+    )
+    if locked_qr_required_indices:
+        selected_caked_required_indices = sorted(
+            set(selected_caked_required_indices) | set(locked_qr_required_indices)
+        )
     fit_space_error = None
     if not selected_caked_required_indices:
         fit_space_error = manual_geometry_fit_space_preflight_error(
@@ -17340,12 +17373,39 @@ def prepare_geometry_fit_run(
         )
 
     dataset_specs = build_geometry_fit_dataset_specs(dataset_infos)
+    locked_qr_row_count = geometry_fit_fixed_manual_caked_qr_row_count(
+        current_dataset=current_dataset,
+        dataset_infos=dataset_infos,
+        require_explicit_branch=True,
+    )
+    locked_qr_requires_caked_metric = int(locked_qr_row_count) > 0
     manual_fit_uses_caked_space = bool(
-        manual_pairs_use_caked_space or geometry_fit_datasets_use_caked_fit_space(dataset_infos)
+        manual_pairs_use_caked_space
+        or geometry_fit_datasets_use_caked_fit_space(dataset_infos)
+        or locked_qr_requires_caked_metric
     )
     if manual_fit_uses_caked_space:
         for spec in dataset_specs:
-            spec["_manual_caked_fit_space_required"] = True
+            spec_idx = None
+            try:
+                spec_idx = int(spec.get("dataset_index"))
+            except Exception:
+                spec_idx = None
+            spec_has_locked_qr = any(
+                isinstance(entry, Mapping)
+                and geometry_fit_entry_has_fixed_manual_caked_qr(
+                    entry,
+                    require_explicit_branch=True,
+                )
+                for entry in (spec.get("measured_peaks", ()) or ())
+            )
+            if (
+                bool(manual_pairs_use_caked_space)
+                or bool(spec_has_locked_qr)
+                or (spec_idx is not None and int(spec_idx) in required_caked_background_set)
+            ):
+                spec["_manual_caked_fit_space_required"] = True
+                spec["solver_requested_objective_space"] = "caked_deg"
     base_runtime_cfg = apply_joint_geometry_fit_runtime_safety_overrides(
         build_runtime_config(fit_params),
         joint_background_mode=joint_background_mode,
@@ -17838,7 +17898,11 @@ def apply_geometry_fit_seed_policy(
     runtime_cfg["seed_search"] = seed_search
 
 
-def geometry_fit_entry_has_fixed_manual_caked_qr(entry: Mapping[str, object]) -> bool:
+def geometry_fit_entry_has_fixed_manual_caked_qr(
+    entry: Mapping[str, object],
+    *,
+    require_explicit_branch: bool = False,
+) -> bool:
     """Return whether one manual-pair row is a fixed-source caked QR target."""
 
     has_observed_caked_anchor = geometry_fit_entry_has_observed_caked_anchor(entry)
@@ -17873,6 +17937,40 @@ def geometry_fit_entry_has_fixed_manual_caked_qr(entry: Mapping[str, object]) ->
         or entry.get("source_row_index") is not None
         or entry.get("source_table_index") is not None
     )
+    identity_sources = (
+        entry,
+        entry.get("provider_selected_source_identity_canonical"),
+        entry.get("selected_source_identity_canonical"),
+        entry.get("manual_picker_selected_source_identity_canonical"),
+    )
+
+    def _identity_value(*keys: str) -> object:
+        for identity_source in identity_sources:
+            if not isinstance(identity_source, Mapping):
+                continue
+            for key in keys:
+                value = identity_source.get(key)
+                if value is not None:
+                    return value
+        return None
+
+    branch_idx = None
+    for identity_source in identity_sources:
+        if not isinstance(identity_source, Mapping):
+            continue
+        for branch_key in ("source_branch_index", "source_peak_index", "resolved_peak_index"):
+            branch_idx = _geometry_fit_coerce_nonnegative_index(identity_source.get(branch_key))
+            if branch_idx in {0, 1}:
+                break
+        if branch_idx in {0, 1}:
+            break
+    source_row_idx = _geometry_fit_coerce_nonnegative_index(_identity_value("source_row_index"))
+    has_locked_qr_identity = bool(
+        _identity_value("q_group_key") is not None
+        and _identity_value("hkl", "normalized_hkl") is not None
+        and source_row_idx is not None
+        and branch_idx in {0, 1}
+    )
     legacy_caked_marker = bool(
         "cached_fit_space_anchor" in target_source
         or "cached_fit_space_anchor" in entry
@@ -17887,7 +17985,11 @@ def geometry_fit_entry_has_fixed_manual_caked_qr(entry: Mapping[str, object]) ->
         or "manual_caked" in row_origin
         or "fit_space" in row_origin
     )
-    cached_target = bool(has_observed_caked_anchor or legacy_caked_marker)
+    cached_target = bool(
+        has_locked_qr_identity
+        if bool(require_explicit_branch)
+        else (has_observed_caked_anchor or legacy_caked_marker or has_locked_qr_identity)
+    )
     dynamic_sim = bool(
         sim_source in {"", "sim_visual_caked_deg"}
         or entry.get("sim_visual_caked_deg") is not None
@@ -17927,6 +18029,7 @@ def geometry_fit_fixed_manual_caked_qr_row_count(
     current_dataset: Mapping[str, object] | None = None,
     dataset_infos: Sequence[Mapping[str, object]] | None = None,
     manual_pair_rows: Sequence[Mapping[str, object]] | None = None,
+    require_explicit_branch: bool = False,
 ) -> int:
     """Count fixed-source caked manual QR rows across prepared/manual inputs."""
 
@@ -17936,12 +18039,19 @@ def geometry_fit_fixed_manual_caked_qr_row_count(
             current_dataset=current_dataset,
             dataset_infos=dataset_infos,
         )
-        if geometry_fit_entry_has_fixed_manual_caked_qr(entry)
+        if geometry_fit_entry_has_fixed_manual_caked_qr(
+            entry,
+            require_explicit_branch=bool(require_explicit_branch),
+        )
     )
     manual_row_count = sum(
         1
         for entry in (manual_pair_rows or ())
-        if isinstance(entry, Mapping) and geometry_fit_entry_has_fixed_manual_caked_qr(entry)
+        if isinstance(entry, Mapping)
+        and geometry_fit_entry_has_fixed_manual_caked_qr(
+            entry,
+            require_explicit_branch=bool(require_explicit_branch),
+        )
     )
     return max(int(prepared_row_count), int(manual_row_count))
 
@@ -23173,12 +23283,33 @@ def build_geometry_fit_rejection_reason_lines(
         ).strip()
     if not route_failure_reason:
         route_failure_reason = str(getattr(result, "final_metric_name", "") or "").strip()
-    if metric_space == "caked_deg" and route_failure_reason == (
-        "manual_caked_route_invariant_violation"
-    ):
+    if route_failure_reason in {
+        "locked_manual_qr_route_invariant_violation",
+        "locked_manual_qr_identity_loss",
+        "manual_caked_route_invariant_violation",
+    }:
+        def _summary_count(key: str, fallback_key: str) -> int:
+            if not isinstance(point_match_summary, Mapping):
+                return 0
+            try:
+                return int(
+                    point_match_summary.get(key, point_match_summary.get(fallback_key, 0)) or 0
+                )
+            except Exception:
+                return 0
+
+        expected_count = _summary_count(
+            "expected_fixed_qr_pair_count",
+            "manual_caked_fit_pair_count",
+        )
+        matched_count = _summary_count("final_matched_pair_count", "matched_pair_count")
         return [
-            "Geometry fit blocked before optimization.",
-            "The requested Qr/Qz fit could not select a caked angular evaluator.",
+            "Geometry fit rejected because final validation lost the locked manual Qr/Qz pair route.",
+            (
+                f"Expected {int(expected_count)} locked pairs but final validation matched "
+                f"{int(matched_count)}."
+            ),
+            "This is an internal route error, not a bad manual pick.",
             "No geometry parameters were changed.",
         ]
 

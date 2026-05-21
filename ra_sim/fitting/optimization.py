@@ -7,7 +7,18 @@ from dataclasses import dataclass
 import math
 import time
 from threading import Lock
-from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import (
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 import numpy as np
 from scipy.optimize import (
@@ -2171,6 +2182,78 @@ def _manual_caked_fit_space_readiness_summary(
         "exact_projector_available": bool(exact_projector_available),
         "dynamic_prediction_available": bool(dynamic_prediction_available),
         "missing_reasons": sorted(missing_reasons),
+    }
+
+
+def _locked_manual_qr_route_summary(
+    dataset_specs: Optional[Sequence[object]],
+    measured_peaks: Optional[Sequence[object]],
+) -> Dict[str, object]:
+    manual_anchor_keys = (
+        "manual_background_input_origin",
+        "manual_background_input_frame",
+        "background_detector_x",
+        "background_detector_y",
+        "background_two_theta_deg",
+        "background_phi_deg",
+        "fit_space_anchor_source",
+        "optimizer_measured_anchor_two_theta_phi",
+    )
+
+    def _is_locked_manual_qr_route_entry(entry: Mapping[str, object]) -> bool:
+        if not _fixed_manual_qr_pair_requires_shared_resolver(entry):
+            return False
+        return any(entry.get(key) is not None for key in manual_anchor_keys)
+
+    fixed_entries: List[Mapping[str, object]] = []
+    saw_fixed_dataset = False
+    exact_projector_available = False
+
+    for spec in _coerce_sequence_items(dataset_specs):
+        if not isinstance(spec, Mapping):
+            continue
+        measured_entries = _coerce_sequence_items(spec.get("measured_peaks", measured_peaks))
+        dataset_fixed_entries = [
+            entry
+            for entry in measured_entries
+            if isinstance(entry, Mapping) and _is_locked_manual_qr_route_entry(entry)
+        ]
+        if not dataset_fixed_entries:
+            continue
+        saw_fixed_dataset = True
+        fixed_entries.extend(dataset_fixed_entries)
+        exact_projector_available = bool(
+            exact_projector_available
+            or (
+                str(spec.get("fit_space_projector_kind", "") or "") == "exact_caked_bundle"
+                and callable(spec.get("fit_space_projector"))
+            )
+        )
+
+    if not saw_fixed_dataset:
+        fixed_entries = [
+            entry
+            for entry in _coerce_sequence_items(measured_peaks)
+            if isinstance(entry, Mapping) and _is_locked_manual_qr_route_entry(entry)
+        ]
+
+    pair_ids: List[str] = []
+    for idx, entry in enumerate(fixed_entries):
+        raw_pair_id = entry.get("pair_id", entry.get("semantic_pair_key"))
+        if raw_pair_id is None:
+            raw_pair_id = (
+                _normalized_hkl_key(entry.get("hkl")),
+                _provider_local_effective_q_group_key(entry),
+                _provider_local_effective_branch_index(entry),
+                _nonnegative_index(entry.get("source_table_index")),
+                _nonnegative_index(entry.get("source_row_index")),
+            )
+        pair_ids.append(str(raw_pair_id if raw_pair_id is not None else idx))
+
+    return {
+        "expected_pair_count": int(len(fixed_entries)),
+        "exact_projector_available": bool(exact_projector_available),
+        "pair_ids": pair_ids,
     }
 
 
@@ -13943,7 +14026,7 @@ def _fixed_manual_pair_requires_exact_source_row(entry: Mapping[str, object]) ->
         return False
     if str(entry.get("optimizer_request_source", "") or "").strip() != "provider_pair":
         return False
-    return _nonnegative_index(entry.get("source_row_index")) is not None
+    return _provider_local_effective_source_identity_index(entry, "source_row_index") is not None
 
 
 def _fixed_manual_qr_pair_requires_shared_resolver(entry: Mapping[str, object]) -> bool:
@@ -22697,6 +22780,14 @@ def fit_geometry_parameters(
         dataset_spec_entries,
         measured_peaks,
     )
+    locked_manual_qr_route = _locked_manual_qr_route_summary(
+        dataset_spec_entries,
+        measured_peaks,
+    )
+    locked_manual_qr_expected_count = int(locked_manual_qr_route.get("expected_pair_count", 0) or 0)
+    locked_manual_qr_exact_projector_available = bool(
+        locked_manual_qr_route.get("exact_projector_available", False)
+    )
     manual_caked_fit_space_required = _dataset_specs_require_manual_caked_fit_space(
         dataset_spec_entries
     )
@@ -23171,6 +23262,7 @@ def fit_geometry_parameters(
         reason: str,
         message: str,
         status: int,
+        extra_summary: Mapping[str, object] | None = None,
     ) -> OptimizeResult:
         def _initial_value_for_var(name: object) -> float:
             key = str(name)
@@ -23224,6 +23316,8 @@ def fit_geometry_parameters(
             "manual_caked_fit_predicted_caked_count": int(manual_caked_predicted_count),
             "manual_caked_fit_missing_reasons": list(manual_caked_missing_reasons),
         }
+        if isinstance(extra_summary, Mapping):
+            result.point_match_summary.update(dict(extra_summary))
         result.geometry_fit_debug_summary = {
             "point_match_mode": bool(point_match_mode),
             "manual_point_fit_mode": bool(manual_point_fit_mode),
@@ -23244,7 +23338,79 @@ def fit_geometry_parameters(
                 "qr_fit_point_only_projection": bool(qr_fit_point_only_projection),
             },
         }
+        if isinstance(extra_summary, Mapping):
+            result.geometry_fit_debug_summary.update(dict(extra_summary))
         return result
+
+    def _mark_locked_manual_qr_identity_loss(
+        result: OptimizeResult,
+        point_match_summary: MutableMapping[str, object],
+        *,
+        previous_metric_name: str,
+    ) -> OptimizeResult:
+        try:
+            final_matched_pair_count = int(point_match_summary.get("matched_pair_count", 0) or 0)
+        except Exception:
+            final_matched_pair_count = 0
+        lost_pair_ids = list(
+            point_match_summary.get("lost_pair_ids")
+            or point_match_summary.get("missing_pair_ids")
+            or ()
+        )
+        if not lost_pair_ids:
+            lost_pair_ids = list(locked_manual_qr_route.get("pair_ids", ()) or ())
+        result.success = False
+        result.status = -13
+        result.message = "locked_manual_qr_identity_loss"
+        result.final_metric_name = "locked_manual_qr_identity_loss"
+        result.final_metric_space = "caked_deg"
+        result.final_metric_units = "deg"
+        result.weighted_objective_rms = float("nan")
+        result.weighted_objective_rms_units = "deg"
+        result.weighted_residual_rms_px = float("nan")
+        result.rms_px = float("nan")
+        point_match_summary.update(
+            {
+                "reason": "locked_manual_qr_identity_loss",
+                "metric_name": "locked_manual_qr_identity_loss",
+                "final_metric_name": "locked_manual_qr_identity_loss",
+                "metric_unit": "deg",
+                "acceptance_metric_space": "caked_deg",
+                "expected_fixed_qr_pair_count": int(locked_manual_qr_expected_count),
+                "final_matched_pair_count": int(final_matched_pair_count),
+                "final_validation_metric_name": str(previous_metric_name),
+                "lost_pair_ids": lost_pair_ids,
+            }
+        )
+        result.point_match_summary = point_match_summary
+        return result
+
+    if locked_manual_qr_expected_count > 0:
+        locked_summary = {
+            "expected_fixed_qr_pair_count": int(locked_manual_qr_expected_count),
+            "locked_manual_qr_pair_ids": list(locked_manual_qr_route.get("pair_ids", ()) or ()),
+            "exact_fit_space_projector_available": bool(locked_manual_qr_exact_projector_available),
+        }
+        if not locked_manual_qr_exact_projector_available:
+            return _manual_caked_preflight_failure_result(
+                reason="locked_manual_qr_missing_exact_caked_projector",
+                message=(
+                    "locked manual Qr/Qz pairs require an exact caked projector; "
+                    "refusing detector-pixel central_point_match fallback"
+                ),
+                status=-12,
+                extra_summary=locked_summary,
+            )
+        if not dynamic_point_geometry_fit or not manual_caked_fit_space_ready:
+            return _manual_caked_preflight_failure_result(
+                reason="locked_manual_qr_route_invariant_violation",
+                message=(
+                    "locked manual Qr/Qz pairs require the caked angular evaluator; "
+                    "refusing detector-pixel central_point_match fallback"
+                ),
+                status=-11,
+                extra_summary=locked_summary,
+            )
 
     if manual_caked_fit_space_required and not manual_caked_fit_space_ready:
         return _manual_caked_preflight_failure_result(
@@ -26095,12 +26261,24 @@ def fit_geometry_parameters(
             blocked_result.point_match_diagnostics = [
                 dict(entry) for entry in preflight_diagnostics if isinstance(entry, Mapping)
             ]
-            blocked_result.point_match_summary = _public_point_match_summary(
-                preflight_summary,
-            )
+            public_preflight_summary = _public_point_match_summary(preflight_summary)
+            blocked_result.point_match_summary = public_preflight_summary
             blocked_result.least_squares_called = False
             blocked_result.optimizer_solve_called = False
             blocked_result.geometry_fit_debug_summary = blocked_summary
+            if locked_manual_qr_expected_count > 0:
+                try:
+                    final_matched_pair_count = int(
+                        public_preflight_summary.get("matched_pair_count", 0) or 0
+                    )
+                except Exception:
+                    final_matched_pair_count = 0
+                if final_matched_pair_count != int(locked_manual_qr_expected_count):
+                    return _mark_locked_manual_qr_identity_loss(
+                        blocked_result,
+                        public_preflight_summary,
+                        previous_metric_name="dynamic_baseline_anchor_mismatch",
+                    )
             return blocked_result
         preflight_saved_projection_mismatches = _manual_qr_x0_saved_manual_projection_mismatches(
             preflight_diagnostics
@@ -35037,6 +35215,20 @@ def fit_geometry_parameters(
                         point_match_summary[summary_key] = copy.deepcopy(public_seed_trace[key])
             result.point_match_diagnostics = point_match_diagnostics
             result.point_match_summary = point_match_summary
+            if locked_manual_qr_expected_count > 0:
+                try:
+                    final_matched_pair_count = int(
+                        point_match_summary.get("matched_pair_count", 0) or 0
+                    )
+                except Exception:
+                    final_matched_pair_count = 0
+                if final_matched_pair_count != int(locked_manual_qr_expected_count):
+                    previous_metric_name = str(getattr(result, "final_metric_name", "") or "")
+                    result = _mark_locked_manual_qr_identity_loss(
+                        result,
+                        point_match_summary,
+                        previous_metric_name=previous_metric_name,
+                    )
             dynamic_anchor_diagnostics = _qr_dynamic_baseline_anchor_diagnostics(
                 point_match_diagnostics
             )

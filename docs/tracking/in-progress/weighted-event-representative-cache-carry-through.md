@@ -105,6 +105,54 @@ Feature status:
 - future weighted-event merges can be validated with one focused command before
   broad-suite triage.
 
+## 2026-05-21 operator Q&A summary
+
+This summarizes the current GUI/manual Qr geometry-fit behavior discussed while
+triaging the `Geometry Fit Rejected` dialog.
+
+- `Pick Qr Sets` should choose deterministic representative rows when the
+  current main simulation/cache is available. Those rows are zero-intensity
+  ghost rays at beam center, with zero divergence/beam offsets and the scalar
+  default wavelength. They are stable source anchors, not closest sampled
+  mosaic rays.
+- A ghost ray fixes source identity, not a detector pixel. During fitting, the
+  same source branch is evaluated under each trial geometry, so predicted
+  detector and caked coordinates can move as fit parameters move.
+- Manual background points for the saved Qr/Qz fixed-source fit are fixed
+  observations. The fit does not re-pick, drag, or move those measured anchors;
+  only the simulated/predicted source position is recomputed.
+- Residual space depends on objective space. A `caked_deg` objective must
+  compare finite observed and predicted caked angular anchors in degrees or
+  fail preflight. Detector-space/manual point mode can still use pixel-space
+  residuals.
+- A branch is the detector-side physical side of the same HKL/Qr/L reflection.
+  For non-`00l` rows, branch identity is normally resolved from signed `phi`:
+  negative `phi` is branch `0`, positive `phi` is branch `1`, and near-zero
+  `phi` is ambiguous. The same HKL appearing in branch `0` and branch `1` is
+  expected.
+- Branch identity for manual Qr rows must be treated as
+  `HKL + q_group_key + source_branch_index`, not just `HKL`.
+
+Resolved GUI-route blockers from the 2026-05-21 rejected GUI runs:
+
+- The trace preserved both clicked background points, found two required
+  `[-1,0,10]` branch candidates, validated the live cache, and reported
+  `branch_mismatch_count=0`.
+- The final acceptance matcher then dropped both fixed-source pairs with
+  `nested_full_identity_branch_ambiguous` and
+  `provider_local_duplicate_hkl_unproven`, leaving `matched_pair_count=0`.
+- That first rejection was fixed by treating
+  `HKL + q_group_key + source_branch_index + source_reflection_index/source_row_index`
+  as the effective identity for branch-proven locked Qr rows.
+- A later run preserved both pairs through preflight but then fell back to
+  detector `point-match` and finalized as `central_point_match, matched=1`.
+  That route-loss bug is fixed by forcing detector-origin locked Qr/Qz pairs
+  through the exact-caked dynamic/manual route and by rejecting any final
+  validation that loses locked pair identity as `locked_manual_qr_identity_loss`.
+- Remaining expected behavior: if exact caked projection cannot be prepared,
+  the fit fails before optimization with a locked-Qr missing-projector or route
+  invariant reason instead of reporting a pixel RMS/outlier.
+
 Committed branch status:
 
 - current branch head is `f7a93f3 feat(diffraction): add worker control`;
@@ -188,6 +236,17 @@ Passed in this worktree:
 - `python -m pytest tests/test_diffraction_weighted_events.py::test_solve_q_real_jit_does_not_crash_allocate_sched -q`
 - `python -m pytest tests/test_diffraction_weighted_events.py::test_compute_intensity_array_is_serial_njit -q`
 - `python -m pytest tests/test_diffraction_weighted_events.py::test_center_ghost_representative_survives_even_when_unsampled -q`
+- `python -m pytest tests/test_diffraction_weighted_events.py::test_branch_representative_cache_uses_zero_intensity_center_ghost -ra`
+  proves the ghost representative precompute uses the scalar default
+  wavelength, not the mosaic wavelength mean, with zero beam/divergence
+  offsets;
+- `python -m pytest tests/test_diffraction_weighted_events.py::test_center_ghost_representative_survives_even_when_unsampled tests/test_diffraction_weighted_events.py::test_branch_representative_cache_uses_zero_intensity_center_ghost tests/test_diffraction_weighted_events.py::test_get_last_intersection_cache_is_representative_facing_after_weighted_events tests/test_diffraction_weighted_events.py::test_get_last_intersection_cache_views_split_sampled_and_representative_rows tests/test_diffraction_constraints.py::test_build_intersection_cache_keeps_explicit_zero_offset_representative_without_sample -ra`
+  passed as the focused core proof for ghost rows, fitter-facing cache, split
+  sampled/representative views, and explicit zero-offset representatives;
+- `python -m pytest tests/test_gui_runtime_primary_cache.py::test_rematerialize_primary_artifacts_prefers_cached_representative_intersection_cache tests/test_gui_runtime_primary_cache.py::test_store_primary_cache_payload_stores_representative_intersection_cache tests/test_gui_runtime_primary_cache.py::test_store_primary_cache_payload_drops_stale_representative_intersection_cache tests/test_gui_runtime_primary_cache.py::test_translate_intersection_cache_entry_cache_for_center_delta tests/test_gui_runtime_invalidation.py tests/test_gui_structure_factor_pruning.py -ra`
+  passed as the GUI/runtime cache carry-through and invalidation proof;
+- `python -m ra_sim.dev check`
+  passed with ruff format check, ruff lint, fast pytest, and mypy;
 - `python -m pytest tests/test_gui_runtime_primary_cache.py::test_store_primary_cache_payload_drops_stale_representative_intersection_cache -q`
 - `python -m pytest tests/test_gui_runtime_primary_cache.py::test_translate_intersection_cache_entry_cache_for_center_delta -q`
 - `python -m pytest tests/test_diffraction_weighted_events.py::test_manual_worker_count_one_routes_serial -q`
