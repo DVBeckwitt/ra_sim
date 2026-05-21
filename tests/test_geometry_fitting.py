@@ -1504,6 +1504,73 @@ def test_exact_caked_optimizer_component_rms_includes_line_residuals(monkeypatch
     )
 
 
+def test_locked_qr_two_branch_fit_includes_segment_angle_residual() -> None:
+    _payloads, dataset_ctx, local = _locked_qr_dynamic_live_shape_context(
+        {
+            0: {
+                "observed": (30.0, 0.0),
+                "refined": (31.0, 0.0),
+                "stale": (39.0, 36.0),
+                "native": (1097.0, 1920.0),
+            },
+            1: {
+                "observed": (40.0, 10.0),
+                "refined": (41.0, 12.0),
+                "stale": (41.0, -38.0),
+                "native": (1074.0, 1132.0),
+            },
+        }
+    )
+    local["_q_group_line_constraints_enabled"] = True
+    local["_q_group_line_requires_two_branches"] = True
+    local["_q_group_line_angle_weight"] = 0.5
+    local["_q_group_line_offset_weight"] = 0.0
+
+    residual, _diagnostics, summary = opt._evaluate_geometry_fit_dataset_dynamic_point_matches(
+        local,
+        dataset_ctx,
+        image_size=4000,
+        missing_pair_penalty_deg=5.0,
+        theta_value=0.0,
+        collect_diagnostics=True,
+    )
+
+    assert summary["matched_pair_count"] == 2
+    assert residual.size == 6
+    assert summary["line_constraints_enabled"] is True
+    assert summary["line_group_count"] == 1
+    assert summary["resolved_line_group_count"] == 1
+    assert np.isfinite(float(summary["line_angle_rms_deg"]))
+    assert float(summary["line_angle_rms_deg"]) > 0.0
+
+
+def test_locked_qr_line_angle_residual_requires_two_branches() -> None:
+    q_group_key = ("q_group", "primary", 1, 10)
+    missing_branch_entries = [
+        {"hkl": (-1, 0, 10), "q_group_key": q_group_key},
+        {"hkl": (-1, 0, 10), "q_group_key": q_group_key},
+    ]
+    same_branch_entries = [
+        {"hkl": (-1, 0, 10), "q_group_key": q_group_key, "source_branch_index": 0},
+        {"hkl": (-1, 0, 10), "q_group_key": q_group_key, "source_branch_index": 0},
+    ]
+
+    assert (
+        opt._eligible_geometry_line_group_ids(
+            missing_branch_entries,
+            require_two_branches=True,
+        )
+        == []
+    )
+    assert (
+        opt._eligible_geometry_line_group_ids(
+            same_branch_entries,
+            require_two_branches=True,
+        )
+        == []
+    )
+
+
 def test_exact_caked_optimizer_component_rms_rejects_nonfinite_vector() -> None:
     summary = opt._angular_degree_residual_audit_summary(
         measured_two_theta_deg=[30.0],
@@ -6041,9 +6108,7 @@ def test_locked_qr_dynamic_identity_eval_uses_clean_handoff_payload():
         },
     }
 
-    _payloads, _residual, summary, rows = _evaluate_locked_qr_dynamic_live_shape(
-        branch_payloads
-    )
+    _payloads, _residual, summary, rows = _evaluate_locked_qr_dynamic_live_shape(branch_payloads)
 
     assert int(summary["matched_pair_count"]) == 2
     assert summary["raw_angular_rms_deg"] < 5.0

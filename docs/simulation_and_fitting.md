@@ -670,6 +670,13 @@ The simulation surface is split across dataclasses, the legacy wrapper, and the 
 
 These are GUI and default-profile values, not hard kernel constants unless the GUI passes them through unchanged.
 
+Fresh simulation-GUI startup pins the displayed geometry adjustment controls
+`cor_angle`, `gamma`, `Gamma`, `chi`, `psi_z`, `zs`, and `zb` to `0.0`.
+Nonzero PONI rotations, sample-orientation config, or hBN tilt hints do not seed
+those seven startup sliders. Restored GUI states may still restore saved user
+values, and center/distance/wavelength defaults continue to come from their
+normal sources.
+
 | Name | Units | Default | Code source | Mathematical role |
 | --- | --- | --- | --- | --- |
 | `instrument.detector.image_size` | px | `3000` | [`config/instrument.yaml`](../config/instrument.yaml) | Output image dimension. |

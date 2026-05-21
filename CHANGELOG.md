@@ -47,6 +47,10 @@
   - Updated `load_tilt_hint` to return converted simulation-space tilt/center/distance hints.
 
 - **Fitting and optimization**
+  - Added an explicit branch-line angle residual for locked two-branch Qr/Qz
+    manual caked geometry fits in both GUI and headless saved-state routes,
+    while keeping single-branch or branch-ambiguous groups out of the line
+    constraint path.
   - Fixed locked manual Qr/Qz geometry fits whose reduced hit-table rows lost
     top-level full-reflection fields even though the canonical provider identity
     still carried them; the matcher now recovers unique `m,L` branch rows from
@@ -288,6 +292,9 @@
   - Fixed headless `fit-geometry` per-background caked projector compatibility so Bi2Se3 and Bi2Te3 saved manual-caked states can run constrained `gamma,Gamma` direct fits through the shared dataset builder.
 
 - **GUI and UX updates**
+  - Made fresh simulation-GUI startup pin the geometry-adjustment controls
+    `cor_angle`, `gamma`, `Gamma`, `chi`, `psi_z`, `zs`, and `zb` to zero
+    while preserving restored saved-state values.
   - Fixed background visibility toggles so cached simulation data is reused and the runtime keeps the update in the analysis/display path instead of promoting it to a full simulation.
   - Added a Setup `Pick Beam Center` control that uses the current detector/background image, zoomed preview, and GUI Row/Col mapping to update the beam-center sliders and entries.
   - Made live caked Qr/Qz visual-source ledger output opt-in and cached manual-pick simulated-candidate refinement by stable simulation/exact-projection signatures so repeated warm-cache caked clicks do not reprint trace rows or rerun full row refinement; display-image sanitization and copied-but-equivalent caked axes no longer churn caked pick caches, explicit projection signatures survive normalize/hydrate/digest handoff, lookup rebuild completion is tracked explicitly, failed lookup builders are retried, no-signature direct calls clear stale skip metadata, and the New4 exact-caked finalizer repairs stale polish fields only for clean selected summaries.

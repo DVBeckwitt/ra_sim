@@ -23,6 +23,15 @@ SELECTED_QR_ROD_DETECTOR_UNION_MASK_CACHE_CAP = 32
 SELECTED_QR_ROD_CAKED_UNION_MASK_CACHE_CAP = 32
 SELECTED_QR_ROD_PROFILE_CACHE_CAP = 64
 _SELECTED_QR_ROD_DELTA_QR_WIDTH_BOUNDS = (0.001, 1.0)
+_SIMULATION_GUI_STARTUP_ZERO_GEOMETRY_DEFAULT_NAMES = (
+    "cor_angle",
+    "gamma",
+    "Gamma",
+    "chi",
+    "psi_z",
+    "zs",
+    "zb",
+)
 
 
 gui_bootstrap.early_main_bootstrap(__name__)
@@ -64,6 +73,13 @@ _QR_ROD_PROFILE_TIMINGS_MAX_RECORDS = 512
 _QR_ROD_PROFILE_TIMINGS: list[dict[str, object]] = []
 _GEOMETRY_FIT_PROJECTION_TOKEN_SCHEMA = "geometry_fit_projection_content_v3"
 _GEOMETRY_FIT_PROJECTION_TOKEN_SOURCE = "runtime_projection_storage_copy_v3"
+
+
+def _simulation_gui_startup_defaults(values: Mapping[str, object]) -> dict[str, object]:
+    resolved = dict(values)
+    for name in _SIMULATION_GUI_STARTUP_ZERO_GEOMETRY_DEFAULT_NAMES:
+        resolved[name] = 0.0
+    return resolved
 
 
 def clear_qr_rod_profile_timings() -> None:
@@ -1774,52 +1790,54 @@ def _initialize_runtime_state_block_05() -> None:
     # Default GUI/fit parameter values. These must be defined before any calls
     # that reference them (e.g. ``ht_Iinf_dict`` below).
     # ---------------------------------------------------------------------------
-    defaults = {
-        "theta_initial": theta_initial,
-        "cor_angle": cor_angle,
-        "gamma": Gamma_initial,
-        "Gamma": gamma_initial,
-        "chi": chi,
-        "psi_z": psi_z,
-        "zs": zs,
-        "zb": zb,
-        "sample_width_m": sample_width_m,
-        "sample_length_m": sample_length_m,
-        "sample_depth_m": sample_depth_m,
-        "debye_x": debye_x,
-        "debye_y": debye_y,
-        "corto_detector": Distance_CoR_to_Detector,
-        "sigma_mosaic_deg": np.degrees(sigma_mosaic),
-        "gamma_mosaic_deg": np.degrees(gamma_mosaic),
-        "eta": eta,
-        "a": av,
-        "c": cv,
-        "vmax": vmax_default,
-        "p0": p_defaults[0],
-        "p1": p_defaults[1],
-        "p2": p_defaults[2],
-        "w0": w_defaults[0],
-        "w1": w_defaults[1],
-        "w2": w_defaults[2],
-        "iodine_z": iodine_z_default,
-        "phase_delta_expression": phase_delta_expression_default,
-        "phi_l_divisor": float(phi_l_divisor_default),
-        "center_x": center_default[0],
-        "center_y": center_default[1],
-        "sampling_resolution": CUSTOM_SAMPLING_OPTION,
-        "sampling_count": DEFAULT_RANDOM_SAMPLE_COUNT,
-        "events_per_beam_phase": DEFAULT_EVENTS_PER_BEAM_PHASE,
-        "rod_points_per_gz": gui_controllers.default_rod_points_per_gz(cv),
-        "bandwidth_percent": float(np.clip(bandwidth_percent_default, 0.0, 10.0)),
-        "sf_prune_bias": sf_prune_bias_default,
-        "solve_q_steps": solve_q_steps_default,
-        "solve_q_rel_tol": solve_q_rel_tol_default,
-        "solve_q_mode": solve_q_mode_default,
-        "finite_stack": finite_stack_default,
-        "stack_layers": stack_layers_default,
-        "optics_mode": "fast",
-        "ordered_structure_scale": 1.0,
-    }
+    defaults = _simulation_gui_startup_defaults(
+        {
+            "theta_initial": theta_initial,
+            "cor_angle": cor_angle,
+            "gamma": Gamma_initial,
+            "Gamma": gamma_initial,
+            "chi": chi,
+            "psi_z": psi_z,
+            "zs": zs,
+            "zb": zb,
+            "sample_width_m": sample_width_m,
+            "sample_length_m": sample_length_m,
+            "sample_depth_m": sample_depth_m,
+            "debye_x": debye_x,
+            "debye_y": debye_y,
+            "corto_detector": Distance_CoR_to_Detector,
+            "sigma_mosaic_deg": np.degrees(sigma_mosaic),
+            "gamma_mosaic_deg": np.degrees(gamma_mosaic),
+            "eta": eta,
+            "a": av,
+            "c": cv,
+            "vmax": vmax_default,
+            "p0": p_defaults[0],
+            "p1": p_defaults[1],
+            "p2": p_defaults[2],
+            "w0": w_defaults[0],
+            "w1": w_defaults[1],
+            "w2": w_defaults[2],
+            "iodine_z": iodine_z_default,
+            "phase_delta_expression": phase_delta_expression_default,
+            "phi_l_divisor": float(phi_l_divisor_default),
+            "center_x": center_default[0],
+            "center_y": center_default[1],
+            "sampling_resolution": CUSTOM_SAMPLING_OPTION,
+            "sampling_count": DEFAULT_RANDOM_SAMPLE_COUNT,
+            "events_per_beam_phase": DEFAULT_EVENTS_PER_BEAM_PHASE,
+            "rod_points_per_gz": gui_controllers.default_rod_points_per_gz(cv),
+            "bandwidth_percent": float(np.clip(bandwidth_percent_default, 0.0, 10.0)),
+            "sf_prune_bias": sf_prune_bias_default,
+            "solve_q_steps": solve_q_steps_default,
+            "solve_q_rel_tol": solve_q_rel_tol_default,
+            "solve_q_mode": solve_q_mode_default,
+            "finite_stack": finite_stack_default,
+            "stack_layers": stack_layers_default,
+            "optics_mode": "fast",
+            "ordered_structure_scale": 1.0,
+        }
+    )
 
     # ---------------------------------------------------------------------------
     # Replace the old miller_generator call with the new Hendricks–Teller helper.

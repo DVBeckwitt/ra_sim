@@ -18187,6 +18187,47 @@ def geometry_fit_fixed_manual_caked_qr_row_count(
     return max(int(prepared_row_count), int(manual_row_count))
 
 
+def geometry_fit_fixed_manual_caked_qr_two_branch_group_count(
+    *,
+    current_dataset: Mapping[str, object] | None = None,
+    dataset_infos: Sequence[Mapping[str, object]] | None = None,
+    manual_pair_rows: Sequence[Mapping[str, object]] | None = None,
+) -> int:
+    """Count locked manual QR groups that have both physical branches."""
+
+    groups: dict[object, set[int]] = {}
+    entries = _geometry_fit_dataset_entries(
+        current_dataset=current_dataset,
+        dataset_infos=dataset_infos,
+    )
+    entries.extend(dict(item) for item in (manual_pair_rows or ()) if isinstance(item, Mapping))
+    for entry in entries:
+        if not geometry_fit_entry_has_fixed_manual_caked_qr(
+            entry,
+            require_explicit_branch=True,
+        ):
+            continue
+        group_key = _geometry_fit_group_identity(entry)
+        if group_key is None:
+            for identity_key in (
+                "provider_selected_source_identity_canonical",
+                "selected_source_identity_canonical",
+                "manual_picker_selected_source_identity_canonical",
+            ):
+                identity = entry.get(identity_key)
+                if isinstance(identity, Mapping):
+                    group_key = _geometry_fit_stable_group_identity(identity.get("q_group_key"))
+                    if group_key is not None:
+                        break
+        if group_key is None:
+            continue
+        branch_idx = _geometry_fit_source_branch_index(entry)
+        if branch_idx not in {0, 1}:
+            continue
+        groups.setdefault(group_key, set()).add(int(branch_idx))
+    return sum(1 for branches in groups.values() if branches == {0, 1})
+
+
 def _geometry_fit_runtime_solver_mapping(runtime_cfg: Mapping[str, object]) -> dict[str, object]:
     solver_cfg = runtime_cfg.get("solver")
     return dict(solver_cfg) if isinstance(solver_cfg, Mapping) else {}
@@ -18226,6 +18267,7 @@ def _apply_saved_manual_caked_geometry_fit_lean_runtime(
     *,
     max_nfev: int,
     seed_multistart: bool,
+    locked_qr_two_branch_group_count: int = 0,
 ) -> None:
     seed_multistart_enabled = bool(seed_multistart)
     solver = _geometry_fit_runtime_solver_mapping(runtime_cfg)
@@ -18241,8 +18283,22 @@ def _apply_saved_manual_caked_geometry_fit_lean_runtime(
     solver["weighted_matching"] = False
     solver["use_measurement_uncertainty"] = False
     solver["anisotropic_measurement_uncertainty"] = False
-    solver["q_group_line_constraints"] = False
-    solver["q_group_line_constraints_enabled"] = False
+    locked_branch_lines_enabled = int(locked_qr_two_branch_group_count) > 0
+    solver["q_group_line_constraints"] = bool(locked_branch_lines_enabled)
+    solver["q_group_line_constraints_enabled"] = bool(locked_branch_lines_enabled)
+    if locked_branch_lines_enabled:
+        try:
+            line_angle_weight = float(solver.get("locked_qr_branch_line_angle_weight", 0.5))
+        except Exception:
+            line_angle_weight = 0.5
+        if not np.isfinite(line_angle_weight) or line_angle_weight < 0.0:
+            line_angle_weight = 0.5
+        solver["locked_qr_branch_line_angle_weight"] = float(line_angle_weight)
+        solver["q_group_line_angle_weight"] = float(line_angle_weight)
+        solver["q_group_line_offset_weight"] = 0.0
+        solver["q_group_line_requires_two_branches"] = True
+    else:
+        solver.pop("q_group_line_requires_two_branches", None)
     solver[GEOMETRY_FIT_HEADLESS_CAKED_ANGULAR_ACCEPT_FLAG] = True
     solver["workers"] = solver.get("workers", "auto")
     solver["parallel_mode"] = "off"
@@ -18294,6 +18350,11 @@ def apply_saved_manual_caked_geometry_fit_budget(
         dataset_infos=dataset_infos,
         manual_pair_rows=manual_pair_rows,
     )
+    two_branch_group_count = geometry_fit_fixed_manual_caked_qr_two_branch_group_count(
+        current_dataset=current_dataset,
+        dataset_infos=dataset_infos,
+        manual_pair_rows=manual_pair_rows,
+    )
     enforce_geometry_fit_gamma_bounds(runtime_cfg, active_var_names)
     if row_count <= 0:
         return False, int(row_count)
@@ -18315,6 +18376,7 @@ def apply_saved_manual_caked_geometry_fit_budget(
             else GEOMETRY_FIT_SAVED_MANUAL_CAKED_DIRECT_MAX_NFEV
         ),
         seed_multistart=(normalized_seed_policy == GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART),
+        locked_qr_two_branch_group_count=int(two_branch_group_count),
     )
     if normalized_seed_policy == GEOMETRY_FIT_SEED_POLICY_LADDER_MULTISTART:
         seed_search_cfg = runtime_cfg.get("seed_search")
@@ -24962,6 +25024,15 @@ def build_geometry_fit_progress_text(
     if metric_name == "dynamic_angular_point_match" and np.isfinite(weighted_rms):
         weighted_unit = str(getattr(result, "weighted_objective_rms_units", "px") or "px")
         base_summary_lines.append(f"Dynamic fit RMS = {float(weighted_rms):.2f} {weighted_unit}")
+        point_match_summary = getattr(result, "point_match_summary", None)
+        if isinstance(point_match_summary, Mapping):
+            line_angle_rms = _geometry_fit_metric_float(
+                point_match_summary.get("line_angle_rms_deg", np.nan)
+            )
+            if np.isfinite(line_angle_rms):
+                base_summary_lines.append(
+                    f"Branch-line angle RMS = {float(line_angle_rms):.2f} deg"
+                )
         if np.isfinite(float(rms)) and abs(float(rms) - float(weighted_rms)) > 1.0e-6:
             base_summary_lines.append(
                 f"Full-beam overlay RMS = {float(rms):.2f} {str(rms_unit or 'px')}"

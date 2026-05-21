@@ -9,6 +9,19 @@ Last updated: 2026-05-21
 
 ## Summary
 
+2026-05-21 locked Qr/Qz branch-line slice: saved manual caked Qr/Qz fits now
+enable the existing q-group line residual only for locked groups that prove both
+`source_branch_index=0` and `source_branch_index=1` for the same `q_group_key`.
+The dynamic angular objective keeps the two endpoint residuals and appends the
+branch-segment angle residual; line-offset weight stays disabled for this route.
+GUI and headless saved-state routes share the same runtime-budget helper, and
+completion/status output reports finite branch-line angle RMS when present.
+Single-branch or branch-ambiguous groups do not create fake line constraints.
+Dead headless-local budget helpers were removed after the shared helper replaced
+them. Feature status: implemented and covered by targeted GUI/headless tests.
+Migration/deprecation status: no saved-state, CLI, config, or artifact migration
+is required; rollback is a normal git revert.
+
 2026-05-21 locked Qr/Qz fit-speed slice: geometry-fit trial source rows now
 prefer zero-intensity required-pair ghost rows in caked/Qr fit space. When
 analytic ghost completion is enough, the trial builder skips source-row rebuild

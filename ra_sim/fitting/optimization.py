@@ -3641,18 +3641,35 @@ def _geometry_line_group_ids(
 
 def _eligible_geometry_line_group_ids(
     entries: Sequence[Mapping[str, object]],
+    *,
+    require_two_branches: bool = False,
 ) -> List[Tuple[object, ...]]:
     """Return stable line groups backed by at least two measured entries."""
 
     grouped: Dict[Tuple[object, ...], List[int]] = {}
+    grouped_branches: Dict[Tuple[object, ...], Set[int]] = {}
     ordered: List[Tuple[object, ...]] = []
     for idx, entry in enumerate(entries):
+        branch_idx = _measured_source_peak_index(entry) if require_two_branches else None
         for group_id in _geometry_line_group_ids(entry):
             if group_id not in grouped:
                 grouped[group_id] = []
+                grouped_branches[group_id] = set()
                 ordered.append(group_id)
             grouped[group_id].append(int(idx))
-    return [group_id for group_id in ordered if len(grouped.get(group_id, ())) >= 2]
+            if branch_idx in {0, 1}:
+                grouped_branches[group_id].add(int(branch_idx))
+    eligible: list[tuple[object, ...]] = []
+    for group_id in ordered:
+        if len(grouped.get(group_id, ())) < 2:
+            continue
+        if require_two_branches:
+            if not group_id or str(group_id[0]) != "q_group_line":
+                continue
+            if grouped_branches.get(group_id, set()) != {0, 1}:
+                continue
+        eligible.append(group_id)
+    return eligible
 
 
 def _fit_geometry_line_model(
@@ -4954,8 +4971,12 @@ def _evaluate_geometry_fit_dataset_point_matches(
     matched_distances: List[float] = []
     matched_pair_count = 0
     anisotropic_sigma_count = 0
+    line_requires_two_branches = bool(local.get("_q_group_line_requires_two_branches", False))
     eligible_line_group_ids = (
-        _eligible_geometry_line_group_ids(normalized_measured)
+        _eligible_geometry_line_group_ids(
+            normalized_measured,
+            require_two_branches=bool(line_requires_two_branches),
+        )
         if bool(line_constraints_enabled)
         else []
     )
@@ -5660,8 +5681,12 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
     a_lattice = float(local.get("a", np.nan))
     c_lattice = float(local.get("c", np.nan))
     wavelength_scalar = _wavelength_scalar_from_local(local)
+    line_requires_two_branches = bool(local.get("_q_group_line_requires_two_branches", False))
     eligible_line_group_ids = (
-        _eligible_geometry_line_group_ids(normalized_measured)
+        _eligible_geometry_line_group_ids(
+            normalized_measured,
+            require_two_branches=bool(line_requires_two_branches),
+        )
         if bool(line_constraints_enabled)
         else []
     )
@@ -23190,6 +23215,9 @@ def fit_geometry_parameters(
             solver_cfg.get("q_group_line_constraints_enabled", manual_point_fit_mode),
         )
     )
+    q_group_line_requires_two_branches = bool(
+        solver_cfg.get("q_group_line_requires_two_branches", False)
+    )
     q_group_line_angle_weight = float(solver_cfg.get("q_group_line_angle_weight", 0.6))
     if not np.isfinite(q_group_line_angle_weight) or q_group_line_angle_weight < 0.0:
         q_group_line_angle_weight = 0.6
@@ -23942,6 +23970,7 @@ def fit_geometry_parameters(
         local["center_x"] = float(center_row)
         local["center_y"] = float(center_col)
         local["_q_group_line_constraints_enabled"] = bool(q_group_line_constraints_enabled)
+        local["_q_group_line_requires_two_branches"] = bool(q_group_line_requires_two_branches)
         local["_q_group_line_angle_weight"] = float(q_group_line_angle_weight)
         local["_q_group_line_offset_weight"] = float(q_group_line_offset_weight)
         local["_q_group_line_missing_penalty_scale"] = float(q_group_line_missing_penalty_scale)
@@ -26335,6 +26364,7 @@ def fit_geometry_parameters(
             "missing_pair_penalty_px": float(missing_pair_penalty),
             "missing_pair_penalty_deg": float(missing_pair_penalty_deg),
             "q_group_line_constraints": bool(q_group_line_constraints_enabled),
+            "q_group_line_requires_two_branches": bool(q_group_line_requires_two_branches),
             "q_group_line_angle_weight": float(q_group_line_angle_weight),
             "q_group_line_offset_weight": float(q_group_line_offset_weight),
             "q_group_line_missing_penalty_scale": float(q_group_line_missing_penalty_scale),
@@ -36071,6 +36101,17 @@ def fit_geometry_parameters(
             f"rms={float(point_match_summary.get('raw_angular_rms_deg', np.nan)):.6f}deg "
             f"max={float(point_match_summary.get('raw_angular_max_deg', np.nan)):.2f}deg"
         )
+        line_angle_rms = _safe_float(point_match_summary.get("line_angle_rms_deg"), np.nan)
+        line_offset_rms = _safe_float(point_match_summary.get("line_offset_rms_deg"), np.nan)
+        line_group_count = int(point_match_summary.get("resolved_line_group_count", 0) or 0)
+        if bool(point_match_summary.get("line_constraints_enabled", False)) or line_group_count > 0:
+            _emit_status(
+                "dynamic angular branch-line summary: "
+                f"enabled={bool(point_match_summary.get('line_constraints_enabled', False))} "
+                f"resolved={line_group_count} "
+                f"angle_rms={float(line_angle_rms):.6f}deg "
+                f"offset_rms={float(line_offset_rms):.6f}deg"
+            )
         _emit_status(
             "dynamic angular failure classification: "
             f"{str(point_match_summary.get('dynamic_angular_failure_classification', '') or '')}"

@@ -19402,7 +19402,9 @@ def test_parameter_combo_sweep_report_freezes_best_gamma_gamma_candidate(
             return {
                 "status": "accepted",
                 "full_fit_success": True,
-                **_accepted_parameter_combo_contract(rms=1.140136774957117, max_deg=6.206891352600093),
+                **_accepted_parameter_combo_contract(
+                    rms=1.140136774957117, max_deg=6.206891352600093
+                ),
                 "result_variables": {
                     "gamma": 1.25,
                     "Gamma": 2.5,
@@ -19433,9 +19435,7 @@ def test_parameter_combo_sweep_report_freezes_best_gamma_gamma_candidate(
         excluded_pair_ids=["bg1:pair15", "bg0:pair20", "bg2:pair17"],
     )
     report_json = json.loads(
-        (tmp_path / "bi2se3_headless_gamma_gamma" / "sweep_report.json").read_text(
-            encoding="utf-8"
-        )
+        (tmp_path / "bi2se3_headless_gamma_gamma" / "sweep_report.json").read_text(encoding="utf-8")
     )
 
     assert report["best_combo_name"] == "00_gamma_Gamma"
@@ -24749,9 +24749,7 @@ def test_build_geometry_manual_fit_dataset_projects_detector_origin_observed_anc
     assert measured["background_phi_deg"] == pytest.approx(130.754)
     assert measured["caked_projection_source"] == "fit_space_projector_native_detector"
     assert measured.get("fit_space_anchor_override") is not True
-    assert dataset["spec"]["measured_peaks"][0]["background_two_theta_deg"] == pytest.approx(
-        33.063
-    )
+    assert dataset["spec"]["measured_peaks"][0]["background_two_theta_deg"] == pytest.approx(33.063)
     assert (3.0, 4.0) in detector_calls
 
 
@@ -31516,12 +31514,12 @@ def test_apply_sweep_result_updates_geometry_and_rebuilds_overlay(tmp_path) -> N
     combo_result_path = combo_dir / "combo_result.json"
     combo_result_path.write_text(
         json.dumps(
-                {
-                    "status": "accepted",
-                    "full_fit_success": True,
-                    "dry_run": True,
-                    "input_state_sha256": state_hash,
-                    "excluded_pair_ids": ["bg0:pair20", "bg1:pair15", "bg2:pair17"],
+            {
+                "status": "accepted",
+                "full_fit_success": True,
+                "dry_run": True,
+                "input_state_sha256": state_hash,
+                "excluded_pair_ids": ["bg0:pair20", "bg1:pair15", "bg2:pair17"],
                 "active_vars": ["gamma", "Gamma"],
                 **_accepted_parameter_combo_contract(),
                 "result_variables": {"gamma": 1.25, "Gamma": 2.5},
@@ -31893,6 +31891,7 @@ def test_apply_sweep_result_requires_gettable_settable_targets_for_all_active_va
     )
     gamma_var = _DummyVar(0.1)
     if target_kind == "missing_set":
+
         class _GetOnlyVar:
             def __init__(self, value):
                 self._value = value
@@ -31902,6 +31901,7 @@ def test_apply_sweep_result_requires_gettable_settable_targets_for_all_active_va
 
         target = _GetOnlyVar(0.2)
     else:
+
         class _SetOnlyVar:
             def set(self, value):
                 pass
@@ -39171,6 +39171,59 @@ def test_headless_saved_manual_caked_ladder_budget_is_narrow() -> None:
     assert runtime_cfg["identifiability"]["enabled"] is False
     assert runtime_cfg["bounds"]["gamma"] == [-90.0, 90.0]
     assert runtime_cfg["bounds"]["Gamma"] == [-90.0, 90.0]
+
+
+def test_headless_saved_manual_caked_budget_enables_two_branch_lines() -> None:
+    from ra_sim import headless_geometry_fit
+
+    q_group_key = ("q_group", "primary", 1, 10)
+    rows = []
+    for branch in (0, 1):
+        rows.append(
+            {
+                "fit_source_resolution_kind": "provider_fixed_source",
+                "optimizer_request_has_fixed_source": True,
+                "target_anchor_source": "cached_fit_space_anchor",
+                "simulated_source": "sim_visual_caked_deg",
+                "background_two_theta_deg": 30.0 + float(branch),
+                "background_phi_deg": 40.0 + float(branch),
+                "q_group_key": q_group_key,
+                "hkl": (-1, 0, 10),
+                "source_branch_index": int(branch),
+                "source_reflection_index": 10,
+                "source_row_index": int(branch),
+            }
+        )
+    prepared_run = SimpleNamespace(
+        current_dataset={"measured_for_fit": rows},
+        dataset_infos=[],
+    )
+    runtime_cfg = {
+        "projection_view_mode": "caked",
+        "solver": {
+            "manual_point_fit_mode": True,
+            "dynamic_point_geometry_fit": True,
+            "max_nfev": 200,
+        },
+        "optimizer": {"max_nfev": 200},
+        "seed_search": {"prescore_top_k": 4},
+        "bounds": {"gamma": [-5.0, 5.0], "Gamma": [-5.0, 5.0]},
+    }
+
+    applied, row_count = headless_geometry_fit._apply_headless_saved_manual_caked_budget(
+        runtime_cfg,
+        seed_policy=headless_geometry_fit.HEADLESS_GEOMETRY_FIT_SEED_POLICY_DIRECT,
+        prepared_run=prepared_run,
+        active_var_names=["gamma", "Gamma"],
+    )
+
+    assert applied is True
+    assert row_count == 2
+    assert runtime_cfg["solver"]["q_group_line_constraints"] is True
+    assert runtime_cfg["solver"]["q_group_line_constraints_enabled"] is True
+    assert runtime_cfg["solver"]["q_group_line_requires_two_branches"] is True
+    assert runtime_cfg["solver"]["q_group_line_angle_weight"] == 0.5
+    assert runtime_cfg["optimizer"]["q_group_line_constraints"] is True
 
 
 def test_headless_saved_manual_caked_budget_requires_full_predicate() -> None:

@@ -152,6 +152,30 @@ def _make_geometry_fit_worker_job(runtime_session) -> dict[str, object]:
     }
 
 
+def test_simulation_gui_startup_geometry_defaults_force_zero_controls() -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    raw_defaults = {
+        "theta_initial": 6.0,
+        "cor_angle": 1.25,
+        "gamma": 2.5,
+        "Gamma": -3.5,
+        "chi": 0.4,
+        "psi_z": -0.5,
+        "zs": 1.0e-4,
+        "zb": -1.0e-4,
+        "sample_width_m": 2.0e-3,
+    }
+
+    resolved = runtime_session._simulation_gui_startup_defaults(raw_defaults)
+
+    for key in runtime_session._SIMULATION_GUI_STARTUP_ZERO_GEOMETRY_DEFAULT_NAMES:
+        assert resolved[key] == 0.0
+    assert resolved["theta_initial"] == 6.0
+    assert resolved["sample_width_m"] == 2.0e-3
+    assert raw_defaults["gamma"] == 2.5
+
+
 def _stable_geometry_fit_test_lut(seed: float = 1.0) -> np.ndarray:
     return np.asarray([[float(seed)]], dtype=np.float64)
 
@@ -15931,7 +15955,9 @@ def test_async_geometry_fit_job_preserves_caked_runtime_fields(monkeypatch, tmp_
     assert caked_detector_job["manual_caked_fit_space_required_by_background"] == {0: True}
     assert caked_detector_job["pick_uses_caked_space"] is True
     assert caked_detector_job["projection_view_mode"] == "caked"
-    assert caked_detector_job["geometry_runtime_cfg"]["solver"]["dynamic_point_geometry_fit"] is True
+    assert (
+        caked_detector_job["geometry_runtime_cfg"]["solver"]["dynamic_point_geometry_fit"] is True
+    )
 
     manual_pairs[:] = [
         {
@@ -19185,10 +19211,12 @@ def test_geometry_fit_progress_text_reports_dynamic_fit_rms_separately() -> None
         result=SimpleNamespace(
             weighted_residual_rms_px=51.6901,
             final_metric_name="dynamic_angular_point_match",
+            point_match_summary={"line_angle_rms_deg": 0.734},
         ),
     )
 
     assert "Dynamic fit RMS = 51.69 px" in text
+    assert "Branch-line angle RMS = 0.73 deg" in text
     assert "Full-beam overlay RMS = 1239.15 px" in text
     assert "RMS residual = 1239.15 px" not in text
 

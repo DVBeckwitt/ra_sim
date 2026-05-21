@@ -3810,26 +3810,6 @@ def _headless_geometry_runtime_is_saved_manual_caked_candidate(
     )
 
 
-def _headless_geometry_dataset_entries(prepared_run: object) -> list[dict[str, object]]:
-    entries: list[dict[str, object]] = []
-    for dataset in (
-        getattr(prepared_run, "current_dataset", None),
-        *(getattr(prepared_run, "dataset_infos", None) or ()),
-    ):
-        if not isinstance(dataset, Mapping):
-            continue
-        for row_key in (
-            "measured_for_fit",
-            "initial_pairs_display",
-            "manual_point_pairs",
-            "provider_pairs",
-        ):
-            for entry in dataset.get(row_key, ()) or ():
-                if isinstance(entry, Mapping):
-                    entries.append(dict(entry))
-    return entries
-
-
 def _headless_geometry_entry_has_fixed_manual_caked_qr(entry: Mapping[str, object]) -> bool:
     return gui_geometry_fit.geometry_fit_entry_has_fixed_manual_caked_qr(entry)
 
@@ -3858,108 +3838,6 @@ def _infer_headless_saved_manual_caked_defaults(
         seed_policy if seed_policy is not None else HEADLESS_GEOMETRY_FIT_SEED_POLICY_DIRECT
     )
     return resolved_active, resolved_seed_policy, True
-
-
-def _headless_geometry_fixed_manual_caked_qr_row_count(prepared_run: object) -> int:
-    return gui_geometry_fit.geometry_fit_fixed_manual_caked_qr_row_count(
-        current_dataset=getattr(prepared_run, "current_dataset", None),
-        dataset_infos=getattr(prepared_run, "dataset_infos", None),
-    )
-
-
-def _set_headless_caked_point_only_projection(runtime_cfg: dict[str, object]) -> None:
-    solver = _headless_runtime_solver_mapping(runtime_cfg)
-    solver[_HEADLESS_GEOMETRY_FIT_POINT_ONLY_FLAG] = True
-    runtime_cfg["solver"] = solver
-    optimizer_cfg = runtime_cfg.get("optimizer")
-    optimizer = dict(optimizer_cfg) if isinstance(optimizer_cfg, Mapping) else dict(solver)
-    optimizer[_HEADLESS_GEOMETRY_FIT_POINT_ONLY_FLAG] = True
-    runtime_cfg["optimizer"] = optimizer
-
-
-def _cap_headless_solver_nfev(runtime_cfg: dict[str, object], max_nfev: int) -> None:
-    for section_name in ("solver", "optimizer"):
-        section_cfg = runtime_cfg.get(section_name)
-        section = dict(section_cfg) if isinstance(section_cfg, Mapping) else {}
-        current_raw = section.get("max_nfev")
-        try:
-            current = int(current_raw)
-        except Exception:
-            current = int(max_nfev)
-        if current <= 0:
-            current = int(max_nfev)
-        section["max_nfev"] = min(int(current), int(max_nfev))
-        runtime_cfg[section_name] = section
-
-
-def _apply_headless_saved_manual_caked_lean_runtime(
-    runtime_cfg: dict[str, object],
-    *,
-    max_nfev: int,
-    seed_multistart: bool,
-) -> None:
-    solver = _headless_runtime_solver_mapping(runtime_cfg)
-    solver["manual_point_fit_mode"] = True
-    solver["dynamic_point_geometry_fit"] = True
-    solver["seed_multistart"] = bool(seed_multistart)
-    solver["seed_multistart_enabled"] = bool(seed_multistart)
-    solver[_HEADLESS_GEOMETRY_FIT_POINT_ONLY_FLAG] = True
-    solver["max_nfev"] = int(max_nfev)
-    solver["min_max_nfev"] = 1
-    solver["loss"] = "linear"
-    solver["f_scale_px"] = 1.0
-    solver["weighted_matching"] = False
-    solver["use_measurement_uncertainty"] = False
-    solver["anisotropic_measurement_uncertainty"] = False
-    solver["q_group_line_constraints"] = False
-    solver["q_group_line_constraints_enabled"] = False
-    solver["_headless_accept_caked_angular_metric_without_pixel_threshold"] = True
-    solver["workers"] = solver.get("workers", "auto")
-    solver["parallel_mode"] = "off"
-    solver["worker_numba_threads"] = 0
-    runtime_cfg["solver"] = solver
-    runtime_cfg["optimizer"] = dict(solver)
-    seed_search_cfg = runtime_cfg.get("seed_search")
-    seed_search = dict(seed_search_cfg) if isinstance(seed_search_cfg, Mapping) else {}
-    seed_search["enabled"] = bool(seed_multistart)
-    runtime_cfg["seed_search"] = seed_search
-    runtime_cfg["projection_view_mode"] = "caked"
-    runtime_cfg["use_numba"] = bool(runtime_cfg.get("use_numba", False))
-    runtime_cfg["allow_unsafe_runtime"] = False
-    for feature_key in ("full_beam_polish", "ridge_refinement", "image_refinement"):
-        runtime_cfg.pop(feature_key, None)
-    discrete = (
-        dict(runtime_cfg.get("discrete_modes", {}))
-        if isinstance(runtime_cfg.get("discrete_modes"), Mapping)
-        else {}
-    )
-    discrete["enabled"] = False
-    runtime_cfg["discrete_modes"] = discrete
-    ident = (
-        dict(runtime_cfg.get("identifiability", {}))
-        if isinstance(runtime_cfg.get("identifiability"), Mapping)
-        else {}
-    )
-    ident["enabled"] = False
-    ident.pop("auto_freeze", None)
-    ident.pop("selective_thaw", None)
-    ident.pop("adaptive_regularization", None)
-    runtime_cfg["identifiability"] = ident
-
-
-def _enforce_headless_gamma_bounds(
-    runtime_cfg: dict[str, object],
-    active_var_names: Sequence[object],
-) -> None:
-    active_names = {str(name) for name in active_var_names}
-    gamma_names = [name for name in ("gamma", "Gamma") if name in active_names]
-    if not gamma_names:
-        return
-    bounds_cfg = runtime_cfg.get("bounds")
-    bounds = dict(bounds_cfg) if isinstance(bounds_cfg, Mapping) else {}
-    for name in gamma_names:
-        bounds[name] = [-90.0, 90.0]
-    runtime_cfg["bounds"] = bounds
 
 
 def _apply_headless_saved_manual_caked_budget(
