@@ -51,6 +51,9 @@
     manual caked geometry fits in both GUI and headless saved-state routes,
     while keeping single-branch or branch-ambiguous groups out of the line
     constraint path.
+  - Fixed a locked Qr/Qz caked preflight timeout race so finite projected
+    selected rows can proceed to the dynamic caked fit while full caked view
+    storage remains deferred for display/cache persistence.
   - Fixed locked manual Qr/Qz geometry fits whose reduced hit-table rows lost
     top-level full-reflection fields even though the canonical provider identity
     still carried them; the matcher now recovers unique `m,L` branch rows from

@@ -1613,6 +1613,31 @@ Locked Qr/Qz handoff simplification follow-up, 2026-05-21:
 - Shipping status: safe as an internal refactor slice. Rollback is a normal git
   revert of the simplification and this tracking update.
 
+Locked Qr/Qz caked-storage timeout race, 2026-05-21:
+
+- Bug/error status: fixed for the preflight race where selected locked Qr/Qz
+  rows had already reached `source_cache_project_rows_ready` with finite exact
+  caked fit-space anchors, but full caked view storage timed out about 0.1 s
+  before `source_cache_full_cake_ready` and blocked dataset build.
+- The runtime now separates locked-Qr row projection readiness from full caked
+  image storage readiness. For locked-Qr dynamic/caked fits, finite projected
+  selected rows are sufficient for the solver; full caked storage may remain
+  deferred/background-pending for display/cache persistence.
+- True projection failures still fail closed with locked-Qr projection-specific
+  reasons instead of the old combined projection/storage timeout message.
+- Diagnostics now emit `locked_qr_projection_readiness` with expected,
+  projected, finite row counts, storage status, and whether a storage timeout is
+  fatal for the fit path.
+- Feature status: no new GUI control, CLI flag, public API, config key,
+  saved-state schema, artifact schema, dependency, CI workflow, deprecation, or
+  migration.
+- Validation: focused projection-readiness, storage-timeout, handoff/caked
+  classification, locked-Qr dynamic/line-angle tests, and `python -m
+  ra_sim.dev check` pass.
+- Shipping status: ready as a normal bug-fix slice. Rollback is a normal git
+  revert of the runtime preflight split, focused regressions, and this tracking
+  update.
+
 Do not use `run_geometry_fit_quality_baseline.py` as the first optimizer debug
 tool. Run it only after the ladder identifies a stable parameter set.
 

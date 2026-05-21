@@ -18187,6 +18187,133 @@ def geometry_fit_fixed_manual_caked_qr_row_count(
     return max(int(prepared_row_count), int(manual_row_count))
 
 
+def _locked_qr_fit_space_projection_readiness(
+    projected_rows: Sequence[object] | None,
+    *,
+    required_pairs: Sequence[Mapping[str, object]] | None,
+) -> dict[str, object]:
+    """Summarize whether locked Qr/Qz rows have finite caked fit-space anchors."""
+
+    locked_required_pairs = [
+        dict(entry)
+        for entry in (required_pairs or ())
+        if isinstance(entry, Mapping)
+        and geometry_fit_entry_has_fixed_manual_caked_qr(
+            entry,
+            require_explicit_branch=True,
+        )
+    ]
+    expected_count = int(len(locked_required_pairs))
+    if expected_count <= 0:
+        return {
+            "expected_locked_qr_rows": 0,
+            "projected_locked_qr_rows": 0,
+            "finite_locked_qr_rows": 0,
+            "missing_locked_qr_rows": [],
+            "nonfinite_locked_qr_rows": [],
+            "fit_space_projection_ready": False,
+            "caked_view_storage_required_for_fit": True,
+            "failure_reason": None,
+            "validation": {},
+        }
+
+    rows = [dict(entry) for entry in (projected_rows or ()) if isinstance(entry, Mapping)]
+    validation = validate_geometry_fit_live_source_rows(
+        rows,
+        required_pairs=locked_required_pairs,
+        require_canonical_required_pairs=True,
+        require_caked_fit_space=True,
+    )
+    resolved_pairs = [
+        dict(entry)
+        for entry in (validation.get("resolved_pairs", ()) or ())
+        if isinstance(entry, Mapping)
+    ]
+    pair_failures = [
+        dict(entry)
+        for entry in (validation.get("pair_failures", ()) or ())
+        if isinstance(entry, Mapping)
+    ]
+
+    def _row_matches_pair(row: Mapping[str, object], pair: Mapping[str, object]) -> bool:
+        if _geometry_fit_entry_source_label(row) != _geometry_fit_entry_source_label(pair):
+            return False
+        row_group = _geometry_fit_group_identity(row)
+        pair_group = _geometry_fit_group_identity(pair)
+        if pair_group is not None and row_group != pair_group:
+            return False
+        row_hkl = _geometry_fit_normalized_hkl(row.get("hkl"))
+        pair_hkl = _geometry_fit_normalized_hkl(pair.get("hkl"))
+        if pair_hkl is not None and row_hkl != pair_hkl:
+            return False
+        pair_branch = _geometry_fit_source_branch_index(pair)
+        row_branch = _geometry_fit_source_branch_index(row)
+        if pair_branch in {0, 1} and row_branch in {0, 1} and int(row_branch) != int(pair_branch):
+            return False
+        pair_reflection_row_key = _geometry_fit_source_reflection_row_key(pair)
+        if (
+            pair_reflection_row_key is not None
+            and _geometry_fit_source_reflection_row_key(row) != pair_reflection_row_key
+        ):
+            return False
+        return True
+
+    def _row_has_caked_projection_fields(row: Mapping[str, object]) -> bool:
+        return any(
+            key in row
+            for key in (
+                "background_two_theta_deg",
+                "background_phi_deg",
+                "caked_x",
+                "caked_y",
+                "raw_caked_x",
+                "raw_caked_y",
+            )
+        )
+
+    locked_pairs_by_id = {
+        str(entry.get("pair_id") or f"pair[{idx}]"): entry
+        for idx, entry in enumerate(locked_required_pairs)
+    }
+    missing_pair_ids: list[str] = []
+    nonfinite_pair_ids: list[str] = []
+    for failure in pair_failures:
+        pair_id = str(failure.get("pair_id") or "")
+        if not pair_id:
+            continue
+        if str(failure.get("reason") or "") != "missing_required_caked_fit_space":
+            missing_pair_ids.append(pair_id)
+            continue
+        pair = locked_pairs_by_id.get(pair_id)
+        if not isinstance(pair, Mapping):
+            missing_pair_ids.append(pair_id)
+            continue
+        matching_rows = [row for row in rows if _row_matches_pair(row, pair)]
+        if any(_row_has_caked_projection_fields(row) for row in matching_rows):
+            nonfinite_pair_ids.append(pair_id)
+        else:
+            missing_pair_ids.append(pair_id)
+    projected_count = int(len(resolved_pairs))
+    ready = bool(validation.get("valid", False)) and projected_count == expected_count
+    if ready:
+        failure_reason = None
+    elif nonfinite_pair_ids:
+        failure_reason = "locked_qr_fit_space_projection_nonfinite"
+    else:
+        failure_reason = "locked_qr_fit_space_projection_missing"
+    return {
+        "expected_locked_qr_rows": int(expected_count),
+        "projected_locked_qr_rows": int(projected_count),
+        "finite_locked_qr_rows": int(projected_count),
+        "missing_locked_qr_rows": missing_pair_ids,
+        "nonfinite_locked_qr_rows": nonfinite_pair_ids,
+        "fit_space_projection_ready": bool(ready),
+        "caked_view_storage_required_for_fit": False,
+        "failure_reason": failure_reason,
+        "validation": validation,
+    }
+
+
 def geometry_fit_fixed_manual_caked_qr_two_branch_group_count(
     *,
     current_dataset: Mapping[str, object] | None = None,

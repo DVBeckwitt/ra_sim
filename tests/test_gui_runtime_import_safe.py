@@ -3918,8 +3918,10 @@ def test_runtime_impl_worker_geometry_fit_rebuilds_source_rows_on_demand() -> No
     assert "def _rebuild_source_rows_for_background_worker(" in source
     assert "geometry_manual_rebuild_source_rows_for_background=(" in source
     assert "_rebuild_source_rows_for_background_worker" in source
-    assert helper_source.count("raise RuntimeError(") == 5
+    assert helper_source.count("raise RuntimeError(") >= 5
     assert "exact caked projector unavailable" in helper_source
+    assert "locked Qr/Qz" in helper_source
+    assert "projected rows" in helper_source
     assert "exact caked fit-space projection/storage unavailable" in helper_source
     assert "exact caked fit-space projection/storage timed out" in helper_source
     assert "mixed detector/caked manual fit spaces are not supported" in helper_source
@@ -17512,6 +17514,134 @@ def test_runtime_session_source_cache_caked_timeout_does_not_hide_row_cache_succ
     assert kinds.index("source_cache_build_ready") < kinds.index("source_cache_caked_view_timeout")
 
 
+def test_runtime_session_locked_qr_projection_ready_storage_timeout_does_not_fail_preflight(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    dataset_calls: list[int] = []
+    job = _make_geometry_fit_worker_job(runtime_session)
+    caked_row = dict(
+        _geometry_fit_worker_live_row(),
+        background_index=0,
+        background_two_theta_deg=1.0,
+        background_phi_deg=2.0,
+        caked_x=1.0,
+        caked_y=2.0,
+    )
+    locked_pair = dict(
+        _geometry_fit_worker_required_pair(),
+        background_index=0,
+        fit_source_resolution_kind="provider_fixed_source_local",
+        optimizer_request_has_fixed_source=True,
+    )
+    perf_lock = threading.Lock()
+    perf_state = {"value": 0.0}
+
+    def _fake_perf_counter() -> float:
+        with perf_lock:
+            perf_state["value"] += 0.25
+            return float(perf_state["value"])
+
+    job["projection_view_mode"] = "caked"
+    job["projection_view_signature"] = {
+        "mode": "caked",
+        "available": True,
+        "background_index": 0,
+        "current_background_index": 0,
+        "detector_shape": [4, 4],
+        "projection_payload_digest": "projection-digest",
+    }
+    job["projection_view_signature_by_background"] = {0: dict(job["projection_view_signature"])}
+    job["projection_payload_by_background"] = {
+        0: _geometry_fit_worker_caked_payload(
+            runtime_session,
+            background_value=1.0,
+            radial_values=[1.0, 2.0],
+            azimuth_values=[3.0, 4.0],
+        )
+    }
+    job["manual_caked_fit_space_required_by_background"] = {0: True}
+    job["manual_fit_space_by_background"] = {0: "detector"}
+    job["manual_pairs_by_background"] = {0: [locked_pair]}
+    job["live_rows_by_background"] = {0: [caked_row]}
+    job["live_rows_signature_by_background"] = {0: ("sig", 0)}
+
+    monkeypatch.setattr(runtime_session, "perf_counter", _fake_perf_counter)
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            geometry_fit_caking_ai_cache={},
+            analysis_preview_bins=(4, 4),
+            ai_cache={},
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_size", 4, raising=False)
+    monkeypatch.setattr(runtime_session, "DISPLAY_ROTATE_K", 0, raising=False)
+    monkeypatch.setattr(runtime_session, "_build_analysis_integrator", lambda _cfg: object())
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_fit_caked_roi_selection",
+        lambda *_args, **_kwargs: {
+            "enabled": False,
+            "valid": False,
+            "pixel_count": 0,
+            "fraction": 0.0,
+            "half_width_px": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "temporary_numba_thread_limit",
+        lambda *_args, **_kwargs: contextlib.nullcontext(),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "caking",
+        lambda *_args, **_kwargs: threading.Event().wait(1.0) or object(),
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_manual_fit_dataset",
+        lambda background_index, **_kwargs: dataset_calls.append(int(background_index)) or {},
+    )
+
+    def _prepare_geometry_fit_run(**kwargs):
+        kwargs["build_dataset"](
+            0,
+            theta_base=0.0,
+            base_fit_params={"theta_initial": 0.0},
+            orientation_cfg={},
+            manual_fit_requires_caked_space=True,
+            stage_callback=kwargs.get("stage_callback"),
+        )
+        return runtime_session.gui_geometry_fit.GeometryFitPreparationResult()
+
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "prepare_geometry_fit_run",
+        _prepare_geometry_fit_run,
+    )
+
+    action_result = runtime_session._run_async_geometry_fit_worker_job(job)
+    events = _drain_geometry_fit_worker_events(job["event_queue"])
+    kinds = [str(event.get("kind")) for event in events]
+    readiness_events = [
+        dict(event.get("payload") or {})
+        for event in events
+        if str(event.get("kind")) == "locked_qr_projection_readiness"
+    ]
+
+    assert action_result.error_text is None
+    assert dataset_calls == [0]
+    assert "source_cache_caked_view_timeout" in kinds
+    assert readiness_events
+    assert readiness_events[-1]["fit_space_projection_ready"] is True
+    assert readiness_events[-1]["storage_timeout_fatal"] is False
+    assert readiness_events[-1]["caked_view_storage_status"] == "deferred"
+
+
 def test_runtime_session_manual_caked_source_cache_timeout_fails_before_dataset_build(
     monkeypatch,
 ) -> None:
@@ -17525,10 +17655,12 @@ def test_runtime_session_manual_caked_source_cache_timeout_fails_before_dataset_
         caked_x=1.0,
         caked_y=2.0,
     )
-    caked_pair = dict(
-        _geometry_fit_worker_required_pair(),
-        background_index=0,
-    )
+    caked_pair = {
+        "pair_id": "bg0:manual-caked",
+        "overlay_match_index": 0,
+        "hkl": (1, 0, 0),
+        "background_index": 0,
+    }
     perf_lock = threading.Lock()
     perf_state = {"value": 0.0}
 
