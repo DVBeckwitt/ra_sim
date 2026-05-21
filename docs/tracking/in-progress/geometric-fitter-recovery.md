@@ -1470,6 +1470,34 @@ Branch-proven duplicate HKL resolver, 2026-05-21:
 - Shipping status: ready as a normal bug-fix slice. Rollback is a normal git
   revert of the resolver and regression-test changes.
 
+Locked Qr/Qz caked authority mismatch, 2026-05-21:
+
+- Bug/error status: fixed for the follow-up dynamic-caked failure where
+  preflight and final matching both kept the two locked pairs, but the predicted
+  native detector point and refined simulated native detector point were equal
+  while their caked coordinates disagreed by tens of degrees.
+- Root cause: the handoff audit could keep stale saved
+  `simulated_two_theta_deg/simulated_phi_deg` as `fit_prediction_caked_deg`
+  even when an exact detector-native to caked projection was available for the
+  same native point.
+- The caked objective now prefers `exact_projector_from_native` for locked Qr
+  predictions and preserves the stale handoff caked value only as diagnostic
+  provenance. The optimizer records a
+  `locked_qr_prediction_caked_authority_mismatch` diagnostic instead of letting
+  this shape look like a physical/manual-pick outlier.
+- The async geometry-fit job now merges job-local fallback source rows with
+  existing live preview rows by q-group/HKL/branch/source identity, so fallback
+  repair does not delete unrelated live rows such as disordered-phase rows.
+- Feature status: no new GUI control, CLI flag, public API, config key,
+  saved-state schema, artifact schema, dependency, CI workflow, deprecation, or
+  migration. This is a routing/provenance bug fix inside existing interfaces.
+- Validation: `python -m pytest -q tests/test_geometry_fitting.py -k "locked_qr or caked_authority or detector_frame or phi_wrap"`,
+  `python -m pytest -q tests/test_geometry_fit_live_rows_signature_handoff.py tests/test_geometry_fit_manual_fit_space_classification.py tests/test_gui_geometry_fit_workflow.py -k "locked or caked or phi or handoff"`,
+  and `python -m ra_sim.dev check` pass.
+- Shipping status: ready as a normal bug-fix slice. Rollback is a normal git
+  revert of the authority-precedence, live-row merge, focused tests, and this
+  tracking update.
+
 Do not use `run_geometry_fit_quality_baseline.py` as the first optimizer debug
 tool. Run it only after the ladder identifies a stable parameter set.
 

@@ -233,7 +233,9 @@ def test_geometry_fit_job_includes_live_rows_for_current_background(monkeypatch,
         lambda: {"cache_source": "stored_hit_tables"},
         raising=False,
     )
-    monkeypatch.setattr(runtime_session, "_live_cache_inventory_snapshot", lambda: {}, raising=False)
+    monkeypatch.setattr(
+        runtime_session, "_live_cache_inventory_snapshot", lambda: {}, raising=False
+    )
     monkeypatch.setattr(
         runtime_session,
         "_geometry_manual_last_source_snapshot_diagnostics",
@@ -251,6 +253,11 @@ def test_geometry_fit_job_includes_live_rows_for_current_background(monkeypatch,
 
     assert list(job["live_rows_by_background"]) == [0]
     assert len(job["live_rows_by_background"][0]) == 2
+    assert job["live_rows_cache_metadata_by_background"][0]["live_rows_raw_count"] == 2
+    assert job["live_rows_cache_metadata_by_background"][0]["live_rows_source_counts"] == {
+        "disordered_phase": 1,
+        "primary": 1,
+    }
     assert job["live_rows_signature_by_background"][0] == ("requested", 0)
     assert job["live_rows_handoff_diagnostics"]["live_rows_current_background_count"] == 2
 

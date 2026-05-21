@@ -7087,6 +7087,9 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         predicted_detector_point, predicted_detector_source = (
             _fit_prediction_detector_point_for_frame(fit_prediction, observed_detector_frame)
         )
+        predicted_native_point, _predicted_native_source = _fit_prediction_detector_point_for_frame(
+            fit_prediction, "native_detector"
+        )
         mixed_display_native_distance = float("nan")
         native_native_distance = float("nan")
         display_display_distance = float("nan")
@@ -7104,9 +7107,6 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             observed_display_point, _observed_display_reason = _detector_anchor_from_entry(
                 measured_entry,
                 ("x", "y", "resolved_display_anchor"),
-            )
-            predicted_native_point, _predicted_native_source = (
-                _fit_prediction_detector_point_for_frame(fit_prediction, "native_detector")
             )
             predicted_display_point, _predicted_display_source = (
                 _fit_prediction_detector_point_for_frame(fit_prediction, "display_detector")
@@ -7204,6 +7204,21 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             observed=contract_observed,
             objective_space="caked_deg",
         )
+        caked_authority_diagnostic = _locked_qr_prediction_caked_authority_mismatch(
+            {
+                **diag,
+                "fit_prediction_detector_native_px": predicted_native_point,
+                "sim_refined_detector_native_px": fit_prediction.get(
+                    "sim_refined_detector_native_px"
+                ),
+                "fit_prediction_caked_deg": fit_prediction.get("fit_prediction_caked_deg"),
+                "sim_refined_caked_deg": fit_prediction.get("sim_refined_caked_deg"),
+                "fit_prediction_caked_authority": fit_prediction.get(
+                    "fit_prediction_caked_authority"
+                ),
+                "sim_refined_caked_authority": fit_prediction.get("sim_refined_caked_authority"),
+            }
+        )
         qr_fit_surface_contracts.append(qr_fit_contract)
         angular_residual_rows.append(
             {
@@ -7246,6 +7261,10 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                 "source_authority_match": bool(qr_fit_contract.get("source_authority_match")),
                 "visual_objective_surface_match": bool(
                     qr_fit_contract.get("visual_objective_surface_match")
+                ),
+                "locked_qr_prediction_caked_authority_diagnostic": (caked_authority_diagnostic),
+                "locked_qr_prediction_caked_authority_reason": (
+                    caked_authority_diagnostic.get("reason")
                 ),
             }
         )
@@ -19191,6 +19210,65 @@ def _wrap_delta_phi_deg(delta: float) -> float:
     return _wrap_phi_deg(delta)
 
 
+def _locked_qr_prediction_caked_authority_mismatch(
+    entry: Mapping[str, object],
+    *,
+    native_tol_px: float = 1.0,
+    caked_tol_deg: float = 2.0,
+) -> Dict[str, object]:
+    fit_native = _finite_pair(
+        entry.get("fit_prediction_detector_native_px", entry.get("predicted_detector_native_px"))
+    )
+    sim_native = _finite_pair(entry.get("sim_refined_detector_native_px"))
+    fit_caked = _fit_qr_caked_pair_from_entry(entry, "fit_prediction_caked_deg")
+    if fit_caked is None:
+        fit_caked = _fit_qr_caked_pair_from_entry(entry, "predicted_caked_deg")
+    sim_caked = _fit_qr_caked_pair_from_entry(entry, "sim_refined_caked_deg")
+
+    native_delta = (
+        _detector_pair_distance(fit_native, sim_native)
+        if fit_native is not None and sim_native is not None
+        else float("nan")
+    )
+    if fit_caked is not None and sim_caked is not None:
+        caked_delta = [
+            float(fit_caked[0] - sim_caked[0]),
+            float(_wrap_phi_deg(float(fit_caked[1] - sim_caked[1]))),
+        ]
+        caked_norm = float(math.hypot(float(caked_delta[0]), float(caked_delta[1])))
+    else:
+        caked_delta = None
+        caked_norm = float("nan")
+
+    mismatch = bool(
+        np.isfinite(native_delta)
+        and float(native_delta) <= float(native_tol_px)
+        and caked_delta is not None
+        and (
+            abs(float(caked_delta[0])) > float(caked_tol_deg)
+            or abs(float(caked_delta[1])) > float(caked_tol_deg)
+        )
+    )
+    reason = "locked_qr_prediction_caked_authority_mismatch" if mismatch else None
+    return {
+        "reason": reason,
+        "classification": reason or "locked_qr_prediction_caked_authority_consistent",
+        "pair_id": entry.get("pair_id"),
+        "hkl": _dynamic_reanchor_jsonable(entry.get("hkl")),
+        "q_group_key": _dynamic_reanchor_jsonable(entry.get("q_group_key")),
+        "source_branch_index": entry.get("source_branch_index"),
+        "native_a": _dynamic_reanchor_jsonable(fit_native),
+        "native_b": _dynamic_reanchor_jsonable(sim_native),
+        "caked_a": _dynamic_reanchor_jsonable(fit_caked),
+        "caked_b": _dynamic_reanchor_jsonable(sim_caked),
+        "native_delta_px": float(native_delta),
+        "caked_delta_deg": caked_delta,
+        "caked_delta_norm_deg": float(caked_norm),
+        "authority_a": entry.get("fit_prediction_caked_authority"),
+        "authority_b": entry.get("sim_refined_caked_authority"),
+    }
+
+
 def _fit_qr_first_caked_pair_payload(
     entry: Mapping[str, object],
     *,
@@ -20752,6 +20830,16 @@ def _resolve_qr_fit_prediction_from_trial_params(
             {
                 "available": True,
                 "fit_prediction_caked_deg": list(live_payload),
+                "fit_prediction_caked_authority": (
+                    "saved_handoff_caked"
+                    if retained_static_caked_prediction
+                    else "dynamic_trial_projection"
+                ),
+                "sim_refined_caked_authority": (
+                    "saved_handoff_caked"
+                    if retained_static_caked_prediction
+                    else "dynamic_trial_projection"
+                ),
                 "optimizer_simulated_source_two_theta_phi": list(live_payload),
                 "optimizer_source_source": live_source,
                 "objective_source_authority": objective_authority,
@@ -20854,16 +20942,21 @@ def _resolve_qr_fit_prediction_from_trial_params(
             display_px = [float(sim_col), float(sim_row)]
     else:
         display_px = [float(sim_col), float(sim_row)]
+    projected_native_px = [
+        float(np.asarray(projection_meta.get("native_cols", [np.nan]))[0]),
+        float(np.asarray(projection_meta.get("native_rows", [np.nan]))[0]),
+    ]
     out.update(
         {
             "sim_nominal_detector_px": list(display_px),
             "sim_nominal_detector_display_px": list(display_px),
             "sim_nominal_projection_input_px": [float(sim_col), float(sim_row)],
             "sim_nominal_projection_input_frame": input_frame,
-            "sim_nominal_native_px": [
-                float(np.asarray(projection_meta.get("native_cols", [np.nan]))[0]),
-                float(np.asarray(projection_meta.get("native_rows", [np.nan]))[0]),
-            ],
+            "sim_nominal_native_px": list(projected_native_px),
+            "sim_nominal_detector_native_px": list(projected_native_px),
+            "sim_refined_detector_native_px": list(projected_native_px),
+            "fit_prediction_detector_native_px": list(projected_native_px),
+            "fit_prediction_detector_native_px_source": "exact_projector_from_native",
             "caked_projection_signature": projection_meta.get("fit_space_local_params_signature"),
             "cake_bundle_signature": projection_meta.get("cake_bundle_signature"),
             "fit_space_projector_kind": projection_meta.get("fit_space_projector_kind"),
@@ -20972,6 +21065,8 @@ def _resolve_qr_fit_prediction_from_trial_params(
                     float(projected_nominal_caked[0]),
                     float(projected_nominal_caked[1]),
                 ],
+                "fit_prediction_caked_authority": "exact_projector_from_native",
+                "sim_refined_caked_authority": "exact_projector_from_native",
                 "optimizer_simulated_source_two_theta_phi": [
                     float(projected_nominal_caked[0]),
                     float(projected_nominal_caked[1]),
@@ -21449,6 +21544,10 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 float(raw_refined[1]),
             ],
             "sim_refined_caked_deg": [float(refined[0]), float(refined[1])],
+            "fit_prediction_caked_deg": [float(refined[0]), float(refined[1])],
+            "fit_prediction_caked_authority": "caked_image_refinement",
+            "sim_refined_caked_authority": "caked_image_refinement",
+            "optimizer_simulated_source_two_theta_phi": [float(refined[0]), float(refined[1])],
             "sim_refinement_delta_caked_deg": [float(delta[0]), float(delta[1])],
             "sim_refinement_delta_caked_norm_deg": float(
                 math.hypot(float(delta[0]), float(delta[1]))

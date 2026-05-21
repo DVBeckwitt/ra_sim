@@ -274,6 +274,105 @@ def test_qr_handoff_audit_projects_detector_origin_observed_caked_anchor() -> No
     assert ("simulated", prediction_native[0], prediction_native[1]) in projector_calls
 
 
+def test_locked_qr_prediction_caked_prefers_exact_projection_over_nominal_handoff() -> None:
+    q_group_key = ("q_group", "primary", 1, 10)
+    hkl = (-1, 0, 10)
+    prediction_native = (1097.0, 1920.0)
+    stale_nominal_caked = (39.718, 36.750)
+    exact_projected_caked = (32.681, 132.250)
+    projector_calls: list[tuple[str, float, float]] = []
+
+    def projector(cols, rows, *, local_params, anchor_kind, input_frame):
+        del local_params
+        col = float(np.asarray(cols, dtype=float).reshape(-1)[0])
+        row = float(np.asarray(rows, dtype=float).reshape(-1)[0])
+        projector_calls.append((str(anchor_kind), col, row))
+        return {
+            "two_theta_deg": np.asarray([exact_projected_caked[0]], dtype=np.float64),
+            "phi_deg": np.asarray([exact_projected_caked[1]], dtype=np.float64),
+            "fit_space_source": "dataset_fit_space_projector",
+            "input_frame": str(input_frame),
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "cake_bundle_signature": "authority-test",
+            "valid": True,
+            "invalid_reason": None,
+            "native_frame_conversion_source": "identity_native_detector",
+            "native_frame_conversion_count": 0,
+            "native_cols": np.asarray([col], dtype=np.float64),
+            "native_rows": np.asarray([row], dtype=np.float64),
+        }
+
+    dataset = {
+        "provider_pairs": [
+            {
+                "q_group_key": q_group_key,
+                "hkl": hkl,
+                "source_branch_index": 0,
+                "source_table_index": 160,
+                "source_row_index": 42,
+                "source_peak_index": 0,
+            }
+        ],
+        "manual_point_pairs": [
+            {
+                "q_group_key": q_group_key,
+                "hkl": hkl,
+                "source_branch_index": 0,
+                "source_table_index": 160,
+                "source_row_index": 42,
+            }
+        ],
+        "measured_display": [
+            {
+                "q_group_key": q_group_key,
+                "hkl": hkl,
+                "source_branch_index": 0,
+                "x": 1089.213,
+                "y": 1092.536,
+            }
+        ],
+        "measured_for_fit": [
+            {
+                "q_group_key": q_group_key,
+                "hkl": hkl,
+                "source_branch_index": 0,
+                "background_detector_x": 1083.270,
+                "background_detector_y": 1915.182,
+                "background_two_theta_deg": 33.063,
+                "background_phi_deg": 130.754,
+            }
+        ],
+        "initial_pairs_display": [
+            {
+                "q_group_key": q_group_key,
+                "hkl": hkl,
+                "source_branch_index": 0,
+                "sim_native": prediction_native,
+                "simulated_two_theta_deg": stale_nominal_caked[0],
+                "simulated_phi_deg": stale_nominal_caked[1],
+            }
+        ],
+        "source_rows_for_trace": [],
+        "spec": {
+            "fit_space_projector": projector,
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "_manual_caked_fit_space_required": True,
+            "solver_requested_objective_space": "caked_deg",
+        },
+    }
+
+    rows = geometry_fit.build_geometry_fit_qr_handoff_audit_rows(dataset)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["fit_prediction_detector_native_px"] == pytest.approx(prediction_native)
+    assert row["fit_prediction_caked_deg"] == pytest.approx(exact_projected_caked)
+    assert row["fit_prediction_caked_authority"] == "exact_projector_from_native"
+    assert row["fit_prediction_caked_raw_handoff_deg"] == pytest.approx(stale_nominal_caked)
+    assert row["locked_qr_prediction_caked_authority_reason"] is None
+    assert ("simulated", prediction_native[0], prediction_native[1]) in projector_calls
+
+
 class _DummyVar:
     def __init__(self, value):
         self._value = value

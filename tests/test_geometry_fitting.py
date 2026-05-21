@@ -5286,6 +5286,76 @@ def test_dynamic_angular_phi_wrap_uses_wrapped_delta_for_summary() -> None:
     assert worst["angular_residual_norm_deg"] == pytest.approx(2.0)
 
 
+def test_locked_qr_same_native_prediction_caked_authority_mismatch_is_detected() -> None:
+    diagnostic = opt._locked_qr_prediction_caked_authority_mismatch(
+        {
+            "pair_id": "branch-0",
+            "hkl": (-1, 0, 10),
+            "q_group_key": ("q_group", "primary", 1, 10),
+            "source_branch_index": 0,
+            "fit_prediction_detector_native_px": (1097.0, 1920.0),
+            "sim_refined_detector_native_px": (1097.0, 1920.0),
+            "fit_prediction_caked_deg": (39.718, 36.750),
+            "sim_refined_caked_deg": (32.681, 132.250),
+            "fit_prediction_caked_authority": "saved_handoff_caked",
+            "sim_refined_caked_authority": "exact_projector_from_native",
+        }
+    )
+
+    assert diagnostic["reason"] == "locked_qr_prediction_caked_authority_mismatch"
+    assert diagnostic["native_delta_px"] == pytest.approx(0.0)
+    assert diagnostic["caked_delta_deg"] == pytest.approx([7.037, -95.5])
+    assert diagnostic["classification"] != "manual_outliers_or_physical_bad_fit"
+
+
+def test_dynamic_angular_phi_residual_wraps_across_180_boundary() -> None:
+    observed_phi = -179.0
+    predicted_phi = 179.0
+
+    assert abs(opt._wrap_phi_deg(predicted_phi - observed_phi)) == pytest.approx(2.0)
+
+
+def test_locked_qr_plus_minus_180_does_not_hide_authority_mismatch() -> None:
+    pairs = [
+        ((39.718, 36.750), (32.681, 132.250)),
+        ((41.634, -38.250), (38.605, 39.250)),
+    ]
+
+    for transform in (
+        lambda phi: phi,
+        lambda phi: opt._wrap_phi_deg(phi + 180.0),
+        lambda phi: opt._wrap_phi_deg(phi - 180.0),
+    ):
+        residuals = []
+        for fit_prediction, sim_refined in pairs:
+            transformed_phi = transform(float(fit_prediction[1]))
+            residuals.append(
+                math.hypot(
+                    float(fit_prediction[0] - sim_refined[0]),
+                    opt._wrap_phi_deg(float(transformed_phi - sim_refined[1])),
+                )
+            )
+        assert max(residuals) > 10.0
+
+
+def test_locked_qr_hit_table_display_point_is_not_labeled_native_without_conversion() -> None:
+    payload = opt._fit_qr_detector_point_payload_from_source_row(
+        {
+            "hkl": (-1, 0, 10),
+            "q_group_key": ("q_group", "primary", 1, 10),
+            "source_branch_index": 0,
+            "display_col": 1097.0,
+            "display_row": 1920.0,
+        }
+    )
+
+    assert payload["input_frame"] == "fit_detector"
+    assert payload["display_px"] == pytest.approx([1097.0, 1920.0])
+    assert payload["native_px"] is None
+    assert payload["point"] == pytest.approx((1097.0, 1920.0))
+    assert payload["point_source"] == "display_col/display_row"
+
+
 def test_dynamic_dataset_evaluator_records_angular_rows_without_diagnostics() -> None:
     def source_rows_builder(*, local_params=None):
         del local_params

@@ -41580,6 +41580,39 @@ def _geometry_fit_hkl_from_row(row: Mapping[str, object]) -> tuple[int, int, int
     return None
 
 
+def _geometry_fit_live_source_row_merge_key(
+    row: Mapping[str, object],
+) -> tuple[object, ...] | None:
+    group_key = _geometry_fit_normalized_q_group_key(row.get("q_group_key"))
+    hkl = _geometry_fit_hkl_from_row(row)
+    try:
+        branch = int(row.get("source_branch_index"))
+    except Exception:
+        branch = None
+    table_index = row.get("source_table_index", row.get("source_reflection_index"))
+    row_index = row.get("source_row_index")
+    peak_index = row.get("source_peak_index")
+    source_label = row.get("source_label")
+    if (
+        group_key is None
+        and hkl is None
+        and table_index is None
+        and row_index is None
+        and peak_index is None
+        and source_label is None
+    ):
+        return None
+    return (
+        tuple(group_key) if group_key is not None else None,
+        tuple(hkl) if hkl is not None else None,
+        branch,
+        table_index,
+        row_index,
+        peak_index,
+        source_label,
+    )
+
+
 def _geometry_fit_copy_numeric_pair(
     row: dict[str, object],
     *,
@@ -42422,9 +42455,33 @@ def _build_geometry_fit_async_job(
             )
             live_rows_handoff_diagnostics.update(dict(fallback_diag))
             if fallback_rows:
-                live_rows_by_background[current_background_idx] = [
-                    dict(row) for row in fallback_rows
+                current_live_rows = [
+                    dict(row)
+                    for row in live_rows_by_background.get(current_background_idx, ())
+                    if isinstance(row, Mapping)
                 ]
+                if current_live_rows:
+                    merged_rows = list(current_live_rows)
+                    merged_key_indices: dict[tuple[object, ...], int] = {}
+                    for row_index, row in enumerate(merged_rows):
+                        key = _geometry_fit_live_source_row_merge_key(row)
+                        if key is not None:
+                            merged_key_indices.setdefault(key, int(row_index))
+                    for fallback_row in fallback_rows:
+                        fallback_copy = dict(fallback_row)
+                        key = _geometry_fit_live_source_row_merge_key(fallback_copy)
+                        if key is not None and key in merged_key_indices:
+                            merged_rows[int(merged_key_indices[key])] = fallback_copy
+                        else:
+                            if key is not None:
+                                merged_key_indices[key] = int(len(merged_rows))
+                            merged_rows.append(fallback_copy)
+                    live_rows_by_background[current_background_idx] = merged_rows
+                else:
+                    live_rows_by_background[current_background_idx] = [
+                        dict(row) for row in fallback_rows
+                    ]
+                payload_rows = live_rows_by_background.get(current_background_idx, ())
                 live_rows_cache_metadata_by_background[current_background_idx].update(
                     {
                         "cache_source": str(
@@ -42433,12 +42490,12 @@ def _build_geometry_fit_async_job(
                         "live_rows_cache_source": str(
                             fallback_diag.get("job_local_fallback_source") or "q_group_snapshot"
                         ),
-                        "live_rows_raw_count": int(len(fallback_rows)),
-                        "live_rows_payload_count": int(len(fallback_rows)),
+                        "live_rows_raw_count": int(len(payload_rows)),
+                        "live_rows_payload_count": int(len(payload_rows)),
                         "live_rows_signature_match": True,
                         "live_rows_signature_reason": "matched_job_local_snapshot",
                         "live_rows_source_counts": _geometry_fit_live_row_source_counts(
-                            fallback_rows
+                            payload_rows
                         ),
                         "geometry_fit_live_handoff_patch_marker": (
                             GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER

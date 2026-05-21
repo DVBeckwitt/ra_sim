@@ -34,6 +34,7 @@ from ra_sim.fitting.background_peak_matching import (
 from ra_sim.fitting.optimization import (
     _detector_pixels_to_fit_space,
     _fit_space_pixel_size_provenance,
+    _locked_qr_prediction_caked_authority_mismatch,
     _resolve_fixed_manual_qr_fit_prediction,
 )
 from ra_sim.gui import geometry_overlay as gui_geometry_overlay
@@ -3690,7 +3691,10 @@ def build_geometry_fit_qr_handoff_audit_rows(
             (initial_entry,),
             (("simulated_two_theta_deg", "simulated_phi_deg"),),
         )
-        fit_prediction_caked_from_handoff = fit_prediction_caked is not None
+        fit_prediction_caked_raw_handoff = fit_prediction_caked
+        fit_prediction_caked_authority = (
+            "saved_handoff_caked" if fit_prediction_caked is not None else None
+        )
         fit_prediction_caked_projection_reason = ""
         fit_prediction_projection_theta_initial = None
         if fit_prediction_native is not None:
@@ -3706,8 +3710,17 @@ def build_geometry_fit_qr_handoff_audit_rows(
                 )
             )
             fit_prediction_caked_projection_reason = str(projected_prediction_reason)
-            if projected_prediction_caked is not None and not fit_prediction_caked_from_handoff:
+            if (
+                projected_prediction_caked is not None
+                and solver_requested_objective_space == "caked_deg"
+            ):
                 fit_prediction_caked = projected_prediction_caked
+                fit_prediction_caked_authority = "exact_projector_from_native"
+            elif projected_prediction_caked is not None and fit_prediction_caked is None:
+                fit_prediction_caked = projected_prediction_caked
+                fit_prediction_caked_authority = "exact_projector_from_native"
+        if fit_prediction_caked_authority is None and fit_prediction_caked is not None:
+            fit_prediction_caked_authority = "unknown"
 
         observed_native_delta = _geometry_fit_audit_point_delta(
             fit_observed_native,
@@ -3817,6 +3830,13 @@ def build_geometry_fit_qr_handoff_audit_rows(
             ),
             "sim_refined_detector_native_px": sim_refined_native,
             "sim_refined_caked_deg": sim_refined_caked,
+            "sim_refined_caked_authority": (
+                "exact_projector_from_native"
+                if sim_caked_meta.get("sim_refined_caked_projection_real_callback")
+                else "saved_handoff_caked"
+                if sim_refined_caked is not None
+                else None
+            ),
             "sim_refinement_status": _geometry_fit_audit_first(entries, "sim_refinement_status"),
             "sim_refinement_source": _geometry_fit_audit_first(entries, "sim_refinement_source"),
             "sim_refinement_delta_detector_px": _geometry_fit_audit_first(
@@ -3849,6 +3869,8 @@ def build_geometry_fit_qr_handoff_audit_rows(
             ),
             "fit_prediction_detector_native_px": fit_prediction_native,
             "fit_prediction_caked_deg": fit_prediction_caked,
+            "fit_prediction_caked_authority": fit_prediction_caked_authority,
+            "fit_prediction_caked_raw_handoff_deg": fit_prediction_caked_raw_handoff,
             "fit_prediction_caked_projection_reason": fit_prediction_caked_projection_reason,
             "fit_prediction_projection_theta_initial_deg": (
                 float(fit_prediction_projection_theta_initial)
@@ -3897,6 +3919,9 @@ def build_geometry_fit_qr_handoff_audit_rows(
             "first_divergence_field": first_divergence or "none",
         }
         row.update(sim_caked_meta)
+        authority_diagnostic = _locked_qr_prediction_caked_authority_mismatch(row)
+        row["locked_qr_prediction_caked_authority_diagnostic"] = authority_diagnostic
+        row["locked_qr_prediction_caked_authority_reason"] = authority_diagnostic.get("reason")
         row["fit_prediction_uses_fake_or_test_transform"] = (
             "yes" if sim_caked_meta.get("fit_prediction_uses_fake_or_test_transform") else "no"
         )
