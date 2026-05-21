@@ -18,10 +18,12 @@
   - Replaced the threaded weighted-event dense Q table with the serial packed Q-set layout, split threaded chunk wall time into `time_chunk_compute`, and added scalar-equivalent beam-phase/event-count diagnostics.
   - Restored the Python cache/stat compatibility surface around `process_peaks_parallel_safe(...)` in `ra_sim.simulation.diffraction`, including `_PHASE_SPACE_CACHE`, `_SOURCE_TEMPLATE_CACHE`, `_Q_VECTOR_CACHE`, and `get_last_process_peaks_safe_stats()`, so the source-template cache regression coverage passes again.
   - Scoped the default Numba cache directory by Python cache tag and moved diagnostic intersection analysis off the unstable compiled `solve_q`/intensity path to avoid stale-cache and full-suite compile failures.
-  - Fixed the background peak-fit prefit subtraction editor to fit a `-90 <= phi <= 90` caked `(phi, 2theta)` 2D background plane, show cropped caked previews with axis labels, subtract the plane before peak and Qr-rod fitting, and invalidate stale prefit caches.
-  - Set the PbI2 Qr-rod editor default active Delta Qr to `0.13` and tied saved Qr-rod peak-edit files to the current background/profile policy so stale raw-image marker points are rejected after prefit background subtraction changes.
-  - Smoothed the Qr-rod peak marker editor by coalescing Delta Qr detector-preview redraws until release/accept, caching per-panel marker/profile plot inputs, and keeping preview-refresh failures inside the editor state instead of interrupting marker edits.
+  - Fixed the background peak-fit prefit subtraction editor to fit a `-90 <= phi <= 90` caked `(phi, 2theta)` 2D background plane, show cropped caked previews and the 2D fit surface with axis labels, subtract the plane before peak and Qr-rod fitting, and invalidate stale prefit caches.
+  - Set the PbI2 nonzero Qr-rod editor default active Delta Qr to `0.13` and tied saved Qr-rod peak-edit files to the current background/profile policy so stale raw-image marker points are rejected after prefit background subtraction changes.
+  - Smoothed the Qr-rod peak marker editor by coalescing Delta Qr detector-preview redraws until release/accept, deferring marker move/delete profile and detector-preview refreshes until Accept, caching per-panel marker/profile plot inputs, and keeping preview-refresh failures inside the editor state instead of interrupting marker edits.
   - Fixed locked manual Qr/Qz branch-pair geometry fits so detector-origin picks force the exact-caked route, preserve same-HKL branch identity, and reject internal route loss before pixel central matching.
+  - Fixed HK=0 Qr-rod picker startup so the specular ROI profile and detector preview initialize before the first pick, replaced the obsolete theta_i control with HK=0-only phi/2theta ROI bounds, and kept the no-op Delta Qr control out of the HK=0 editor/cache policy.
+  - Linked the Qr-rod marker editor and detector-preview windows so closing either window also closes the other.
 
 - **Config and path migration**
   - Renamed background-path keys in config from `dark_image`/`osc_files` to `simulation_dark_osc_file`/`simulation_background_osc_files`.

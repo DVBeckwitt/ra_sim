@@ -862,6 +862,24 @@ Passing checks:
   `git diff --check`. Bug/error status: fixed for the observed laggy marker
   editor interactions. Migration status: no saved-state, CLI/config, artifact
   schema, dependency, CI workflow, or version bump is required.
+- 2026-05-21 HK=0 phi/2theta ROI closeout: the HK=0 / `00L` Qr-rod picker no
+  longer uses theta_i or a Delta Qr band. The specular phase is defined by
+  `phi_min`, `phi_max`, `2theta_min`, and `2theta_max`, the detector companion
+  draws the same ROI as an arc/region overlay, the profile builder integrates
+  that phi/2theta ROI, and the final cache policy records `specular_roi` rather
+  than a no-op specular Delta Qr value. Focused validation passed with
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "hk0_roi or specular_hk0 or delta_qr or final_cache or detector_region_specular_visual" -ra`
+  (`16 passed, 202 deselected`) and full notebook-script validation passed with
+  `python -m pytest tests/test_background_peak_fits_notebook.py -ra`
+  (`210 passed, 8 skipped`), followed by scoped compileall, scoped Ruff,
+  `git diff --check`, and `python -m ra_sim.dev check` (`294 passed`, Ruff
+  clean, mypy clean). Bug/error status: fixed for the obsolete HK=0
+  theta_i/specular-Delta-Qr path and for stale no-op Delta Qr cache identity.
+  Migration status: stale final/pre-editor Qr-rod caches are rejected by the
+  bumped signatures; saved-state, CLI/config, artifact schema, dependency, CI
+  workflow, and version changes are not required. Feature status: implemented
+  locally; manual real-data visual review of the HK=0 ROI arc and profile row
+  still remains before manuscript use.
 
 Known validation limits:
 

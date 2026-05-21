@@ -126,12 +126,12 @@ def _safe_run_name(value: object) -> str:
 
 
 QR_ROD_PROFILE_CACHE_SCHEMA = "ra_sim.qr_rod_profile_cache.v1"
-QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_specular_theta_i12_l8_v17_caked_phi_m90_90_plane"
+QR_ROD_FINAL_FIT_CACHE_SIGNATURE = "joint_qz_labeled_marker_fit_specular_roi_v18_caked_phi_m90_90_plane"
 PRE_EDITOR_CACHE_SCHEMA = "ra_sim.background_pre_editor_cache.v1"
 PRE_EDITOR_CACHE_SIGNATURE = "pre_qr_rod_marker_editor_inputs_v1"
 PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE = "background_peak_fit_results_v5_caked_phi_m90_90_plane"
 PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE = "profile_fit_cache_v1"
-PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_l_defaults_v16_caked_phi_m90_90_plane"
+PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_roi_v17_caked_phi_m90_90_plane"
 
 
 def _cache_normalize_value(value: object) -> object:
@@ -1451,14 +1451,43 @@ def show_qr_rod_peak_marker_popup(
             current_l_min = 0.0
         if not np.isfinite(current_l_max) or current_l_max <= current_l_min:
             current_l_max = max(current_l_min + 1.0, 8.0)
+        current_phi_min = as_float(
+            region_control_state.get("phi_min"), globals().get("specular_phi_min_deg", -10.0)
+        )
+        current_phi_max = as_float(
+            region_control_state.get("phi_max"), globals().get("specular_phi_max_deg", 10.0)
+        )
+        current_two_theta_min = as_float(
+            region_control_state.get("two_theta_min"),
+            globals().get("specular_theta_min_deg", 5.0),
+        )
+        current_two_theta_max = as_float(
+            region_control_state.get("two_theta_max"),
+            globals().get("specular_theta_max_deg", 25.0),
+        )
         region_control_state["delta_qr"] = float(current_delta_qr)
         region_control_state["l_min"] = float(current_l_min)
         region_control_state["l_max"] = float(current_l_max)
+        if np.isfinite(current_phi_min):
+            region_control_state["phi_min"] = float(current_phi_min)
+        if np.isfinite(current_phi_max):
+            region_control_state["phi_max"] = float(current_phi_max)
+        if np.isfinite(current_two_theta_min):
+            region_control_state["two_theta_min"] = float(current_two_theta_min)
+        if np.isfinite(current_two_theta_max):
+            region_control_state["two_theta_max"] = float(current_two_theta_max)
         region_control_state["rod_profile_table"] = profiles.copy()
 
     cols = min(3, max(1, len(groups)))
     rows = int(math.ceil(len(groups) / cols))
-    control_extra_height = 1.15 if region_controls_enabled else 0.6
+    hk0_roi_layout_enabled = (
+        region_controls_enabled
+        and qr_rod_editor_phase_matches(0, editor_phase)
+        and any(int(group[0]) == 0 for group in groups)
+    )
+    control_extra_height = (
+        1.45 if hk0_roi_layout_enabled else (1.15 if region_controls_enabled else 0.6)
+    )
     fig, axes = plt.subplots(
         rows,
         cols,
@@ -1474,7 +1503,7 @@ def show_qr_rod_peak_marker_popup(
         left=0.07,
         right=0.98,
         top=0.92,
-        bottom=0.26 if region_controls_enabled else 0.18,
+        bottom=0.34 if hk0_roi_layout_enabled else (0.26 if region_controls_enabled else 0.18),
         hspace=0.55,
         wspace=0.30,
     )
@@ -1542,23 +1571,40 @@ def show_qr_rod_peak_marker_popup(
         except TypeError:
             companion_figure_list = [companion_figures]
 
-    close_companions_when_done = str(editor_phase or "all").strip().lower() != "nonzero"
+    closing_linked_qr_rod_figures = False
 
-    def close_companion_figures(_event=None) -> None:
-        if not close_companions_when_done:
+    def close_linked_qr_rod_figures(event=None) -> None:
+        nonlocal closing_linked_qr_rod_figures
+        if closing_linked_qr_rod_figures:
             return
-        for companion_fig in companion_figure_list:
-            if companion_fig is fig:
-                continue
-            try:
-                plt.close(companion_fig)
-            except Exception:
-                pass
+        event_fig = getattr(getattr(event, "canvas", None), "figure", None)
+        editor_phase_text = str(editor_phase or "all").strip().lower()
+        if (
+            event_fig is fig
+            and editor_phase_text == "nonzero"
+            and bool(result.get("_editor_action_close", False))
+        ):
+            return
+        closing_linked_qr_rod_figures = True
+        try:
+            for linked_fig in [fig, *companion_figure_list]:
+                if linked_fig is event_fig:
+                    continue
+                try:
+                    plt.close(linked_fig)
+                except Exception:
+                    pass
+        finally:
+            closing_linked_qr_rod_figures = False
 
     def show_companion_figures() -> None:
         for companion_fig in companion_figure_list:
             if companion_fig is fig:
                 continue
+            try:
+                companion_fig.canvas.mpl_connect("close_event", close_linked_qr_rod_figures)
+            except Exception:
+                pass
             try:
                 companion_fig.show(warn=False)
             except TypeError:
@@ -1600,6 +1646,38 @@ def show_qr_rod_peak_marker_popup(
         phase = str(editor_phase if editor_phase is not None else "all").strip().lower()
         return phase in {"specular", "hk0", "00l"}
 
+    def hk0_roi_controls_enabled() -> bool:
+        return hk0_roi_layout_enabled and use_region_l_bounds_for_hk0()
+
+    def current_hk0_roi_bounds() -> tuple[float, float, float, float]:
+        defaults = (
+            globals().get("specular_phi_min_deg", -10.0),
+            globals().get("specular_phi_max_deg", 10.0),
+            globals().get("specular_theta_min_deg", 5.0),
+            globals().get("specular_theta_max_deg", 25.0),
+        )
+        keys = ("phi_min", "phi_max", "two_theta_min", "two_theta_max")
+        values = [
+            as_float(region_control_state.get(key), default)
+            for key, default in zip(keys, defaults)
+        ]
+        return tuple(float(value) for value in values)
+
+    def hk0_roi_callback_kwargs(callback: object) -> dict[str, float]:
+        if not hk0_roi_controls_enabled():
+            return {}
+        phi_min, phi_max, theta_min, theta_max = current_hk0_roi_bounds()
+        kwargs: dict[str, float] = {}
+        for key, value in (
+            ("phi_min", phi_min),
+            ("phi_max", phi_max),
+            ("two_theta_min", theta_min),
+            ("two_theta_max", theta_max),
+        ):
+            if callback_accepts_keyword(callback, key):
+                kwargs[key] = float(value)
+        return kwargs
+
     def editor_l_bounds_for_group(m_value: int) -> tuple[float, float] | None:
         return qr_rod_l_bounds_for_group(
             int(m_value),
@@ -1634,6 +1712,7 @@ def show_qr_rod_peak_marker_popup(
                 update_kwargs["editor_phase"] = editor_phase
             if callback_accepts_keyword(profile_update_callback, "marker_table"):
                 update_kwargs["marker_table"] = edited.copy()
+            update_kwargs.update(hk0_roi_callback_kwargs(profile_update_callback))
             updated = profile_update_callback(
                 delta_qr_value, l_min_value, l_max_value, **update_kwargs
             )
@@ -1742,7 +1821,7 @@ def show_qr_rod_peak_marker_popup(
         if region_controls_enabled and qr_rod_editor_phase_matches(int(group[0]), editor_phase):
             mark_region_profile_refresh_pending("marker_table")
             if refresh_preview:
-                refresh_detector_region_preview()
+                mark_detector_preview_refresh_pending()
             return True
         return False
 
@@ -1775,6 +1854,7 @@ def show_qr_rod_peak_marker_popup(
             }
             if callback_accepts_keyword(region_preview_update_callback, "editor_phase"):
                 preview_kwargs["editor_phase"] = editor_phase
+            preview_kwargs.update(hk0_roi_callback_kwargs(region_preview_update_callback))
             region_preview_update_callback(**preview_kwargs)
         except Exception as exc:
             region_control_state["region_preview_update_error"] = str(exc)
@@ -2306,6 +2386,24 @@ def show_qr_rod_peak_marker_popup(
         editor_debug("l_max.submit", text=text)
         refresh_deferred_region_controls()
 
+    def set_region_roi_bound(key: str, text: object) -> None:
+        if not hk0_roi_controls_enabled():
+            return
+        current_values = dict(
+            zip(
+                ("phi_min", "phi_max", "two_theta_min", "two_theta_max"),
+                current_hk0_roi_bounds(),
+            )
+        )
+        value = as_float(text, current_values.get(str(key), np.nan))
+        if np.isfinite(value):
+            region_control_state[str(key)] = float(value)
+        clear_group_plot_cache()
+        mark_region_profile_refresh_pending("hk0_roi")
+        mark_detector_preview_refresh_pending()
+        editor_debug("hk0_roi.submit", key=str(key), text=text)
+        refresh_region_controls()
+
     def select_nearest(
         group: tuple[int, str],
         x_value: float,
@@ -2372,6 +2470,7 @@ def show_qr_rod_peak_marker_popup(
             mark_marker_table_changed((int(m_value), str(branch_value)))
         elif region_controls_enabled and qr_rod_editor_phase_matches(int(m_value), editor_phase):
             mark_region_profile_refresh_pending("marker_table")
+            mark_detector_preview_refresh_pending()
         return True
 
     def move_selected(x_value: float) -> None:
@@ -2530,16 +2629,8 @@ def show_qr_rod_peak_marker_popup(
                     redraw(preserve_limits=True)
         finally:
             restore_group_axis_limits(limits)
-        group = selected.get("group")
-        if (
-            needs_redraw
-            and "marker_table" in region_profile_refresh_sources
-            and group is not None
-            and region_controls_enabled
-            and qr_rod_editor_phase_matches(int(group[0]), editor_phase)
-        ):
-            refresh_detector_region_preview()
-        flush_detector_region_preview()
+        if "marker_table" not in region_profile_refresh_sources:
+            flush_detector_region_preview()
         if should_flush_region_profile_on_release():
             flush_region_profile_refresh()
 
@@ -2563,9 +2654,11 @@ def show_qr_rod_peak_marker_popup(
             flush_region_profile_refresh(redraw_figure=False)
             flush_detector_region_preview()
             result["accepted"] = True
+            result["_editor_action_close"] = True
             plt.close(fig)
         elif key in {"escape"}:
             result["accepted"] = False
+            result["_editor_action_close"] = True
             plt.close(fig)
 
     def accept(_event) -> None:
@@ -2573,45 +2666,85 @@ def show_qr_rod_peak_marker_popup(
         flush_region_profile_refresh(redraw_figure=False)
         flush_detector_region_preview()
         result["accepted"] = True
+        result["_editor_action_close"] = True
         plt.close(fig)
 
     def cancel(_event) -> None:
         result["accepted"] = False
+        result["_editor_action_close"] = True
         plt.close(fig)
 
     region_widgets: list[object] = []
+    roi_controls_active = region_controls_enabled and hk0_roi_controls_enabled()
     if region_controls_enabled:
-        delta_qr_ax = fig.add_axes([0.08, 0.105, 0.30, 0.045])
-        l_min_ax = fig.add_axes([0.46, 0.105, 0.10, 0.045])
-        l_max_ax = fig.add_axes([0.62, 0.105, 0.10, 0.045])
-        delta_qr_value = max(1.0e-9, as_float(region_control_state.get("delta_qr"), 1.0e-3))
-        delta_qr_slider = Slider(
-            delta_qr_ax,
-            "Delta Qr (+/- A^-1)",
-            1.0e-9,
-            max(delta_qr_value * 4.0, delta_qr_value + 1.0e-6),
-            valinit=delta_qr_value,
-        )
+        delta_qr_slider = None
+        if roi_controls_active:
+            l_min_ax = fig.add_axes([0.08, 0.125, 0.10, 0.045])
+            l_max_ax = fig.add_axes([0.25, 0.125, 0.10, 0.045])
+        else:
+            delta_qr_ax = fig.add_axes([0.08, 0.125, 0.30, 0.045])
+            l_min_ax = fig.add_axes([0.46, 0.125, 0.10, 0.045])
+            l_max_ax = fig.add_axes([0.62, 0.125, 0.10, 0.045])
+            delta_qr_value = max(1.0e-9, as_float(region_control_state.get("delta_qr"), 1.0e-3))
+            delta_qr_slider = Slider(
+                delta_qr_ax,
+                "Delta Qr (+/- A^-1)",
+                1.0e-9,
+                max(delta_qr_value * 4.0, delta_qr_value + 1.0e-6),
+                valinit=delta_qr_value,
+            )
+            delta_qr_slider.on_changed(set_region_delta_qr)
         l_min_initial = f"{as_float(region_control_state.get('l_min'), 0.0):.6g}"
         l_max_initial = f"{as_float(region_control_state.get('l_max'), 8.0):.6g}"
         l_min_box = TextBox(l_min_ax, "L Min", initial=l_min_initial)
         l_max_box = TextBox(l_max_ax, "L Max", initial=l_max_initial)
         suppress_inactive_text_box_stop_draw(l_min_box)
         suppress_inactive_text_box_stop_draw(l_max_box)
-        delta_qr_slider.on_changed(set_region_delta_qr)
         l_min_box.on_submit(set_region_l_min)
         l_max_box.on_submit(set_region_l_max)
-        region_widgets.extend([delta_qr_slider, l_min_box, l_max_box])
+        if delta_qr_slider is not None:
+            region_widgets.append(delta_qr_slider)
+        region_widgets.extend([l_min_box, l_max_box])
         text_input_widgets.extend([l_min_box, l_max_box])
+        if roi_controls_active:
+            phi_min_value, phi_max_value, theta_min_value, theta_max_value = (
+                current_hk0_roi_bounds()
+            )
+            roi_specs = [
+                ("phi_min", "Phi Min", phi_min_value, [0.08, 0.055, 0.10, 0.045]),
+                ("phi_max", "Phi Max", phi_max_value, [0.25, 0.055, 0.10, 0.045]),
+                ("two_theta_min", "2theta Min", theta_min_value, [0.43, 0.055, 0.11, 0.045]),
+                ("two_theta_max", "2theta Max", theta_max_value, [0.63, 0.055, 0.11, 0.045]),
+            ]
+            for key, label, value, bounds in roi_specs:
+                box = TextBox(fig.add_axes(bounds), label, initial=f"{float(value):.6g}")
+                suppress_inactive_text_box_stop_draw(box)
+                box.on_submit(lambda text, key=key: set_region_roi_bound(key, text))
+                region_widgets.append(box)
+                text_input_widgets.append(box)
 
-    button_axes = [
-        fig.add_axes([0.46, 0.035, 0.085, 0.05]),
-        fig.add_axes([0.55, 0.035, 0.085, 0.05]),
-        fig.add_axes([0.64, 0.035, 0.085, 0.05]),
-        fig.add_axes([0.73, 0.035, 0.085, 0.05]),
-        fig.add_axes([0.82, 0.035, 0.085, 0.05]),
-    ]
-    title_box = TextBox(fig.add_axes([0.08, 0.035, 0.34, 0.05]), "Label", textalignment="left")
+    if roi_controls_active:
+        button_axes = [
+            fig.add_axes([0.77, 0.035, 0.060, 0.05]),
+            fig.add_axes([0.835, 0.035, 0.060, 0.05]),
+            fig.add_axes([0.900, 0.035, 0.060, 0.05]),
+            fig.add_axes([0.770, 0.000, 0.090, 0.028]),
+            fig.add_axes([0.870, 0.000, 0.090, 0.028]),
+        ]
+    else:
+        button_axes = [
+            fig.add_axes([0.46, 0.035, 0.085, 0.05]),
+            fig.add_axes([0.55, 0.035, 0.085, 0.05]),
+            fig.add_axes([0.64, 0.035, 0.085, 0.05]),
+            fig.add_axes([0.73, 0.035, 0.085, 0.05]),
+            fig.add_axes([0.82, 0.035, 0.085, 0.05]),
+        ]
+    title_box_bounds = (
+        [0.08, 0.005, 0.34, 0.035]
+        if roi_controls_active
+        else [0.08, 0.035, 0.34, 0.05]
+    )
+    title_box = TextBox(fig.add_axes(title_box_bounds), "Label", textalignment="left")
     suppress_inactive_text_box_stop_draw(title_box)
     title_box.on_submit(set_selected_marker_title)
     title_box_state["box"] = title_box
@@ -2633,7 +2766,11 @@ def show_qr_rod_peak_marker_popup(
     fig.canvas.mpl_connect("motion_notify_event", on_motion)
     fig.canvas.mpl_connect("button_release_event", on_release)
     fig.canvas.mpl_connect("key_press_event", on_key)
-    fig.canvas.mpl_connect("close_event", close_companion_figures)
+    fig.canvas.mpl_connect("close_event", close_linked_qr_rod_figures)
+    if roi_controls_active:
+        # HK=0 needs the ROI-scoped detector/profile state before the first pick.
+        refresh_region_profile_table()
+        refresh_detector_region_preview()
     redraw()
     show_companion_figures()
     print(f"opening {window_title}; click Accept to continue", flush=True)
@@ -2653,6 +2790,10 @@ def edit_qr_rod_region_editor(
     delta_qr: object = None,
     l_min: object = None,
     l_max: object = None,
+    phi_min: object = None,
+    phi_max: object = None,
+    two_theta_min: object = None,
+    two_theta_max: object = None,
     profile_update_callback: object | None = None,
     region_preview_update_callback: object | None = None,
     required_marker_table: pd.DataFrame | None = None,
@@ -2681,6 +2822,14 @@ def edit_qr_rod_region_editor(
     current_delta_qr = max(1.0e-9, as_float(delta_qr, qr_rod_delta_qr))
     current_l_min = as_float(l_min, 0.0)
     current_l_max = as_float(l_max, SPECULAR_QR_ROD_L_MAX)
+    current_phi_min = as_float(phi_min, globals().get("specular_phi_min_deg", -10.0))
+    current_phi_max = as_float(phi_max, globals().get("specular_phi_max_deg", 10.0))
+    current_two_theta_min = as_float(
+        two_theta_min, globals().get("specular_theta_min_deg", 5.0)
+    )
+    current_two_theta_max = as_float(
+        two_theta_max, globals().get("specular_theta_max_deg", 25.0)
+    )
     runtime_mode = qr_rod_peak_edit_runtime_mode(mode, backend_name=backend_name, env=env)
 
     def fallback_result(source: str) -> dict[str, object]:
@@ -2691,6 +2840,10 @@ def edit_qr_rod_region_editor(
             "delta_qr": float(current_delta_qr),
             "l_min": float(current_l_min),
             "l_max": float(current_l_max),
+            "phi_min": float(current_phi_min),
+            "phi_max": float(current_phi_max),
+            "two_theta_min": float(current_two_theta_min),
+            "two_theta_max": float(current_two_theta_max),
             "accepted": False,
             "source": source,
         }
@@ -2707,6 +2860,10 @@ def edit_qr_rod_region_editor(
         "delta_qr": float(current_delta_qr),
         "l_min": float(current_l_min),
         "l_max": float(current_l_max),
+        "phi_min": float(current_phi_min),
+        "phi_max": float(current_phi_max),
+        "two_theta_min": float(current_two_theta_min),
+        "two_theta_max": float(current_two_theta_max),
     }
     try:
         edited_markers, accepted = show_qr_rod_peak_marker_popup(
@@ -2736,6 +2893,10 @@ def edit_qr_rod_region_editor(
         "delta_qr": float(region_control_state.get("delta_qr", current_delta_qr)),
         "l_min": float(region_control_state.get("l_min", current_l_min)),
         "l_max": float(region_control_state.get("l_max", current_l_max)),
+        "phi_min": float(region_control_state.get("phi_min", np.nan)),
+        "phi_max": float(region_control_state.get("phi_max", np.nan)),
+        "two_theta_min": float(region_control_state.get("two_theta_min", np.nan)),
+        "two_theta_max": float(region_control_state.get("two_theta_max", np.nan)),
         "accepted": bool(accepted),
         "source": "popup" if accepted else source_mode,
     }
@@ -3018,7 +3179,6 @@ NONZERO_QR_ROD_L_MIN = 0.5
 NONZERO_QR_ROD_L_MAX = 3.0
 SPECULAR_QR_ROD_L_MAX = 8.0
 PBI2_SPECULAR_QR_ROD_L_MIN = 1.5
-PBI2_SPECULAR_THETA_INITIAL_DEG = 12.0
 ALLOW_GENERATED_ROD_REFERENCES = _truthy_setting(
     "ALLOW_GENERATED_ROD_REFERENCES_OVERRIDE", "RA_SIM_ALLOW_GENERATED_ROD_REFERENCES", False
 )
@@ -3732,12 +3892,18 @@ def caked_background_plane_from_image(
         fill_source = image[fit_mask] if np.any(fit_mask) else image[finite]
         fill = float(np.nanmedian(fill_source)) if fill_source.size else 0.0
         model = np.full(image.shape, fill, dtype=np.float64)
+        fit_surface = np.full(image.shape, np.nan, dtype=np.float64)
+        model_surface = np.full(image.shape, np.nan, dtype=np.float64)
+        fit_surface[fit_mask] = image[fit_mask]
+        model_surface[fit_mask] = model[fit_mask]
         return {
             "background_model": model,
             "coefficients": np.asarray([fill, 0.0, 0.0], dtype=np.float64),
             "theta_ref": 0.0,
             "phi_ref": 0.0,
             "theta_axis": theta.copy(),
+            "fit_surface": fit_surface,
+            "model_surface": model_surface,
             "fit_profile": np.full(theta.shape, fill, dtype=np.float64),
             "model_profile": np.full(theta.shape, fill, dtype=np.float64),
             "fit_mask": fit_mask,
@@ -3784,6 +3950,10 @@ def caked_background_plane_from_image(
         + float(coefficients[1]) * (theta_grid - theta_ref)
         + float(coefficients[2]) * _radial_background_phi_delta_deg(phi_grid, phi_ref)
     )
+    fit_surface = np.full(image.shape, np.nan, dtype=np.float64)
+    model_surface = np.full(image.shape, np.nan, dtype=np.float64)
+    fit_surface[fit_mask] = image[fit_mask]
+    model_surface[fit_mask] = model[fit_mask]
     fit_profile = np.full(theta.shape, np.nan, dtype=np.float64)
     model_profile = np.full(theta.shape, np.nan, dtype=np.float64)
     for col in range(theta.size):
@@ -3817,6 +3987,8 @@ def caked_background_plane_from_image(
         "theta_ref": float(theta_ref),
         "phi_ref": float(phi_ref),
         "theta_axis": theta.copy(),
+        "fit_surface": fit_surface,
+        "model_surface": model_surface,
         "fit_profile": np.asarray(fit_profile, dtype=np.float64),
         "model_profile": np.asarray(model_profile, dtype=np.float64),
         "fit_mask": fit_mask,
@@ -4002,6 +4174,8 @@ def apply_radial_background_subtraction_to_detector(
             "plane_theta_ref": float(theta_ref),
             "plane_phi_ref": float(phi_ref),
             "caked_background_model": plane_payload["background_model"],
+            "caked_fit_surface": plane_payload["fit_surface"],
+            "caked_model_surface": plane_payload["model_surface"],
             "caked_background_fit_mask": plane_payload["fit_mask"],
             "theta_centers": plane_payload["theta_axis"],
             "radial_profile": plane_payload["fit_profile"],
@@ -4293,101 +4467,6 @@ def show_radial_background_subtraction_popup(
         )
         return cached_radial_payload
 
-    def finite_profile_limits(*series: np.ndarray) -> tuple[float, float]:
-        finite_values: list[np.ndarray] = []
-        for values in series:
-            array = np.asarray(values, dtype=np.float64)
-            finite = array[np.isfinite(array)]
-            if finite.size:
-                finite_values.append(finite)
-        if not finite_values:
-            return 0.0, 1.0
-        combined = np.concatenate(finite_values)
-        ymin, ymax = np.nanpercentile(combined, [1.0, 99.0])
-        if not np.isfinite(ymin) or not np.isfinite(ymax) or ymax <= ymin:
-            center = float(np.nanmedian(combined))
-            width = max(abs(center) * 0.1, 1.0)
-            return center - width, center + width
-        padding = max((float(ymax) - float(ymin)) * 0.05, 1.0e-9)
-        return float(ymin) - padding, float(ymax) + padding
-
-    def draw_radial_profile(
-        theta_centers: np.ndarray,
-        radial_profile: np.ndarray,
-        smoothed_profile: np.ndarray,
-    ) -> None:
-        profile_canvas.delete("profile")
-        width = max(1, int(profile_canvas.winfo_width() or profile_width))
-        height = max(1, int(profile_canvas.winfo_height() or profile_height))
-        margin_left = 34
-        margin_right = 10
-        margin_top = 12
-        margin_bottom = 24
-        x0 = margin_left
-        x1 = max(margin_left + 1, width - margin_right)
-        y0 = margin_top
-        y1 = max(margin_top + 1, height - margin_bottom)
-        profile_canvas.create_rectangle(
-            x0,
-            y0,
-            x1,
-            y1,
-            outline="#b8b8b8",
-            width=1,
-            tags="profile",
-        )
-        theta = np.asarray(theta_centers, dtype=np.float64)
-        raw_profile = np.asarray(radial_profile, dtype=np.float64)
-        smooth_profile = np.asarray(smoothed_profile, dtype=np.float64)
-        valid_theta = theta[np.isfinite(theta)]
-        if valid_theta.size == 0 or smooth_profile.size == 0:
-            return
-        xmin = float(np.nanmin(valid_theta))
-        xmax = float(np.nanmax(valid_theta))
-        if not np.isfinite(xmin) or not np.isfinite(xmax) or xmax <= xmin:
-            return
-        ymin, ymax = finite_profile_limits(raw_profile, smooth_profile)
-        if ymax <= ymin:
-            return
-
-        def points_for(values: np.ndarray) -> list[float]:
-            values = np.asarray(values, dtype=np.float64)
-            count = min(theta.size, values.size)
-            if count == 0:
-                return []
-            x_values = theta[:count]
-            y_values = values[:count]
-            finite = np.isfinite(x_values) & np.isfinite(y_values)
-            if np.count_nonzero(finite) < 2:
-                return []
-            x_scaled = x0 + (x_values[finite] - xmin) / (xmax - xmin) * (x1 - x0)
-            y_scaled = y1 - (y_values[finite] - ymin) / (ymax - ymin) * (y1 - y0)
-            points = np.column_stack([x_scaled, y_scaled]).reshape(-1)
-            return [float(value) for value in points]
-
-        raw_points = points_for(raw_profile)
-        smooth_points = points_for(smooth_profile)
-        if len(raw_points) >= 4:
-            profile_canvas.create_line(*raw_points, fill="#6a6a6a", width=1, tags="profile")
-        if len(smooth_points) >= 4:
-            profile_canvas.create_line(*smooth_points, fill="#0072b2", width=2, tags="profile")
-        profile_canvas.create_text(
-            x0,
-            height - 12,
-            text=f"{xmin:.3g}",
-            anchor="w",
-            fill="#444444",
-            tags="profile",
-        )
-        profile_canvas.create_text(
-            x1,
-            height - 12,
-            text=f"{xmax:.3g}",
-            anchor="e",
-            fill="#444444",
-            tags="profile",
-        )
-
     def update_panel_image(name: str, values: object) -> None:
         pil_image = detector_preview_image(
             values,
@@ -4428,18 +4507,18 @@ def show_radial_background_subtraction_popup(
                 )
             else:
                 corrected_caked_image = raw_caked_preview - scale * model_caked_image
-            theta_centers = np.asarray(payload.get("theta_centers", []), dtype=np.float64)
-            radial_profile = np.asarray(payload.get("radial_profile", []), dtype=np.float64)
-            smoothed_profile = np.asarray(payload.get("smoothed_profile", []), dtype=np.float64)
+            fit_surface_caked_full = np.asarray(payload["caked_fit_surface"], dtype=np.float64)
+            fit_surface_caked_image = fit_surface_caked_full[
+                ::caked_preview_step,
+                ::caked_preview_step,
+            ]
         else:
             model_caked_image = np.zeros_like(raw_caked_preview, dtype=np.float64)
             corrected_caked_image = raw_caked_preview.copy()
-            theta_centers = np.asarray([], dtype=np.float64)
-            radial_profile = np.asarray([], dtype=np.float64)
-            smoothed_profile = np.asarray([], dtype=np.float64)
+            fit_surface_caked_image = np.full_like(raw_caked_preview, np.nan, dtype=np.float64)
         update_panel_image("model", model_caked_image)
         update_panel_image("corrected", corrected_caked_image)
-        draw_radial_profile(theta_centers, radial_profile, smoothed_profile)
+        update_panel_image("fit_surface", fit_surface_caked_image)
 
     def set_scale(_value: float) -> None:
         nonlocal enabled
@@ -4490,8 +4569,6 @@ def show_radial_background_subtraction_popup(
         y_label="phi (deg)",
     )
     preview_width, preview_height = raw_preview.size
-    profile_width = int(preview_width)
-    profile_height = int(preview_height)
     image_refs: dict[str, object] = {}
     image_canvases: dict[str, object] = {}
     image_items: dict[str, int] = {}
@@ -4551,23 +4628,19 @@ def show_radial_background_subtraction_popup(
             ),
         )
         add_image_panel("corrected", "Corrected caked image", 1, 0, raw_preview)
-
-        profile_panel = ttk.Frame(main, padding=(0, 0, 8, 8))
-        profile_panel.grid(row=1, column=1, sticky="nsew")
-        profile_panel.columnconfigure(0, weight=1)
-        profile_panel.rowconfigure(1, weight=1)
-        ttk.Label(profile_panel, text="Plane fit profile (-90 <= phi <= 90)").grid(
-            row=0, column=0, sticky="w"
+        add_image_panel(
+            "fit_surface",
+            "Plane fit surface (-90 <= phi <= 90)",
+            1,
+            1,
+            detector_preview_image(
+                np.full_like(raw_caked_preview, np.nan, dtype=np.float64),
+                x_axis=caked_theta_preview,
+                y_axis=caked_phi_preview,
+                x_label="2theta (deg)",
+                y_label="phi (deg)",
+            ),
         )
-        profile_canvas = tk.Canvas(
-            profile_panel,
-            width=profile_width,
-            height=profile_height,
-            background="white",
-            highlightthickness=1,
-            highlightbackground="#8a8a8a",
-        )
-        profile_canvas.grid(row=1, column=0, sticky="nsew")
 
         controls = ttk.Frame(main)
         controls.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
@@ -6389,7 +6462,6 @@ PRE_EDITOR_CACHE_INPUT_SIGNATURE = {
                 (float(SPECULAR_QR_ROD_L_MIN), float(SPECULAR_QR_ROD_L_MAX)),
             )[1]
         ),
-        "pbi2_specular_theta_initial_deg": float(PBI2_SPECULAR_THETA_INITIAL_DEG),
         "qr_rod_transverse_background": bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED),
         "qr_rod_bg_side_band_inner_scale": float(QR_ROD_BG_SIDE_BAND_INNER_SCALE),
         "qr_rod_bg_side_band_outer_scale": float(QR_ROD_BG_SIDE_BAND_OUTER_SCALE),
@@ -10039,6 +10111,40 @@ def _sideband_qr_mask(
     return mask, inner, outer
 
 
+def detector_phi_two_theta_roi_mask(
+    phi_map: object,
+    two_theta_map: object,
+    *,
+    phi_min: object,
+    phi_max: object,
+    two_theta_min: object,
+    two_theta_max: object,
+) -> np.ndarray:
+    phi = np.asarray(phi_map, dtype=np.float64)
+    two_theta = np.asarray(two_theta_map, dtype=np.float64)
+    if phi.shape != two_theta.shape:
+        raise RuntimeError("detector phi and 2theta maps must have matching shapes")
+
+    def finite_bound(value: object) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float("nan")
+
+    phi_lo, phi_hi = sorted((finite_bound(phi_min), finite_bound(phi_max)))
+    theta_lo, theta_hi = sorted((finite_bound(two_theta_min), finite_bound(two_theta_max)))
+    if not all(np.isfinite(value) for value in (phi_lo, phi_hi, theta_lo, theta_hi)):
+        return np.zeros(phi.shape, dtype=bool)
+    return (
+        np.isfinite(phi)
+        & np.isfinite(two_theta)
+        & (phi >= float(phi_lo))
+        & (phi <= float(phi_hi))
+        & (two_theta >= float(theta_lo))
+        & (two_theta <= float(theta_hi))
+    )
+
+
 def profile_from_detector_qr_qz(
     bg: dict[str, object],
     rod: dict[str, object],
@@ -10354,6 +10460,50 @@ def profile_from_detector_qr_qz(
             "two_theta_max": two_theta_max,
             "two_theta_mean": two_theta_mean,
         }
+    )
+
+
+def profile_from_detector_phi_two_theta_roi(
+    bg: dict[str, object],
+    rod: dict[str, object],
+    *,
+    branch_name: str,
+    branch_label: str,
+    qz_edges: np.ndarray,
+    phi_min: object,
+    phi_max: object,
+    two_theta_min: object,
+    two_theta_max: object,
+    detector_q_maps: tuple[np.ndarray, np.ndarray, np.ndarray],
+    detector_phi_map: np.ndarray,
+    detector_solid_angle: np.ndarray | None,
+    detector_two_theta_map: np.ndarray,
+) -> pd.DataFrame:
+    roi_mask = detector_phi_two_theta_roi_mask(
+        detector_phi_map,
+        detector_two_theta_map,
+        phi_min=phi_min,
+        phi_max=phi_max,
+        two_theta_min=two_theta_min,
+        two_theta_max=two_theta_max,
+    )
+    if not np.any(roi_mask):
+        return pd.DataFrame()
+    return profile_from_detector_qr_qz(
+        bg,
+        rod,
+        branch_name=branch_name,
+        branch_label=branch_label,
+        qz_edges=qz_edges,
+        phi_min=-180.0,
+        phi_max=180.0,
+        detector_q_maps=detector_q_maps,
+        detector_phi_map=detector_phi_map,
+        detector_solid_angle=detector_solid_angle,
+        detector_two_theta_map=detector_two_theta_map,
+        delta_qr_override=0.0,
+        profile_mask_override=roi_mask,
+        qr_integration_source_override="detector_phi_two_theta_roi_per_qz_bin",
     )
 
 
@@ -10694,17 +10844,6 @@ def rod_profile_l_axis_limits_for_sample(
     if not np.isfinite(capped_upper):
         return lower, upper
     return lower, max(lower + 1.0e-6, capped_upper)
-
-
-def specular_detector_theta_initial_for_sample(
-    sample_stem: object,
-    tilt_deg: object,
-    *,
-    pbi2_theta_initial_deg: float = 12.0,
-) -> float:
-    if sample_uses_pbi2_rod_plot_policy(sample_stem):
-        return float(pbi2_theta_initial_deg)
-    return 3.0 * float(tilt_deg)
 
 
 try:
@@ -13248,21 +13387,7 @@ profile_detector_q_maps = notebook_detector_qr_qz_maps(
 )
 if profile_detector_q_maps is None:
     raise RuntimeError("detector Qr/Qz maps are required for detector-space Qr rod profiles")
-specular_detector_theta_initial_deg = specular_detector_theta_initial_for_sample(
-    SAMPLE_STEM,
-    ROD_PROFILE_TILT_DEG,
-    pbi2_theta_initial_deg=float(PBI2_SPECULAR_THETA_INITIAL_DEG),
-)
-specular_detector_q_config = detector_qspace_config_with_theta_initial(
-    profile_bg["qr_overlay_config"],
-    specular_detector_theta_initial_deg,
-)
-specular_detector_q_maps = notebook_detector_qr_qz_maps(
-    config=specular_detector_q_config,
-    detector_shape=tuple(profile_bg["detector_image"].shape),
-)
-if specular_detector_q_maps is None:
-    raise RuntimeError("detector Qr/Qz maps are required for m=0 detector-space Qr profiles")
+specular_detector_q_maps = profile_detector_q_maps
 profile_detector_phi_map = detector_gui_phi_map_for_background(profile_bg)
 if profile_detector_phi_map is None:
     raise RuntimeError("detector phi map is required for detector-space Qr rod profiles")
@@ -13546,8 +13671,29 @@ def specular_window_for_background(bg: dict[str, object]) -> tuple[float, float,
     return float(theta_min), float(theta_max), float(phi_min), float(phi_max)
 
 
+def specular_roi_signature_from_bounds(
+    *,
+    phi_min: object,
+    phi_max: object,
+    two_theta_min: object,
+    two_theta_max: object,
+) -> dict[str, float]:
+    return {
+        "phi_min": round(float(phi_min), 9),
+        "phi_max": round(float(phi_max), 9),
+        "two_theta_min": round(float(two_theta_min), 9),
+        "two_theta_max": round(float(two_theta_max), 9),
+    }
+
+
 specular_theta_min_deg, specular_theta_max_deg, specular_phi_min_deg, specular_phi_max_deg = (
     specular_window_for_background(profile_bg)
+)
+SPECULAR_ROI_SIGNATURE = specular_roi_signature_from_bounds(
+    phi_min=specular_phi_min_deg,
+    phi_max=specular_phi_max_deg,
+    two_theta_min=specular_theta_min_deg,
+    two_theta_max=specular_theta_max_deg,
 )
 specular_region_mask = (
     (theta_region_axis[None, :] >= float(specular_theta_min_deg))
@@ -13559,27 +13705,21 @@ specular_region_mask = (
 specular_detector_qr_map = np.asarray(specular_detector_q_maps[0], dtype=np.float64)
 specular_detector_qz_map = np.asarray(specular_detector_q_maps[1], dtype=np.float64)
 specular_detector_valid_q = np.asarray(specular_detector_q_maps[2], dtype=bool)
-if float(specular_phi_min_deg) <= float(specular_phi_max_deg):
-    specular_detector_phi_mask = (
-        np.asarray(profile_detector_phi_map, dtype=np.float64) >= float(specular_phi_min_deg)
-    ) & (np.asarray(profile_detector_phi_map, dtype=np.float64) <= float(specular_phi_max_deg))
-else:
-    specular_detector_phi_mask = (
-        np.asarray(profile_detector_phi_map, dtype=np.float64) >= float(specular_phi_min_deg)
-    ) | (np.asarray(profile_detector_phi_map, dtype=np.float64) <= float(specular_phi_max_deg))
+specular_detector_phi_mask = detector_phi_two_theta_roi_mask(
+    profile_detector_phi_map,
+    profile_detector_two_theta_map,
+    phi_min=specular_phi_min_deg,
+    phi_max=specular_phi_max_deg,
+    two_theta_min=specular_theta_min_deg,
+    two_theta_max=specular_theta_max_deg,
+)
 specular_detector_region_mask = (
     specular_detector_valid_q
     & specular_detector_phi_mask
     & np.isfinite(specular_detector_qr_map)
     & np.isfinite(specular_detector_qz_map)
     & np.isfinite(profile_detector_two_theta_map)
-    & (
-        np.asarray(profile_detector_two_theta_map, dtype=np.float64)
-        <= float(ROD_PROFILE_MAX_TWO_THETA_DEG)
-    )
     & (specular_detector_qz_map > POSITIVE_QZ_MIN)
-    & (specular_detector_qr_map >= -float(qr_rod_delta_qr))
-    & (specular_detector_qr_map <= float(qr_rod_delta_qr))
 )
 
 
@@ -13695,10 +13835,13 @@ def specular_qz_edges_for_l_window(
 
 def build_specular_qr_rod_profile(
     *,
-    delta_qr: object,
     l_min: object,
     l_max: object,
     marker_source: object,
+    phi_min: object = None,
+    phi_max: object = None,
+    two_theta_min: object = None,
+    two_theta_max: object = None,
 ) -> pd.DataFrame:
     qz_edges = specular_qz_edges_for_l_window(
         marker_source,
@@ -13707,20 +13850,24 @@ def build_specular_qr_rod_profile(
     )
     if qz_edges is None:
         return pd.DataFrame()
-    return profile_from_detector_qr_qz(
+    phi_min_value = as_float(phi_min, specular_phi_min_deg)
+    phi_max_value = as_float(phi_max, specular_phi_max_deg)
+    theta_min_value = as_float(two_theta_min, specular_theta_min_deg)
+    theta_max_value = as_float(two_theta_max, specular_theta_max_deg)
+    return profile_from_detector_phi_two_theta_roi(
         profile_bg,
         specular_rod_entry,
         branch_name="qz",
         branch_label="m = 0",
         qz_edges=qz_edges,
-        phi_min=float(specular_phi_min_deg),
-        phi_max=float(specular_phi_max_deg),
+        phi_min=phi_min_value,
+        phi_max=phi_max_value,
+        two_theta_min=theta_min_value,
+        two_theta_max=theta_max_value,
         detector_q_maps=specular_detector_q_maps,
         detector_phi_map=profile_detector_phi_map,
         detector_solid_angle=profile_detector_solid_angle,
         detector_two_theta_map=profile_detector_two_theta_map,
-        theta_initial_deg_used_for_q=specular_detector_theta_initial_deg,
-        delta_qr_override=delta_qr,
     )
 
 
@@ -13840,7 +13987,6 @@ else:
     ]
 if not qr_rod_pre_editor_cache_hit:
     initial_specular_profile = build_specular_qr_rod_profile(
-        delta_qr=qr_rod_delta_qr,
         l_min=specular_profile_l_min,
         l_max=specular_profile_l_max,
         marker_source=specular_l_marker_table,
@@ -13850,53 +13996,10 @@ if not qr_rod_pre_editor_cache_hit:
     ) > 0:
         profile_rows.append(initial_specular_profile)
     else:
-        specular_qr_band_mask = (
-            specular_detector_valid_q
-            & np.isfinite(specular_detector_qr_map)
-            & np.isfinite(specular_detector_qz_map)
-            & (specular_detector_qz_map > POSITIVE_QZ_MIN)
-            & (specular_detector_qr_map >= -float(qr_rod_delta_qr))
-            & (specular_detector_qr_map <= float(qr_rod_delta_qr))
-        )
-        specular_phi_two_theta_mask = (
-            specular_qr_band_mask
-            & specular_detector_phi_mask
-            & np.isfinite(profile_detector_two_theta_map)
-            & (
-                np.asarray(profile_detector_two_theta_map, dtype=np.float64)
-                <= float(ROD_PROFILE_MAX_TWO_THETA_DEG)
-            )
-        )
-        specular_qz_window_mask = (
-            specular_qr_band_mask
-            if specular_qz_bounds is None
-            else (
-                specular_qr_band_mask
-                & (specular_detector_qz_map >= float(specular_qz_bounds[0]))
-                & (specular_detector_qz_map <= float(specular_qz_bounds[1]))
-            )
-        )
-        specular_full_profile_mask = (
-            specular_phi_two_theta_mask
-            if specular_qz_bounds is None
-            else (
-                specular_phi_two_theta_mask
-                & (specular_detector_qz_map >= float(specular_qz_bounds[0]))
-                & (specular_detector_qz_map <= float(specular_qz_bounds[1]))
-            )
-        )
-        specular_qz_only_mask = (
-            specular_detector_valid_q
-            & specular_detector_phi_mask
-            & np.isfinite(specular_detector_qr_map)
-            & np.isfinite(specular_detector_qz_map)
-            & np.isfinite(profile_detector_two_theta_map)
-            & (
-                np.asarray(profile_detector_two_theta_map, dtype=np.float64)
-                <= float(ROD_PROFILE_MAX_TWO_THETA_DEG)
-            )
-            & (specular_detector_qz_map > POSITIVE_QZ_MIN)
-        )
+        specular_phi_two_theta_mask = specular_detector_region_mask.copy()
+        specular_qz_window_mask = specular_detector_region_mask.copy()
+        specular_full_profile_mask = specular_detector_region_mask.copy()
+        specular_qz_only_mask = specular_detector_region_mask.copy()
         if specular_qz_bounds is not None:
             specular_qz_only_mask = (
                 specular_qz_only_mask
@@ -13916,19 +14019,20 @@ if not qr_rod_pre_editor_cache_hit:
                 ROD_PROFILE_TILT_DEG,
                 0.0,
                 "(0,L)",
-                "empty detector HK=0 Qr/Qz profile "
-                f"delta_qr={float(qr_rod_delta_qr):.6g} "
+                "empty detector HK=0 phi/2theta ROI profile "
                 f"l_min={float(specular_profile_l_min):.6g} "
                 f"l_max={float(specular_profile_l_max):.6g} "
+                f"phi_min={float(specular_phi_min_deg):.6g} "
+                f"phi_max={float(specular_phi_max_deg):.6g} "
+                f"two_theta_min={float(specular_theta_min_deg):.6g} "
+                f"two_theta_max={float(specular_theta_max_deg):.6g} "
                 f"qz_bounds={None if specular_qz_bounds is None else tuple(float(value) for value in specular_qz_bounds)} "
-                f"qr_band_pixels={int(np.count_nonzero(specular_qr_band_mask))} "
                 f"phi_two_theta_pixels={int(np.count_nonzero(specular_phi_two_theta_mask))} "
                 f"qz_window_pixels={int(np.count_nonzero(specular_qz_window_mask))} "
                 f"full_profile_pixels={int(np.count_nonzero(specular_full_profile_mask))} "
-                f"qr_band_qz_range={map_range_for_mask(specular_detector_qz_map, specular_qr_band_mask)} "
                 f"phi_two_theta_qz_range={map_range_for_mask(specular_detector_qz_map, specular_phi_two_theta_mask)} "
                 f"qz_only_pixels={int(np.count_nonzero(specular_qz_only_mask))} "
-                f"qz_only_qr_range={map_range_for_mask(specular_detector_qr_map, specular_qz_only_mask)}",
+                f"qz_only_theta_range={map_range_for_mask(profile_detector_two_theta_map, specular_qz_only_mask)}",
             )
         )
 
@@ -14338,10 +14442,18 @@ def recompute_qr_rod_region_profiles(
     *,
     editor_phase: object = None,
     marker_table: object = None,
+    phi_min: object = None,
+    phi_max: object = None,
+    two_theta_min: object = None,
+    two_theta_max: object = None,
 ) -> pd.DataFrame:
     delta_qr = max(1.0e-9, as_float(delta_qr_value, qr_rod_delta_qr))
     l_min_number = as_float(l_min_value, 0.0)
     l_max_number = as_float(l_max_value, np.nan)
+    phi_min_number = as_float(phi_min, specular_phi_min_deg)
+    phi_max_number = as_float(phi_max, specular_phi_max_deg)
+    theta_min_number = as_float(two_theta_min, specular_theta_min_deg)
+    theta_max_number = as_float(two_theta_max, specular_theta_max_deg)
     active_marker_source = (
         pd.DataFrame(globals().get("marker_table", pd.DataFrame())).copy()
         if marker_table is None
@@ -14364,11 +14476,21 @@ def recompute_qr_rod_region_profiles(
         for row in active_specular_markers.to_dict("records")
         if np.isfinite(as_float(row.get("qz_marker", np.nan)))
     )
+    editor_phase_text = str(editor_phase if editor_phase is not None else "all").strip().lower()
+    delta_qr_cache_value = (
+        "specular_roi"
+        if editor_phase_text in {"specular", "hk0", "00l"}
+        else round(float(delta_qr), 12)
+    )
     cache_key = (
-        round(float(delta_qr), 12),
-        str(editor_phase if editor_phase is not None else "all").strip().lower(),
+        delta_qr_cache_value,
+        editor_phase_text,
         round(float(l_min_number), 9) if np.isfinite(l_min_number) else float("nan"),
         round(float(l_max_number), 9) if np.isfinite(l_max_number) else float("nan"),
+        round(float(phi_min_number), 9) if np.isfinite(phi_min_number) else float("nan"),
+        round(float(phi_max_number), 9) if np.isfinite(phi_max_number) else float("nan"),
+        round(float(theta_min_number), 9) if np.isfinite(theta_min_number) else float("nan"),
+        round(float(theta_max_number), 9) if np.isfinite(theta_max_number) else float("nan"),
         specular_marker_signature,
     )
     cached = qr_rod_editor_profile_cache.get(cache_key)
@@ -14383,10 +14505,13 @@ def recompute_qr_rod_region_profiles(
     rebuilt_rows: list[pd.DataFrame] = []
     if qr_rod_editor_phase_matches(0, editor_phase):
         specular_profile = build_specular_qr_rod_profile(
-            delta_qr=delta_qr,
             l_min=l_min_number,
             l_max=l_max_number,
             marker_source=active_marker_source,
+            phi_min=phi_min_number,
+            phi_max=phi_max_number,
+            two_theta_min=theta_min_number,
+            two_theta_max=theta_max_number,
         )
         if not specular_profile.empty:
             rebuilt_rows.append(specular_profile)
@@ -14668,11 +14793,19 @@ def build_qr_rod_detector_region_preview_figure() -> tuple[object, object] | Non
             l_max: object,
             marker_table: object = None,
             editor_phase: object = None,
+            phi_min: object = None,
+            phi_max: object = None,
+            two_theta_min: object = None,
+            two_theta_max: object = None,
         ) -> None:
             clear_preview_overlays()
             delta_qr_value = max(1.0e-9, as_float(delta_qr, qr_rod_delta_qr))
             l_min_value = as_float(l_min, np.nan)
             l_max_value = as_float(l_max, np.nan)
+            phi_min_value = as_float(phi_min, specular_phi_min_deg)
+            phi_max_value = as_float(phi_max, specular_phi_max_deg)
+            theta_min_value = as_float(two_theta_min, specular_theta_min_deg)
+            theta_max_value = as_float(two_theta_max, specular_theta_max_deg)
             l_bounds = None
             if np.isfinite(l_min_value) and np.isfinite(l_max_value):
                 l_lo, l_hi = sorted((float(l_min_value), float(l_max_value)))
@@ -14723,7 +14856,25 @@ def build_qr_rod_detector_region_preview_figure() -> tuple[object, object] | Non
                                 color=color,
                             )
 
-            preview_specular_qz_values = np.asarray(specular_qz_values, dtype=np.float64)
+            _, specular_preview_qz_map, specular_preview_valid_q = specular_detector_q_maps
+            specular_preview_roi_mask = detector_phi_two_theta_roi_mask(
+                profile_detector_phi_map,
+                profile_detector_two_theta_map,
+                phi_min=phi_min_value,
+                phi_max=phi_max_value,
+                two_theta_min=theta_min_value,
+                two_theta_max=theta_max_value,
+            )
+            preview_specular_qz_values = np.asarray(
+                specular_preview_qz_map[
+                    preview_shape_mask
+                    & specular_preview_valid_q
+                    & specular_preview_roi_mask
+                    & np.isfinite(specular_preview_qz_map)
+                    & (specular_preview_qz_map > POSITIVE_QZ_MIN)
+                ],
+                dtype=np.float64,
+            )
             preview_specular_qz_values = preview_specular_qz_values[
                 np.isfinite(preview_specular_qz_values)
                 & (preview_specular_qz_values > POSITIVE_QZ_MIN)
@@ -14741,17 +14892,20 @@ def build_qr_rod_detector_region_preview_figure() -> tuple[object, object] | Non
                 )
                 if specular_bounds is not None:
                     specular_qz_min, specular_qz_max = specular_bounds
-                    specular_qr_map, specular_qz_map, specular_valid_q = specular_detector_q_maps
-                    draw_preview_band(
-                        qr_map=specular_qr_map,
-                        qz_map=specular_qz_map,
-                        valid_q=specular_valid_q,
-                        qr_center=0.0,
-                        delta_qr_value=delta_qr_value,
-                        qz_min=specular_qz_min,
-                        qz_max=specular_qz_max,
-                        phi_min=specular_phi_min_deg,
-                        phi_max=specular_phi_max_deg,
+                    specular_band_mask = (
+                        preview_shape_mask
+                        & specular_preview_valid_q
+                        & specular_preview_roi_mask
+                        & np.isfinite(specular_preview_qz_map)
+                        & (specular_preview_qz_map >= float(specular_qz_min))
+                        & (specular_preview_qz_map <= float(specular_qz_max))
+                    )
+                    draw_preview_visual(
+                        {
+                            "band_fill_mask": specular_band_mask,
+                            "band_boundary_inner_visible": specular_band_mask,
+                            "band_boundary_outer_visible": specular_band_mask,
+                        },
                         color=OKABE_ITO["sky"],
                         fill_alpha=0.42,
                         boundary_alpha=1.0,
@@ -14783,6 +14937,10 @@ def build_qr_rod_detector_region_preview_figure() -> tuple[object, object] | Non
             delta_qr=qr_rod_delta_qr,
             l_min=globals().get("qr_rod_editor_initial_l_min", np.nan),
             l_max=globals().get("qr_rod_editor_initial_l_max", np.nan),
+            phi_min=specular_phi_min_deg,
+            phi_max=specular_phi_max_deg,
+            two_theta_min=specular_theta_min_deg,
+            two_theta_max=specular_theta_max_deg,
             marker_table=initial_marker_source,
         )
         return preview_fig, update_preview
@@ -14888,6 +15046,10 @@ qr_rod_specular_editor_result = edit_qr_rod_region_editor(
     delta_qr=qr_rod_delta_qr,
     l_min=qr_rod_specular_editor_initial_l_min,
     l_max=qr_rod_specular_editor_initial_l_max,
+    phi_min=specular_phi_min_deg,
+    phi_max=specular_phi_max_deg,
+    two_theta_min=specular_theta_min_deg,
+    two_theta_max=specular_theta_max_deg,
     profile_update_callback=recompute_qr_rod_region_profiles,
     region_preview_update_callback=qr_rod_detector_region_preview_update_callback,
     required_marker_table=specular_l_marker_table,
@@ -14899,15 +15061,67 @@ qr_rod_specular_editor_result = edit_qr_rod_region_editor(
 marker_table = pd.DataFrame(qr_rod_specular_editor_result["marker_table"]).copy()
 if bool(qr_rod_specular_editor_result.get("accepted", False)):
     qr_rod_peak_edit_source = "popup"
-qr_rod_specular_delta_qr = max(
-    1.0e-9, as_float(qr_rod_specular_editor_result.get("delta_qr"), qr_rod_delta_qr)
-)
 qr_rod_specular_editor_l_min = as_float(
     qr_rod_specular_editor_result.get("l_min"), qr_rod_specular_editor_initial_l_min
 )
 qr_rod_specular_editor_l_max = as_float(
     qr_rod_specular_editor_result.get("l_max"), qr_rod_specular_editor_initial_l_max
 )
+qr_rod_specular_phi_min_deg = as_float(
+    qr_rod_specular_editor_result.get("phi_min"), specular_phi_min_deg
+)
+qr_rod_specular_phi_max_deg = as_float(
+    qr_rod_specular_editor_result.get("phi_max"), specular_phi_max_deg
+)
+qr_rod_specular_theta_min_deg = as_float(
+    qr_rod_specular_editor_result.get("two_theta_min"), specular_theta_min_deg
+)
+qr_rod_specular_theta_max_deg = as_float(
+    qr_rod_specular_editor_result.get("two_theta_max"), specular_theta_max_deg
+)
+if np.isfinite(qr_rod_specular_phi_min_deg):
+    specular_phi_min_deg = float(qr_rod_specular_phi_min_deg)
+if np.isfinite(qr_rod_specular_phi_max_deg):
+    specular_phi_max_deg = float(qr_rod_specular_phi_max_deg)
+if np.isfinite(qr_rod_specular_theta_min_deg):
+    specular_theta_min_deg = float(qr_rod_specular_theta_min_deg)
+if np.isfinite(qr_rod_specular_theta_max_deg):
+    specular_theta_max_deg = float(qr_rod_specular_theta_max_deg)
+SPECULAR_ROI_SIGNATURE = specular_roi_signature_from_bounds(
+    phi_min=specular_phi_min_deg,
+    phi_max=specular_phi_max_deg,
+    two_theta_min=specular_theta_min_deg,
+    two_theta_max=specular_theta_max_deg,
+)
+specular_region_mask = (
+    (theta_region_axis[None, :] >= float(specular_theta_min_deg))
+    & (theta_region_axis[None, :] <= float(specular_theta_max_deg))
+    & (phi_region_axis[:, None] > float(specular_phi_min_deg))
+    & (phi_region_axis[:, None] < float(specular_phi_max_deg))
+    & positive_qz_mask(profile_qz_map)
+)
+specular_detector_qr_map = np.asarray(specular_detector_q_maps[0], dtype=np.float64)
+specular_detector_qz_map = np.asarray(specular_detector_q_maps[1], dtype=np.float64)
+specular_detector_valid_q = np.asarray(specular_detector_q_maps[2], dtype=bool)
+specular_detector_phi_mask = detector_phi_two_theta_roi_mask(
+    profile_detector_phi_map,
+    profile_detector_two_theta_map,
+    phi_min=specular_phi_min_deg,
+    phi_max=specular_phi_max_deg,
+    two_theta_min=specular_theta_min_deg,
+    two_theta_max=specular_theta_max_deg,
+)
+specular_detector_region_mask = (
+    specular_detector_valid_q
+    & specular_detector_phi_mask
+    & np.isfinite(specular_detector_qr_map)
+    & np.isfinite(specular_detector_qz_map)
+    & np.isfinite(profile_detector_two_theta_map)
+    & (specular_detector_qz_map > POSITIVE_QZ_MIN)
+)
+specular_qz_values = specular_detector_qz_map[
+    specular_detector_region_mask & np.isfinite(specular_detector_qz_map)
+]
 rod_profile_table = merge_qr_rod_editor_phase_table(
     rod_profile_table,
     qr_rod_specular_editor_result.get("rod_profile_table", rod_profile_table),
@@ -14924,11 +15138,11 @@ qr_rod_region_editor_result = {
     "marker_table": marker_table,
     "rod_profile_table": rod_profile_table,
     "delta_qr": float(qr_rod_delta_qr),
-    "specular_delta_qr": float(qr_rod_specular_delta_qr),
     "l_min": float(qr_rod_editor_l_min),
     "l_max": float(qr_rod_editor_l_max),
     "specular_l_min": float(qr_rod_specular_editor_l_min),
     "specular_l_max": float(qr_rod_specular_editor_l_max),
+    "specular_roi": dict(SPECULAR_ROI_SIGNATURE),
     "accepted": bool(qr_rod_nonzero_editor_result.get("accepted", False))
     or bool(qr_rod_specular_editor_result.get("accepted", False)),
     "source": qr_rod_peak_edit_source,
@@ -14962,9 +15176,8 @@ qr_rod_peak_edit_key = qr_rod_peak_edit_cache_key(
     rod_reference_policy=ROD_REFERENCE_POLICY_SIGNATURE,
     rod_profile_policy={
         **ROD_PROFILE_BACKGROUND_POLICY_SIGNATURE,
-        "specular_theta_initial_deg": float(specular_detector_theta_initial_deg),
+        "specular_roi": SPECULAR_ROI_SIGNATURE,
         "editor_delta_qr": float(qr_rod_delta_qr),
-        "specular_editor_delta_qr": float(qr_rod_specular_delta_qr),
         "editor_l_min": float(qr_rod_editor_l_min),
         "editor_l_max": float(qr_rod_editor_l_max),
         "specular_editor_l_min": float(qr_rod_specular_editor_l_min),
@@ -15275,7 +15488,7 @@ rod_note_lines = [
     "",
     f"The figure uses only the {ROD_PROFILE_TILT_LABEL}° background. Non-specular traces are integrated directly in detector Qr/Qz space.",
     f"Nonzero rods use detector Q maps at `theta_i = {float(ROD_PROFILE_TILT_DEG):.6g}°`.",
-    f"Specular `m = 0` Qr integration uses detector Q maps at `theta_i = {float(specular_detector_theta_initial_deg):.6g}°` and is limited to `{SPECULAR_QR_ROD_L_MIN:g} <= L <= {SPECULAR_QR_ROD_L_MAX:g}`.",
+    f"m = 0 ROI uses caked phi/2theta bounds `phi=[{float(specular_phi_min_deg):.6g}, {float(specular_phi_max_deg):.6g}]°`, `2theta=[{float(specular_theta_min_deg):.6g}, {float(specular_theta_max_deg):.6g}]°`, and `{SPECULAR_QR_ROD_L_MIN:g} <= L <= {SPECULAR_QR_ROD_L_MAX:g}`.",
     "Before integration, each non-specular HK rod center is adjusted from fitted detector peak Qr samples; every Qz bin then uses the adjusted Qr0 +/- delta_Qr, branch, positive Qz, and the 2theta display limit before summing intensity.",
     "The detector-region figure is a detector-space Qr overlay diagnostic: the background is linear detector intensity with robust percentile clipping, translucent ribbons show the active Delta Qr support with dashed boundary strokes, solid curves are projected fitted-geometry rod centerlines, and solid-white m labels start from the default geometry before manual adjustment; the intensity scale is saved as a separate file.",
     "The plotted traces are acceptance-normalized detector-count densities unless BACKGROUND_SOLID_ANGLE_CORRECTION is enabled. Raw summed columns are retained for audit only.",
@@ -15294,7 +15507,7 @@ rod_note_lines = [
     "The detector-space fit model remains in the CSV as `fit_density`. Individual component distributions are saved to the component CSV but not drawn.",
     "Subplot labels show `m = H^2 + H*K + K^2`; marker tick labels show compressed (HK,L) values for the fitted points.",
     "Nonzero-m masks still use detector-space Qr/Qz internally and extend to the projected sign endpoint.",
-    "The detector-region figure labels the specular rod as `m = 0`; the displayed support is the same detector Qr/Qz region used for profile extraction.",
+    "The detector-region figure labels the specular rod as `m = 0`; the displayed support is the same phi/2theta ROI arc used for profile extraction.",
     f"Hidden Qr-rod subplot HK values: `{', '.join(str(int(value)) for value in QR_ROD_HIDDEN_PLOT_HK) or 'none'}`.",
     "",
     "## Rods",
@@ -16180,27 +16393,6 @@ def point_to_projected_polyline_distance_px(
     return best if np.isfinite(best) else float("nan")
 
 
-def specular_detector_lines_from_markers(
-    table: pd.DataFrame,
-) -> list[tuple[np.ndarray, np.ndarray]]:
-    if table.empty or "refined_two_theta_deg" not in table or "refined_phi_deg" not in table:
-        return []
-    sort_key = "qz_marker" if "qz_marker" in table else "refined_two_theta_deg"
-    points: list[tuple[float, float]] = []
-    for _idx, marker in table.sort_values(sort_key).iterrows():
-        xy = detector_xy_from_caked_angles(
-            profile_bg,
-            float(marker["refined_two_theta_deg"]),
-            float(marker["refined_phi_deg"]),
-        )
-        if xy is not None and detector_point_in_region(xy[0], xy[1]):
-            points.append((float(xy[0]), float(xy[1])))
-    if len(points) < 2:
-        return []
-    pts = np.asarray(points, dtype=np.float64)
-    return [(pts[:, 0], pts[:, 1])]
-
-
 def specular_detector_centerline_fallback(
     sample_count: int = 320,
 ) -> list[tuple[np.ndarray, np.ndarray]]:
@@ -17037,6 +17229,7 @@ specular_detector_qz_values = specular_detector_qz_values[
 ]
 specular_visual_qz_values = specular_detector_qz_map[
     detector_region_shape_mask
+    & specular_detector_phi_mask
     & np.isfinite(specular_detector_qz_map)
     & (specular_detector_qz_map > POSITIVE_QZ_MIN)
 ]
@@ -17055,21 +17248,19 @@ if specular_visual_qz_bounds is None and specular_detector_qz_values.size >= 2:
     )
 specular_delta_q_visual = None
 if specular_visual_qz_bounds is not None:
-    specular_delta_q_visual = (
-        gui_qr_cylinder_overlay.build_detector_selected_qr_rod_band_visual_payload(
-            qr_map=specular_detector_qr_map,
-            qz_map=specular_detector_qz_map,
-            valid_q=specular_detector_valid_q,
-            qr_center=0.0,
-            delta_qr=float(qr_rod_specular_delta_qr),
-            qz_min=float(specular_visual_qz_bounds[0]),
-            qz_max=float(specular_visual_qz_bounds[1]),
-            detector_phi_deg=profile_detector_phi_map,
-            phi_min=float(specular_phi_min_deg),
-            phi_max=float(specular_phi_max_deg),
-            shape_mask=detector_region_shape_mask,
-        )
+    specular_roi_visual_mask = (
+        detector_region_shape_mask
+        & specular_detector_valid_q
+        & specular_detector_phi_mask
+        & np.isfinite(specular_detector_qz_map)
+        & (specular_detector_qz_map >= float(specular_visual_qz_bounds[0]))
+        & (specular_detector_qz_map <= float(specular_visual_qz_bounds[1]))
     )
+    specular_delta_q_visual = {
+        "band_fill_mask": specular_roi_visual_mask,
+        "band_boundary_inner_visible": specular_roi_visual_mask,
+        "band_boundary_outer_visible": specular_roi_visual_mask,
+    }
     draw_detector_delta_q_region(
         specular_delta_q_visual,
         specular_color,
@@ -17077,9 +17268,7 @@ if specular_visual_qz_bounds is not None:
         boundary_alpha=detector_region_specular_boundary_alpha,
         boundary_expand_px=detector_region_specular_boundary_expand_px,
     )
-specular_lines = specular_detector_lines_from_markers(specular_l_marker_table)
-if not specular_lines:
-    specular_lines = detector_mask_centerline_from_visual(specular_delta_q_visual)
+specular_lines = detector_mask_centerline_from_visual(specular_delta_q_visual)
 if not specular_lines:
     specular_lines = specular_detector_centerline_fallback()
 for projected_col, projected_row in specular_lines:
