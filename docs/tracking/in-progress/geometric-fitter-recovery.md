@@ -9,6 +9,20 @@ Last updated: 2026-05-21
 
 ## Summary
 
+2026-05-21 locked Qr/Qz pipeline-validation slice: row-level caked projection
+readiness now counts projected live rows whose locked identity is carried only
+in nested canonical provenance, so `source_cache_project_rows_ready rows=4`
+cannot later degrade to `locked_qr_projection_readiness projected_rows=0`.
+The two-group dynamic fixture now uses the current `[-1,0,5]`/`[-1,0,10]`
+live-shape values. The optimizer records a locked-Qr identity baseline before
+least-squares and, when that baseline is already within acceptance, a failed or
+worse solver candidate cannot replace it with a manual-outlier rejection. Stale
+nominal caked fields remain diagnostics when exact/refined projection authority
+is proven. Feature status: implemented for the current two-group locked-Qr
+route and covered by targeted readiness, handoff, dynamic objective, and public
+solver tests. Migration/deprecation status: no saved-state, CLI, config, or
+artifact migration is required.
+
 2026-05-21 locked Qr/Qz branch-line slice: saved manual caked Qr/Qz fits now
 enable the existing q-group line residual only for locked groups that prove both
 `source_branch_index=0` and `source_branch_index=1` for the same `q_group_key`.

@@ -20139,12 +20139,23 @@ def _qr_dynamic_baseline_anchor_diagnostics(
         elif not hkl_match:
             failure_reason = "hkl_mismatch"
         elif nominal_anchor is not None:
-            nominal_delta = (
-                float(nominal_anchor[0] - dynamic_anchor[0]),
-                float(_angular_difference_deg(float(nominal_anchor[1]), float(dynamic_anchor[1]))),
-            )
-            if abs(nominal_delta[0]) > 0.5 or abs(nominal_delta[1]) > 1.0:
-                failure_reason = "baseline_not_current_dynamic_caked_row"
+            trusted_dynamic_projection = bool(raw_entry.get("used_exact_projector", False)) or str(
+                raw_entry.get("fit_prediction_caked_authority", "") or ""
+            ) in {
+                "dynamic_trial_projection_from_prediction_native",
+                "dynamic_trial_projection_from_prediction_display_converted_to_native",
+                "exact_projector_from_native",
+                "sim_refined_caked_matching_prediction_native",
+            }
+            if not trusted_dynamic_projection:
+                nominal_delta = (
+                    float(nominal_anchor[0] - dynamic_anchor[0]),
+                    float(
+                        _angular_difference_deg(float(nominal_anchor[1]), float(dynamic_anchor[1]))
+                    ),
+                )
+                if abs(nominal_delta[0]) > 0.5 or abs(nominal_delta[1]) > 1.0:
+                    failure_reason = "baseline_not_current_dynamic_caked_row"
 
         mismatch_type = "none"
         if failure_reason == "dynamic_anchor_units_not_degrees":
@@ -26386,6 +26397,10 @@ def fit_geometry_parameters(
         "dataset_entries": dataset_debug_entries,
     }
     geometry_fit_stage_timings: Dict[str, float] = {}
+    locked_qr_identity_baseline_x: Optional[np.ndarray] = None
+    locked_qr_identity_baseline_fun: Optional[np.ndarray] = None
+    locked_qr_identity_baseline_summary: Dict[str, object] = {}
+    locked_qr_identity_baseline_payload: Dict[str, object] = {}
 
     def _fit_prediction_pair(
         entry: Mapping[str, object],
@@ -26606,6 +26621,40 @@ def fit_geometry_parameters(
             point_match_summary=preflight_summary,
             prior_residual=preflight_prior_residual,
         )
+        if locked_manual_qr_expected_count > 0:
+            baseline_rows = [
+                dict(entry)
+                for entry in (preflight_summary.get("_angular_residual_rows", ()) or ())
+                if isinstance(entry, Mapping)
+            ]
+            locked_qr_identity_baseline_x = np.asarray(x0_arr, dtype=float).copy()
+            locked_qr_identity_baseline_fun = np.asarray(preflight_fun, dtype=float).copy()
+            locked_qr_identity_baseline_summary = _public_point_match_summary(
+                preflight_summary,
+            )
+            locked_qr_identity_baseline_payload = {
+                "identity_baseline_matched_pair_count": int(
+                    locked_qr_identity_baseline_summary.get("matched_pair_count", 0) or 0
+                ),
+                "identity_baseline_point_rms_deg": _safe_float(
+                    locked_qr_identity_baseline_summary.get("raw_angular_rms_deg"),
+                    float("nan"),
+                ),
+                "identity_baseline_point_max_deg": _safe_float(
+                    locked_qr_identity_baseline_summary.get("raw_angular_max_deg"),
+                    float("nan"),
+                ),
+                "identity_baseline_line_angle_rms_deg": _safe_float(
+                    locked_qr_identity_baseline_summary.get("line_angle_rms_deg"),
+                    float("nan"),
+                ),
+                "identity_baseline_line_offset_rms_deg": _safe_float(
+                    locked_qr_identity_baseline_summary.get("line_offset_rms_deg"),
+                    float("nan"),
+                ),
+                "identity_baseline_rows": copy.deepcopy(baseline_rows),
+            }
+            geometry_fit_debug_summary.update(copy.deepcopy(locked_qr_identity_baseline_payload))
         preflight_anchor_diagnostics = _qr_dynamic_baseline_anchor_diagnostics(
             preflight_diagnostics
         )
@@ -34605,6 +34654,43 @@ def fit_geometry_parameters(
         if note not in existing_parts:
             current_result.message = f"{message_text}; {note}"
 
+    def _maybe_select_locked_qr_identity_baseline(
+        current_result: OptimizeResult,
+    ) -> OptimizeResult:
+        if not (
+            locked_manual_qr_expected_count > 0
+            and locked_qr_identity_baseline_x is not None
+            and locked_qr_identity_baseline_fun is not None
+            and locked_qr_identity_baseline_summary
+            and _dynamic_angular_objective_within_acceptance(locked_qr_identity_baseline_summary)
+        ):
+            return current_result
+
+        current_fun = np.asarray(getattr(current_result, "fun", []), dtype=float)
+        current_cost = _robust_cost(current_fun, loss=solver_loss, f_scale=solver_f_scale)
+        baseline_fun = np.asarray(locked_qr_identity_baseline_fun, dtype=float)
+        baseline_cost = _robust_cost(baseline_fun, loss=solver_loss, f_scale=solver_f_scale)
+        cost_tol = max(1.0e-9 * max(abs(float(baseline_cost)), 1.0), 1.0e-12)
+        current_failed = not bool(getattr(current_result, "success", False))
+        current_worse = bool(np.isfinite(baseline_cost) and baseline_cost + cost_tol < current_cost)
+        if not (current_failed or current_worse):
+            return current_result
+
+        baseline_result = _build_probe_result(
+            np.asarray(locked_qr_identity_baseline_x, dtype=float),
+            baseline_fun,
+            message="optimizer_failed_identity_within_acceptance",
+        )
+        baseline_result.success = True
+        baseline_result.status = 1
+        baseline_result.identity_baseline_selected = True
+        baseline_result.optimizer_failed_identity_within_acceptance = bool(current_failed)
+        _emit_status(
+            "Geometry fit: retained locked Qr/Qz identity baseline "
+            "because optimizer candidate was worse or failed"
+        )
+        return baseline_result
+
     def _maybe_run_auto_freeze(
         current_result: OptimizeResult,
     ) -> Dict[str, object]:
@@ -35140,7 +35226,7 @@ def fit_geometry_parameters(
             summary["status"] = "rejected"
         return summary
 
-    result = best_result
+    result = _maybe_select_locked_qr_identity_baseline(best_result)
     if reparameterization_summary.get("accepted"):
         reparam_pairs = reparameterization_summary.get("pairs", [])
         if reparam_pairs:
@@ -35429,6 +35515,11 @@ def fit_geometry_parameters(
                     np.asarray(result.x, dtype=float),
                     evaluator=point_match_evaluator,
                 )
+                if locked_qr_identity_baseline_payload:
+                    point_match_summary.update(copy.deepcopy(locked_qr_identity_baseline_payload))
+                    point_match_summary["identity_baseline_selected"] = bool(
+                        getattr(result, "identity_baseline_selected", False)
+                    )
                 point_match_summary.update(sensitivity_summary)
                 point_match_summary.update(_classify_dynamic_angular_failure(point_match_summary))
                 if (

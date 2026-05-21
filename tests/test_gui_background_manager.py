@@ -164,7 +164,7 @@ def test_background_manager_resolves_background_display_defaults_from_image() ->
     assert defaults.slider_step >= 0.01
 
 
-def test_background_manager_slider_max_uses_true_background_peak() -> None:
+def test_background_manager_sparse_peak_informs_default_and_slider_ceiling() -> None:
     image = np.concatenate(
         [
             np.zeros(100, dtype=float),
@@ -174,7 +174,8 @@ def test_background_manager_slider_max_uses_true_background_peak() -> None:
 
     defaults = background_manager.resolve_background_display_defaults(image)
 
-    assert defaults.vmax_default == 1.0
+    assert defaults.vmax_default > 100.0
+    assert defaults.vmax_default < 1000.0
     assert defaults.slider_max == 1000.0
 
 
@@ -285,7 +286,8 @@ def test_background_manager_updates_slider_ceiling_to_true_background_peak() -> 
 
     assert view_state.background_min_slider.cget("to") == 1000.0
     assert view_state.background_max_slider.cget("to") == 1000.0
-    assert view_state.background_max_var.get() == 1.0
+    assert view_state.background_max_var.get() > 100.0
+    assert view_state.background_max_var.get() < 1000.0
 
 
 def test_background_manager_load_and_switch_update_state_in_place(tmp_path) -> None:

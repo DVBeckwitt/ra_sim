@@ -27323,6 +27323,62 @@ def test_locked_qr_fit_space_projection_readiness_accepts_projected_rows() -> No
     assert readiness["failure_reason"] is None
 
 
+def test_locked_qr_projection_readiness_counts_projected_live_rows() -> None:
+    required_pairs = [
+        _targeted_required_pair(
+            pair_id=f"bg0:g{group}:branch{branch}",
+            hkl=(-1, 0, group),
+            branch_index=branch,
+            q_group_key=("q_group", "primary", 1, group),
+            extra={
+                "source_reflection_index": group,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": group * 10 + branch,
+                "fit_source_resolution_kind": "provider_fixed_source_local",
+                "optimizer_request_has_fixed_source": True,
+            },
+        )
+        for group in (5, 10)
+        for branch in (0, 1)
+    ]
+    projected_rows = []
+    for idx, pair in enumerate(required_pairs):
+        identity = {
+            key: pair[key]
+            for key in (
+                "q_group_key",
+                "hkl",
+                "source_branch_index",
+                "source_reflection_index",
+                "source_reflection_namespace",
+                "source_reflection_is_full",
+                "source_row_index",
+            )
+            if key in pair
+        }
+        projected_rows.append(
+            {
+                "provider_selected_source_identity_canonical": identity,
+                "sim_col": 100.0 + idx,
+                "sim_row": 200.0 + idx,
+                "background_two_theta_deg": 30.0 + idx,
+                "background_phi_deg": 40.0 + idx,
+            }
+        )
+
+    readiness = geometry_fit._locked_qr_fit_space_projection_readiness(
+        projected_rows,
+        required_pairs=required_pairs,
+    )
+
+    assert readiness["expected_locked_qr_rows"] == 4
+    assert readiness["projected_locked_qr_rows"] == 4
+    assert readiness["finite_locked_qr_rows"] == 4
+    assert readiness["fit_space_projection_ready"] is True
+    assert readiness["failure_reason"] is None
+
+
 def test_locked_qr_fit_space_projection_readiness_rejects_missing_row() -> None:
     required_pairs = [
         _targeted_required_pair(

@@ -18243,8 +18243,70 @@ def _locked_qr_fit_space_projection_readiness(
 ) -> dict[str, object]:
     """Summarize whether locked Qr/Qz rows have finite caked fit-space anchors."""
 
+    def _with_effective_locked_qr_identity(entry: Mapping[str, object]) -> dict[str, object]:
+        row = dict(entry)
+        sources = (row,)
+        q_group_key = _geometry_fit_audit_first_identity(
+            sources,
+            "q_group_key",
+            "source_q_group_key",
+            "branch_group_key",
+            "group_key",
+        )
+        hkl = _geometry_fit_audit_hkl(
+            _geometry_fit_audit_first_identity(sources, "hkl", "normalized_hkl", "source_hkl")
+        )
+        branch_idx = _geometry_fit_coerce_nonnegative_index(
+            _geometry_fit_audit_first_identity(
+                sources,
+                "source_branch_index",
+                "source_peak_index",
+                "resolved_peak_index",
+            )
+        )
+        source_row_idx = _geometry_fit_coerce_nonnegative_index(
+            _geometry_fit_audit_first_identity(sources, "source_row_index")
+        )
+        source_reflection_idx = _geometry_fit_coerce_nonnegative_index(
+            _geometry_fit_audit_first_identity(sources, "source_reflection_index")
+        )
+        source_table_idx = _geometry_fit_coerce_nonnegative_index(
+            _geometry_fit_audit_first_identity(
+                sources,
+                "source_table_index",
+                "source_reflection_index",
+                "resolved_table_index",
+            )
+        )
+        source_label = _geometry_fit_audit_first_identity(sources, "source_label")
+
+        if q_group_key is not None and row.get("q_group_key") is None:
+            row["q_group_key"] = copy.deepcopy(q_group_key)
+        if hkl is not None:
+            row.setdefault("hkl", tuple(int(value) for value in hkl))
+            row.setdefault("normalized_hkl", tuple(int(value) for value in hkl))
+        if branch_idx in {0, 1}:
+            row.setdefault("source_branch_index", int(branch_idx))
+            row.setdefault("source_peak_index", int(branch_idx))
+        if source_row_idx is not None:
+            row.setdefault("source_row_index", int(source_row_idx))
+        if source_reflection_idx is not None:
+            row.setdefault("source_reflection_index", int(source_reflection_idx))
+            namespace = _geometry_fit_audit_first_identity(sources, "source_reflection_namespace")
+            is_full = _geometry_fit_audit_first_identity(sources, "source_reflection_is_full")
+            if namespace is not None:
+                row.setdefault("source_reflection_namespace", str(namespace))
+            if is_full is not None:
+                row.setdefault("source_reflection_is_full", bool(is_full))
+        if source_table_idx is not None:
+            row.setdefault("source_table_index", int(source_table_idx))
+        if source_label is not None and row.get("source_label") is None:
+            row["source_label"] = str(source_label)
+        _geometry_fit_apply_source_coverage_identity(row)
+        return row
+
     locked_required_pairs = [
-        dict(entry)
+        _with_effective_locked_qr_identity(entry)
         for entry in (required_pairs or ())
         if isinstance(entry, Mapping)
         and geometry_fit_entry_has_fixed_manual_caked_qr(
@@ -18266,7 +18328,11 @@ def _locked_qr_fit_space_projection_readiness(
             "validation": {},
         }
 
-    rows = [dict(entry) for entry in (projected_rows or ()) if isinstance(entry, Mapping)]
+    rows = [
+        _with_effective_locked_qr_identity(entry)
+        for entry in (projected_rows or ())
+        if isinstance(entry, Mapping)
+    ]
     validation = validate_geometry_fit_live_source_rows(
         rows,
         required_pairs=locked_required_pairs,

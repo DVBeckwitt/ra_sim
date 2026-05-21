@@ -312,9 +312,11 @@ Current status as of 2026-05-21:
   `Phi`/`2theta` ROI bounds, and HK=0 imports with their own markers replace
   stale required ROI rows instead of merging them into the imported set, even
   when the nonzero editor phase runs before the HK=0 phase. Accepted
-  HK=0/specular profile rows are also hashed into the final Qr-rod cache
-  identity, so the final figure cannot reuse stale cached `m=0` data after the
-  GUI selection changes.
+  nonzero `L Min` / `L Max` bounds are reused when drawing final
+  detector-region Qr-rod overlays, so exported detector images clip rod bands
+  the same way the picker preview did. Accepted HK=0/specular profile rows are
+  also hashed into the final Qr-rod cache identity, so the final figure cannot
+  reuse stale cached `m=0` data after the GUI selection changes.
 - PbI2 manuscript figures default to
   `C:\Users\Kenpo\OneDrive\Documents\GitHub\PhD Work\2D-Manuscript-Draft\figures\results_pbi2`.
   Other samples keep the `results_ordered` default, and

@@ -17580,6 +17580,22 @@ for index, rod in enumerate(detector_overlay_rods):
             if qz_bounds is None:
                 continue
             qz_min, qz_max = qz_bounds
+            marker_rows = l_reference_rows(
+                m_value=m_value,
+                branch_value=branch_name,
+                marker_source=plot_marker_table,
+            )
+            qz_bounds = (
+                qz_bounds_for_l_window(
+                    (qz_min, qz_max),
+                    marker_rows,
+                    l_min=qr_rod_editor_l_min,
+                    l_max=qr_rod_editor_l_max,
+                    positive_qz_min=POSITIVE_QZ_MIN,
+                )
+                or qz_bounds
+            )
+            qz_min, qz_max = qz_bounds
             detector_overlay_qz_bounds_by_key[
                 (str(rod.get("source", "")), m_value, branch_name)
             ] = (float(qz_min), float(qz_max))

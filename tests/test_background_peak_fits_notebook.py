@@ -4159,6 +4159,27 @@ def test_parallel_script_detector_hk0_delta_q_draw_uses_specular_style() -> None
     )
 
 
+def test_parallel_script_detector_export_clips_nonzero_rods_to_accepted_l_window() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    detector_export = source[
+        source.index("detector_overlay_rods = detector_overlay_rod_entries(") : source.index(
+            "specular_color = OKABE_ITO"
+        )
+    ]
+
+    for token in (
+        "l_reference_rows(",
+        "marker_source=plot_marker_table",
+        "qz_bounds_for_l_window(",
+        "l_min=qr_rod_editor_l_min",
+        "l_max=qr_rod_editor_l_max",
+        "positive_qz_min=POSITIVE_QZ_MIN",
+    ):
+        assert token in detector_export
+
+
 def test_parallel_script_hk0_delta_qr_does_not_replace_nonzero_delta_qr() -> None:
     if not PARALLEL_SCRIPT_PATH.exists():
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")

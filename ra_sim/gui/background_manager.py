@@ -132,6 +132,12 @@ def _finite_percentile(array, percentile: float, fallback: float) -> float:
     return float(np.nanpercentile(finite, percentile))
 
 
+def _background_display_vmax_candidate(image, fallback: float) -> float:
+    """Return a robust default max that still sees sparse bright peaks."""
+
+    return _finite_percentile(image, 99.9, fallback)
+
+
 def apply_background_state_update(
     background_state,
     payload: dict[str, object],
@@ -262,7 +268,7 @@ def resolve_background_display_defaults(image) -> BackgroundDisplayDefaults:
     vmin_default = 0.0
     _, vmax_default = gui_controllers.ensure_display_intensity_range(
         vmin_default,
-        _finite_percentile(image, 99.0, 1.0),
+        _background_display_vmax_candidate(image, 1.0),
     )
     slider_min = min(min_candidate, 0.0)
     slider_max = max(
@@ -365,7 +371,7 @@ def update_background_slider_defaults(
     ):
         return None
     min_candidate = _finite_percentile(image, 1.0, 0.0)
-    max_candidate = _finite_percentile(image, 99.0, background_max_var.get())
+    max_candidate = _background_display_vmax_candidate(image, background_max_var.get())
     min_candidate, max_candidate = gui_controllers.ensure_display_intensity_range(
         min_candidate,
         max_candidate,

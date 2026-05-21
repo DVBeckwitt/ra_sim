@@ -28,8 +28,10 @@
   - Fixed the nonzero Qr-rod marker editor so clicking or dragging the `m=1 -` panel cannot submit a focused `L Min` text box and accidentally change the shared L window.
   - Fixed the `m=1 -` Qr-rod marker editor drift by freezing each panel's Qz-to-L mapping for the editor session, so marker edits no longer refit the panel coordinate transform while dragging.
   - Fixed Qr-rod peak-edit import/export so nonzero parameters (`Delta Qr`, `L Min`, `L Max`, `theta_i`) and HK=0 ROI parameters (`Phi`, `2theta`) round-trip with marker edits, while imported HK=0 markers are not merged with stale required ROI rows.
+  - Fixed final detector-region exports so nonzero Qr-rod overlays are clipped to the accepted GUI `L Min` / `L Max` window, matching the picker preview instead of drawing the full positive-Qz rod span.
   - Fixed final Qr-rod fit cache identity so accepted HK=0 profile rows from the specular editor cannot be replaced by stale cached final-figure data.
   - Linked the Qr-rod marker editor and detector-preview windows so closing either window also closes the other.
+  - Raised the default background max-intensity estimate for sparse bright peaks by using a higher robust percentile while keeping slider ceilings tied to the true finite image range.
 
 - **Config and path migration**
   - Renamed background-path keys in config from `dark_image`/`osc_files` to `simulation_dark_osc_file`/`simulation_background_osc_files`.
@@ -54,6 +56,10 @@
     optimizer request payloads now match locked-Qr audit rows by q-group, HKL,
     branch, and source-row identity, including nested canonical provider
     provenance, before falling back to pair order.
+  - Fixed the locked Qr/Qz two-group dynamic fit pipeline so projected live
+    rows count when their identity is nested in canonical provenance, and a
+    failed or worse optimizer candidate cannot replace an already-acceptable
+    identity baseline with a manual-outlier rejection.
   - Added an explicit branch-line angle residual for locked two-branch Qr/Qz
     manual caked geometry fits in both GUI and headless saved-state routes,
     while keeping single-branch or branch-ambiguous groups out of the line

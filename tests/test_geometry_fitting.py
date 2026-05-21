@@ -6086,10 +6086,10 @@ def _locked_qr_two_group_dynamic_context():
             "branch": 0,
             "source_table_index": 5,
             "source_row_index": 50,
-            "observed": (25.0, 125.0),
-            "refined": (25.5, 126.0),
-            "stale": (80.0, -5.0),
-            "native": (1005.0, 1905.0),
+            "observed": (22.762, 164.667),
+            "refined": (21.977, 166.250),
+            "stale": (28.381, 57.881),
+            "native": (1381.0, 1890.0),
         },
         {
             "q_group_key": ("q_group", "primary", 1, 5),
@@ -6097,10 +6097,10 @@ def _locked_qr_two_group_dynamic_context():
             "branch": 1,
             "source_table_index": 5,
             "source_row_index": 51,
-            "observed": (34.0, 35.0),
-            "refined": (34.5, 35.5),
-            "stale": (90.0, -35.0),
-            "native": (1006.0, 1106.0),
+            "observed": (29.527, 10.337),
+            "refined": (30.107, 10.250),
+            "stale": (30.292, -59.750),
+            "native": (1375.0, 1168.0),
         },
         {
             "q_group_key": ("q_group", "primary", 1, 10),
@@ -6433,6 +6433,138 @@ def test_locked_qr_two_groups_line_groups_are_separate_and_use_objective_payload
     }
     assert residual.size == 12
     assert np.isfinite(float(summary["line_angle_rms_deg"]))
+
+
+def _fit_locked_qr_two_group_dynamic(
+    monkeypatch,
+    *,
+    least_squares_impl,
+    projector_shift_on_theta: bool = False,
+):
+    payloads, dataset_ctx, local = _locked_qr_two_group_dynamic_context()
+
+    def fake_process(*args, **_kwargs):
+        image_size = int(args[2])
+        return (
+            np.zeros((image_size, image_size), dtype=np.float64),
+            [],
+            np.empty((0, 0, 0)),
+            np.empty(0),
+            np.empty(0),
+            [],
+        )
+
+    base_projector = dataset_ctx.fit_space_projector
+
+    def projector(cols, rows, *, local_params=None, **kwargs):
+        payload = dict(base_projector(cols, rows, local_params=local_params, **kwargs))
+        if projector_shift_on_theta:
+            try:
+                theta_delta = float((local_params or {}).get("theta_initial", 0.0) or 0.0)
+            except Exception:
+                theta_delta = 0.0
+            if abs(theta_delta) > 1.0e-9:
+                payload["phi_deg"] = np.asarray(payload["phi_deg"], dtype=np.float64) + 120.0
+        return payload
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", least_squares_impl)
+
+    dataset_spec = {
+        "dataset_index": 0,
+        "label": "bg0",
+        "theta_initial": 0.0,
+        "measured_peaks": list(dataset_ctx.subset.measured_entries),
+        "experimental_image": np.zeros((4, 4), dtype=np.float64),
+        "fit_space_projector": projector,
+        "fit_space_projector_kind": "exact_caked_bundle",
+        "qr_fit_trial_source_rows_builder": dataset_ctx.qr_fit_trial_source_rows_builder,
+        "qr_fit_trial_source_rows_builder_kind": "unit_test_dynamic_rows",
+        "sim_caked_image_builder": lambda *_args, **_kwargs: pytest.fail(
+            "locked Qr dynamic fit must not require full caked image storage"
+        ),
+        "sim_caked_image_builder_kind": "must_not_call",
+    }
+    config = _live_caked_qr_refinement_config(point_only_projection=True)
+    config["solver"].update(
+        {
+            "q_group_line_constraints": True,
+            "q_group_line_constraints_enabled": True,
+            "q_group_line_requires_two_branches": True,
+            "q_group_line_angle_weight": 0.25,
+            "q_group_line_offset_weight": 0.0,
+        }
+    )
+
+    result = opt.fit_geometry_parameters(
+        np.asarray([payload["hkl"] for payload in payloads], dtype=np.float64),
+        np.ones(len(payloads), dtype=np.float64),
+        4000,
+        local,
+        measured_peaks=list(dataset_ctx.subset.measured_entries),
+        var_names=["theta_initial"],
+        experimental_image=np.zeros((4, 4), dtype=np.float64),
+        dataset_specs=[dataset_spec],
+        refinement_config=config,
+    )
+    return result
+
+
+def test_locked_qr_two_group_identity_baseline_recorded_before_optimizer(monkeypatch):
+    def fake_least_squares(residual_fn, x0, **_kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=True,
+            status=1,
+            message="ok",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    result = _fit_locked_qr_two_group_dynamic(
+        monkeypatch,
+        least_squares_impl=fake_least_squares,
+    )
+
+    summary = result.point_match_summary
+    assert summary["identity_baseline_matched_pair_count"] == 4
+    assert summary["identity_baseline_point_rms_deg"] < 5.0
+    assert summary["identity_baseline_point_max_deg"] < 5.0
+    assert np.isfinite(float(summary["identity_baseline_line_angle_rms_deg"]))
+    assert len(summary["identity_baseline_rows"]) == 4
+
+
+def test_locked_qr_solver_does_not_select_worse_failed_candidate_than_identity(monkeypatch):
+    def failed_worse_least_squares(residual_fn, x0, **_kwargs):
+        x = np.asarray(x0, dtype=float) + 1.0
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=False,
+            status=0,
+            message="synthetic solver failure",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=float("nan"),
+        )
+
+    result = _fit_locked_qr_two_group_dynamic(
+        monkeypatch,
+        least_squares_impl=failed_worse_least_squares,
+        projector_shift_on_theta=True,
+    )
+
+    assert result.success
+    assert result.message == "optimizer_failed_identity_within_acceptance"
+    assert result.point_match_summary["identity_baseline_selected"] is True
+    assert result.point_match_summary["identity_baseline_point_max_deg"] < 5.0
+    assert result.point_match_summary["raw_angular_max_deg"] < 10.0
+    assert result.point_match_summary.get("recommended_next_fix") != (
+        "remove_or_repick_manual_outliers"
+    )
 
 
 def test_qr_caked_objective_rejects_caked_display_values_as_detector_px():
