@@ -110,6 +110,7 @@ def _install_simple_weighted_backend(
     *,
     solution_map: dict[tuple[int, int, int, int], np.ndarray],
     projector=None,
+    precompute_calls=None,
 ):
     def fake_precompute(
         wavelength_array,
@@ -131,6 +132,16 @@ def _install_simple_weighted_backend(
         _R_ZY_n,
         _P0,
     ):
+        if precompute_calls is not None:
+            precompute_calls.append(
+                {
+                    "wavelength_array": np.asarray(wavelength_array, dtype=np.float64).copy(),
+                    "beam_x_array": np.asarray(beam_x_array, dtype=np.float64).copy(),
+                    "beam_y_array": np.asarray(_beam_y_array, dtype=np.float64).copy(),
+                    "theta_array": np.asarray(_theta_array, dtype=np.float64).copy(),
+                    "phi_array": np.asarray(_phi_array, dtype=np.float64).copy(),
+                }
+            )
         n_samp = int(np.asarray(beam_x_array, dtype=np.float64).shape[0])
         sample_terms = np.zeros((n_samp, diffraction._SAMPLE_COLS), dtype=np.float64)
         sample_terms[:, diffraction._SAMPLE_COL_VALID] = 1.0
@@ -2413,12 +2424,14 @@ def test_center_ghost_representative_survives_even_when_unsampled(monkeypatch):
 def test_branch_representative_cache_uses_zero_intensity_center_ghost(monkeypatch):
     diffraction._set_last_intersection_cache([])
     monkeypatch.setattr(diffraction, "_retain_last_intersection_cache", lambda: True)
+    precompute_calls = []
     _install_simple_weighted_backend(
         monkeypatch,
         solution_map={
             (1, 0, 1, 0): np.array([[10.0, -1.0, 0.0, 1.0]], dtype=np.float64),
             (1, 0, 1, 1): np.array([[20.0, -1.0, 0.0, 100.0]], dtype=np.float64),
         },
+        precompute_calls=precompute_calls,
     )
 
     def controlled_targets(_total_mass, event_count, sample_idx):
@@ -2431,7 +2444,8 @@ def test_branch_representative_cache_uses_zero_intensity_center_ghost(monkeypatc
     kwargs = _base_process_kwargs(n_samp=2)
     kwargs["theta_array"] = np.array([0.25, 0.50], dtype=np.float64)
     kwargs["phi_array"] = np.array([0.25, 0.50], dtype=np.float64)
-    kwargs["wavelength_array"] = np.array([1.52, 1.56], dtype=np.float64)
+    kwargs["wavelength_array"] = np.array([1.52, 1.88], dtype=np.float64)
+    assert not np.isclose(float(np.mean(kwargs["wavelength_array"])), float(kwargs["lambda_"]))
 
     diffraction.process_peaks_parallel_safe(
         **kwargs,
@@ -2456,6 +2470,15 @@ def test_branch_representative_cache_uses_zero_intensity_center_ghost(monkeypatc
     assert float(representative_rows[0, cache_schema.CACHE_COL_INTENSITY]) == pytest.approx(0.0)
     np.testing.assert_allclose(representative_rows[0, 9:14], np.zeros(5, dtype=np.float64))
     assert np.isnan(representative_rows[0, cache_schema.CACHE_COL_BEST_SAMPLE_INDEX])
+    assert any(
+        call["wavelength_array"].shape == (1,)
+        and np.allclose(call["wavelength_array"], [kwargs["lambda_"]])
+        and np.allclose(call["beam_x_array"], [0.0])
+        and np.allclose(call["beam_y_array"], [0.0])
+        and np.allclose(call["theta_array"], [0.0])
+        and np.allclose(call["phi_array"], [0.0])
+        for call in precompute_calls
+    )
 
     qr_hit_rows = diffraction.intersection_cache_to_hit_tables(
         diffraction.get_last_intersection_cache()
