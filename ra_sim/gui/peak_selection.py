@@ -4536,13 +4536,15 @@ def refresh_runtime_selected_peak_after_simulation_update(
         bindings.simulation_runtime_state,
         live_geometry_preview_enabled=bool(live_geometry_preview_enabled),
     )
+    selected_hkl_target = getattr(bindings.peak_selection_state, "selected_hkl_target", None)
+    has_selected_hkl_target = selected_hkl_target is not None
     if need_peak_overlay:
-        overlay_ready = bool(bindings.ensure_peak_overlay_data(force=False))
+        overlay_ready = bool(bindings.ensure_peak_overlay_data(force=has_selected_hkl_target))
     else:
         _clear_peak_overlay_lists(bindings.simulation_runtime_state)
         overlay_ready = False
 
-    if getattr(bindings.peak_selection_state, "selected_hkl_target", None) is not None:
+    if has_selected_hkl_target:
         reselection_ok = reselect_runtime_selected_peak(bindings)
         if not reselection_ok:
             _hide_runtime_selected_peak_marker(bindings)

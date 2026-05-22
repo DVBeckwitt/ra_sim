@@ -373,6 +373,46 @@ Shipping status: ready as a normal bug-fix slice after the final pre-commit
 gate passes. Rollback is a normal git revert of the runtime-session cache
 preference, focused regression test, and documentation updates.
 
+## 2026-05-22 Selected HKL Marker Refresh Follow-up
+
+Problem:
+
+- The yellow selected-HKL marker square could stay at its old detector/caked
+  position after incident angle or other simulation parameters changed.
+- The refresh path maintained the selected HKL target, but it first asked for
+  peak-overlay data with `force=False`, so reselection could consume stale
+  `peak_positions` and `peak_records`.
+
+What changed:
+
+- `refresh_runtime_selected_peak_after_simulation_update(...)` now forces the
+  existing `ensure_peak_overlay_data(...)` callback when a selected HKL target
+  is present, then reuses the existing `reselect_runtime_selected_peak(...)`
+  path.
+- No new public API, abstraction layer, dependency, saved-state field, config
+  key, CLI flag, CI workflow, deprecation, or migration was added.
+
+Bug/error status: fixed for stale selected-HKL marker coordinates after
+simulation-parameter updates. If the current simulation no longer contains the
+selected target, the existing missing-target behavior still hides the marker.
+
+Feature status: no new user-facing feature. The existing selected marker now
+tracks the current simulation data.
+
+Validation recorded for this follow-up:
+
+- Red regression first:
+  `python -m pytest tests/test_gui_peak_selection.py -k "forces_overlay_rebuild_for_selected_target" -ra`
+  failed before the production change.
+- `python -m pytest tests/test_gui_peak_selection.py -k "refresh_runtime_selected_peak" -ra`
+  passed, `3 passed`.
+- `python -m pytest tests/test_gui_peak_selection.py -ra` passed, `112 passed`.
+- `python -m ra_sim.dev check` passed, `295 passed`.
+
+Shipping status: ready as a focused bug-fix slice. Rollback is a normal git
+revert of the `peak_selection.py` refresh change, its regression test, and this
+documentation update.
+
 ## Main Code Paths
 
 - `ra_sim/gui/geometry_q_group_manager.py`

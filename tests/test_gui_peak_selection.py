@@ -6119,11 +6119,73 @@ def test_refresh_runtime_selected_peak_after_signature_change_uses_current_overl
         live_geometry_preview_enabled=False,
     )
 
-    assert events == [("ensure", False), ("ensure", False), ("draw", None)]
+    assert events == [("ensure", True), ("ensure", False), ("draw", None)]
     assert marker.data == ([8.0], [9.0])
     assert runtime_state.selected_peak_record["display_col"] == 8.0
     assert runtime_state.selected_peak_record["display_row"] == 9.0
     assert "_refined_simulation_signature" not in runtime_state.selected_peak_record
+
+
+def test_refresh_runtime_selected_peak_forces_overlay_rebuild_for_selected_target() -> None:
+    target = (1, 0, 2)
+    runtime_state = state.SimulationRuntimeState(
+        peak_positions=[(8.0, 9.0)],
+        peak_millers=[target],
+        peak_intensities=[3.0],
+        peak_records=[
+            {
+                "hkl": target,
+                "display_col": 8.0,
+                "display_row": 9.0,
+                "native_col": 18.0,
+                "native_row": 19.0,
+            }
+        ],
+    )
+    peak_state = state.PeakSelectionState(selected_hkl_target=target)
+    marker = _FakeMarker()
+    events: list[object] = []
+
+    def ensure_peak_overlay_data(*, force: bool = False) -> bool:
+        events.append(("ensure", force))
+        if force:
+            runtime_state.peak_positions = [(30.0, 40.0)]
+            runtime_state.peak_millers = [target]
+            runtime_state.peak_intensities = [7.0]
+            runtime_state.peak_records = [
+                {
+                    "hkl": target,
+                    "display_col": 30.0,
+                    "display_row": 40.0,
+                    "native_col": 130.0,
+                    "native_row": 140.0,
+                }
+            ]
+        return True
+
+    bindings = peak_selection.SelectedPeakRuntimeBindings(
+        simulation_runtime_state=runtime_state,
+        peak_selection_state=peak_state,
+        hkl_lookup_view_state=None,
+        selected_peak_marker=marker,
+        current_primary_a_factory=lambda: 5.0,
+        caked_view_enabled_factory=lambda: False,
+        current_canvas_pick_config_factory=lambda: None,
+        current_intersection_config_factory=lambda: None,
+        ensure_peak_overlay_data=ensure_peak_overlay_data,
+        draw_idle=lambda: events.append(("draw", None)),
+    )
+
+    assert peak_selection.refresh_runtime_selected_peak_after_simulation_update(
+        bindings,
+        live_geometry_preview_enabled=False,
+    )
+
+    assert events == [("ensure", True), ("ensure", False), ("draw", None)]
+    assert marker.data == ([30.0], [40.0])
+    assert marker.visible is True
+    assert runtime_state.selected_peak_record["display_col"] == 30.0
+    assert runtime_state.selected_peak_record["display_row"] == 40.0
 
 
 def test_refresh_runtime_selected_peak_after_simulation_update_manages_overlay_state() -> None:
@@ -6156,7 +6218,7 @@ def test_refresh_runtime_selected_peak_after_simulation_update_manages_overlay_s
     )
 
     assert handled is True
-    assert events == [("ensure", False), ("ensure", False), ("draw", None)]
+    assert events == [("ensure", True), ("ensure", False), ("draw", None)]
 
     events.clear()
     peak_state.selected_hkl_target = None
@@ -6188,7 +6250,7 @@ def test_refresh_runtime_selected_peak_after_simulation_update_manages_overlay_s
     )
 
     assert handled is True
-    assert events == [("ensure", False), ("ensure", False), ("draw", None)]
+    assert events == [("ensure", True), ("ensure", False), ("draw", None)]
     assert marker.visible is False
     assert runtime_state.selected_peak_record is None
 
