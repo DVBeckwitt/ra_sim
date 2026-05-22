@@ -4248,6 +4248,13 @@ def test_final_region_overlay_bounds_come_from_final_profile_table() -> None:
                 "theta_initial_deg_used_for_q": 7.5,
                 "pixel_count": 0,
             },
+            {
+                "m": 0,
+                "branch": "qz",
+                "qz_min": 0.2,
+                "qz_max": 0.6,
+                "pixel_count": 3,
+            },
         ]
     )
     rod_entries = [
@@ -4267,11 +4274,16 @@ def test_final_region_overlay_bounds_come_from_final_profile_table() -> None:
         rod_entries,
         delta_qr=0.30,
         theta_initial_deg=12.5,
-        specular_roi={},
+        specular_roi={
+            "phi_min": -8.0,
+            "phi_max": 8.0,
+            "two_theta_min": 3.0,
+            "two_theta_max": 9.0,
+        },
     )
 
-    assert len(overlays) == 1
-    overlay = overlays[0]
+    assert len(overlays) == 2
+    overlay = next(item for item in overlays if int(item["m"]) == 1)
     assert overlay["source"] == "primary"
     assert overlay["branch"] == "-"
     assert overlay["qz_min"] == pytest.approx(1.2)
@@ -4281,6 +4293,16 @@ def test_final_region_overlay_bounds_come_from_final_profile_table() -> None:
     assert overlay["theta_initial_deg"] == pytest.approx(7.5)
     assert overlay["pixel_count_sum"] == pytest.approx(10.0)
     assert overlay["profile_rows"] == 2
+    specular_overlay = next(item for item in overlays if int(item["m"]) == 0)
+    assert specular_overlay["branch"] == "qz"
+    assert specular_overlay["theta_initial_deg"] == pytest.approx(12.5)
+    assert specular_overlay["qz_min"] == pytest.approx(0.2)
+    assert specular_overlay["qz_max"] == pytest.approx(0.6)
+    assert specular_overlay["phi_min"] == pytest.approx(-8.0)
+    assert specular_overlay["phi_max"] == pytest.approx(8.0)
+    assert specular_overlay["two_theta_min"] == pytest.approx(3.0)
+    assert specular_overlay["two_theta_max"] == pytest.approx(9.0)
+    assert specular_overlay["pixel_count_sum"] == pytest.approx(3.0)
 
 
 def test_final_detector_figure_does_not_use_pre_editor_region_overlays_after_editor() -> None:

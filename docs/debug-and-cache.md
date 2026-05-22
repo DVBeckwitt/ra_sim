@@ -301,7 +301,7 @@ Current status as of 2026-05-21:
   Qr-rod cache policy. During nonzero profile refresh, both plus/minus branches
   for the same `m` rebuild their Qz bins from the same active L window and
   common finite detector support, so their displayed L starts stay aligned.
-- Bug status fixed as of 2026-05-21: clicking or dragging a nonzero HK rod
+- Bug status fixed as of 2026-05-22: clicking or dragging a nonzero HK rod
   panel while an `L Min` / `L Max` text box is focused blurs the box without
   submitting its draft value, so panel interaction no longer changes the
   shared L window. The editor also freezes each panel's Qz-to-L mapping for

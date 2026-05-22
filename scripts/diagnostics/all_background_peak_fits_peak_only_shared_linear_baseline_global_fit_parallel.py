@@ -14708,6 +14708,7 @@ def final_qr_rod_supported_profile_group(
 def final_specular_qr_rod_region_overlay_from_profile_table(
     profile_table: pd.DataFrame,
     *,
+    theta_initial_deg: object,
     specular_roi: dict[str, object],
 ) -> list[dict[str, object]]:
     table = pd.DataFrame(profile_table).copy()
@@ -14735,7 +14736,7 @@ def final_specular_qr_rod_region_overlay_from_profile_table(
             "qr_fit_sample_count": 0,
             "qr_fit_method": "specular_roi",
             "delta_qr": 0.0,
-            "theta_initial_deg": float("nan"),
+            "theta_initial_deg": as_float(theta_initial_deg, np.nan),
             "qz_min": float(np.nanmin(qz_min_values)),
             "qz_max": float(np.nanmax(qz_max_values)),
             "pixel_count_sum": pixel_count_sum,
@@ -14864,6 +14865,7 @@ def final_qr_rod_region_overlays_from_profile_table(
     overlays.extend(
         final_specular_qr_rod_region_overlay_from_profile_table(
             table,
+            theta_initial_deg=theta_initial_deg,
             specular_roi=dict(specular_roi or {}),
         )
     )
