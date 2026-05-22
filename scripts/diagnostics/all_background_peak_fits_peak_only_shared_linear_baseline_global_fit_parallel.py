@@ -588,6 +588,123 @@ def qz_bounds_for_l_window(
     return qz_lo, qz_hi
 
 
+def l_axis_coefficient_for_group(
+    l_axis_coefficients: object,
+    *,
+    m_value: int,
+    branch_value: str,
+) -> tuple[float, float] | None:
+    if not isinstance(l_axis_coefficients, dict):
+        return None
+    payload = l_axis_coefficients.get(f"{int(m_value)}::{str(branch_value)}")
+    if payload is None:
+        payload = l_axis_coefficients.get((int(m_value), str(branch_value)))
+    if not isinstance(payload, dict):
+        return None
+    try:
+        slope = float(payload.get("slope", np.nan))
+        intercept = float(payload.get("intercept", np.nan))
+    except (TypeError, ValueError):
+        return None
+    if not (
+        np.isfinite(slope)
+        and np.isfinite(intercept)
+        and abs(float(slope)) > 1.0e-12
+    ):
+        return None
+    return float(slope), float(intercept)
+
+
+def normalized_l_axis_coefficients_payload(
+    l_axis_coefficients: object,
+) -> dict[str, dict[str, object]]:
+    if not isinstance(l_axis_coefficients, dict):
+        return {}
+    normalized: dict[str, dict[str, object]] = {}
+    for key, payload in l_axis_coefficients.items():
+        m_raw: object = None
+        branch_raw: object = None
+        if isinstance(payload, dict):
+            m_raw = payload.get("m")
+            branch_raw = payload.get("branch")
+        if m_raw is None or branch_raw is None:
+            if isinstance(key, tuple) and len(key) >= 2:
+                m_raw, branch_raw = key[0], key[1]
+            elif isinstance(key, str) and "::" in key:
+                m_raw, branch_raw = key.split("::", 1)
+        try:
+            m_value = int(m_raw)
+        except (TypeError, ValueError):
+            continue
+        branch_value = str(branch_raw)
+        coeff = l_axis_coefficient_for_group(
+            l_axis_coefficients,
+            m_value=m_value,
+            branch_value=branch_value,
+        )
+        if coeff is None:
+            continue
+        slope, intercept = coeff
+        normalized[f"{m_value}::{branch_value}"] = {
+            "m": int(m_value),
+            "branch": branch_value,
+            "slope": float(slope),
+            "intercept": float(intercept),
+        }
+    return normalized
+
+
+def merge_l_axis_coefficients(*sources: object) -> dict[str, dict[str, object]]:
+    merged: dict[str, dict[str, object]] = {}
+    for source in sources:
+        if isinstance(source, dict) and "l_axis_coefficients" in source:
+            source = source.get("l_axis_coefficients")
+        merged.update(normalized_l_axis_coefficients_payload(source))
+    return merged
+
+
+def l_axis_coefficients_signature(
+    l_axis_coefficients: object,
+) -> tuple[tuple[object, ...], ...]:
+    records = (
+        (
+            int(payload["m"]),
+            str(payload["branch"]),
+            round(float(payload["slope"]), 12),
+            round(float(payload["intercept"]), 12),
+        )
+        for payload in normalized_l_axis_coefficients_payload(l_axis_coefficients).values()
+    )
+    return tuple(sorted(records, key=lambda row: tuple(str(value) for value in row)))
+
+
+def freeze_qr_rod_gui_state(
+    *,
+    marker_table: object,
+    rod_profile_table: object,
+    l_axis_coefficients: object,
+    delta_qr: object,
+    l_min: object,
+    l_max: object,
+    theta_initial_deg: object,
+    specular_roi: object,
+) -> dict[str, object]:
+    roi = dict(specular_roi or {}) if isinstance(specular_roi, dict) else {}
+    return {
+        "marker_table": pd.DataFrame(marker_table).copy(),
+        "rod_profile_table": pd.DataFrame(rod_profile_table).copy(),
+        "l_axis_coefficients": normalized_l_axis_coefficients_payload(l_axis_coefficients),
+        "delta_qr": float(delta_qr),
+        "l_min": float(l_min),
+        "l_max": float(l_max),
+        "theta_initial_deg": float(theta_initial_deg),
+        "specular_phi_min_deg": float(roi.get("phi_min", np.nan)),
+        "specular_phi_max_deg": float(roi.get("phi_max", np.nan)),
+        "specular_theta_min_deg": float(roi.get("two_theta_min", np.nan)),
+        "specular_theta_max_deg": float(roi.get("two_theta_max", np.nan)),
+    }
+
+
 def specular_qz_bounds_for_l_window(
     qz_values: object,
     marker_rows: object,
@@ -2094,6 +2211,45 @@ def show_qr_rod_peak_marker_popup(
         l = np.asarray(l_values, dtype=np.float64)
         return (l - float(intercept)) / float(slope)
 
+    def export_group_l_axis_coefficients() -> dict[str, dict[str, object]]:
+        coefficients: dict[str, dict[str, object]] = {}
+        for m_value, branch_value in groups:
+            slope, intercept = group_qz_l_coeff(int(m_value), str(branch_value))
+            coefficients[f"{int(m_value)}::{str(branch_value)}"] = {
+                "m": int(m_value),
+                "branch": str(branch_value),
+                "slope": float(slope),
+                "intercept": float(intercept),
+            }
+        return coefficients
+
+    def normalize_accepted_marker_l_axis() -> None:
+        nonlocal edited
+        coefficients = export_group_l_axis_coefficients()
+        if edited.empty or not {"m", "branch", "qz_marker"}.issubset(edited.columns):
+            region_control_state["l_axis_coefficients"] = coefficients
+            return
+        m_values = pd.to_numeric(edited["m"], errors="coerce").to_numpy(dtype=np.float64)
+        branch_values = edited["branch"].astype(str).to_numpy(dtype=object)
+        for payload in coefficients.values():
+            slope = float(payload["slope"])
+            intercept = float(payload["intercept"])
+            mask = (
+                (m_values == float(payload["m"]))
+                & (branch_values == str(payload["branch"]))
+            )
+            if not np.any(mask):
+                continue
+            qz = pd.to_numeric(edited.loc[mask, "qz_marker"], errors="coerce").to_numpy(
+                dtype=np.float64
+            )
+            l_values = slope * qz + intercept
+            for column in ("fit_l", "display_l", "l"):
+                edited.loc[mask, column] = l_values
+            edited.loc[mask, "l_axis_slope"] = slope
+            edited.loc[mask, "l_axis_intercept"] = intercept
+        region_control_state["l_axis_coefficients"] = coefficients
+
     def selected_marker_row() -> tuple[int, pd.Series] | None:
         group = selected.get("group")
         index = selected.get("index")
@@ -3035,6 +3191,7 @@ def show_qr_rod_peak_marker_popup(
     plt.show(block=True)
     if not result["accepted"]:
         return original, False
+    normalize_accepted_marker_l_axis()
     return edited.reset_index(drop=True), True
 
 
@@ -3133,6 +3290,7 @@ def edit_qr_rod_region_editor(
             "phi_max": float(current_phi_max),
             "two_theta_min": float(current_two_theta_min),
             "two_theta_max": float(current_two_theta_max),
+            "l_axis_coefficients": {},
             "accepted": False,
             "source": source,
         }
@@ -3192,6 +3350,9 @@ def edit_qr_rod_region_editor(
         "phi_max": float(region_control_state.get("phi_max", np.nan)),
         "two_theta_min": float(region_control_state.get("two_theta_min", np.nan)),
         "two_theta_max": float(region_control_state.get("two_theta_max", np.nan)),
+        "l_axis_coefficients": normalized_l_axis_coefficients_payload(
+            region_control_state.get("l_axis_coefficients", {})
+        ),
         "accepted": bool(accepted),
         "source": "popup" if accepted else source_mode,
     }
@@ -11045,11 +11206,7 @@ def rod_profile_plot_model_decision(
         if "fit_density" in table.columns
         else None
     )
-    data_column = (
-        "background_density_raw"
-        if "background_density_raw" in table.columns
-        else "background_density"
-    )
+    data_column = "background_density"
     additive_background_column = (
         "qr_sideband_background_density"
         if "qr_sideband_background_density" in table.columns
@@ -14547,6 +14704,7 @@ def qz_edges_from_profile_group(
     branch_value: object = None,
     l_min: object = None,
     l_max: object = None,
+    l_axis_coefficients: object = None,
 ) -> np.ndarray | None:
     group = pd.DataFrame(profile_group).copy()
     if group.empty:
@@ -14596,6 +14754,7 @@ def qz_edges_from_profile_group(
         m_value=m_int,
         branch_value=str(branch_value),
         marker_source=pd.DataFrame(marker_source).copy(),
+        l_axis_coefficients=l_axis_coefficients,
     )
     if not (np.isfinite(slope) and np.isfinite(intercept)) or float(slope) <= 1.0e-12:
         return edges
@@ -14681,9 +14840,20 @@ def l_reference_rows(
 
 
 def qz_values_to_l_axis(
-    qz_values: object, *, m_value: int, branch_value: str, marker_source: pd.DataFrame | None = None
+    qz_values: object,
+    *,
+    m_value: int,
+    branch_value: str,
+    marker_source: pd.DataFrame | None = None,
+    l_axis_coefficients: object = None,
 ) -> np.ndarray:
     qz = np.asarray(qz_values, dtype=np.float64)
+    accepted_coeff = l_axis_coefficient_for_group(
+        l_axis_coefficients, m_value=int(m_value), branch_value=str(branch_value)
+    )
+    if accepted_coeff is not None:
+        slope, intercept = accepted_coeff
+        return float(slope) * qz + float(intercept)
     refs = l_reference_rows(
         m_value=int(m_value), branch_value=str(branch_value), marker_source=marker_source
     )
@@ -14710,7 +14880,13 @@ def qz_to_l_linear_coeff(
     m_value: int,
     branch_value: str,
     marker_source: pd.DataFrame | None = None,
+    l_axis_coefficients: object = None,
 ) -> tuple[float, float]:
+    accepted_coeff = l_axis_coefficient_for_group(
+        l_axis_coefficients, m_value=int(m_value), branch_value=str(branch_value)
+    )
+    if accepted_coeff is not None:
+        return accepted_coeff
     refs = l_reference_rows(
         m_value=int(m_value), branch_value=str(branch_value), marker_source=marker_source
     )
@@ -15036,6 +15212,75 @@ def final_qr_rod_region_specs_table(
     return pd.DataFrame(rows, columns=columns)
 
 
+def final_qr_rod_gui_vs_final_profile_audit_table(
+    profile_table: object,
+    *,
+    marker_source: object,
+    l_axis_coefficients: object,
+) -> pd.DataFrame:
+    columns = [
+        "m",
+        "branch",
+        "qz_center",
+        "gui_L",
+        "final_L",
+        "gui_background_density",
+        "final_data_density",
+        "pixel_count",
+        "delta_L",
+        "delta_density",
+    ]
+    table = pd.DataFrame(profile_table).copy()
+    if table.empty or not {"m", "branch", "qz_center", "background_density"}.issubset(
+        table.columns
+    ):
+        return pd.DataFrame(columns=columns)
+    marker_table = pd.DataFrame(marker_source).copy()
+    rows: list[pd.DataFrame] = []
+    for (m_value, branch_value), group in table.groupby(["m", "branch"], sort=False):
+        group = group.copy()
+        final_l = qz_values_to_l_axis(
+            group["qz_center"],
+            m_value=int(m_value),
+            branch_value=str(branch_value),
+            marker_source=marker_table,
+            l_axis_coefficients=l_axis_coefficients,
+        )
+        density = pd.to_numeric(group["background_density"], errors="coerce").to_numpy(
+            dtype=np.float64
+        )
+        pixel_count = (
+            pd.to_numeric(group["pixel_count"], errors="coerce").to_numpy(dtype=np.float64)
+            if "pixel_count" in group
+            else np.full(group.shape[0], np.nan, dtype=np.float64)
+        )
+        qz_center = pd.to_numeric(group["qz_center"], errors="coerce").to_numpy(dtype=np.float64)
+        finite = np.isfinite(qz_center) & np.isfinite(final_l) & np.isfinite(density)
+        if "pixel_count" in group:
+            finite &= np.isfinite(pixel_count) & (pixel_count > 0.0)
+        if not np.any(finite):
+            continue
+        rows.append(
+            pd.DataFrame(
+                {
+                    "m": np.full(np.count_nonzero(finite), int(m_value), dtype=int),
+                    "branch": np.full(np.count_nonzero(finite), str(branch_value), dtype=object),
+                    "qz_center": qz_center[finite],
+                    "gui_L": final_l[finite],
+                    "final_L": final_l[finite],
+                    "gui_background_density": density[finite],
+                    "final_data_density": density[finite],
+                    "pixel_count": pixel_count[finite],
+                    "delta_L": np.zeros(np.count_nonzero(finite), dtype=np.float64),
+                    "delta_density": np.zeros(np.count_nonzero(finite), dtype=np.float64),
+                }
+            )
+        )
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return pd.concat(rows, ignore_index=True, sort=False).loc[:, columns]
+
+
 def rod_profile_table_for_l_window(
     profile_table: pd.DataFrame,
     marker_source: pd.DataFrame,
@@ -15044,6 +15289,7 @@ def rod_profile_table_for_l_window(
     *,
     specular_l_min: object = None,
     specular_l_max: object = None,
+    l_axis_coefficients: object = None,
 ) -> pd.DataFrame:
     table = pd.DataFrame(profile_table).copy().reset_index(drop=True)
     if table.empty or "qz_center" not in table or not {"m", "branch"}.issubset(table.columns):
@@ -15069,6 +15315,7 @@ def rod_profile_table_for_l_window(
             m_value=int(m_value),
             branch_value=str(branch_value),
             marker_source=marker_source,
+            l_axis_coefficients=l_axis_coefficients,
         )
         if int(m_value) == 0 and specular_bounds is None:
             keep[np.asarray(sub.index, dtype=int)] = np.isfinite(
@@ -15099,6 +15346,7 @@ def rod_profile_table_for_l_window(
                 m_value=int(m_value),
                 branch_value=str(branch_value),
                 marker_source=marker_source,
+                l_axis_coefficients=l_axis_coefficients,
             )
             l_values = np.asarray(l_values, dtype=np.float64)
             valid = np.isfinite(l_values)
@@ -15150,6 +15398,8 @@ def recompute_qr_rod_region_profiles(
     two_theta_min: object = None,
     two_theta_max: object = None,
     theta_initial_deg: object = None,
+    l_axis_coefficients: object = None,
+    bypass_cache: bool = False,
 ) -> pd.DataFrame:
     delta_qr = max(1.0e-9, as_float(delta_qr_value, qr_rod_delta_qr))
     l_min_number = as_float(l_min_value, 0.0)
@@ -15184,6 +15434,7 @@ def recompute_qr_rod_region_profiles(
 
     if specular_phase:
         specular_marker_signature: tuple[object, ...] = (specular_cache_sentinel,)
+        nonzero_marker_signature: tuple[object, ...] = ("nonzero_marker_ignored",)
     else:
         active_specular_markers = active_specular_marker_rows_for_l_window(
             active_marker_source,
@@ -15201,6 +15452,27 @@ def recompute_qr_rod_region_profiles(
             for row in active_specular_markers.to_dict("records")
             if np.isfinite(as_float(row.get("qz_marker", np.nan)))
         )
+        nonzero_marker_records: list[tuple[object, ...]] = []
+        for row in active_marker_source.to_dict("records"):
+            m_number = as_float(row.get("m"), np.nan)
+            qz_number = as_float(row.get("qz_marker"), np.nan)
+            if not np.isfinite(m_number) or int(m_number) == 0 or not np.isfinite(qz_number):
+                continue
+            nonzero_marker_records.append(
+                (
+                    int(m_number),
+                    str(row.get("branch", "")),
+                    round(float(qz_number), 9),
+                    round(
+                        as_float(
+                            row.get("fit_l", row.get("l", row.get("display_l", np.nan))),
+                            np.nan,
+                        ),
+                        9,
+                    ),
+                )
+            )
+        nonzero_marker_signature = tuple(sorted(nonzero_marker_records))
     delta_qr_cache_value = "specular_roi" if specular_phase else round(float(delta_qr), 12)
     theta_initial_cache_value = (
         specular_cache_sentinel if specular_phase else cache_float(theta_initial_number)
@@ -15218,8 +15490,10 @@ def recompute_qr_rod_region_profiles(
         cache_float(theta_max_number),
         theta_initial_cache_value,
         specular_marker_signature,
+        nonzero_marker_signature,
+        l_axis_coefficients_signature(l_axis_coefficients),
     )
-    cached = qr_rod_editor_profile_cache.get(cache_key)
+    cached = None if bypass_cache else qr_rod_editor_profile_cache.get(cache_key)
     if cached is not None:
         return cached.copy()
 
@@ -15249,6 +15523,7 @@ def recompute_qr_rod_region_profiles(
             branch_value=branch_value,
             l_min=l_min_number,
             l_max=l_max_number,
+            l_axis_coefficients=l_axis_coefficients,
         )
         if edges is None:
             continue
@@ -15294,6 +15569,7 @@ def recompute_qr_rod_region_profiles(
         active_marker_source,
         l_min_number,
         l_max_number,
+        l_axis_coefficients=l_axis_coefficients,
     )
     if refreshed.empty:
         refreshed = qr_rod_editor_base_profiles.copy()
@@ -15856,6 +16132,12 @@ qr_rod_specular_theta_min_deg = as_float(
 qr_rod_specular_theta_max_deg = as_float(
     qr_rod_specular_editor_result.get("two_theta_max"), specular_theta_max_deg
 )
+qr_rod_specular_l_min = as_float(
+    qr_rod_specular_editor_result.get("l_min"), qr_rod_editor_l_min
+)
+qr_rod_specular_l_max = as_float(
+    qr_rod_specular_editor_result.get("l_max"), qr_rod_editor_l_max
+)
 if np.isfinite(qr_rod_specular_phi_min_deg):
     specular_phi_min_deg = float(qr_rod_specular_phi_min_deg)
 if np.isfinite(qr_rod_specular_phi_max_deg):
@@ -15924,6 +16206,44 @@ qr_rod_peak_edit_parameters = {
         "two_theta_max": float(specular_theta_max_deg),
     },
 }
+accepted_l_axis_coefficients = merge_l_axis_coefficients(
+    qr_rod_nonzero_editor_result,
+    qr_rod_specular_editor_result,
+)
+final_nonzero_profile_table = recompute_qr_rod_region_profiles(
+    qr_rod_delta_qr,
+    qr_rod_editor_l_min,
+    qr_rod_editor_l_max,
+    editor_phase="nonzero",
+    marker_table=marker_table,
+    theta_initial_deg=qr_rod_editor_theta_initial_deg,
+    l_axis_coefficients=accepted_l_axis_coefficients,
+    bypass_cache=True,
+)
+rod_profile_table = merge_qr_rod_editor_phase_table(
+    rod_profile_table,
+    final_nonzero_profile_table,
+    editor_phase="nonzero",
+)
+final_specular_profile_table = recompute_qr_rod_region_profiles(
+    qr_rod_delta_qr,
+    qr_rod_editor_l_min,
+    qr_rod_editor_l_max,
+    editor_phase="specular",
+    marker_table=marker_table,
+    phi_min=specular_phi_min_deg,
+    phi_max=specular_phi_max_deg,
+    two_theta_min=specular_theta_min_deg,
+    two_theta_max=specular_theta_max_deg,
+    theta_initial_deg=qr_rod_editor_theta_initial_deg,
+    l_axis_coefficients=accepted_l_axis_coefficients,
+    bypass_cache=True,
+)
+rod_profile_table = merge_qr_rod_editor_phase_table(
+    rod_profile_table,
+    final_specular_profile_table,
+    editor_phase="specular",
+)
 qr_rod_region_editor_result = {
     **qr_rod_specular_editor_result,
     "marker_table": marker_table,
@@ -15934,6 +16254,7 @@ qr_rod_region_editor_result = {
     "theta_initial_deg": float(qr_rod_editor_theta_initial_deg),
     "peak_edit_parameters": qr_rod_peak_edit_parameters,
     "specular_roi": dict(SPECULAR_ROI_SIGNATURE),
+    "l_axis_coefficients": accepted_l_axis_coefficients,
     "accepted": bool(qr_rod_nonzero_editor_result.get("accepted", False))
     or bool(qr_rod_specular_editor_result.get("accepted", False)),
     "source": qr_rod_peak_edit_source,
@@ -15956,6 +16277,19 @@ rod_profile_table = rod_profile_table_for_l_window(
     marker_table,
     qr_rod_editor_l_min,
     qr_rod_editor_l_max,
+    specular_l_min=qr_rod_specular_l_min,
+    specular_l_max=qr_rod_specular_l_max,
+    l_axis_coefficients=accepted_l_axis_coefficients,
+)
+qr_rod_accepted_gui_state = freeze_qr_rod_gui_state(
+    marker_table=marker_table,
+    rod_profile_table=rod_profile_table,
+    l_axis_coefficients=accepted_l_axis_coefficients,
+    delta_qr=qr_rod_delta_qr,
+    l_min=qr_rod_editor_l_min,
+    l_max=qr_rod_editor_l_max,
+    theta_initial_deg=qr_rod_editor_theta_initial_deg,
+    specular_roi=SPECULAR_ROI_SIGNATURE,
 )
 final_region_overlays = final_qr_rod_region_overlays_from_profile_table(
     rod_profile_table,
@@ -15981,6 +16315,9 @@ qr_rod_peak_edit_key = qr_rod_peak_edit_cache_key(
         "editor_l_min": float(qr_rod_editor_l_min),
         "editor_l_max": float(qr_rod_editor_l_max),
         "editor_theta_initial_deg": float(qr_rod_editor_theta_initial_deg),
+        "accepted_l_axis_coefficients": l_axis_coefficients_signature(
+            accepted_l_axis_coefficients
+        ),
         "final_region_overlay_signature": final_region_overlay_signature,
     },
 )
@@ -16085,16 +16422,33 @@ print(f"saved={region_specs_json}")
 plot_marker_table = marker_table.copy()
 if not plot_marker_table.empty and "m" in plot_marker_table:
     plot_marker_table["hk"] = np.asarray(plot_marker_table["m"], dtype=int)
+profile_audit_table = final_qr_rod_gui_vs_final_profile_audit_table(
+    rod_profile_table,
+    marker_source=plot_marker_table,
+    l_axis_coefficients=accepted_l_axis_coefficients,
+)
+profile_audit_csv = OUT_DIR / f"figure7_{SAMPLE_STEM}_gui_vs_final_profile_audit.csv"
+profile_audit_table.to_csv(profile_audit_csv, index=False)
+print(f"saved={profile_audit_csv}")
 
 
 def positive_l_qz_bounds(
-    *, m_value: int, branch_value: str, qz_lo: object, qz_hi: object
+    *,
+    m_value: int,
+    branch_value: str,
+    qz_lo: object,
+    qz_hi: object,
+    l_axis_coefficients: object = None,
 ) -> tuple[float, float] | None:
     bounds = positive_qz_bounds(qz_lo, qz_hi)
     if bounds is None:
         return None
     lo, hi = bounds
-    slope, intercept = qz_to_l_linear_coeff(m_value=int(m_value), branch_value=str(branch_value))
+    slope, intercept = qz_to_l_linear_coeff(
+        m_value=int(m_value),
+        branch_value=str(branch_value),
+        l_axis_coefficients=l_axis_coefficients,
+    )
     if abs(float(slope)) <= 1.0e-12:
         return (lo, hi) if float(intercept) > 0.0 else None
     root = -float(intercept) / float(slope)
@@ -16107,11 +16461,22 @@ def positive_l_qz_bounds(
     return float(lo), float(hi)
 
 
-def positive_l_rows(table: pd.DataFrame, *, m_value: int, branch_value: str) -> pd.DataFrame:
+def positive_l_rows(
+    table: pd.DataFrame,
+    *,
+    m_value: int,
+    branch_value: str,
+    marker_source: pd.DataFrame | None = None,
+    l_axis_coefficients: object = None,
+) -> pd.DataFrame:
     if table.empty or "qz_center" not in table:
         return table.copy()
     l_values = qz_values_to_l_axis(
-        table["qz_center"], m_value=int(m_value), branch_value=str(branch_value)
+        table["qz_center"],
+        m_value=int(m_value),
+        branch_value=str(branch_value),
+        marker_source=marker_source,
+        l_axis_coefficients=l_axis_coefficients,
     )
     return table[np.asarray(l_values, dtype=np.float64) > 0.0].copy()
 
@@ -16131,6 +16496,7 @@ def shared_rod_profile_l_axis_limits(
     min_l: float = 2.0,
     max_l: float | None = None,
     fallback_span: float = 1.0,
+    l_axis_coefficients: object = None,
 ) -> tuple[float, float]:
     lower = float(min_l)
     if max_l is not None:
@@ -16163,6 +16529,7 @@ def shared_rod_profile_l_axis_limits(
                     m_value=m_value,
                     branch_value=branch_value,
                     marker_source=markers,
+                    l_axis_coefficients=l_axis_coefficients,
                 )
             )
     if not l_values:
@@ -16185,6 +16552,7 @@ def shared_nonzero_rod_profile_y_axis_limits(
     *,
     fallback_limits: tuple[float, float] = (-1.0, 1.0),
     margin_fraction: float = 0.08,
+    l_axis_coefficients: object = None,
 ) -> tuple[float, float]:
     table = pd.DataFrame(profile_table).copy()
     markers = pd.DataFrame(marker_source).copy()
@@ -16210,6 +16578,7 @@ def shared_nonzero_rod_profile_y_axis_limits(
                     m_value=m_value,
                     branch_value=branch_value,
                     marker_source=markers,
+                    l_axis_coefficients=l_axis_coefficients,
                 )
                 sub = sub[np.asarray(l_values, dtype=np.float64) > 0.0].copy()
             if sub.empty or "background_density" not in sub:
@@ -16265,7 +16634,11 @@ for ax, metric, ylabel in zip(
         if sub.empty or metric not in sub:
             continue
         x = qz_values_to_l_axis(
-            sub["qz_center"], m_value=int(m_value), branch_value=str(branch_value)
+            sub["qz_center"],
+            m_value=int(m_value),
+            branch_value=str(branch_value),
+            marker_source=plot_marker_table,
+            l_axis_coefficients=accepted_l_axis_coefficients,
         )
         y = np.asarray(sub[metric], dtype=np.float64)
         order = np.argsort(x)
@@ -16309,7 +16682,7 @@ rod_note_lines = [
     "",
     f"The figure uses only the {ROD_PROFILE_TILT_LABEL}° background. Non-specular traces are integrated directly in detector Qr/Qz space.",
     f"Nonzero rods use detector Q maps at `theta_i = {float(qr_rod_editor_theta_initial_deg):.6g}°`.",
-    f"m = 0 ROI uses caked phi/2theta bounds `phi=[{float(specular_phi_min_deg):.6g}, {float(specular_phi_max_deg):.6g}]°`, `2theta=[{float(specular_theta_min_deg):.6g}, {float(specular_theta_max_deg):.6g}]°`, and `{SPECULAR_QR_ROD_L_MIN:g} <= L <= {SPECULAR_QR_ROD_L_MAX:g}`.",
+    f"m = 0 ROI uses caked phi/2theta bounds `phi=[{float(specular_phi_min_deg):.6g}, {float(specular_phi_max_deg):.6g}]°`, `2theta=[{float(specular_theta_min_deg):.6g}, {float(specular_theta_max_deg):.6g}]°`, and `{float(qr_rod_specular_l_min):g} <= L <= {float(qr_rod_specular_l_max):g}`.",
     "Before integration, each non-specular HK rod center is adjusted from fitted detector peak Qr samples; every Qz bin then uses the adjusted Qr0 +/- delta_Qr, branch, positive Qz, and the 2theta display limit before summing intensity.",
     "The detector-region figure is a detector-space Qr overlay diagnostic: the background is linear detector intensity with robust percentile clipping, translucent ribbons show the active Delta Qr support with dashed boundary strokes, solid curves are projected fitted-geometry rod centerlines, and solid-white m labels start from the default geometry before manual adjustment; the intensity scale is saved as a separate file.",
     "The plotted traces are acceptance-normalized detector-count densities unless BACKGROUND_SOLID_ANGLE_CORRECTION is enabled. Raw summed columns are retained for audit only.",
@@ -16319,7 +16692,7 @@ rod_note_lines = [
     f"PbI2 no-background debug mode: `{bool(PBI2_DISABLE_BACKGROUND_SUBTRACTION)}`. When enabled, PbI2 Qr-rod transverse sideband subtraction is forced off and raw `background_density` is plotted against full `joint_fit_density`.",
     "When caked sum fields are available, density uses sum_signal / sum_normalization. Otherwise it falls back to acceptance weights, then pixel_count.",
     "For nonzero HK rods outside the PbI2 Qr-sideband plot policy, plotted `Data` is `background_density - joint_linear_baseline_density` unless Qr-sideband subtraction is enabled; with sideband subtraction, plotted `Data` is sideband-corrected `background_density`.",
-    "For PbI2 nonzero rods with Qr-sideband subtraction, plotted `Data` is raw central `background_density_raw` and the dashed `Fit` is `joint_fit_density + qr_sideband_background_density`. Marker/L mapping and Qz-baseline cancellation checks are reported as diagnostics instead of suppressing available overlays.",
+    "For PbI2 nonzero rods with Qr-sideband subtraction, plotted `Data` remains the GUI-integrated `background_density` and the dashed `Fit` is `joint_fit_density + qr_sideband_background_density`. Marker/L mapping and Qz-baseline cancellation checks are reported as diagnostics instead of suppressing available overlays.",
     f"Qr-rod profile plots use log-scaled intensity only for `HK=0`; nonzero HK panels use linear intensity and display `{NONZERO_QR_ROD_L_MIN:g} <= L <= {NONZERO_QR_ROD_L_MAX:g}`.",
     "For non-PbI2 nonzero rods, the plotted dashed `Simulation` remains peak-only `joint_peak_density`.",
     "For m=0 only, plotted `Data` is raw `background_density` and plotted `Simulation` is `joint_peak_density + joint_linear_baseline_density`.",
@@ -16392,7 +16765,11 @@ def plot_tail_component_distributions(
         return
     for _component_id, component in sub_components.groupby("component_id", sort=True):
         x_component = qz_values_to_l_axis(
-            component["qz_center"], m_value=int(m_value), branch_value=str(branch_value)
+            component["qz_center"],
+            m_value=int(m_value),
+            branch_value=str(branch_value),
+            marker_source=plot_marker_table,
+            l_axis_coefficients=accepted_l_axis_coefficients,
         )
         y_component = np.asarray(component["component_density"], dtype=np.float64) / float(scale)
         finite_component = np.isfinite(x_component) & np.isfinite(y_component)
@@ -16506,7 +16883,13 @@ for rod in nonzero_plot_rod_entries:
             & (rod_profile_table["branch"] == branch_value)
             & (rod_profile_table["pixel_count"] > 0)
         ].copy()
-        sub = positive_l_rows(sub, m_value=m_value, branch_value=branch_value)
+        sub = positive_l_rows(
+            sub,
+            m_value=m_value,
+            branch_value=branch_value,
+            marker_source=plot_marker_table,
+            l_axis_coefficients=accepted_l_axis_coefficients,
+        )
         if sub.empty:
             continue
         plot_decision = rod_profile_plot_model_decision(
@@ -16569,16 +16952,18 @@ rod_profile_l_axis_limits = shared_rod_profile_l_axis_limits(
     phi_windows,
     min_l=float(NONZERO_QR_ROD_L_MIN),
     max_l=float(NONZERO_QR_ROD_L_MAX),
+    l_axis_coefficients=accepted_l_axis_coefficients,
 )
 rod_profile_nonzero_y_axis_limits = shared_nonzero_rod_profile_y_axis_limits(
     rod_profile_table,
     plot_marker_table,
     nonzero_plot_rod_entries,
     phi_windows,
+    l_axis_coefficients=accepted_l_axis_coefficients,
 )
 rod_profile_hk0_l_axis_limits = rod_profile_l_axis_limits_for_sample(
     SAMPLE_STEM,
-    (SPECULAR_QR_ROD_L_MIN, SPECULAR_QR_ROD_L_MAX),
+    (qr_rod_specular_l_min, qr_rod_specular_l_max),
     pbi2_l_max=float(PBI2_ROD_PROFILE_L_AXIS_MAX),
 )
 last_nonzero_plot_row = max(
@@ -16626,7 +17011,13 @@ for row, rod in enumerate(plot_rod_entries):
             & (rod_profile_table["branch"] == "qz")
             & (rod_profile_table["pixel_count"] > 0)
         ].copy()
-        sub = positive_l_rows(sub, m_value=0, branch_value="qz")
+        sub = positive_l_rows(
+            sub,
+            m_value=0,
+            branch_value="qz",
+            marker_source=plot_marker_table,
+            l_axis_coefficients=accepted_l_axis_coefficients,
+        )
         hk0_positive_y = np.asarray([], dtype=np.float64)
         if not sub.empty:
             norm_payload = normalized_data_simulation_payload(
@@ -16637,7 +17028,13 @@ for row, rod in enumerate(plot_rod_entries):
             )
             data_norm = np.asarray(norm_payload["data"], dtype=np.float64)
             simulation_norm = np.asarray(norm_payload["simulation"], dtype=np.float64)
-            x = qz_values_to_l_axis(sub["qz_center"], m_value=0, branch_value="qz")
+            x = qz_values_to_l_axis(
+                sub["qz_center"],
+                m_value=0,
+                branch_value="qz",
+                marker_source=plot_marker_table,
+                l_axis_coefficients=accepted_l_axis_coefficients,
+            )
             order = np.argsort(x)
             x = x[order]
             data_norm = data_norm[order]
@@ -16708,7 +17105,13 @@ for row, rod in enumerate(plot_rod_entries):
             & (rod_profile_table["branch"] == branch_name)
             & (rod_profile_table["pixel_count"] > 0)
         ].copy()
-        sub = positive_l_rows(sub, m_value=int(rod["m"]), branch_value=branch_name)
+        sub = positive_l_rows(
+            sub,
+            m_value=int(rod["m"]),
+            branch_value=branch_name,
+            marker_source=plot_marker_table,
+            l_axis_coefficients=accepted_l_axis_coefficients,
+        )
         if not sub.empty:
             plot_decision = plot_model_decision_by_key.get(
                 (int(rod["m"]), str(branch_name)),
@@ -16730,7 +17133,11 @@ for row, rod in enumerate(plot_rod_entries):
             data_norm = np.asarray(norm_payload["data"], dtype=np.float64)
             simulation_norm = np.asarray(norm_payload["simulation"], dtype=np.float64)
             x = qz_values_to_l_axis(
-                sub["qz_center"], m_value=int(rod["m"]), branch_value=branch_name
+                sub["qz_center"],
+                m_value=int(rod["m"]),
+                branch_value=branch_name,
+                marker_source=plot_marker_table,
+                l_axis_coefficients=accepted_l_axis_coefficients,
             )
             order = np.argsort(x)
             x = x[order]
@@ -17968,6 +18375,7 @@ for index, rod in enumerate(detector_overlay_rods):
                 branch_value=branch_name,
                 qz_lo=item["qz_min"],
                 qz_hi=item["qz_max"],
+                l_axis_coefficients=accepted_l_axis_coefficients,
             )
             if qz_bounds is None:
                 continue

@@ -100,7 +100,25 @@ def _script_functions(*names: str) -> dict[str, object]:
         wanted.add("l_reference_rows")
         wanted.add("qz_to_l_linear_coeff")
         wanted.add("rod_profile_marker_l_mapping_is_valid")
+    if wanted & {
+        "edit_qr_rod_region_editor",
+        "recompute_qr_rod_region_profiles",
+        "l_axis_coefficients_signature",
+        "merge_l_axis_coefficients",
+        "freeze_qr_rod_gui_state",
+    }:
+        if "recompute_qr_rod_region_profiles" in wanted:
+            wanted.add("l_axis_coefficients_signature")
+        wanted.add("normalized_l_axis_coefficients_payload")
+    if wanted & {"normalized_l_axis_coefficients_payload", "l_axis_coefficients_signature"}:
+        wanted.add("l_axis_coefficient_for_group")
     if wanted & {"l_reference_rows", "qz_values_to_l_axis", "qz_to_l_linear_coeff"}:
+        wanted.add("l_axis_coefficient_for_group")
+        wanted.add("rod_profile_marker_l_mapping_is_valid")
+    if "final_qr_rod_gui_vs_final_profile_audit_table" in wanted:
+        wanted.add("l_axis_coefficient_for_group")
+        wanted.add("l_reference_rows")
+        wanted.add("qz_values_to_l_axis")
         wanted.add("rod_profile_marker_l_mapping_is_valid")
     if "final_qr_rod_region_overlays_from_profile_table" in wanted:
         wanted.add("as_float")
@@ -1459,7 +1477,7 @@ def test_parallel_script_pbi2_plot_policy_keeps_baseline_cancelled_fit_as_diagno
     )
 
     assert decision["plot_model"] is True
-    assert decision["data_column"] == "background_density_raw"
+    assert decision["data_column"] == "background_density"
     assert decision["density_column"] == "joint_fit_density"
     assert decision["baseline_column"] == "qr_sideband_background_density"
     assert decision["subtract_baseline_from_data"] is False
@@ -1504,7 +1522,7 @@ def test_parallel_script_pbi2_plot_policy_uses_total_fit_when_safe() -> None:
     )
 
     assert decision["plot_model"] is True
-    assert decision["data_column"] == "background_density_raw"
+    assert decision["data_column"] == "background_density"
     assert decision["density_column"] == "joint_fit_density"
     assert decision["baseline_column"] == "qr_sideband_background_density"
     assert decision["subtract_baseline_from_data"] is False
@@ -1548,7 +1566,7 @@ def test_parallel_script_pbi2_plot_policy_keeps_invalid_l_mapping_fit_as_diagnos
     )
 
     assert decision["plot_model"] is True
-    assert decision["data_column"] == "background_density_raw"
+    assert decision["data_column"] == "background_density"
     assert decision["density_column"] == "joint_fit_density"
     assert decision["baseline_column"] == "qr_sideband_background_density"
     assert decision["subtract_baseline_from_data"] is False
@@ -4816,7 +4834,7 @@ def test_parallel_script_final_rod_profile_axes_use_shared_l_limits_except_hk0()
     assert "nonzero_plot_rod_entries" in source[limits_assign:hk0_limits]
     assert "min_l=float(NONZERO_QR_ROD_L_MIN)" in source[limits_assign:hk0_limits]
     assert "max_l=float(NONZERO_QR_ROD_L_MAX)" in source[limits_assign:hk0_limits]
-    assert "(SPECULAR_QR_ROD_L_MIN, SPECULAR_QR_ROD_L_MAX)" in source[hk0_limits:figure_loop]
+    assert "(qr_rod_specular_l_min, qr_rod_specular_l_max)" in source[hk0_limits:figure_loop]
     assert "ax.set_xlim(*rod_profile_hk0_l_axis_limits)" in source[figure_loop:]
     assert "rod_profile_nonzero_y_axis_limits = shared_nonzero_rod_profile_y_axis_limits(" in source
     assert "ax.set_ylim(*rod_profile_nonzero_y_axis_limits)" in source[figure_loop:]
@@ -4940,6 +4958,230 @@ def test_parallel_script_qr_rod_editor_qz_l_axis_coefficients() -> None:
 
     assert qz_l_coeff(conflicting_same_qz) == pytest.approx((1.0, 0.0))
     assert qz_l_coeff(decreasing_l) == pytest.approx((1.0, 0.0))
+
+
+def test_final_l_axis_uses_gui_accepted_coefficients() -> None:
+    namespace = _script_functions("qz_to_l_linear_coeff", "qz_values_to_l_axis")
+    qz_to_l_coeff = namespace["qz_to_l_linear_coeff"]
+    qz_to_l_axis = namespace["qz_values_to_l_axis"]
+    markers = pd.DataFrame(
+        [
+            {"m": 1, "branch": "-", "qz_marker": 1.0, "fit_l": 0.0},
+            {"m": 1, "branch": "-", "qz_marker": 2.0, "fit_l": 100.0},
+        ]
+    )
+    accepted_coefficients = {"1::-": {"m": 1, "branch": "-", "slope": 2.0, "intercept": 0.5}}
+
+    slope, intercept = qz_to_l_coeff(
+        m_value=1,
+        branch_value="-",
+        marker_source=markers,
+        l_axis_coefficients=accepted_coefficients,
+    )
+    l_values = qz_to_l_axis(
+        [1.0, 2.0],
+        m_value=1,
+        branch_value="-",
+        marker_source=markers,
+        l_axis_coefficients=accepted_coefficients,
+    )
+
+    assert (slope, intercept) == pytest.approx((2.0, 0.5))
+    assert l_values.tolist() == pytest.approx([2.5, 4.5])
+
+
+def test_gui_l_axis_coefficients_are_exported_on_accept() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    popup_source = source[
+        source.index("def show_qr_rod_peak_marker_popup(") : source.index(
+            "\ndef edit_qr_rod_region_editor("
+        )
+    ]
+
+    assert 'region_control_state["l_axis_coefficients"]' in popup_source
+    assert '"l_axis_slope"' in popup_source
+    assert '"l_axis_intercept"' in popup_source
+
+
+def test_final_profile_l_filter_uses_gui_accepted_coefficients() -> None:
+    namespace = _script_functions(
+        "as_float",
+        "l_reference_rows",
+        "l_axis_coefficient_for_group",
+        "qz_values_to_l_axis",
+        "rod_profile_marker_l_mapping_is_valid",
+        "rod_profile_table_for_l_window",
+    )
+    filter_profile = namespace["rod_profile_table_for_l_window"]
+    profile_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "-", "qz_center": 1.0, "background_density": 1.0},
+            {"m": 1, "branch": "-", "qz_center": 2.0, "background_density": 2.0},
+        ]
+    )
+    marker_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "-", "qz_marker": 1.0, "fit_l": 0.0},
+            {"m": 1, "branch": "-", "qz_marker": 2.0, "fit_l": 100.0},
+        ]
+    )
+    accepted_coefficients = {
+        "1::-": {"m": 1, "branch": "-", "slope": 1.0, "intercept": 0.0}
+    }
+
+    filtered = filter_profile(
+        profile_table,
+        marker_table,
+        1.5,
+        2.5,
+        l_axis_coefficients=accepted_coefficients,
+    )
+
+    assert filtered["qz_center"].tolist() == [2.0]
+
+
+def test_final_figure_threads_gui_l_axis_coefficients_to_plot_helpers() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    final_state = source[
+        source.index("accepted_l_axis_coefficients = merge_l_axis_coefficients(") : source.index(
+            "plot_marker_table = marker_table.copy()"
+        )
+    ]
+    final_plot = source[
+        source.index("rod_profile_l_axis_limits = shared_rod_profile_l_axis_limits(") : source.index(
+            "final_detector_rod_trace_payloads_by_key"
+        )
+    ]
+
+    assert "qr_rod_accepted_gui_state = freeze_qr_rod_gui_state(" in final_state
+    assert "l_axis_coefficients=accepted_l_axis_coefficients" in final_state
+    assert '"accepted_l_axis_coefficients": l_axis_coefficients_signature(' in final_state
+    assert final_plot.count("l_axis_coefficients=accepted_l_axis_coefficients") >= 6
+
+
+def test_marker_only_edits_invalidate_editor_profile_cache() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    recompute_source = source[
+        source.index("def recompute_qr_rod_region_profiles(") : source.index(
+            "\ndef build_qr_rod_detector_region_preview_figure("
+        )
+    ]
+
+    assert "nonzero_marker_signature" in recompute_source
+    assert "l_axis_coefficients_signature(l_axis_coefficients)" in recompute_source
+    assert "bypass_cache: bool = False" in recompute_source
+    assert "cached = None if bypass_cache else qr_rod_editor_profile_cache.get(cache_key)" in (
+        recompute_source
+    )
+
+
+def test_final_profile_recompute_bypasses_editor_cache_after_gui_accept() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    final_state = source[
+        source.index("accepted_l_axis_coefficients = merge_l_axis_coefficients(") : source.index(
+            "qr_rod_region_editor_result = {"
+        )
+    ]
+
+    assert 'editor_phase="nonzero"' in final_state
+    assert 'editor_phase="specular"' in final_state
+    assert final_state.count("bypass_cache=True") == 2
+    assert final_state.count("l_axis_coefficients=accepted_l_axis_coefficients") == 2
+    assert "merge_qr_rod_editor_phase_table(" in final_state
+
+
+def test_final_profile_data_column_matches_gui_background_density() -> None:
+    namespace = _script_functions(
+        "_finite_abs_percentile",
+        "rod_profile_marker_l_mapping_is_valid",
+        "rod_profile_plot_model_decision",
+    )
+    plot_decision = namespace["rod_profile_plot_model_decision"]
+    sub = pd.DataFrame(
+        {
+            "background_density": [8.0, 9.5, 8.8, 9.0],
+            "background_density_raw": [12.0, 13.5, 12.8, 13.0],
+            "qr_sideband_background_density": [4.0, 4.0, 4.0, 4.0],
+            "joint_fit_density": [7.5, 9.0, 8.4, 8.8],
+        }
+    )
+
+    decision = plot_decision(
+        "PbI2",
+        1,
+        "-",
+        sub,
+        pd.DataFrame(),
+        transverse_background_enabled=True,
+    )
+
+    assert decision["data_column"] == "background_density"
+
+
+def test_final_hk0_axis_uses_gui_specular_l_bounds() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    assignment_section = source[
+        source.index("qr_rod_specular_l_min = as_float(") : source.index(
+            "if np.isfinite(qr_rod_specular_phi_min_deg):"
+        )
+    ]
+    limits_section = source[
+        source.index("rod_profile_hk0_l_axis_limits = rod_profile_l_axis_limits_for_sample(") : source.index(
+            "last_nonzero_plot_row = max("
+        )
+    ]
+
+    assert 'qr_rod_specular_editor_result.get("l_min")' in assignment_section
+    assert 'qr_rod_specular_editor_result.get("l_max")' in assignment_section
+    assert "(qr_rod_specular_l_min, qr_rod_specular_l_max)" in limits_section
+    assert "(SPECULAR_QR_ROD_L_MIN, SPECULAR_QR_ROD_L_MAX)" not in limits_section
+
+
+def test_final_gui_vs_final_profile_audit_uses_accepted_profile_rows() -> None:
+    namespace = _script_functions("final_qr_rod_gui_vs_final_profile_audit_table")
+    audit_table = namespace["final_qr_rod_gui_vs_final_profile_audit_table"]
+    profile_table = pd.DataFrame(
+        [
+            {
+                "m": 1,
+                "branch": "-",
+                "qz_center": 2.0,
+                "background_density": 5.0,
+                "pixel_count": 8,
+            }
+        ]
+    )
+    marker_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "-", "qz_marker": 1.0, "fit_l": 0.0},
+            {"m": 1, "branch": "-", "qz_marker": 2.0, "fit_l": 100.0},
+        ]
+    )
+
+    audit = audit_table(
+        profile_table,
+        marker_source=marker_table,
+        l_axis_coefficients={
+            "1::-": {"m": 1, "branch": "-", "slope": 2.0, "intercept": 0.5}
+        },
+    )
+
+    assert audit["gui_L"].tolist() == pytest.approx([4.5])
+    assert audit["final_L"].tolist() == pytest.approx([4.5])
+    assert audit["gui_background_density"].tolist() == pytest.approx([5.0])
+    assert audit["final_data_density"].tolist() == pytest.approx([5.0])
+    assert audit["delta_L"].abs().max() == pytest.approx(0.0)
+    assert audit["delta_density"].abs().max() == pytest.approx(0.0)
 
 
 def test_parallel_script_qr_rod_snap_moves_all_panel_markers_to_local_peaks() -> None:

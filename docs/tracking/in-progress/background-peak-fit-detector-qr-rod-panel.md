@@ -4,7 +4,7 @@ Type: bug/feature
 Owner: -
 Issue: none
 Priority: p1
-Last updated: 2026-05-21
+Last updated: 2026-05-22
 Status: implemented locally, Qr-rod editor startup and L-bound callback crash
 fixed, detector label editing/import/export restored through a responsive Tk
 canvas popup, detector companion preview/deferred Delta Qr validation passing,
@@ -916,6 +916,18 @@ Passing checks:
   instead of 2theta/phi ROI. Shipping status: local quality gates passed; no
   dependency, CI workflow, version, migration, public API, saved-state, config,
   or artifact-schema change is required.
+- 2026-05-22 accepted L-axis closeout: final Qr-rod profile recomputation now
+  freezes the GUI-accepted per-branch L-axis coefficients, includes them in the
+  final profile cache identity, bypasses stale editor-cache rows after accept,
+  and audits the GUI profile rows against the final profile rows. Final figure
+  plotting uses the accepted GUI L mapping and `background_density` profile data
+  consistently, while HK=0 axis limits follow the accepted specular controls.
+  Focused validation passed with
+  `python -m pytest tests/test_background_peak_fits_notebook.py -ra`
+  (`240 passed, 8 skipped`). Bug/error status: fixed for stale final
+  Qr-rod L-axis/profile rows after marker edits; no dependency, CI workflow,
+  version, migration, public API, saved-state, config, or artifact-schema change
+  is required.
 
 Known validation limits:
 
