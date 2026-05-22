@@ -28,6 +28,7 @@
   - Fixed the nonzero Qr-rod marker editor so clicking or dragging the `m=1 -` panel cannot submit a focused `L Min` text box and accidentally change the shared L window.
   - Fixed the `m=1 -` Qr-rod marker editor drift by freezing each panel's Qz-to-L mapping for the editor session, so marker edits no longer refit the panel coordinate transform while dragging.
   - Fixed Qr-rod peak-edit import/export so nonzero parameters (`Delta Qr`, `L Min`, `L Max`, `theta_i`) and HK=0 ROI parameters (`Phi`, `2theta`) round-trip with marker edits, while imported HK=0 markers are not merged with stale required ROI rows.
+  - Fixed HK=0 Qr-rod peak-edit imports so imported phi/2theta ROI values immediately refresh the specular editor profile, are applied when loading an edit file path directly, and do not drop saved nonzero parameters when the HK=0 edit is saved.
   - Fixed final detector-region exports so nonzero Qr-rod overlays are clipped to the accepted GUI `L Min` / `L Max` window, matching the picker preview instead of drawing the full positive-Qz rod span.
   - Fixed Qr-rod final region figures to use GUI-accepted integration regions rather than stale pre-editor overlays.
   - Fixed final Qr-rod fit cache identity so accepted HK=0 profile rows from the specular editor cannot be replaced by stale cached final-figure data.

@@ -311,7 +311,11 @@ Current status as of 2026-05-21:
   nonzero `Delta Qr`, `L Min`, `L Max`, and `theta_i` values plus HK=0
   `Phi`/`2theta` ROI bounds, and HK=0 imports with their own markers replace
   stale required ROI rows instead of merging them into the imported set, even
-  when the nonzero editor phase runs before the HK=0 phase. Accepted
+  when the nonzero editor phase runs before the HK=0 phase. HK=0 imports now
+  immediately refresh the specular editor profile with the imported marker
+  table and ROI bounds, and loading an edit file path directly applies and
+  preserves the saved HK=0 ROI parameters without dropping saved nonzero
+  parameters. Accepted
   nonzero `L Min` / `L Max` bounds are reused when drawing final
   detector-region Qr-rod overlays, so exported detector images clip rod bands
   the same way the picker preview did. The final detector-region and final

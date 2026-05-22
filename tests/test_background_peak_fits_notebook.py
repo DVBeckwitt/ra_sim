@@ -7787,7 +7787,8 @@ def test_parallel_script_qr_rod_peak_editor_import_applies_hk0_parameters(
         )
         update_count_before_import = len(update_calls)
         import_button._observers.process("clicked", None)
-        assert len(update_calls) == update_count_before_import
+        assert len(update_calls) == update_count_before_import + 1
+        assert update_calls[-1][4]["qz_marker"].tolist() == pytest.approx([1.8, 2.4])
         fig.canvas.callbacks.process(
             "key_press_event",
             KeyEvent("key_press_event", fig.canvas, key="enter"),
@@ -7807,7 +7808,7 @@ def test_parallel_script_qr_rod_peak_editor_import_applies_hk0_parameters(
     )
 
     monkeypatch.setattr(plt, "show", fake_show)
-    _edited, accepted = show_editor(
+    edited, accepted = show_editor(
         marker_table,
         rod_profile_table,
         backend_name="TkAgg",
@@ -7819,6 +7820,7 @@ def test_parallel_script_qr_rod_peak_editor_import_applies_hk0_parameters(
     )
 
     assert accepted is True
+    assert edited["qz_marker"].tolist() == pytest.approx([1.8, 2.4])
     assert {
         "phi_min": region_state["phi_min"],
         "phi_max": region_state["phi_max"],
@@ -7840,6 +7842,100 @@ def test_parallel_script_qr_rod_peak_editor_import_applies_hk0_parameters(
         update_calls[-1][3],
     ) == pytest.approx((-4.5, 6.5, 8.5, 18.5))
     assert update_calls[-1][4]["qz_marker"].tolist() == pytest.approx([1.8, 2.4])
+
+
+def test_parallel_script_qr_rod_region_editor_edit_path_applies_hk0_parameters(
+    tmp_path: Path,
+) -> None:
+    namespace = _script_functions(
+        "as_float",
+        "qr_rod_peak_edit_runtime_mode",
+        "edit_qr_rod_region_editor",
+        "load_qr_rod_peak_edits",
+        "write_qr_rod_peak_edits",
+        "hk0_qz_marker_count",
+        "marker_table_with_specular_l_markers",
+        "clean_marker_title",
+    )
+    editor = namespace["edit_qr_rod_region_editor"]
+    edit_path = tmp_path / "hk0_edit_path_import.json"
+    imported_rows = [
+        {"m": 0, "branch": "qz", "qz_marker": 1.8, "fit_l": 1.8, "display_l": 1.8},
+        {"m": 0, "branch": "qz", "qz_marker": 2.4, "fit_l": 2.4, "display_l": 2.4},
+    ]
+    edit_path.write_text(
+        json.dumps(
+            {
+                "schema": "ra_sim.qr_rod_peak_edits.v1",
+                "markers": imported_rows,
+                "parameters": {
+                    "nonzero": {
+                        "delta_qr": 0.04,
+                        "l_min": 0.2,
+                        "l_max": 4.2,
+                        "theta_initial_deg": 1.25,
+                    },
+                    "specular": {
+                        "phi_min": -4.5,
+                        "phi_max": 6.5,
+                        "two_theta_min": 8.5,
+                        "two_theta_max": 18.5,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    observed_region_state: dict[str, object] = {}
+
+    def fake_popup(marker_table: pd.DataFrame, _profile_table: pd.DataFrame, **kwargs: object):
+        observed_region_state.update(dict(kwargs.get("region_state", {})))
+        return pd.DataFrame(marker_table).copy(), True
+
+    namespace["show_qr_rod_peak_marker_popup"] = fake_popup
+    namespace["qr_rod_delta_qr"] = 0.01
+    namespace["SPECULAR_QR_ROD_L_MAX"] = 3.0
+    namespace["ROD_PROFILE_TILT_DEG"] = 0.0
+
+    result = editor(
+        pd.DataFrame(),
+        pd.DataFrame(
+            [
+                {"m": 0, "branch": "qz", "qz_center": 1.5, "background_density": 1.0},
+                {"m": 0, "branch": "qz", "qz_center": 3.0, "background_density": 1.0},
+            ]
+        ),
+        mode="popup",
+        edit_path=edit_path,
+        backend_name="TkAgg",
+        editor_phase="specular",
+    )
+
+    assert result["accepted"] is True
+    assert pd.DataFrame(result["marker_table"])["qz_marker"].tolist() == pytest.approx([1.8, 2.4])
+    assert {
+        "phi_min": result["phi_min"],
+        "phi_max": result["phi_max"],
+        "two_theta_min": result["two_theta_min"],
+        "two_theta_max": result["two_theta_max"],
+    } == pytest.approx(
+        {"phi_min": -4.5, "phi_max": 6.5, "two_theta_min": 8.5, "two_theta_max": 18.5}
+    )
+    assert {
+        "phi_min": observed_region_state["phi_min"],
+        "phi_max": observed_region_state["phi_max"],
+        "two_theta_min": observed_region_state["two_theta_min"],
+        "two_theta_max": observed_region_state["two_theta_max"],
+    } == pytest.approx(
+        {"phi_min": -4.5, "phi_max": 6.5, "two_theta_min": 8.5, "two_theta_max": 18.5}
+    )
+    saved_payload = json.loads(edit_path.read_text(encoding="utf-8"))
+    assert saved_payload["parameters"]["nonzero"] == pytest.approx(
+        {"delta_qr": 0.04, "l_min": 0.2, "l_max": 4.2, "theta_initial_deg": 1.25}
+    )
+    assert saved_payload["parameters"]["specular"] == pytest.approx(
+        {"phi_min": -4.5, "phi_max": 6.5, "two_theta_min": 8.5, "two_theta_max": 18.5}
+    )
 
 
 def test_parallel_script_qr_rod_peak_editor_export_writes_phase_parameters(

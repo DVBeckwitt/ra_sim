@@ -2787,6 +2787,10 @@ def show_qr_rod_peak_marker_popup(
                     mark_marker_table_changed(imported_group, refresh_preview=False)
                     or needs_preview_refresh
                 )
+            if any(int(group[0]) == 0 for group in imported_groups) and qr_rod_editor_phase_matches(
+                0, editor_phase
+            ):
+                refresh_region_profile_table()
             if needs_preview_refresh:
                 refresh_detector_region_preview()
             redraw()
@@ -3064,9 +3068,13 @@ def edit_qr_rod_region_editor(
     ]
     source_mode = "last_cached"
     path_text = "" if edit_path is None else str(edit_path).strip()
+    imported_peak_edit_parameters: dict[str, object] = {}
     if path_text:
         try:
             table = load_qr_rod_peak_edits(path_text)
+            imported_peak_edit_parameters = dict(
+                getattr(table, "attrs", {}).get("qr_rod_peak_edit_parameters", {}) or {}
+            )
             if required_marker_table is not None and hk0_qz_marker_count(table) <= 0:
                 table = marker_table_with_specular_l_markers(table, required_marker_table)
             source_mode = "imported_edits"
@@ -3084,6 +3092,32 @@ def edit_qr_rod_region_editor(
     current_phi_max = as_float(phi_max, globals().get("specular_phi_max_deg", 10.0))
     current_two_theta_min = as_float(two_theta_min, globals().get("specular_theta_min_deg", 5.0))
     current_two_theta_max = as_float(two_theta_max, globals().get("specular_theta_max_deg", 25.0))
+    editor_phase_text = str(editor_phase if editor_phase is not None else "all").strip().lower()
+    imports_nonzero_parameters = editor_phase_text in {"", "all", "nonzero"}
+    imports_specular_parameters = editor_phase_text in {"", "all", "specular", "hk0", "00l"}
+    if imports_nonzero_parameters:
+        nonzero_parameters = imported_peak_edit_parameters.get("nonzero", {})
+        if isinstance(nonzero_parameters, dict):
+            current_delta_qr = max(
+                1.0e-9, as_float(nonzero_parameters.get("delta_qr"), current_delta_qr)
+            )
+            current_l_min = as_float(nonzero_parameters.get("l_min"), current_l_min)
+            current_l_max = as_float(nonzero_parameters.get("l_max"), current_l_max)
+            current_theta_initial_deg = as_float(
+                nonzero_parameters.get("theta_initial_deg"),
+                current_theta_initial_deg,
+            )
+    if imports_specular_parameters:
+        specular_parameters = imported_peak_edit_parameters.get("specular", {})
+        if isinstance(specular_parameters, dict):
+            current_phi_min = as_float(specular_parameters.get("phi_min"), current_phi_min)
+            current_phi_max = as_float(specular_parameters.get("phi_max"), current_phi_max)
+            current_two_theta_min = as_float(
+                specular_parameters.get("two_theta_min"), current_two_theta_min
+            )
+            current_two_theta_max = as_float(
+                specular_parameters.get("two_theta_max"), current_two_theta_max
+            )
     runtime_mode = qr_rod_peak_edit_runtime_mode(mode, backend_name=backend_name, env=env)
 
     def fallback_result(source: str) -> dict[str, object]:
@@ -3163,7 +3197,30 @@ def edit_qr_rod_region_editor(
     }
     if bool(result.get("accepted", False)) and path_text:
         try:
-            saved_path = write_qr_rod_peak_edits(path_text, pd.DataFrame(result["marker_table"]))
+            save_parameters: dict[str, object] = {
+                str(key): dict(value)
+                for key, value in imported_peak_edit_parameters.items()
+                if isinstance(value, dict)
+            }
+            if imports_nonzero_parameters:
+                save_parameters["nonzero"] = {
+                    "delta_qr": float(result["delta_qr"]),
+                    "l_min": float(result["l_min"]),
+                    "l_max": float(result["l_max"]),
+                    "theta_initial_deg": float(result["theta_initial_deg"]),
+                }
+            if imports_specular_parameters:
+                save_parameters["specular"] = {
+                    "phi_min": float(result["phi_min"]),
+                    "phi_max": float(result["phi_max"]),
+                    "two_theta_min": float(result["two_theta_min"]),
+                    "two_theta_max": float(result["two_theta_max"]),
+                }
+            saved_path = write_qr_rod_peak_edits(
+                path_text,
+                pd.DataFrame(result["marker_table"]),
+                parameters=save_parameters,
+            )
             print(f"saved Qr-rod peak edits={saved_path}")
         except Exception as exc:
             print(f"failed saving Qr-rod peak edits={Path(path_text).expanduser()}: {exc}")
