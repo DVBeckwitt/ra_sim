@@ -15188,6 +15188,7 @@ def final_qr_rod_region_specs_table(
 def final_qr_rod_gui_vs_final_profile_audit_table(
     profile_table: object,
     *,
+    gui_profile_table: object = None,
     marker_source: object,
     l_axis_coefficients: object,
 ) -> pd.DataFrame:
@@ -15203,55 +15204,105 @@ def final_qr_rod_gui_vs_final_profile_audit_table(
         "delta_L",
         "delta_density",
     ]
-    table = pd.DataFrame(profile_table).copy()
-    if table.empty or not {"m", "branch", "qz_center", "background_density"}.issubset(
-        table.columns
+    final_table = pd.DataFrame(profile_table).copy()
+    gui_table_source = profile_table if gui_profile_table is None else gui_profile_table
+    gui_table = pd.DataFrame(gui_table_source).copy()
+    required_columns = {"m", "branch", "qz_center", "background_density"}
+    if (
+        final_table.empty
+        or gui_table.empty
+        or not required_columns.issubset(final_table.columns)
+        or not required_columns.issubset(gui_table.columns)
     ):
         return pd.DataFrame(columns=columns)
     marker_table = pd.DataFrame(marker_source).copy()
-    rows: list[pd.DataFrame] = []
-    for (m_value, branch_value), group in table.groupby(["m", "branch"], sort=False):
-        group = group.copy()
-        final_l = qz_values_to_l_axis(
-            group["qz_center"],
-            m_value=int(m_value),
-            branch_value=str(branch_value),
-            marker_source=marker_table,
-            l_axis_coefficients=l_axis_coefficients,
+    merge_keys = ["m", "branch", "_audit_qz_key", "_audit_row"]
+
+    def prepared_profile_rows(table: pd.DataFrame, prefix: str) -> pd.DataFrame:
+        qz_column = f"{prefix}_qz_center"
+        l_column = f"{prefix}_L"
+        density_column = f"{prefix}_background_density"
+        pixel_column = f"{prefix}_pixel_count"
+        m_values = pd.to_numeric(table["m"], errors="coerce").to_numpy(dtype=np.float64)
+        branches = table["branch"].astype(str).to_numpy(dtype=object)
+        qz_center = pd.to_numeric(table["qz_center"], errors="coerce").to_numpy(
+            dtype=np.float64
         )
-        density = pd.to_numeric(group["background_density"], errors="coerce").to_numpy(
+        density = pd.to_numeric(table["background_density"], errors="coerce").to_numpy(
             dtype=np.float64
         )
         pixel_count = (
-            pd.to_numeric(group["pixel_count"], errors="coerce").to_numpy(dtype=np.float64)
-            if "pixel_count" in group
-            else np.full(group.shape[0], np.nan, dtype=np.float64)
+            pd.to_numeric(table["pixel_count"], errors="coerce").to_numpy(dtype=np.float64)
+            if "pixel_count" in table
+            else np.full(table.shape[0], np.nan, dtype=np.float64)
         )
-        qz_center = pd.to_numeric(group["qz_center"], errors="coerce").to_numpy(dtype=np.float64)
-        finite = np.isfinite(qz_center) & np.isfinite(final_l) & np.isfinite(density)
-        if "pixel_count" in group:
+        finite = np.isfinite(m_values) & np.isfinite(qz_center) & np.isfinite(density)
+        if "pixel_count" in table:
             finite &= np.isfinite(pixel_count) & (pixel_count > 0.0)
         if not np.any(finite):
-            continue
-        rows.append(
-            pd.DataFrame(
-                {
-                    "m": np.full(np.count_nonzero(finite), int(m_value), dtype=int),
-                    "branch": np.full(np.count_nonzero(finite), str(branch_value), dtype=object),
-                    "qz_center": qz_center[finite],
-                    "gui_L": final_l[finite],
-                    "final_L": final_l[finite],
-                    "gui_background_density": density[finite],
-                    "final_data_density": density[finite],
-                    "pixel_count": pixel_count[finite],
-                    "delta_L": np.zeros(np.count_nonzero(finite), dtype=np.float64),
-                    "delta_density": np.zeros(np.count_nonzero(finite), dtype=np.float64),
-                }
+            return pd.DataFrame(
+                columns=[
+                    *merge_keys,
+                    qz_column,
+                    l_column,
+                    density_column,
+                    pixel_column,
+                ]
             )
+        prepared = pd.DataFrame(
+            {
+                "m": m_values[finite].astype(int),
+                "branch": branches[finite],
+                qz_column: qz_center[finite],
+                density_column: density[finite],
+                pixel_column: pixel_count[finite],
+            }
         )
-    if not rows:
+        prepared[l_column] = np.nan
+        for (m_value, branch_value), group in prepared.groupby(["m", "branch"], sort=False):
+            prepared.loc[group.index, l_column] = qz_values_to_l_axis(
+                group[qz_column],
+                m_value=int(m_value),
+                branch_value=str(branch_value),
+                marker_source=marker_table,
+                l_axis_coefficients=l_axis_coefficients,
+            )
+        finite_l = np.isfinite(prepared[l_column].to_numpy(dtype=np.float64))
+        prepared = prepared.loc[finite_l].copy()
+        prepared["_audit_qz_key"] = np.round(prepared[qz_column].to_numpy(dtype=np.float64), 9)
+        prepared["_audit_row"] = prepared.groupby(merge_keys[:-1], sort=False).cumcount()
+        return prepared
+
+    gui_rows = prepared_profile_rows(gui_table, "gui")
+    final_rows = prepared_profile_rows(final_table, "final")
+    if gui_rows.empty or final_rows.empty:
         return pd.DataFrame(columns=columns)
-    return pd.concat(rows, ignore_index=True, sort=False).loc[:, columns]
+    merged = gui_rows.merge(
+        final_rows,
+        on=merge_keys,
+        how="inner",
+    )
+    if merged.empty:
+        return pd.DataFrame(columns=columns)
+    audit = pd.DataFrame(
+        {
+            "m": merged["m"].astype(int),
+            "branch": merged["branch"].astype(str),
+            "qz_center": pd.to_numeric(merged["final_qz_center"], errors="coerce"),
+            "gui_L": pd.to_numeric(merged["gui_L"], errors="coerce"),
+            "final_L": pd.to_numeric(merged["final_L"], errors="coerce"),
+            "gui_background_density": pd.to_numeric(
+                merged["gui_background_density"], errors="coerce"
+            ),
+            "final_data_density": pd.to_numeric(
+                merged["final_background_density"], errors="coerce"
+            ),
+            "pixel_count": pd.to_numeric(merged["final_pixel_count"], errors="coerce"),
+        }
+    )
+    audit["delta_L"] = audit["final_L"] - audit["gui_L"]
+    audit["delta_density"] = audit["final_data_density"] - audit["gui_background_density"]
+    return audit.loc[:, columns]
 
 
 def rod_profile_table_for_l_window(
@@ -16254,7 +16305,8 @@ rod_profile_table = rod_profile_table_for_l_window(
     specular_l_max=qr_rod_specular_l_max,
     l_axis_coefficients=accepted_l_axis_coefficients,
 )
-final_region_overlays = final_qr_rod_region_overlays_from_profile_table(
+accepted_profile_table = rod_profile_table.copy()
+accepted_region_overlays = final_qr_rod_region_overlays_from_profile_table(
     rod_profile_table,
     rod_entries,
     marker_source=marker_table,
@@ -16262,7 +16314,9 @@ final_region_overlays = final_qr_rod_region_overlays_from_profile_table(
     theta_initial_deg=qr_rod_editor_theta_initial_deg,
     specular_roi=SPECULAR_ROI_SIGNATURE,
 )
-final_region_overlay_signature = final_region_overlay_signature_from_overlays(final_region_overlays)
+accepted_region_overlay_signature = final_region_overlay_signature_from_overlays(
+    accepted_region_overlays
+)
 qr_rod_peak_edit_key = qr_rod_peak_edit_cache_key(
     None if qr_rod_peak_edit_source == "last_cached" else qr_rod_peak_edits_path or None,
     marker_table=marker_table if qr_rod_peak_edit_source != "last_cached" else None,
@@ -16281,7 +16335,7 @@ qr_rod_peak_edit_key = qr_rod_peak_edit_cache_key(
         "accepted_l_axis_coefficients": l_axis_coefficients_signature(
             accepted_l_axis_coefficients
         ),
-        "final_region_overlay_signature": final_region_overlay_signature,
+        "accepted_region_overlay_signature": accepted_region_overlay_signature,
     },
 )
 if qr_rod_profile_cache_has_final_fit(qr_rod_profile_cache or {}, qr_rod_peak_edit_key):
@@ -16333,6 +16387,14 @@ if not marker_table.empty and {"m", "branch"}.issubset(marker_table.columns):
     marker_branch = marker_table["branch"].astype(str).to_numpy(dtype=object)
     marker_table = marker_table.loc[~((marker_m == 0.0) & (marker_branch == "qz"))].copy()
 marker_table = marker_table_with_specular_l_markers(marker_table, specular_l_marker_table)
+final_region_overlays = final_qr_rod_region_overlays_from_profile_table(
+    rod_profile_table,
+    rod_entries,
+    marker_source=marker_table,
+    delta_qr=qr_rod_delta_qr,
+    theta_initial_deg=qr_rod_editor_theta_initial_deg,
+    specular_roi=SPECULAR_ROI_SIGNATURE,
+)
 print(
     f"rod-profile joint fits: groups={int(rod_profile_table.groupby(['m', 'branch']).ngroups) if not rod_profile_table.empty else 0} workers={ROD_PROFILE_FIT_WORKERS} gpu={GPU_ACCELERATION_ENABLED}"
 )
@@ -16387,6 +16449,7 @@ if not plot_marker_table.empty and "m" in plot_marker_table:
     plot_marker_table["hk"] = np.asarray(plot_marker_table["m"], dtype=int)
 profile_audit_table = final_qr_rod_gui_vs_final_profile_audit_table(
     rod_profile_table,
+    gui_profile_table=accepted_profile_table,
     marker_source=plot_marker_table,
     l_axis_coefficients=accepted_l_axis_coefficients,
 )

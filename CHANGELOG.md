@@ -32,7 +32,7 @@
   - Fixed final detector-region exports so nonzero Qr-rod overlays are clipped to the accepted GUI `L Min` / `L Max` window, matching the picker preview instead of drawing the full positive-Qz rod span.
   - Fixed Qr-rod final region figures to use GUI-accepted integration regions and marker groups rather than stale pre-editor overlays.
   - Fixed final Qr-rod fit cache identity so accepted HK=0 profile rows from the specular editor cannot be replaced by stale cached final-figure data.
-  - Fixed final Qr-rod profile figures so accepted GUI marker L-axis coefficients, profile rows, `background_density` data, HK=0 axis bounds, and detector overlays remain the final Figure 7 source of truth, with a saved GUI-vs-final profile audit CSV.
+  - Fixed final Qr-rod profile figures so accepted GUI marker L-axis coefficients, profile rows, `background_density` data, HK=0 axis bounds, and detector overlays remain the final Figure 7 source of truth after final-fit cache resolution, with a saved GUI-vs-final profile audit CSV.
   - Linked the Qr-rod marker editor and detector-preview windows so closing either window also closes the other.
   - Raised the default background max-intensity estimate for sparse bright peaks by using a higher robust percentile while keeping slider ceilings tied to the true finite image range.
 

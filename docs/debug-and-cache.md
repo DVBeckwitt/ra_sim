@@ -327,7 +327,11 @@ Current status as of 2026-05-21:
   `figure7_<sample>_qr_rod_region_specs.csv` and `.json` next to the profile
   CSV. Accepted HK=0/specular profile rows are also hashed into the final
   Qr-rod cache identity, so the final figure cannot reuse stale cached `m=0`
-  data after the GUI selection changes.
+  data after the GUI selection changes. After final-fit cache resolution and
+  final marker/specular normalization, the script rebuilds final region overlays
+  from the accepted profile table before saving region specs or detector-region
+  figures, and the GUI-vs-final audit compares accepted GUI rows against the
+  post-cache final rows instead of comparing the final table to itself.
 - PbI2 manuscript figures default to
   `C:\Users\Kenpo\OneDrive\Documents\GitHub\PhD Work\2D-Manuscript-Draft\figures\results_pbi2`.
   Other samples keep the `results_ordered` default, and

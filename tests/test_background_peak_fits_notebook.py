@@ -4211,11 +4211,20 @@ def test_final_qr_rod_region_overlays_are_rebuilt_after_gui_editor() -> None:
         "rod_profile_table = rod_profile_table_for_l_window(",
         specular_call,
     )
-    final_overlay_rebuild = source.index(
-        "final_region_overlays = final_qr_rod_region_overlays_from_profile_table(",
+    accepted_overlay_signature = source.index(
+        "accepted_region_overlay_signature = final_region_overlay_signature_from_overlays(",
         window_filter,
     )
-    cache_key_call = source.index("qr_rod_peak_edit_cache_key(", final_overlay_rebuild)
+    cache_key_call = source.index("qr_rod_peak_edit_cache_key(", accepted_overlay_signature)
+    cache_resolution = source.index("if qr_rod_profile_cache_has_final_fit(", cache_key_call)
+    post_cache_marker_table = source.index(
+        "marker_table = marker_table_with_specular_l_markers(marker_table, specular_l_marker_table)",
+        cache_resolution,
+    )
+    final_overlay_rebuild = source.index(
+        "final_region_overlays = final_qr_rod_region_overlays_from_profile_table(",
+        post_cache_marker_table,
+    )
     final_profile_selection = source.index(
         "detector_plot_rod_entries = detector_complete_branch_rod_entries(",
         final_overlay_rebuild,
@@ -4225,11 +4234,38 @@ def test_final_qr_rod_region_overlays_are_rebuilt_after_gui_editor() -> None:
         final_overlay_rebuild,
     )
 
-    assert nonzero_call < specular_call < window_filter < final_overlay_rebuild
-    assert final_overlay_rebuild < cache_key_call < final_profile_selection
+    assert nonzero_call < specular_call < window_filter < accepted_overlay_signature
+    assert accepted_overlay_signature < cache_key_call < cache_resolution
+    assert cache_resolution < post_cache_marker_table < final_overlay_rebuild
     assert final_profile_selection < detector_overlay_selection
-    rebuild_call = source[final_overlay_rebuild:cache_key_call]
+    rebuild_call = source[final_overlay_rebuild:final_profile_selection]
     assert "marker_source=marker_table" in rebuild_call
+
+
+def test_final_region_overlays_are_rebuilt_after_final_fit_cache_resolution() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    cache_resolution = source.index("if qr_rod_profile_cache_has_final_fit(")
+    post_cache_marker_table = source.index(
+        "marker_table = marker_table_with_specular_l_markers(marker_table, specular_l_marker_table)",
+        cache_resolution,
+    )
+    final_overlay_rebuild = source.index(
+        "final_region_overlays = final_qr_rod_region_overlays_from_profile_table(",
+        post_cache_marker_table,
+    )
+    region_specs_save = source.index(
+        "region_specs_table = final_qr_rod_region_specs_table(",
+        final_overlay_rebuild,
+    )
+    detector_overlay_selection = source.index(
+        "detector_overlay_rods = detector_overlay_rod_entries(",
+        final_overlay_rebuild,
+    )
+
+    assert cache_resolution < post_cache_marker_table < final_overlay_rebuild
+    assert final_overlay_rebuild < region_specs_save < detector_overlay_selection
 
 
 def test_final_region_overlay_bounds_come_from_final_profile_table() -> None:
@@ -4356,17 +4392,19 @@ def test_final_region_overlay_signature_is_in_final_fit_cache_key() -> None:
     if not PARALLEL_SCRIPT_PATH.exists():
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
-    final_overlay_rebuild = source.index(
-        "final_region_overlays = final_qr_rod_region_overlays_from_profile_table("
+    accepted_overlay_rebuild = source.index(
+        "accepted_region_overlays = final_qr_rod_region_overlays_from_profile_table("
     )
-    cache_key_call = source.index("qr_rod_peak_edit_cache_key(", final_overlay_rebuild)
-    cache_key_section = source[final_overlay_rebuild : cache_key_call + 1400]
+    cache_key_call = source.index("qr_rod_peak_edit_cache_key(", accepted_overlay_rebuild)
+    cache_key_section = source[accepted_overlay_rebuild : cache_key_call + 1400]
 
+    assert "accepted_region_overlay_signature = " in cache_key_section
+    assert "final_region_overlay_signature_from_overlays(" in cache_key_section
+    assert "accepted_region_overlays" in cache_key_section
     assert (
-        "final_region_overlay_signature = "
-        "final_region_overlay_signature_from_overlays(final_region_overlays)"
-    ) in cache_key_section
-    assert '"final_region_overlay_signature": final_region_overlay_signature' in cache_key_section
+        '"accepted_region_overlay_signature": accepted_region_overlay_signature'
+        in cache_key_section
+    )
 
 
 def test_final_qr_rod_region_specs_are_saved_with_gui_fields() -> None:
@@ -5181,6 +5219,66 @@ def test_final_gui_vs_final_profile_audit_uses_accepted_profile_rows() -> None:
     assert audit["final_data_density"].tolist() == pytest.approx([5.0])
     assert audit["delta_L"].abs().max() == pytest.approx(0.0)
     assert audit["delta_density"].abs().max() == pytest.approx(0.0)
+
+
+def test_final_profile_audit_compares_gui_rows_to_post_cache_final_rows() -> None:
+    namespace = _script_functions("final_qr_rod_gui_vs_final_profile_audit_table")
+    audit_table = namespace["final_qr_rod_gui_vs_final_profile_audit_table"]
+    gui_profile_table = pd.DataFrame(
+        [
+            {
+                "m": 1,
+                "branch": "-",
+                "qz_center": 2.0,
+                "background_density": 5.0,
+                "pixel_count": 8,
+            }
+        ]
+    )
+    final_profile_table = pd.DataFrame(
+        [
+            {
+                "m": 1,
+                "branch": "-",
+                "qz_center": 2.0,
+                "background_density": 7.0,
+                "pixel_count": 9,
+            }
+        ]
+    )
+
+    audit = audit_table(
+        final_profile_table,
+        gui_profile_table=gui_profile_table,
+        marker_source=pd.DataFrame(),
+        l_axis_coefficients={
+            "1::-": {"m": 1, "branch": "-", "slope": 2.0, "intercept": 0.5}
+        },
+    )
+
+    assert audit["gui_L"].tolist() == pytest.approx([4.5])
+    assert audit["final_L"].tolist() == pytest.approx([4.5])
+    assert audit["gui_background_density"].tolist() == pytest.approx([5.0])
+    assert audit["final_data_density"].tolist() == pytest.approx([7.0])
+    assert audit["pixel_count"].tolist() == pytest.approx([9.0])
+    assert audit["delta_L"].tolist() == pytest.approx([0.0])
+    assert audit["delta_density"].tolist() == pytest.approx([2.0])
+
+
+def test_final_profile_audit_call_receives_accepted_gui_rows() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    accepted_profile_snapshot = source.index("accepted_profile_table = rod_profile_table.copy()")
+    cache_resolution = source.index("if qr_rod_profile_cache_has_final_fit(")
+    audit_call = source[
+        source.index(
+            "profile_audit_table = final_qr_rod_gui_vs_final_profile_audit_table("
+        ) : source.index("profile_audit_csv =")
+    ]
+
+    assert accepted_profile_snapshot < cache_resolution
+    assert "gui_profile_table=accepted_profile_table" in audit_call
 
 
 def test_parallel_script_qr_rod_snap_moves_all_panel_markers_to_local_peaks() -> None:

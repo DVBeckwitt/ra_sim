@@ -937,6 +937,20 @@ Passing checks:
   behavior preserved; cleanup only. No CI workflow, deprecation, migration,
   version, public API, saved-state, config, artifact-schema, or launch-procedure
   change is required.
+- 2026-05-22 post-cache Figure 7 source-of-truth closeout: final Qr-rod
+  detector-region overlays now rebuild after final-fit cache hit/miss
+  resolution and final marker/specular normalization, so saved region specs and
+  detector-region masks consume the same post-cache `rod_profile_table` and
+  marker table as the final profile figure. The GUI-vs-final audit now compares
+  accepted GUI profile rows against post-cache final rows by `(m, branch,
+  qz_center)` instead of comparing the final table to itself. Validation passed
+  with `python -m pytest --assert=plain tests/test_background_peak_fits_notebook.py -ra`
+  (`243 passed, 8 skipped`), scoped compileall, `git diff --check`, and
+  `python -m ra_sim.dev check` (`295 passed`, Ruff clean, mypy clean).
+  Bug/error status: fixed for stale final detector/profile images after cache
+  reuse; feature status: no new operator control; migration/deprecation status:
+  no dependency, CI workflow, version, public API, saved-state, config, or
+  artifact-schema change is required.
 
 Known validation limits:
 
