@@ -54,6 +54,8 @@ scripts/debug/simulation.npz
 # Generated diagnostic artifacts
 /debug/beam_center_trace.jsonl
 /artifacts/background_peak_fits/
+/artifacts/plots/
+/artifacts/test_refactor_baseline/
 /artifacts/geometry_fit_correlations/
 /artifacts/geometry_fit_coordinate_diagnostics/
 /artifacts/geometry_fit_caked_snapshots/
@@ -85,6 +87,7 @@ scripts/debug/simulation.npz
 /artifacts/perf/gui_timing/
 /artifacts/q_group_peak_sensitivity/
 /artifacts/q_group_peak_sensitivity.zip
+/scripts/diagnostics/background_peak_fit_worker*.zip
 /temp/
 
 # Accidental root-level probe files with random 8-char names

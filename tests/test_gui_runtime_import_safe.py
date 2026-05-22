@@ -15,6 +15,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from tests.helpers.gui_fakes import RuntimeVar as _RuntimeVar
+
 
 RUNTIME_MODULE_NAME = "ra_sim.gui.runtime"
 RUNTIME_IMPL_MODULE_NAME = "ra_sim.gui._runtime_impl"
@@ -9225,17 +9227,6 @@ def test_runtime_session_manual_rebuild_failure_preserves_runtime_cache_state(
     assert runtime_state.last_simulation_signature == ("old-sig", 0)
     assert np.array_equal(runtime_state.stored_sim_image, np.full((4, 4), 5.0))
     assert runtime_state.source_row_snapshots[0]["created_from"] == "old-cache"
-
-
-class _RuntimeVar:
-    def __init__(self, value: object) -> None:
-        self._value = value
-
-    def get(self):
-        return self._value
-
-    def set(self, value) -> None:
-        self._value = value
 
 
 def test_manual_geometry_undo_reconciles_fit_background_selection(monkeypatch) -> None:

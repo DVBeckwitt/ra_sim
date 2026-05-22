@@ -23,43 +23,9 @@ from ra_sim.gui import mosaic_top_selection
 from ra_sim.gui import peak_selection as ps
 from ra_sim.io.data_loading import load_gui_state_file
 from ra_sim.simulation import diffraction, exact_cake_portable
-
-
-class _DummyVar:
-    def __init__(self, value):
-        self._value = value
-
-    def get(self):
-        return self._value
-
-    def set(self, value):
-        self._value = value
-
-
-class _DummyAxis:
-    def __init__(self, xlim=(0.0, 1.0), ylim=(0.0, 1.0)):
-        self._xlim = tuple(float(v) for v in xlim)
-        self._ylim = tuple(float(v) for v in ylim)
-
-    def get_xlim(self):
-        return self._xlim
-
-    def get_ylim(self):
-        return self._ylim
-
-    def set_xlim(self, left, right):
-        self._xlim = (float(left), float(right))
-
-    def set_ylim(self, bottom, top):
-        self._ylim = (float(bottom), float(top))
-
-
-class _DummyCanvas:
-    def __init__(self) -> None:
-        self.draws = 0
-
-    def draw_idle(self):
-        self.draws += 1
+from tests.helpers.gui_fakes import DummyAxis as _DummyAxis
+from tests.helpers.gui_fakes import DummyCanvas as _DummyCanvas
+from tests.helpers.gui_fakes import DummyVar as _DummyVar
 
 
 def _pairs_for_index(pairs_by_background: dict[int, list[dict[str, object]]], index: int):

@@ -31,6 +31,8 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 | `python -m ra_sim.dev format` | Format the current formatter frontier. |
 | `python -m ra_sim.dev format-check` | Check formatting on the formatter frontier. |
 | `python -m ra_sim.dev check` | Run format-check, ruff, fast tests, and mypy frontier. |
+| `scripts/dev/check_geometry_test_refactor.ps1` | Windows gate for geometry test refactors; preserves collection IDs against a local baseline and runs the four large geometry test files. |
+| `scripts/dev/check_geometry_test_refactor.sh` | Bash equivalent of the geometry test refactor gate. |
 | `python -m ra_sim.dev test-fast` | Run the fast pytest manifest from `ra_sim/test_tiers.py`. |
 | `python -m ra_sim.dev test-integration` | Run the integration pytest manifest from `ra_sim/test_tiers.py`. |
 | `python -m ra_sim.dev test-all` | Run full pytest suite. |
@@ -48,6 +50,19 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 - `tests/conftest.py` adds tier markers from the manifests, marks benchmark-directory files as benchmark tests, and resets shared debug state around tests.
 - The tests/benchmarks directory is the benchmark test area.
 - Fast and integration manifests are partial in the current checkout; untiered tests still run by direct pytest or `python -m ra_sim.dev test-all`.
+
+## Geometry test refactor gate
+
+Use `scripts/dev/check_geometry_test_refactor.ps1` on Windows, or `scripts/dev/check_geometry_test_refactor.sh` where Bash is available, when moving helpers out of these large geometry test files:
+
+- `tests/test_manual_geometry_selection_helpers.py`
+- `tests/test_gui_geometry_fit_workflow.py`
+- `tests/test_gui_runtime_import_safe.py`
+- `tests/test_geometry_fitting.py`
+
+The gate compares normalized `pytest --collect-only -q` output against local baseline files in `artifacts/test_refactor_baseline/`, ignoring only the elapsed-time suffix, then runs the same four-file suite. The baseline artifacts are local generated files and are intentionally ignored by git.
+
+Current status: the collection baseline is stable at 2055 tests, but the four-file runtime baseline is red in this checkout (`53 failed, 2000 passed, 2 skipped`) and can hit Windows native access violations in the manual geometry tests. During helper extraction, treat this gate first as a collection and node-ID guard until the runtime baseline is repaired. Keep helper code in the tracked test-helper package; do not move test scaffolding into `ra_sim/`.
 
 ## Test file index
 
@@ -233,6 +248,7 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 |---|---|---|---|
 | `tests/Diffuse/diffuse_cif_toggle.py` | Support script | `python tests/Diffuse/diffuse_cif_toggle.py --l-max <value>` | Interactive PbI2 diffuse CIF viewer used as test-adjacent support, not a pytest file. |
 | `tests/helpers/__init__.py` | Support package marker | Not direct CLI. | Package marker for shared test helpers. |
+| `tests/helpers/gui_fakes.py` | Support helper | Imported by tests. | Shared dummy GUI variables, axes, canvases, and sliders for geometry test refactors. |
 | `tests/helpers/vesta_reference.py` | Support helper | Imported by tests. | Test import shim for VESTA parity helpers. |
 
 ## Validation, diagnostic, benchmark, and timing scripts
@@ -244,6 +260,8 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 | Benchmarks | `scripts/benchmarks/benchmark_gui_startup.py` | `python scripts/benchmarks/benchmark_gui_startup.py --label <label> --output <json>` | Optional JSON output. | Benchmarks GUI startup import and launch timing. |
 | Benchmarks | `scripts/benchmarks/benchmark_mosaic_profiles.py` | `python scripts/benchmarks/benchmark_mosaic_profiles.py --samples <n> --iterations <n>` | Stdout timing summary. | Benchmarks random mosaic profile generation. |
 | Benchmarks | `scripts/benchmarks/benchmark_weighted_events_parallel.py` | `python scripts/benchmarks/benchmark_weighted_events_parallel.py --help` | Stdout timing summary. | Benchmarks weighted-event parallel execution. |
+| Developer gates | `scripts/dev/check_geometry_test_refactor.ps1` | `scripts/dev/check_geometry_test_refactor.ps1` | Collection diff plus four-file pytest output. | Windows gate for helper extraction from large geometry tests. |
+| Developer gates | `scripts/dev/check_geometry_test_refactor.sh` | `scripts/dev/check_geometry_test_refactor.sh` | Collection diff plus four-file pytest output. | Bash gate for helper extraction from large geometry tests. |
 | Weighted-event diagnostics | `scripts/diagnostics/validate_weighted_event_merge.py` | `python scripts/diagnostics/validate_weighted_event_merge.py` | Focused pytest and benchmark output. | Runs the weighted-event merge diagnostics gate. |
 | Geometry landscape and fitting performance | `scripts/debug/analyze_geometry_fit_jacobians.py` | `python scripts/debug/analyze_geometry_fit_jacobians.py <scenario_file> --output <report>` | JSON or YAML aggregate report. | Aggregates geometry-fit Jacobian diagnostics. |
 | Debug and analysis tools | `scripts/debug/analyze_simulation_debug.py` | `python scripts/debug/analyze_simulation_debug.py` | Reads generated artifact scripts/debug/simulation.npz and shows a plot. | Analyzes missed diffracted ray directions. |
@@ -262,6 +280,8 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 | Validation probes | `scripts/debug/run_q_group_peak_transport_validation.py` | `python scripts/debug/run_q_group_peak_transport_validation.py --state <state.json> --group-key <key> --outdir <dir>` | Transport validation artifacts. | Compares Q-group transport shortcuts against recomputation. |
 | Geometry recovery diagnostics | `scripts/debug/validate_geometry_preflight_rebind.py` | `python scripts/debug/validate_geometry_preflight_rebind.py --state <state.json> --mode <mode>` | Optional report JSON or fresh state export. | Validates grouped-pick preflight rebinding behavior. |
 | Debug and analysis tools | `scripts/debug/view_sim_image.py` | `python scripts/debug/view_sim_image.py` | Reads generated artifact scripts/debug/simulation.npz and shows a plot. | Views the simulated image written by run_diffraction_test.py. |
+| Geometry recovery diagnostics | `scripts/diagnostics/check_geometry_fit_handoff.py` | `python scripts/diagnostics/check_geometry_fit_handoff.py` | Handoff diagnostics on stdout. | Checks geometry-fit handoff payloads for manual Qr/Qz workflows. |
+| Debug and analysis tools | `scripts/diagnostics/comparison.py` | `python scripts/diagnostics/comparison.py` | Comparison diagnostics on stdout. | Legacy comparison probe for diagnostic fitting work. |
 | Geometry landscape and fitting performance | `scripts/geometry_fit_landscape.py` | `python scripts/geometry_fit_landscape.py --state <state.json> --outdir <dir>` | landscape_runs.csv, baseline_metadata.json, landscape_figure.png. | Sweeps geometry-fit parameters around a saved GUI baseline. |
 | GUI timing and performance | `scripts/measure_gui_timing.py` | `python scripts/measure_gui_timing.py --scenario <name> --trials <n>` | Generated artifacts under artifacts/perf/gui_timing/<stamp>/. | Runs GUI timing trials and summarizes JSONL timing events. |
 

@@ -25,6 +25,8 @@ from ra_sim.gui import (
 from ra_sim.io.data_loading import load_gui_state_file, save_gui_state_file
 from ra_sim.simulation.exact_cake import DetectorCakeLUT
 from ra_sim.simulation.exact_cake_portable import CakeTransformBundle
+from tests.helpers.gui_fakes import DummySlider as _DummySlider
+from tests.helpers.gui_fakes import DummyVar as _DummyVar
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -521,28 +523,6 @@ def test_qr_handoff_audit_uses_nested_locked_qr_identity_fields() -> None:
     assert row["source_peak_index"] == identity["source_peak_index"]
     assert row["source_table_index"] == identity["source_table_index"]
     assert row["source_row_index"] == identity["source_row_index"]
-
-
-class _DummyVar:
-    def __init__(self, value):
-        self._value = value
-
-    def get(self):
-        return self._value
-
-    def set(self, value):
-        self._value = value
-
-
-class _DummySlider:
-    def __init__(self, from_value, to_value):
-        self._values = {
-            "from": from_value,
-            "to": to_value,
-        }
-
-    def cget(self, key):
-        return self._values[key]
 
 
 def _make_prepared_run(
