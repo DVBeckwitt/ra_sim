@@ -584,10 +584,22 @@ update, refreshes Qr/Qz picker rows and geometry source-row snapshots, and
 retains only user masks such as enabled/disabled Qr groups. This prevents
 selected Qr/Qz sets from reusing stale source rows after sample-tilt changes.
 Saved manual Qr/Qz placements from zero-intensity ghost representatives keep
-their measured background point, but their simulated marker is replayed from
-the current source row after simulation changes. If the current ghost source
-identity is missing, the marker is reported unresolved instead of drawing the
-old saved simulated pixel as current truth.
+their measured background point, but their simulated square marker is replayed
+from current source rows after simulation changes, falling back to current
+simulated-peak rows when the source-row snapshot is empty. The refresh is
+required even when the saved placed row no longer carries ghost provenance and
+only the warm manual-pick cache identifies the resolved simulated source as a
+ghost. If the current ghost source identity is missing from both current
+providers, the marker is reported unresolved instead of drawing the old saved
+simulated pixel or falling back to saved refined simulated coordinates as
+current truth. Full-simulation invalidation also clears remembered geometry-fit
+overlay records so stale fit markers cannot preempt the saved-pair redraw path
+after the new source rows apply.
+Validation for this path should inspect the actual Matplotlib overlay artists:
+the simulated Qr/Qz square must be drawn at the current ghost row coordinates,
+not just returned in the intermediate display payload.
+The selected Qr-set integration overlay is refreshed as an integration overlay
+even when the separate geometry overlay visibility toggle is off.
 
 Generated disordered-phase Qr/Qz groups are structural rows, not live display
 artifacts. When `Include generated disordered-phase Qr refs` is enabled and a

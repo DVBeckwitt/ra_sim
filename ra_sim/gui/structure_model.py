@@ -421,6 +421,7 @@ class StructureModelState:
     last_stack_layers: int = 1
     last_rod_points_per_gz: int = 0
     last_atom_site_fractional_signature: tuple[float, ...] = field(default_factory=tuple)
+    last_primary_source_mode: str = "ht"
     miller_generator: Callable[..., tuple[object, object, object, object]] | None = None
     inject_fractional_reflections: Callable[..., tuple[object, object]] | None = None
     bootstrap_complete: bool = False
@@ -1172,6 +1173,76 @@ def build_ht_cache(
     }
 
 
+def build_integer_bragg_inputs(
+    state: StructureModelState,
+    *,
+    occ_values,
+    cif_path_override=None,
+):
+    """Return primary integer-Bragg inputs using the existing CIF generator."""
+
+    if state.miller_generator is None:
+        raise RuntimeError("Integer Bragg mode requires a Miller-index generator.")
+
+    active_cif_path = (
+        str(cif_path_override) if cif_path_override is not None else str(state.cif_file)
+    )
+    miller, intensities, degeneracy, details = state.miller_generator(
+        int(state.mx),
+        active_cif_path,
+        list(occ_values),
+        float(state.lambda_angstrom),
+        float(state.energy),
+        float(state.intensity_threshold),
+        tuple(state.two_theta_range),
+    )
+
+    miller_arr = np.asarray(miller, dtype=np.float64)
+    if miller_arr.ndim != 2 or miller_arr.shape[1] < 3:
+        miller_arr = np.empty((0, 3), dtype=np.float64)
+    else:
+        miller_arr = miller_arr[:, :3]
+    intens_arr = np.asarray(intensities, dtype=np.float64).reshape(-1)
+    deg_arr = np.asarray(degeneracy, dtype=np.int32).reshape(-1)
+
+    row_count = min(miller_arr.shape[0], intens_arr.shape[0])
+    if row_count <= 0:
+        return (
+            np.empty((0, 3), dtype=np.float64),
+            np.empty((0,), dtype=np.float64),
+            np.empty((0,), dtype=np.int32),
+            [],
+        )
+
+    miller_arr = miller_arr[:row_count]
+    intens_arr = intens_arr[:row_count]
+    if deg_arr.shape[0] < row_count:
+        deg_padded = np.ones(row_count, dtype=np.int32)
+        deg_padded[: deg_arr.shape[0]] = deg_arr
+        deg_arr = deg_padded
+    else:
+        deg_arr = deg_arr[:row_count]
+
+    rounded = np.rint(miller_arr)
+    keep = (
+        np.all(np.isfinite(miller_arr), axis=1)
+        & np.isfinite(intens_arr)
+        & np.all(np.isclose(miller_arr, rounded, rtol=0.0, atol=1.0e-8), axis=1)
+    )
+    kept_indices = np.flatnonzero(keep)
+    details_seq = list(details) if isinstance(details, (list, tuple)) else []
+    filtered_details = [
+        details_seq[int(idx)] if int(idx) < len(details_seq) else []
+        for idx in kept_indices
+    ]
+    return (
+        rounded[keep].astype(np.float64, copy=False),
+        intens_arr[keep].astype(np.float64, copy=False),
+        deg_arr[keep].astype(np.int32, copy=False),
+        filtered_details,
+    )
+
+
 def combine_ht_dicts(caches, weights):
     out = {}
     for cache, weight in zip(caches, weights):
@@ -1379,6 +1450,7 @@ def build_initial_structure_model_state(
         "finite_stack": bool(state.defaults["finite_stack"]),
         "stack_layers": int(max(1, state.defaults["stack_layers"])),
         "rod_points_per_gz": int(default_rod_points_per_gz),
+        "primary_source_mode": "ht",
     }
     state.last_occ_for_ht = list(state.occ)
     state.last_p_triplet = [
@@ -1398,6 +1470,7 @@ def build_initial_structure_model_state(
     state.last_atom_site_fractional_signature = atom_site_fractional_signature(
         atom_site_fractional_default_values(state)
     )
+    state.last_primary_source_mode = "ht"
 
     if debug_print is not None:
         debug_print("miller1 shape:", miller1.shape, "intens1 shape:", intens1.shape)
@@ -1549,9 +1622,13 @@ def rebuild_diffraction_inputs(
     tcl_error_types: tuple[type[BaseException], ...] = (),
     force=False,
     trigger_update=True,
+    primary_source_mode="ht",
 ):
     """Refresh cached HT curves and peak lists for the current settings."""
 
+    primary_source_mode = str(primary_source_mode or "ht").strip().lower()
+    if primary_source_mode not in {"ht", "integer_bragg"}:
+        primary_source_mode = "ht"
     rod_points_per_gz = gui_controllers.normalize_rod_points_per_gz(
         rod_points_per_gz,
         gui_controllers.default_rod_points_per_gz(c_axis),
@@ -1583,6 +1660,7 @@ def rebuild_diffraction_inputs(
         and (not finite_stack_flag or state.last_stack_layers == int(layers))
         and int(rod_points_per_gz) == int(state.last_rod_points_per_gz)
         and atom_site_signature == state.last_atom_site_fractional_signature
+        and str(state.last_primary_source_mode) == primary_source_mode
     ):
         simulation_runtime_state.last_sim_signature = None
         simulation_runtime_state.last_simulation_signature = None
@@ -1635,28 +1713,51 @@ def rebuild_diffraction_inputs(
             state.ht_cache_multi[label] = cache
         return cache
 
-    active_ht_entries = active_weighted_ht_entries(p_vals, weights)
-    caches = [get_cache(label, p_value) for label, p_value, _weight in active_ht_entries]
+    if primary_source_mode == "integer_bragg":
+        arrays_local = build_integer_bragg_inputs(
+            state,
+            occ_values=new_occ,
+            cif_path_override=active_cif,
+        )
+        combined_qr_local = {}
+        state.ht_curves_cache = {
+            "curves": {},
+            "qr_curves": combined_qr_local,
+            "arrays": arrays_local,
+            "a": float(a_axis),
+            "c": float(c_axis),
+            "iodine_z": float(iodine_z_current),
+            "phi_l_divisor": float(phi_l_divisor_current),
+            "phase_delta_expression": str(phase_delta_expression_current),
+            "finite_stack": bool(finite_stack_flag),
+            "stack_layers": int(layers),
+            "rod_points_per_gz": int(rod_points_per_gz),
+            "primary_source_mode": primary_source_mode,
+        }
+    else:
+        active_ht_entries = active_weighted_ht_entries(p_vals, weights)
+        caches = [get_cache(label, p_value) for label, p_value, _weight in active_ht_entries]
 
-    combined_ht_local = combine_ht_dicts(
-        caches,
-        [weight for _label, _p_value, weight in active_ht_entries],
-    )
-    combined_qr_local = ht_dict_to_qr_dict(combined_ht_local)
-    arrays_local = ht_dict_to_arrays(combined_ht_local)
-    state.ht_curves_cache = {
-        "curves": combined_ht_local,
-        "qr_curves": combined_qr_local,
-        "arrays": arrays_local,
-        "a": float(a_axis),
-        "c": float(c_axis),
-        "iodine_z": float(iodine_z_current),
-        "phi_l_divisor": float(phi_l_divisor_current),
-        "phase_delta_expression": str(phase_delta_expression_current),
-        "finite_stack": bool(finite_stack_flag),
-        "stack_layers": int(layers),
-        "rod_points_per_gz": int(rod_points_per_gz),
-    }
+        combined_ht_local = combine_ht_dicts(
+            caches,
+            [weight for _label, _p_value, weight in active_ht_entries],
+        )
+        combined_qr_local = ht_dict_to_qr_dict(combined_ht_local)
+        arrays_local = ht_dict_to_arrays(combined_ht_local)
+        state.ht_curves_cache = {
+            "curves": combined_ht_local,
+            "qr_curves": combined_qr_local,
+            "arrays": arrays_local,
+            "a": float(a_axis),
+            "c": float(c_axis),
+            "iodine_z": float(iodine_z_current),
+            "phi_l_divisor": float(phi_l_divisor_current),
+            "phase_delta_expression": str(phase_delta_expression_current),
+            "finite_stack": bool(finite_stack_flag),
+            "stack_layers": int(layers),
+            "rod_points_per_gz": int(rod_points_per_gz),
+            "primary_source_mode": primary_source_mode,
+        }
     state.last_occ_for_ht = list(new_occ)
     state.last_p_triplet = list(p_vals)
     state.last_weights = list(weights)
@@ -1669,6 +1770,7 @@ def rebuild_diffraction_inputs(
     state.last_stack_layers = int(max(1, layers))
     state.last_rod_points_per_gz = int(rod_points_per_gz)
     state.last_atom_site_fractional_signature = atom_site_signature
+    state.last_primary_source_mode = primary_source_mode
 
     m1, i1, d1, det1 = arrays_local
     deg_dict1 = {tuple(m1[i]): int(d1[i]) for i in range(len(m1))}

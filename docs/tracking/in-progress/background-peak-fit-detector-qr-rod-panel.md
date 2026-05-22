@@ -24,7 +24,9 @@ rejected when their stored background/profile policy no longer matches the
 current prefit subtraction settings; Qr-rod peak marker editing now coalesces
 Delta Qr preview refreshes and caches per-panel plot inputs for smoother marker
 dragging; nonzero plus/minus branches now share an L grid and common finite
-support, and HK=0/specular no longer exposes or applies L min/max controls
+support, HK=0/specular no longer exposes or applies L min/max controls, and
+final Qr-rod profile figures now skip peak fitting and draw only the
+GUI-integrated trace plus a slider-controlled smoothed copy
 
 ## Problem
 
@@ -218,6 +220,21 @@ to make the Qr rod detector and integration figures source-consistent:
 - Qr-rod marker editing now runs in explicit phases: nonzero HK rods first,
   `HK=0`/`00L` second, and detector-label placement last. The accepted `HK=0`
   phase state drives the detector specular band and `00L_region.png` mask.
+- Final Qr-rod profile figures no longer run or draw the joint Qz peak fit.
+  The final panels use the same accepted `background_density` traces shown in
+  the GUI and overlay a second dashed trace smoothed by the GUI `Smooth` slider.
+  The smoothing amount is stored in Qr-rod edit JSON with the nonzero/HK=0
+  region parameters and participates in final cache/policy identity.
+- Saved HK=0 Qr-rod profile figures now match the GUI's no-L-window behavior:
+  the accepted phi/2theta ROI trace is not clipped by stale specular L bounds,
+  and the final HK=0 x-axis is left to autoscale from the plotted ROI data.
+- The legacy `scripts/diagnostics/comparison.py` duplicate no longer carries its
+  own stale Qr-rod plotting implementation. It delegates to the maintained
+  parallel diagnostic, preventing old entry points from rewriting manuscript
+  figures with the obsolete `Simulation` overlay and forced HK=0 L axis.
+- The batch runner default and the Bi2Te3/Bi2Se3/PbI2 batch file now point at
+  `all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py`,
+  so reruns do not fall back to the removed notebook or a stale generated copy.
 - Configured-hidden rods such as `HK=7` are skipped in the editor/support/final
   Qr-rod plots without changing the generated profile CSV tables.
 - The legacy `all_background_peak_fits.ipynb` diagnostic artifact is removed
@@ -990,6 +1007,21 @@ Passing checks:
   saved and environment overrides remain stable. Shipping status: local quality
   gates passed; real detector-output visual review remains recommended before
   manuscript use.
+- 2026-05-22 output save-folder chooser: interactive diagnostic reruns now
+  offer a save-folder chooser after the sample name is detected and before
+  output/cache files are written. When accepted, the chosen directory becomes
+  both `OUT_DIR` and `FIGURE_OUT_DIR` so CSV/JSON/NPY diagnostics and final
+  figure files land together. Headless/CI runs skip the chooser, and explicit
+  `RA_SIM_ALL_BACKGROUND_OUT_DIR` or `RA_SIM_ALL_BACKGROUND_FIGURE_OUT_DIR`
+  overrides keep their existing deterministic behavior unless the chooser is
+  forced with `RA_SIM_ALL_BACKGROUND_SAVE_DIR_EDIT_MODE=popup`. Focused
+  validation passed with
+  `python -m pytest --assert=plain tests/test_background_peak_fits_notebook.py -k "final_output_dir_choice or save_folder_chooser or radial_background or auto_scale" -ra`
+  (`18 passed, 244 deselected`), scoped compileall, `git diff --check`, and
+  `python -m ra_sim.dev check` (`295 passed`, Ruff clean, mypy clean).
+  Feature status: complete for interactive output-directory selection.
+  Migration/deprecation status: no schema, dependency, CLI, or CI workflow
+  migration required.
 
 Known validation limits:
 

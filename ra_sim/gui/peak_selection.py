@@ -4790,7 +4790,7 @@ def open_runtime_selected_peak_intersection_figure(
     return open_selected_peak_intersection_figure(
         bindings.simulation_runtime_state,
         config=config,
-        n2=bindings.n2,
+        n2=_resolve_runtime_value(bindings.n2),
         set_status_text=lambda text: _set_status_text(bindings.set_status_text, text),
     )
 

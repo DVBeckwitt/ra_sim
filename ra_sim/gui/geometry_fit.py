@@ -18136,6 +18136,33 @@ def geometry_manual_fit_space_by_background(
     return result
 
 
+def geometry_manual_locked_qr_projection_required_by_background(
+    background_indices: Sequence[object] | None,
+    pairs_for_index: Callable[[int], Sequence[Mapping[str, object]]] | Mapping[object, object],
+) -> dict[int, bool]:
+    """Return whether detector-origin locked Qr/Qz rows need exact caked projection."""
+
+    result: dict[int, bool] = {}
+    for raw_idx in background_indices or ():
+        idx = int(raw_idx)
+        if callable(pairs_for_index):
+            pairs = pairs_for_index(idx)
+        elif isinstance(pairs_for_index, Mapping):
+            pairs = pairs_for_index.get(idx, pairs_for_index.get(str(idx), ()))
+        else:
+            pairs = ()
+        result[idx] = any(
+            isinstance(entry, Mapping)
+            and geometry_manual_pair_enabled_for_geometry_fit(entry)
+            and geometry_fit_entry_has_fixed_manual_caked_qr(
+                entry,
+                require_explicit_branch=True,
+            )
+            for entry in (pairs or ())
+        )
+    return result
+
+
 def geometry_manual_caked_fit_space_required_by_background(
     background_indices: Sequence[object] | None,
     *,
@@ -18541,7 +18568,12 @@ def _locked_qr_fit_space_projection_readiness(
 
     def _with_effective_locked_qr_identity(entry: Mapping[str, object]) -> dict[str, object]:
         row = dict(entry)
-        sources = (row,)
+        sources = (
+            row,
+            row.get("provider_selected_source_identity_canonical"),
+            row.get("selected_source_identity_canonical"),
+            row.get("manual_picker_selected_source_identity_canonical"),
+        )
         q_group_key = _geometry_fit_audit_first_identity(
             sources,
             "q_group_key",

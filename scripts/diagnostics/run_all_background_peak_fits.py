@@ -120,6 +120,7 @@ def _execute_notebook(
     numba_threads: int | None,
     fit_backend: str | None,
     process_numba_threads: int | None,
+    state_was_defaulted: bool = False,
 ) -> None:
     old_cwd = Path.cwd()
     old_path = list(sys.path)
@@ -127,6 +128,10 @@ def _execute_notebook(
         "RA_SIM_ALL_BACKGROUND_STATE": _set_or_clear_env(
             "RA_SIM_ALL_BACKGROUND_STATE",
             state_path,
+        ),
+        "RA_SIM_ALL_BACKGROUND_STATE_DEFAULTED": _set_or_clear_env(
+            "RA_SIM_ALL_BACKGROUND_STATE_DEFAULTED",
+            "1" if bool(state_was_defaulted) else None,
         ),
         "RA_SIM_ALL_BACKGROUND_RUN_NAME": _set_or_clear_env(
             "RA_SIM_ALL_BACKGROUND_RUN_NAME",
@@ -259,6 +264,9 @@ def main(argv: list[str] | None = None) -> int:
         raise FileNotFoundError(f"Notebook not found: {notebook_path}")
 
     repo_root = _repo_root(notebook_path.parent)
+    state_was_defaulted = (
+        not args.states and not os.environ.get("RA_SIM_ALL_BACKGROUND_STATE", "").strip()
+    )
     states = _state_paths(args.states)
     if args.run_name and len(states) != 1:
         raise SystemExit("--run-name can only be used with one state")
@@ -270,7 +278,7 @@ def main(argv: list[str] | None = None) -> int:
 
     failures: list[tuple[Path, str]] = []
     for state_path in states:
-        if not state_path.exists():
+        if not state_path.exists() and not state_was_defaulted:
             message = f"Saved GUI state not found: {state_path}"
             if not args.keep_going:
                 raise FileNotFoundError(message)
@@ -303,6 +311,7 @@ def main(argv: list[str] | None = None) -> int:
                 numba_threads=args.numba_threads,
                 fit_backend=args.fit_backend,
                 process_numba_threads=args.process_numba_threads,
+                state_was_defaulted=state_was_defaulted,
             )
         except Exception as exc:
             message = _format_exception(exc, exc.__traceback__)

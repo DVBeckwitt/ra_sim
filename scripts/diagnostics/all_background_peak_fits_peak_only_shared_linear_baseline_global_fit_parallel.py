@@ -4,6 +4,7 @@ from __future__ import annotations
 
 # Parameters. Leave blank to use environment variables and repository defaults.
 GUI_STATE_PATH = ""
+GUI_STATE_FILE_EDIT_MODE_OVERRIDE = ""
 OUTPUT_DIR = ""
 FIGURE_OUTPUT_DIR = ""
 SAVE_OUTPUT_DIR_EDIT_MODE_OVERRIDE = ""
@@ -610,11 +611,7 @@ def l_axis_coefficient_for_group(
         intercept = float(payload.get("intercept", np.nan))
     except (TypeError, ValueError):
         return None
-    if not (
-        np.isfinite(slope)
-        and np.isfinite(intercept)
-        and abs(float(slope)) > 1.0e-12
-    ):
+    if not (np.isfinite(slope) and np.isfinite(intercept) and abs(float(slope)) > 1.0e-12):
         return None
     return float(slope), float(intercept)
 
@@ -1060,6 +1057,76 @@ def qr_rod_peak_edit_runtime_mode(
     return "skip"
 
 
+def gui_state_file_choice_runtime_mode(
+    requested: object = "auto",
+    *,
+    state_override: object = "",
+    state_was_defaulted: bool = False,
+    backend_name: object = None,
+    env: dict[str, object] | None = None,
+) -> str:
+    mode = str(requested or "auto").strip().lower()
+    if mode in {"0", "false", "off", "none", "no", "skip"}:
+        return "skip"
+    if mode in {"1", "true", "on", "yes", "interactive", "popup"}:
+        return "popup"
+    if str(state_override or "").strip() and not bool(state_was_defaulted):
+        return "skip"
+    return qr_rod_peak_edit_runtime_mode("auto", backend_name=backend_name, env=env)
+
+
+def choose_gui_state_file(
+    *,
+    mode: object = "auto",
+    default_state_path: object,
+    state_override: object = "",
+    state_was_defaulted: bool = False,
+    backend_name: object = None,
+    env: dict[str, object] | None = None,
+) -> Path | None:
+    runtime_mode = gui_state_file_choice_runtime_mode(
+        mode,
+        state_override=state_override,
+        state_was_defaulted=state_was_defaulted,
+        backend_name=backend_name,
+        env=env,
+    )
+    if runtime_mode != "popup":
+        return None
+    root = None
+    default_path = Path(str(default_state_path)).expanduser()
+    initial_dir = default_path.parent if str(default_path.parent) else Path.cwd()
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        selected = filedialog.askopenfilename(
+            title="Choose RA-SIM GUI state",
+            initialdir=str(initial_dir),
+            initialfile=default_path.name,
+            filetypes=(("JSON state files", "*.json"), ("All files", "*.*")),
+        )
+    except Exception as exc:
+        if str(mode or "auto").strip().lower() == "popup":
+            raise RuntimeError(f"GUI state file chooser unavailable: {exc}") from exc
+        print(f"skipped GUI state file chooser: {exc}")
+        return None
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+    if not str(selected or "").strip():
+        return None
+    selected_path = Path(str(selected)).expanduser()
+    if not selected_path.is_absolute():
+        selected_path = initial_dir / selected_path
+    return selected_path
+
+
 def final_output_dir_choice_runtime_mode(
     requested: object = "auto",
     *,
@@ -1491,7 +1558,7 @@ def snap_qr_rod_markers_to_profile_peaks(
 
 def qr_rod_editor_phase_matches(m_value: object, editor_phase: object = "all") -> bool:
     phase = str(editor_phase if editor_phase is not None else "all").strip().lower()
-    if phase in {"", "all"}:
+    if phase in {"", "all", "combined"}:
         return True
     m_int = int(m_value)
     if phase == "nonzero":
@@ -1503,6 +1570,8 @@ def qr_rod_editor_phase_matches(m_value: object, editor_phase: object = "all") -
 
 def qr_rod_editor_phase_title(editor_phase: object = "all") -> str:
     phase = str(editor_phase if editor_phase is not None else "all").strip().lower()
+    if phase in {"", "all", "combined"}:
+        return "Qr rod region editor"
     if phase == "nonzero":
         return "Qr rod peak marker editor - nonzero HK"
     if phase in {"specular", "hk0", "00l"}:
@@ -1876,14 +1945,14 @@ def show_qr_rod_peak_marker_popup(
 
     def specular_editor_phase_active() -> bool:
         phase = str(editor_phase if editor_phase is not None else "all").strip().lower()
-        return phase in {"specular", "hk0", "00l"}
+        return phase in {"", "all", "combined", "specular", "hk0", "00l"}
 
     def hk0_roi_controls_enabled() -> bool:
         return hk0_roi_layout_enabled and specular_editor_phase_active()
 
     def nonzero_theta_i_controls_enabled() -> bool:
         phase = str(editor_phase if editor_phase is not None else "all").strip().lower()
-        return region_controls_enabled and phase == "nonzero"
+        return region_controls_enabled and phase in {"", "all", "combined", "nonzero"}
 
     def current_theta_initial_deg() -> float:
         value = as_float(
@@ -1963,53 +2032,64 @@ def show_qr_rod_peak_marker_popup(
             if key in region_control_state:
                 set_region_widget_value(key, region_control_state[key])
 
-    def current_phase_parameter_group() -> tuple[str, tuple[str, ...]] | None:
+    def current_phase_parameter_groups() -> list[tuple[str, tuple[str, ...]]]:
+        groups: list[tuple[str, tuple[str, ...]]] = []
         if nonzero_theta_i_controls_enabled():
-            return "nonzero", (
-                "delta_qr",
-                "l_min",
-                "l_max",
-                "theta_initial_deg",
-                "smoothing_sigma_bins",
+            groups.append(
+                (
+                    "nonzero",
+                    (
+                        "delta_qr",
+                        "l_min",
+                        "l_max",
+                        "theta_initial_deg",
+                        "smoothing_sigma_bins",
+                    ),
+                )
             )
         if hk0_roi_controls_enabled():
-            return "specular", (
-                "phi_min",
-                "phi_max",
-                "two_theta_min",
-                "two_theta_max",
-                "smoothing_sigma_bins",
+            groups.append(
+                (
+                    "specular",
+                    (
+                        "phi_min",
+                        "phi_max",
+                        "two_theta_min",
+                        "two_theta_max",
+                        "smoothing_sigma_bins",
+                    ),
+                )
             )
-        return None
+        return groups
 
     def apply_imported_peak_edit_parameters(parameters: object) -> bool:
         if not region_controls_enabled or not isinstance(parameters, dict):
             return False
-        phase_group = current_phase_parameter_group()
-        if phase_group is None:
-            return False
-        phase_name, keys = phase_group
-        phase_parameters = parameters.get(phase_name, {})
-        if not isinstance(phase_parameters, dict):
+        phase_groups = current_phase_parameter_groups()
+        if not phase_groups:
             return False
         applied_keys: list[str] = []
         changed = False
         profile_changed = False
-        for key in keys:
-            value = as_float(phase_parameters.get(key), np.nan)
-            if not np.isfinite(value):
+        for phase_name, keys in phase_groups:
+            phase_parameters = parameters.get(phase_name, {})
+            if not isinstance(phase_parameters, dict):
                 continue
-            if key == "delta_qr":
-                value = max(1.0e-9, float(value))
-            if key == "smoothing_sigma_bins":
-                value = max(0.0, float(value))
-            old_value = as_float(region_control_state.get(key), np.nan)
-            if not np.isfinite(old_value) or not np.isclose(float(old_value), float(value)):
-                changed = True
-                if key != "smoothing_sigma_bins":
-                    profile_changed = True
-            region_control_state[key] = float(value)
-            applied_keys.append(key)
+            for key in keys:
+                value = as_float(phase_parameters.get(key), np.nan)
+                if not np.isfinite(value):
+                    continue
+                if key == "delta_qr":
+                    value = max(1.0e-9, float(value))
+                if key == "smoothing_sigma_bins":
+                    value = max(0.0, float(value))
+                old_value = as_float(region_control_state.get(key), np.nan)
+                if not np.isfinite(old_value) or not np.isclose(float(old_value), float(value)):
+                    changed = True
+                    if key != "smoothing_sigma_bins":
+                        profile_changed = True
+                region_control_state[key] = float(value)
+                applied_keys.append(key)
         if not applied_keys:
             return False
         sync_region_parameter_widgets(*applied_keys)
@@ -2023,36 +2103,30 @@ def show_qr_rod_peak_marker_popup(
     def current_phase_peak_edit_parameters() -> dict[str, dict[str, float]]:
         if not region_controls_enabled:
             return {}
-        phase_group = current_phase_parameter_group()
-        if phase_group is None:
-            return {}
-        phase_name, _keys = phase_group
-        if phase_name == "nonzero":
-            l_bounds = current_l_bounds() or (
-                as_float(region_control_state.get("l_min"), 0.0),
-                as_float(region_control_state.get("l_max"), 8.0),
-            )
-            return {
-                "nonzero": {
+        payload: dict[str, dict[str, float]] = {}
+        for phase_name, _keys in current_phase_parameter_groups():
+            if phase_name == "nonzero":
+                l_bounds = current_l_bounds() or (
+                    as_float(region_control_state.get("l_min"), 0.0),
+                    as_float(region_control_state.get("l_max"), 8.0),
+                )
+                payload["nonzero"] = {
                     "delta_qr": max(1.0e-9, as_float(region_control_state.get("delta_qr"), 1.0e-3)),
                     "l_min": float(l_bounds[0]),
                     "l_max": float(l_bounds[1]),
                     "theta_initial_deg": float(current_theta_initial_deg()),
                     "smoothing_sigma_bins": float(current_smoothing_sigma_bins()),
                 }
-            }
-        if phase_name == "specular":
-            phi_min, phi_max, theta_min, theta_max = current_hk0_roi_bounds()
-            return {
-                "specular": {
+            elif phase_name == "specular":
+                phi_min, phi_max, theta_min, theta_max = current_hk0_roi_bounds()
+                payload["specular"] = {
                     "phi_min": float(phi_min),
                     "phi_max": float(phi_max),
                     "two_theta_min": float(theta_min),
                     "two_theta_max": float(theta_max),
                     "smoothing_sigma_bins": float(current_smoothing_sigma_bins()),
                 }
-            }
-        return {}
+        return payload
 
     def editor_l_bounds_for_group(m_value: int) -> tuple[float, float] | None:
         if int(m_value) == 0 and hk0_roi_controls_enabled():
@@ -2322,10 +2396,7 @@ def show_qr_rod_peak_marker_popup(
         for payload in coefficients.values():
             slope = float(payload["slope"])
             intercept = float(payload["intercept"])
-            mask = (
-                (m_values == float(payload["m"]))
-                & (branch_values == str(payload["branch"]))
-            )
+            mask = (m_values == float(payload["m"])) & (branch_values == str(payload["branch"]))
             if not np.any(mask):
                 continue
             qz = pd.to_numeric(edited.loc[mask, "qz_marker"], errors="coerce").to_numpy(
@@ -3179,7 +3250,8 @@ def show_qr_rod_peak_marker_popup(
 
     region_widgets: list[object] = []
     roi_controls_active = hk0_roi_controls_enabled()
-    theta_i_controls_active = nonzero_theta_i_controls_enabled()
+    nonzero_controls_active = nonzero_theta_i_controls_enabled()
+    theta_i_controls_active = nonzero_controls_active
 
     def remember_button_press_axes(event) -> None:
         last_button_press_axes["inaxes"] = getattr(event, "inaxes", None)
@@ -3192,7 +3264,11 @@ def show_qr_rod_peak_marker_popup(
         theta_i_box = None
         l_min_box = None
         l_max_box = None
-        smoothing_ax = fig.add_axes([0.08, 0.185, 0.30, 0.035])
+        combined_controls_active = bool(nonzero_controls_active and roi_controls_active)
+        smoothing_y = 0.215 if combined_controls_active else 0.185
+        nonzero_y = 0.145 if combined_controls_active else 0.125
+        roi_y = 0.075 if combined_controls_active else 0.055
+        smoothing_ax = fig.add_axes([0.08, smoothing_y, 0.30, 0.035])
         smoothing_slider = Slider(
             smoothing_ax,
             "Smooth",
@@ -3202,12 +3278,12 @@ def show_qr_rod_peak_marker_popup(
         )
         region_parameter_widgets["smoothing_sigma_bins"] = smoothing_slider
         smoothing_slider.on_changed(set_profile_smoothing_sigma)
-        if not roi_controls_active:
-            delta_qr_ax = fig.add_axes([0.08, 0.125, 0.30, 0.045])
-            l_min_ax = fig.add_axes([0.46, 0.125, 0.10, 0.045])
-            l_max_ax = fig.add_axes([0.62, 0.125, 0.10, 0.045])
+        if nonzero_controls_active:
+            delta_qr_ax = fig.add_axes([0.08, nonzero_y, 0.30, 0.045])
+            l_min_ax = fig.add_axes([0.46, nonzero_y, 0.10, 0.045])
+            l_max_ax = fig.add_axes([0.62, nonzero_y, 0.10, 0.045])
             theta_i_ax = (
-                fig.add_axes([0.78, 0.125, 0.10, 0.045]) if theta_i_controls_active else None
+                fig.add_axes([0.78, nonzero_y, 0.10, 0.045]) if theta_i_controls_active else None
             )
             delta_qr_value = max(1.0e-9, as_float(region_control_state.get("delta_qr"), 1.0e-3))
             delta_qr_slider = Slider(
@@ -3253,10 +3329,10 @@ def show_qr_rod_peak_marker_popup(
                 current_hk0_roi_bounds()
             )
             roi_specs = [
-                ("phi_min", "Phi Min", phi_min_value, [0.08, 0.055, 0.10, 0.045]),
-                ("phi_max", "Phi Max", phi_max_value, [0.25, 0.055, 0.10, 0.045]),
-                ("two_theta_min", "2theta Min", theta_min_value, [0.43, 0.055, 0.11, 0.045]),
-                ("two_theta_max", "2theta Max", theta_max_value, [0.63, 0.055, 0.11, 0.045]),
+                ("phi_min", "Phi Min", phi_min_value, [0.08, roi_y, 0.10, 0.045]),
+                ("phi_max", "Phi Max", phi_max_value, [0.25, roi_y, 0.10, 0.045]),
+                ("two_theta_min", "2theta Min", theta_min_value, [0.43, roi_y, 0.11, 0.045]),
+                ("two_theta_max", "2theta Max", theta_max_value, [0.63, roi_y, 0.11, 0.045]),
             ]
             for key, label, value, bounds in roi_specs:
                 box = TextBox(fig.add_axes(bounds), label, initial=f"{float(value):.6g}")
@@ -3385,8 +3461,15 @@ def edit_qr_rod_region_editor(
     current_two_theta_min = as_float(two_theta_min, globals().get("specular_theta_min_deg", 5.0))
     current_two_theta_max = as_float(two_theta_max, globals().get("specular_theta_max_deg", 25.0))
     editor_phase_text = str(editor_phase if editor_phase is not None else "all").strip().lower()
-    imports_nonzero_parameters = editor_phase_text in {"", "all", "nonzero"}
-    imports_specular_parameters = editor_phase_text in {"", "all", "specular", "hk0", "00l"}
+    imports_nonzero_parameters = editor_phase_text in {"", "all", "combined", "nonzero"}
+    imports_specular_parameters = editor_phase_text in {
+        "",
+        "all",
+        "combined",
+        "specular",
+        "hk0",
+        "00l",
+    }
     if imports_nonzero_parameters:
         nonzero_parameters = imported_peak_edit_parameters.get("nonzero", {})
         if isinstance(nonzero_parameters, dict):
@@ -3427,6 +3510,23 @@ def edit_qr_rod_region_editor(
     runtime_mode = qr_rod_peak_edit_runtime_mode(mode, backend_name=backend_name, env=env)
 
     def fallback_result(source: str) -> dict[str, object]:
+        fallback_parameters = {}
+        if imports_nonzero_parameters:
+            fallback_parameters["nonzero"] = {
+                "delta_qr": float(current_delta_qr),
+                "l_min": float(current_l_min),
+                "l_max": float(current_l_max),
+                "theta_initial_deg": float(current_theta_initial_deg),
+                "smoothing_sigma_bins": float(current_smoothing_sigma_bins),
+            }
+        if imports_specular_parameters:
+            fallback_parameters["specular"] = {
+                "phi_min": float(current_phi_min),
+                "phi_max": float(current_phi_max),
+                "two_theta_min": float(current_two_theta_min),
+                "two_theta_max": float(current_two_theta_max),
+                "smoothing_sigma_bins": float(current_smoothing_sigma_bins),
+            }
         return {
             "marker_table": table,
             "rod_profile_table": fallback_profile_table.copy(),
@@ -3441,6 +3541,7 @@ def edit_qr_rod_region_editor(
             "two_theta_max": float(current_two_theta_max),
             "smoothing_sigma_bins": float(current_smoothing_sigma_bins),
             "l_axis_coefficients": {},
+            "peak_edit_parameters": fallback_parameters,
             "accepted": False,
             "source": source,
         }
@@ -3466,6 +3567,43 @@ def edit_qr_rod_region_editor(
         "two_theta_max": float(current_two_theta_max),
         "smoothing_sigma_bins": float(current_smoothing_sigma_bins),
     }
+
+    def current_phase_peak_edit_parameters() -> dict[str, dict[str, float]]:
+        parameters: dict[str, dict[str, float]] = {}
+        if imports_nonzero_parameters:
+            parameters["nonzero"] = {
+                "delta_qr": float(region_control_state.get("delta_qr", current_delta_qr)),
+                "l_min": float(region_control_state.get("l_min", current_l_min)),
+                "l_max": float(region_control_state.get("l_max", current_l_max)),
+                "theta_initial_deg": float(
+                    region_control_state.get("theta_initial_deg", current_theta_initial_deg)
+                ),
+                "smoothing_sigma_bins": float(
+                    region_control_state.get(
+                        "smoothing_sigma_bins",
+                        current_smoothing_sigma_bins,
+                    )
+                ),
+            }
+        if imports_specular_parameters:
+            parameters["specular"] = {
+                "phi_min": float(region_control_state.get("phi_min", current_phi_min)),
+                "phi_max": float(region_control_state.get("phi_max", current_phi_max)),
+                "two_theta_min": float(
+                    region_control_state.get("two_theta_min", current_two_theta_min)
+                ),
+                "two_theta_max": float(
+                    region_control_state.get("two_theta_max", current_two_theta_max)
+                ),
+                "smoothing_sigma_bins": float(
+                    region_control_state.get(
+                        "smoothing_sigma_bins",
+                        current_smoothing_sigma_bins,
+                    )
+                ),
+            }
+        return parameters
+
     try:
         edited_markers, accepted = show_qr_rod_peak_marker_popup(
             table,
@@ -3507,6 +3645,7 @@ def edit_qr_rod_region_editor(
         "l_axis_coefficients": normalized_l_axis_coefficients_payload(
             region_control_state.get("l_axis_coefficients", {})
         ),
+        "peak_edit_parameters": current_phase_peak_edit_parameters(),
         "accepted": bool(accepted),
         "source": "popup" if accepted else source_mode,
     }
@@ -3706,9 +3845,26 @@ def figure_output_dir_for_sample(
     return output_dir
 
 
-STATE_PATH = Path(
-    _setting_text("GUI_STATE_PATH", "RA_SIM_ALL_BACKGROUND_STATE", DEFAULT_STATE_PATH)
-).expanduser()
+STATE_OVERRIDE_TEXT = _setting_text("GUI_STATE_PATH", "RA_SIM_ALL_BACKGROUND_STATE", "")
+STATE_WAS_DEFAULTED = _truthy_setting(
+    "GUI_STATE_PATH_DEFAULTED",
+    "RA_SIM_ALL_BACKGROUND_STATE_DEFAULTED",
+    False,
+)
+STATE_DEFAULT_TEXT = STATE_OVERRIDE_TEXT or str(DEFAULT_STATE_PATH)
+SELECTED_STATE_PATH = choose_gui_state_file(
+    mode=_setting_text(
+        "GUI_STATE_FILE_EDIT_MODE_OVERRIDE",
+        "RA_SIM_ALL_BACKGROUND_STATE_EDIT_MODE",
+        "auto",
+    ),
+    default_state_path=STATE_DEFAULT_TEXT,
+    state_override=STATE_OVERRIDE_TEXT,
+    state_was_defaulted=STATE_WAS_DEFAULTED,
+    backend_name=mpl.get_backend(),
+    env=os.environ,
+)
+STATE_PATH = Path(SELECTED_STATE_PATH or STATE_DEFAULT_TEXT).expanduser()
 ROOT = next(p for p in [Path.cwd(), *Path.cwd().parents] if (p / "pyproject.toml").exists())
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -4594,8 +4750,7 @@ def robust_background_model_scale(
     scale_raw = float(scale0)
     if np.isfinite(mad) and mad > 0.0:
         keep = (
-            np.abs(residual - residual_median)
-            <= float(RADIAL_BACKGROUND_AUTO_SCALE_MAD_CLIP) * mad
+            np.abs(residual - residual_median) <= float(RADIAL_BACKGROUND_AUTO_SCALE_MAD_CLIP) * mad
         )
         if np.any(keep):
             kept_ratio = image_sample[keep] / model_sample[keep]
@@ -4647,9 +4802,7 @@ def radial_background_auto_scale_mask(
     theta_half_width = float(THETA_HALF_WINDOW_DEG) * float(
         RADIAL_BACKGROUND_AUTO_SCALE_PEAK_MARGIN
     )
-    phi_half_width = float(PHI_HALF_WINDOW_DEG) * float(
-        RADIAL_BACKGROUND_AUTO_SCALE_PEAK_MARGIN
-    )
+    phi_half_width = float(PHI_HALF_WINDOW_DEG) * float(RADIAL_BACKGROUND_AUTO_SCALE_PEAK_MARGIN)
     for entry in entries or []:
         if not isinstance(entry, dict):
             continue
@@ -4657,9 +4810,7 @@ def radial_background_auto_scale_mask(
         if angles is None:
             continue
         theta_seed, phi_seed = angles
-        peak_mask = (
-            np.abs(theta - float(theta_seed)) <= theta_half_width
-        ) & (
+        peak_mask = (np.abs(theta - float(theta_seed)) <= theta_half_width) & (
             np.abs(_radial_background_phi_delta_deg(phi, float(phi_seed))) <= phi_half_width
         )
         off_peak &= ~peak_mask
@@ -4677,9 +4828,7 @@ def radial_background_auto_scale_mask(
             ).reshape(-1)
             for qr_value in qr_values:
                 if np.isfinite(qr_value) and qr_width > 0.0:
-                    qr_exclusion |= np.isfinite(qr) & (
-                        np.abs(qr - float(qr_value)) <= qr_width
-                    )
+                    qr_exclusion |= np.isfinite(qr) & (np.abs(qr - float(qr_value)) <= qr_width)
             off_peak &= ~qr_exclusion
 
     heldout_phi = off_peak & ((phi < -90.0) | (phi > 90.0))
@@ -6624,9 +6773,7 @@ radial_background_subtraction_config = radial_background_subtraction_config_from
     variables,
     mode_override=mode_override_text,
     scale_override=(
-        ""
-        if str(scale_override_text).strip().lower() == "auto"
-        else scale_override_text
+        "" if str(scale_override_text).strip().lower() == "auto" else scale_override_text
     ),
     percentile_override=_setting_text(
         "RADIAL_BACKGROUND_SUBTRACTION_PERCENTILE_OVERRIDE",
@@ -15962,9 +16109,7 @@ def final_qr_rod_gui_vs_final_profile_audit_table(
         pixel_column = f"{prefix}_pixel_count"
         m_values = pd.to_numeric(table["m"], errors="coerce").to_numpy(dtype=np.float64)
         branches = table["branch"].astype(str).to_numpy(dtype=object)
-        qz_center = pd.to_numeric(table["qz_center"], errors="coerce").to_numpy(
-            dtype=np.float64
-        )
+        qz_center = pd.to_numeric(table["qz_center"], errors="coerce").to_numpy(dtype=np.float64)
         density = pd.to_numeric(table["background_density"], errors="coerce").to_numpy(
             dtype=np.float64
         )
@@ -16864,51 +17009,6 @@ if isinstance(qr_rod_imported_nonzero_parameters, dict):
             qr_rod_profile_smoothing_sigma,
         ),
     )
-qr_rod_nonzero_editor_result = edit_qr_rod_region_editor(
-    marker_table,
-    rod_profile_table,
-    mode=qr_rod_peak_edit_mode,
-    edit_path=None,
-    detector_label_entries=[],
-    delta_qr=qr_rod_delta_qr,
-    l_min=qr_rod_editor_initial_l_min,
-    l_max=qr_rod_editor_initial_l_max,
-    theta_initial_deg=qr_rod_editor_initial_theta_initial_deg,
-    smoothing_sigma_bins=qr_rod_profile_smoothing_sigma,
-    profile_update_callback=recompute_qr_rod_region_profiles,
-    region_preview_update_callback=qr_rod_detector_region_preview_update_callback,
-    required_marker_table=specular_l_marker_table,
-    backend_name=mpl.get_backend(),
-    env=os.environ,
-    companion_figures=qr_rod_detector_region_preview_figures,
-    editor_phase="nonzero",
-)
-marker_table = pd.DataFrame(qr_rod_nonzero_editor_result["marker_table"]).copy()
-if bool(qr_rod_nonzero_editor_result.get("accepted", False)):
-    qr_rod_peak_edit_source = "popup"
-qr_rod_delta_qr = max(
-    1.0e-9, as_float(qr_rod_nonzero_editor_result.get("delta_qr"), qr_rod_delta_qr)
-)
-qr_rod_editor_l_min = as_float(
-    qr_rod_nonzero_editor_result.get("l_min"), qr_rod_editor_initial_l_min
-)
-qr_rod_editor_l_max = as_float(
-    qr_rod_nonzero_editor_result.get("l_max"), qr_rod_editor_initial_l_max
-)
-qr_rod_editor_theta_initial_deg = as_float(
-    qr_rod_nonzero_editor_result.get("theta_initial_deg"),
-    qr_rod_editor_initial_theta_initial_deg,
-)
-qr_rod_profile_smoothing_sigma = max(
-    0.0,
-    as_float(
-        qr_rod_nonzero_editor_result.get("smoothing_sigma_bins"),
-        qr_rod_profile_smoothing_sigma,
-    ),
-)
-rod_profile_table = pd.DataFrame(
-    qr_rod_nonzero_editor_result.get("rod_profile_table", rod_profile_table)
-).copy()
 qr_rod_imported_specular_parameters = qr_rod_imported_peak_edit_parameters.get("specular", {})
 if isinstance(qr_rod_imported_specular_parameters, dict):
     specular_phi_min_deg = as_float(
@@ -16930,27 +17030,16 @@ if isinstance(qr_rod_imported_specular_parameters, dict):
             qr_rod_profile_smoothing_sigma,
         ),
     )
-qr_rod_specular_editor_initial_l_min, qr_rod_specular_editor_initial_l_max = (
-    qr_rod_l_bounds_for_group(
-        0,
-        (float(SPECULAR_QR_ROD_L_MIN), float(SPECULAR_QR_ROD_L_MAX)),
-    )
-    or (float(SPECULAR_QR_ROD_L_MIN), float(SPECULAR_QR_ROD_L_MAX))
-)
-qr_rod_specular_editor_profile_table = merge_qr_rod_editor_phase_table(
-    rod_profile_table,
-    qr_rod_editor_base_profiles,
-    editor_phase="specular",
-)
-qr_rod_specular_editor_result = edit_qr_rod_region_editor(
+qr_rod_region_editor_result = edit_qr_rod_region_editor(
     marker_table,
-    qr_rod_specular_editor_profile_table,
+    rod_profile_table,
     mode=qr_rod_peak_edit_mode,
     edit_path=None,
     detector_label_entries=[],
     delta_qr=qr_rod_delta_qr,
-    l_min=qr_rod_specular_editor_initial_l_min,
-    l_max=qr_rod_specular_editor_initial_l_max,
+    l_min=qr_rod_editor_initial_l_min,
+    l_max=qr_rod_editor_initial_l_max,
+    theta_initial_deg=qr_rod_editor_initial_theta_initial_deg,
     phi_min=specular_phi_min_deg,
     phi_max=specular_phi_max_deg,
     two_theta_min=specular_theta_min_deg,
@@ -16962,33 +17051,50 @@ qr_rod_specular_editor_result = edit_qr_rod_region_editor(
     backend_name=mpl.get_backend(),
     env=os.environ,
     companion_figures=qr_rod_detector_region_preview_figures,
-    editor_phase="specular",
+    editor_phase="all",
 )
-marker_table = pd.DataFrame(qr_rod_specular_editor_result["marker_table"]).copy()
-if bool(qr_rod_specular_editor_result.get("accepted", False)):
+marker_table = pd.DataFrame(qr_rod_region_editor_result["marker_table"]).copy()
+if bool(qr_rod_region_editor_result.get("accepted", False)):
     qr_rod_peak_edit_source = "popup"
-qr_rod_specular_phi_min_deg = as_float(
-    qr_rod_specular_editor_result.get("phi_min"), specular_phi_min_deg
+qr_rod_delta_qr = max(
+    1.0e-9, as_float(qr_rod_region_editor_result.get("delta_qr"), qr_rod_delta_qr)
 )
-qr_rod_specular_phi_max_deg = as_float(
-    qr_rod_specular_editor_result.get("phi_max"), specular_phi_max_deg
+qr_rod_editor_l_min = as_float(
+    qr_rod_region_editor_result.get("l_min"), qr_rod_editor_initial_l_min
 )
-qr_rod_specular_theta_min_deg = as_float(
-    qr_rod_specular_editor_result.get("two_theta_min"), specular_theta_min_deg
+qr_rod_editor_l_max = as_float(
+    qr_rod_region_editor_result.get("l_max"), qr_rod_editor_initial_l_max
 )
-qr_rod_specular_theta_max_deg = as_float(
-    qr_rod_specular_editor_result.get("two_theta_max"), specular_theta_max_deg
-)
-qr_rod_specular_l_min = as_float(
-    qr_rod_specular_editor_result.get("l_min"), qr_rod_editor_l_min
-)
-qr_rod_specular_l_max = as_float(
-    qr_rod_specular_editor_result.get("l_max"), qr_rod_editor_l_max
+qr_rod_editor_theta_initial_deg = as_float(
+    qr_rod_region_editor_result.get("theta_initial_deg"),
+    qr_rod_editor_initial_theta_initial_deg,
 )
 qr_rod_profile_smoothing_sigma = max(
     0.0,
     as_float(
-        qr_rod_specular_editor_result.get("smoothing_sigma_bins"),
+        qr_rod_region_editor_result.get("smoothing_sigma_bins"),
+        qr_rod_profile_smoothing_sigma,
+    ),
+)
+rod_profile_table = pd.DataFrame(
+    qr_rod_region_editor_result.get("rod_profile_table", rod_profile_table)
+).copy()
+qr_rod_specular_phi_min_deg = as_float(
+    qr_rod_region_editor_result.get("phi_min"), specular_phi_min_deg
+)
+qr_rod_specular_phi_max_deg = as_float(
+    qr_rod_region_editor_result.get("phi_max"), specular_phi_max_deg
+)
+qr_rod_specular_theta_min_deg = as_float(
+    qr_rod_region_editor_result.get("two_theta_min"), specular_theta_min_deg
+)
+qr_rod_specular_theta_max_deg = as_float(
+    qr_rod_region_editor_result.get("two_theta_max"), specular_theta_max_deg
+)
+qr_rod_profile_smoothing_sigma = max(
+    0.0,
+    as_float(
+        qr_rod_region_editor_result.get("smoothing_sigma_bins"),
         qr_rod_profile_smoothing_sigma,
     ),
 )
@@ -17037,7 +17143,7 @@ specular_qz_values = specular_detector_qz_map[
 ]
 rod_profile_table = merge_qr_rod_editor_phase_table(
     rod_profile_table,
-    qr_rod_specular_editor_result.get("rod_profile_table", rod_profile_table),
+    qr_rod_region_editor_result.get("rod_profile_table", rod_profile_table),
     editor_phase="specular",
 )
 marker_table = filter_hidden_qr_rod_table(
@@ -17062,10 +17168,7 @@ qr_rod_peak_edit_parameters = {
         "smoothing_sigma_bins": float(qr_rod_profile_smoothing_sigma),
     },
 }
-accepted_l_axis_coefficients = merge_l_axis_coefficients(
-    qr_rod_nonzero_editor_result,
-    qr_rod_specular_editor_result,
-)
+accepted_l_axis_coefficients = merge_l_axis_coefficients(qr_rod_region_editor_result)
 final_nonzero_profile_table = recompute_qr_rod_region_profiles(
     qr_rod_delta_qr,
     qr_rod_editor_l_min,
@@ -17101,7 +17204,7 @@ rod_profile_table = merge_qr_rod_editor_phase_table(
     editor_phase="specular",
 )
 qr_rod_region_editor_result = {
-    **qr_rod_specular_editor_result,
+    **qr_rod_region_editor_result,
     "marker_table": marker_table,
     "rod_profile_table": rod_profile_table,
     "delta_qr": float(qr_rod_delta_qr),
@@ -17112,8 +17215,7 @@ qr_rod_region_editor_result = {
     "specular_roi": dict(SPECULAR_ROI_SIGNATURE),
     "l_axis_coefficients": accepted_l_axis_coefficients,
     "smoothing_sigma_bins": float(qr_rod_profile_smoothing_sigma),
-    "accepted": bool(qr_rod_nonzero_editor_result.get("accepted", False))
-    or bool(qr_rod_specular_editor_result.get("accepted", False)),
+    "accepted": bool(qr_rod_region_editor_result.get("accepted", False)),
     "source": qr_rod_peak_edit_source,
 }
 if bool(qr_rod_region_editor_result.get("accepted", False)) and qr_rod_peak_edits_path:
@@ -17163,9 +17265,7 @@ qr_rod_peak_edit_key = qr_rod_peak_edit_cache_key(
         "editor_l_min": float(qr_rod_editor_l_min),
         "editor_l_max": float(qr_rod_editor_l_max),
         "editor_theta_initial_deg": float(qr_rod_editor_theta_initial_deg),
-        "accepted_l_axis_coefficients": l_axis_coefficients_signature(
-            accepted_l_axis_coefficients
-        ),
+        "accepted_l_axis_coefficients": l_axis_coefficients_signature(accepted_l_axis_coefficients),
         "accepted_region_overlay_signature": accepted_region_overlay_signature,
         "profile_smoothing_sigma_bins": float(qr_rod_profile_smoothing_sigma),
     },
@@ -17372,9 +17472,9 @@ def final_qr_rod_profile_plot_payload(
                 marker_source=markers,
                 l_axis_coefficients=l_axis_coefficients,
             )
-            data_values = pd.to_numeric(
-                sub["background_density"], errors="coerce"
-            ).to_numpy(dtype=np.float64)
+            data_values = pd.to_numeric(sub["background_density"], errors="coerce").to_numpy(
+                dtype=np.float64
+            )
             order = np.argsort(np.asarray(x_values, dtype=np.float64))
             x_sorted = np.asarray(x_values, dtype=np.float64)[order]
             data_sorted = data_values[order]
@@ -17850,8 +17950,7 @@ final_profile_plot_payloads = final_qr_rod_profile_plot_payload(
     smoothing_sigma_bins=qr_rod_profile_smoothing_sigma,
 )
 final_profile_plot_payload_by_key = {
-    (int(payload["m"]), str(payload["branch"])): payload
-    for payload in final_profile_plot_payloads
+    (int(payload["m"]), str(payload["branch"])): payload for payload in final_profile_plot_payloads
 }
 nonzero_profile_row = 0
 for row, rod in enumerate(plot_rod_entries):

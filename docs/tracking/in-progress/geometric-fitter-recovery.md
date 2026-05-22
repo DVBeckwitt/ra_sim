@@ -1724,6 +1724,24 @@ Locked Qr/Qz optimizer-request handoff preservation, 2026-05-21:
 
 Detector-origin locked Qr/Qz projected-row generation, 2026-05-22:
 
+- Follow-up status: fixed the route-order case where detector-origin locked
+  Qr/Qz manual pairs were still classified as detector provenance, so the
+  async job chose detector projection mode before the locked-Qr caked route
+  could request selected-row exact caked projections. Detector provenance now
+  remains visible in `manual_fit_space_by_background`, while
+  `manual_caked_fit_space_required_by_background` and source-cache projection
+  mode are forced to caked for branch-proven locked-Qr rows.
+- Readiness normalization now also reads nested canonical source identity
+  fields when matching projected rows back to selected locked-Qr pairs, keeping
+  worker preflight aligned with handoff and optimizer-request identity.
+- Job build now replaces unmatched stale live-preview source rows with the
+  current saved manual-pair fallback rows, while preserving current live rows
+  that already match saved source identity.
+- Validation: focused GUI runtime job/projection tests, projection-readiness
+  workflow tests, locked-Qr handoff tests, locked-Qr dynamic/caked-authority
+  fitting tests, targeted `compileall`, and targeted Ruff check pass.
+  The prior unrelated `F821 current_phase_peak_edit_parameters` diagnostics
+  script blocker was cleared, and `python -m ra_sim.dev check` passes.
 - Bug/error status: fixed the detector-mode locked-Qr preflight block where
   selected source rows existed and an exact caked projector was available, but
   strict caked worker bundles kept `projected_rows=[]`, causing

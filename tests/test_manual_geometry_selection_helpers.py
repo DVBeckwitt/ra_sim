@@ -6203,6 +6203,184 @@ def test_saved_qr_pair_refreshes_ghost_source_after_simulation_change() -> None:
     assert displayed[0]["sim_display"] != (100.0, 110.0)
 
 
+def _stale_and_current_ghost_qr_pair_rows() -> tuple[
+    dict[str, object],
+    dict[str, object],
+    dict[str, object],
+]:
+    group_key = ("q_group", "primary", 1, 5)
+    identity = {
+        "label": "-1,0,5",
+        "hkl": (-1, 0, 5),
+        "q_group_key": group_key,
+        "source_table_index": 1,
+        "source_row_index": 30,
+        "source_reflection_index": 500,
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "is_ghost_ray": True,
+    }
+    saved_pair = {
+        **identity,
+        "x": 200.0,
+        "y": 210.0,
+        "refined_sim_x": 100.0,
+        "refined_sim_y": 110.0,
+        "sim_col": 100.0,
+        "sim_row": 110.0,
+    }
+    stale_cached_ghost = {
+        **identity,
+        "sim_col": 100.0,
+        "sim_row": 110.0,
+        "display_col": 100.0,
+        "display_row": 110.0,
+    }
+    current_ghost_row = {
+        **identity,
+        "source_row_index": 39,
+        "sim_col": 125.0,
+        "sim_row": 140.0,
+        "display_col": 125.0,
+        "display_row": 140.0,
+    }
+    return saved_pair, stale_cached_ghost, current_ghost_row
+
+
+def _without_ghost_provenance(entry: dict[str, object]) -> dict[str, object]:
+    untagged = dict(entry)
+    for key in ("is_ghost_ray", "ghost_ray", "ghost_ray_role"):
+        untagged.pop(key, None)
+    return untagged
+
+
+def test_saved_qr_pair_prefers_current_ghost_source_over_stale_cache() -> None:
+    saved_pair, stale_cached_ghost, current_ghost_row = (
+        _stale_and_current_ghost_qr_pair_rows()
+    )
+    source_row_calls: list[dict[str, object]] = []
+
+    def _source_rows_for_background(*args, **kwargs):
+        source_row_calls.append({"args": args, "kwargs": dict(kwargs)})
+        return [dict(current_ghost_row)]
+
+    _measured, displayed = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": _build_lookup([dict(stale_cached_ghost)]),
+        },
+        source_rows_for_background=_source_rows_for_background,
+        build_simulated_lookup=_build_lookup,
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert source_row_calls
+    assert displayed[0]["bg_display"] == (200.0, 210.0)
+    assert displayed[0]["sim_display"] == (125.0, 140.0)
+    assert displayed[0]["sim_display"] != (100.0, 110.0)
+
+
+def test_saved_qr_pair_refreshes_when_only_cache_source_is_tagged_ghost() -> None:
+    saved_pair, stale_cached_ghost, current_ghost_row = (
+        _stale_and_current_ghost_qr_pair_rows()
+    )
+    saved_pair = _without_ghost_provenance(saved_pair)
+
+    _measured, displayed = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": _build_lookup([dict(stale_cached_ghost)]),
+        },
+        source_rows_for_background=lambda *_args, **_kwargs: [dict(current_ghost_row)],
+        build_simulated_lookup=_build_lookup,
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert displayed[0]["bg_display"] == (200.0, 210.0)
+    assert displayed[0]["sim_display"] == (125.0, 140.0)
+    assert displayed[0]["sim_display"] != (100.0, 110.0)
+
+
+def test_render_saved_qr_pair_draws_square_at_current_ghost_source() -> None:
+    from matplotlib.figure import Figure
+
+    overlays = importlib.import_module("ra_sim.gui.overlays")
+    saved_pair, stale_cached_ghost, current_ghost_row = (
+        _stale_and_current_ghost_qr_pair_rows()
+    )
+    saved_pair = _without_ghost_provenance(saved_pair)
+    figure = Figure(figsize=(4.0, 4.0))
+    axis = figure.add_subplot(111)
+    artists: list[object] = []
+    draw_count = 0
+
+    def _draw_idle() -> None:
+        nonlocal draw_count
+        draw_count += 1
+
+    def _build_initial_pairs_display(background_index, **kwargs):
+        return mg.build_geometry_manual_initial_pairs_display(
+            background_index,
+            current_background_index=0,
+            use_caked_display=False,
+            pairs_for_index=lambda _idx: [dict(saved_pair)],
+            get_cache_data=lambda **_cache_kwargs: {
+                "simulated_lookup": _build_lookup([dict(stale_cached_ghost)]),
+            },
+            source_rows_for_background=lambda *_args, **_row_kwargs: [],
+            simulated_peaks_for_params=lambda *_args, **_sim_kwargs: [dict(current_ghost_row)],
+            build_simulated_lookup=_build_lookup,
+            entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+            **kwargs,
+        )
+
+    rendered = mg.render_current_geometry_manual_pairs(
+        background_visible=True,
+        current_background_index=0,
+        current_background_image=np.zeros((8, 8), dtype=float),
+        pick_session=None,
+        build_initial_pairs_display=_build_initial_pairs_display,
+        session_initial_pairs_display=lambda **_kwargs: [],
+        clear_geometry_pick_artists=lambda **_kwargs: artists.clear(),
+        draw_initial_geometry_pairs_overlay=(
+            lambda pairs, **kwargs: overlays.draw_initial_geometry_pairs_overlay(
+                axis,
+                pairs,
+                geometry_pick_artists=artists,
+                clear_geometry_pick_artists=lambda **_clear_kwargs: artists.clear(),
+                draw_idle=_draw_idle,
+                **kwargs,
+            )
+        ),
+        update_button_label_fn=lambda: None,
+        set_background_file_status_text_fn=lambda: None,
+        pair_group_count=lambda _idx: 1,
+    )
+
+    assert rendered is True
+    square_lines = [line for line in axis.lines if line.get_marker() == "s"]
+    triangle_lines = [line for line in axis.lines if line.get_marker() == "^"]
+    assert len(square_lines) == 1
+    assert len(triangle_lines) == 1
+    assert (
+        float(square_lines[0].get_xdata()[0]),
+        float(square_lines[0].get_ydata()[0]),
+    ) == (125.0, 140.0)
+    assert (
+        float(triangle_lines[0].get_xdata()[0]),
+        float(triangle_lines[0].get_ydata()[0]),
+    ) == (200.0, 210.0)
+    assert draw_count == 1
+
+
 def test_saved_qr_pair_refresh_matches_ghost_branch_identity() -> None:
     group_key = ("q_group", "primary", 1, 5)
     base_identity = {
@@ -6302,6 +6480,122 @@ def test_saved_qr_pair_missing_current_ghost_source_does_not_reuse_old_sim_posit
     assert displayed[0]["bg_display"] == (200.0, 210.0)
     assert "sim_display" not in displayed[0]
     assert displayed[0]["sim_display_unresolved"] is True
+
+
+def test_saved_qr_pair_missing_current_ghost_source_rejects_stale_cache() -> None:
+    saved_pair, stale_cached_ghost, _current_ghost_row = (
+        _stale_and_current_ghost_qr_pair_rows()
+    )
+
+    _measured, displayed = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": _build_lookup([dict(stale_cached_ghost)]),
+        },
+        source_rows_for_background=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=_build_lookup,
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert displayed[0]["bg_display"] == (200.0, 210.0)
+    assert "sim_display" not in displayed[0]
+    assert displayed[0]["sim_display_unresolved"] is True
+
+
+def test_saved_qr_pair_untagged_missing_current_ghost_rejects_stale_cache() -> None:
+    saved_pair, stale_cached_ghost, _current_ghost_row = (
+        _stale_and_current_ghost_qr_pair_rows()
+    )
+    saved_pair = _without_ghost_provenance(saved_pair)
+
+    _measured, displayed = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": _build_lookup([dict(stale_cached_ghost)]),
+        },
+        source_rows_for_background=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=_build_lookup,
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert displayed[0]["bg_display"] == (200.0, 210.0)
+    assert "sim_display" not in displayed[0]
+    assert displayed[0]["sim_display_unresolved"] is True
+
+
+def test_saved_qr_pair_refreshes_ghost_from_simulated_peaks_when_source_rows_missing() -> None:
+    saved_pair, stale_cached_ghost, current_ghost_row = (
+        _stale_and_current_ghost_qr_pair_rows()
+    )
+    saved_pair = _without_ghost_provenance(saved_pair)
+
+    _measured, displayed = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": _build_lookup([dict(stale_cached_ghost)]),
+        },
+        source_rows_for_background=lambda *_args, **_kwargs: [],
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [dict(current_ghost_row)],
+        build_simulated_lookup=_build_lookup,
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert displayed[0]["bg_display"] == (200.0, 210.0)
+    assert displayed[0]["sim_display"] == (125.0, 140.0)
+    assert displayed[0]["sim_display"] != (100.0, 110.0)
+
+
+def test_saved_qr_pair_refreshes_ghost_from_simulated_peaks_when_source_rows_lack_match() -> (
+    None
+):
+    saved_pair, stale_cached_ghost, current_ghost_row = (
+        _stale_and_current_ghost_qr_pair_rows()
+    )
+    saved_pair = _without_ghost_provenance(saved_pair)
+    unrelated_current_row = {
+        "label": "2,0,0",
+        "hkl": (2, 0, 0),
+        "q_group_key": ("q_group", "primary", 2, 0),
+        "source_table_index": 9,
+        "source_row_index": 99,
+        "source_reflection_index": 999,
+        "source_branch_index": 0,
+        "sim_col": 5.0,
+        "sim_row": 6.0,
+        "display_col": 5.0,
+        "display_row": 6.0,
+    }
+
+    _measured, displayed = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": _build_lookup([dict(stale_cached_ghost)]),
+        },
+        source_rows_for_background=lambda *_args, **_kwargs: [dict(unrelated_current_row)],
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [dict(current_ghost_row)],
+        build_simulated_lookup=_build_lookup,
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert displayed[0]["bg_display"] == (200.0, 210.0)
+    assert displayed[0]["sim_display"] == (125.0, 140.0)
+    assert displayed[0]["sim_display"] != (100.0, 110.0)
 
 
 def test_geometry_manual_session_initial_pairs_display_uses_caked_coords_for_legacy_group_rows() -> (

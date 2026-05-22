@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from ra_sim.gui import app as gui_app
@@ -59,6 +60,11 @@ def _restore_runtime_session_globals():
         "sampling_optics_controls_view_state",
         "simulation_runtime_state",
         "resolution_var",
+        "_debug_disable_ht_integer_bragg",
+        "_debug_refraction_effects_disabled",
+        "debug_integer_bragg_toggle_label_var",
+        "debug_refraction_toggle_label_var",
+        "progress_label",
     )
     missing = object()
     original = {name: getattr(runtime_session, name, missing) for name in names}
@@ -114,6 +120,128 @@ def test_geometry_source_signature_includes_events_per_beam_phase():
     )
 
     assert sig_a != sig_b
+
+
+def test_geometry_source_signature_includes_refraction_disable_mode():
+    mosaic_params = {
+        "events_per_beam_phase": 50,
+        "solve_q_steps": 32,
+        "solve_q_rel_tol": 1e-6,
+        "solve_q_mode": 0,
+        "beam_x_array": [0.0],
+        "theta_array": [0.0],
+        "_sampling_signature": (),
+    }
+    normal_sig = runtime_session._geometry_source_snapshot_signature_from_params(
+        {},
+        mosaic_params=dict(mosaic_params, _refraction_effects_disabled=False),
+        optics_mode_component=0,
+        sf_prune_bias=0.0,
+        sf_prune_stats={},
+        ordered_structure_scale=1.0,
+        qr_cylinder_replace_requested=False,
+        primary_source_signature=None,
+        secondary_source_signature=None,
+        secondary_a=0.0,
+        secondary_c=0.0,
+    )
+    vacuum_sig = runtime_session._geometry_source_snapshot_signature_from_params(
+        {},
+        mosaic_params=dict(mosaic_params, _refraction_effects_disabled=True),
+        optics_mode_component=0,
+        sf_prune_bias=0.0,
+        sf_prune_stats={},
+        ordered_structure_scale=1.0,
+        qr_cylinder_replace_requested=False,
+        primary_source_signature=None,
+        secondary_source_signature=None,
+        secondary_a=0.0,
+        secondary_c=0.0,
+    )
+
+    assert normal_sig != vacuum_sig
+
+
+def test_current_sample_n2_payload_uses_vacuum_when_refraction_disabled(monkeypatch):
+    runtime_session._debug_refraction_effects_disabled = True
+    monkeypatch.setattr(
+        runtime_session,
+        "resolve_index_of_refraction_array",
+        lambda *_args, **_kwargs: pytest.fail("material optics should be bypassed"),
+    )
+
+    n2_sample_array, source_meta, wavelength_snapshot = runtime_session._current_sample_n2_payload(
+        [1.54, 1.55],
+        active_cif_path="primary.cif",
+    )
+
+    np.testing.assert_array_equal(
+        n2_sample_array,
+        np.ones(2, dtype=np.complex128),
+    )
+    assert source_meta == ("refraction_disabled", None)
+    np.testing.assert_array_equal(
+        wavelength_snapshot,
+        np.array([1.54, 1.55], dtype=np.float64),
+    )
+
+
+def test_debug_integer_bragg_toggle_updates_mode_label_and_rebuilds(monkeypatch):
+    runtime_session._debug_disable_ht_integer_bragg = False
+    runtime_session.debug_integer_bragg_toggle_label_var = _FakeVar("")
+    runtime_session.progress_label = SimpleNamespace(config=lambda **_kwargs: None)
+    calls = []
+
+    monkeypatch.setattr(runtime_session, "update_occupancies", lambda: calls.append("update"))
+
+    assert runtime_session._current_primary_source_mode() == "ht"
+    assert runtime_session._debug_integer_bragg_toggle_label() == "Disable HT: Integer Bragg"
+
+    runtime_session._toggle_debug_integer_bragg_mode()
+
+    assert runtime_session._current_primary_source_mode() == "integer_bragg"
+    assert runtime_session.debug_integer_bragg_toggle_label_var.get() == "Enable HT"
+    assert calls == ["update"]
+
+
+def test_debug_refraction_toggle_invalidates_optics_and_schedules(monkeypatch):
+    runtime_session._debug_refraction_effects_disabled = False
+    runtime_session.debug_refraction_toggle_label_var = _FakeVar("")
+    runtime_session.progress_label = SimpleNamespace(config=lambda **_kwargs: None)
+    runtime_session.simulation_runtime_state = SimpleNamespace(
+        profile_cache={"_optics_signature": ("old",), "kept": True}
+    )
+    calls = []
+
+    monkeypatch.setattr(runtime_session, "update_mosaic_cache", lambda: calls.append("mosaic"))
+    monkeypatch.setattr(runtime_session, "schedule_update", lambda: calls.append("schedule"))
+    monkeypatch.setattr(
+        runtime_session,
+        "_invalidate_for_update_action",
+        lambda *args, **kwargs: calls.append(("invalidate", args, kwargs)),
+    )
+
+    assert runtime_session._debug_refraction_toggle_label() == "Disable Refraction"
+
+    runtime_session._toggle_debug_refraction_effects()
+
+    assert runtime_session._debug_refraction_disabled() is True
+    assert runtime_session.debug_refraction_toggle_label_var.get() == "Enable Refraction"
+    assert runtime_session.simulation_runtime_state.profile_cache == {"kept": True}
+    assert calls == [
+        "mosaic",
+        (
+            "invalidate",
+            (runtime_session.UpdateAction.FULL_SIMULATION,),
+            {
+                "physics_signature_changed": True,
+                "hit_table_signature_changed": True,
+                "q_group_content_signature_changed": True,
+                "detector_geometry_changed": False,
+            },
+        ),
+        "schedule",
+    ]
 
 
 def test_apply_events_per_beam_phase_invalidates_simulation_without_regenerating_mosaic(

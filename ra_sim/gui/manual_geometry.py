@@ -14124,6 +14124,125 @@ def build_geometry_manual_initial_pairs_display(
                     target[field] = value
                     break
 
+    def _entry_is_ghost_ray_source(entry: Mapping[str, object] | None) -> bool:
+        return bool(
+            isinstance(entry, Mapping)
+            and (
+                entry.get("is_ghost_ray")
+                or entry.get("ghost_ray")
+                or str(entry.get("ghost_ray_role", "") or "").strip()
+            )
+        )
+
+    def _project_source_rows(
+        raw_rows: Sequence[Mapping[str, object]] | None,
+    ) -> list[dict[str, object]]:
+        source_rows = [dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)]
+        if source_rows and callable(project_peaks_to_current_view):
+            try:
+                projected_rows = project_peaks_to_current_view(source_rows)
+            except Exception:
+                projected_rows = source_rows
+            source_rows = [
+                dict(entry) for entry in (projected_rows or ()) if isinstance(entry, Mapping)
+            ]
+        return source_rows
+
+    def _filter_active_source_rows(
+        source_rows: Sequence[Mapping[str, object]] | None,
+    ) -> list[dict[str, object]]:
+        source_rows = [dict(entry) for entry in (source_rows or ()) if isinstance(entry, Mapping)]
+        if source_rows and callable(filter_active_rows):
+            try:
+                filtered_rows = filter_active_rows(source_rows)
+            except Exception:
+                filtered_rows = []
+            source_rows = [
+                dict(entry) for entry in (filtered_rows or ()) if isinstance(entry, Mapping)
+            ]
+        return source_rows
+
+    def _projected_source_rows_for_consumer(consumer: str) -> list[dict[str, object]]:
+        if not callable(source_rows_for_background):
+            return []
+        try:
+            raw_rows = source_rows_for_background(
+                int(background_index),
+                params_local,
+                consumer=str(consumer),
+            )
+        except TypeError:
+            try:
+                raw_rows = source_rows_for_background(int(background_index), params_local)
+            except Exception:
+                raw_rows = []
+        except Exception:
+            raw_rows = []
+        return _project_source_rows(raw_rows)
+
+    def _active_projected_source_rows_for_consumer(consumer: str) -> list[dict[str, object]]:
+        return _filter_active_source_rows(_projected_source_rows_for_consumer(consumer))
+
+    def _active_projected_simulated_rows() -> list[dict[str, object]]:
+        source_rows = geometry_manual_simulated_peaks_from_callback(
+            simulated_peaks_for_params,
+            param_set=params_local,
+            prefer_cache=bool(
+                prefer_cache and int(background_index) == int(current_background_index)
+            ),
+        )
+        return _filter_active_source_rows(_project_source_rows(source_rows))
+
+    current_ghost_source_lookup: GeometryManualLookupMap | None = None
+    simulated_ghost_source_lookup: GeometryManualLookupMap | None = None
+
+    def _ghost_source_lookup_from_rows(
+        rows: Sequence[Mapping[str, object]],
+    ) -> GeometryManualLookupMap:
+        ghost_rows = [entry for entry in rows if _entry_is_ghost_ray_source(entry)]
+        return build_simulated_lookup(ghost_rows) if ghost_rows else {}
+
+    def _current_ghost_source_lookup() -> GeometryManualLookupMap:
+        nonlocal current_ghost_source_lookup
+        if current_ghost_source_lookup is not None:
+            return current_ghost_source_lookup
+        current_ghost_source_lookup = {}
+        if bool(reuse_only):
+            return current_ghost_source_lookup
+        current_ghost_source_lookup = _ghost_source_lookup_from_rows(
+            _active_projected_source_rows_for_consumer(
+                "initial_pairs_ghost_source",
+            ),
+        )
+        return current_ghost_source_lookup
+
+    def _simulated_ghost_source_lookup() -> GeometryManualLookupMap:
+        nonlocal simulated_ghost_source_lookup
+        if simulated_ghost_source_lookup is not None:
+            return simulated_ghost_source_lookup
+        simulated_ghost_source_lookup = {}
+        if bool(reuse_only):
+            return simulated_ghost_source_lookup
+        simulated_ghost_source_lookup = _ghost_source_lookup_from_rows(
+            _active_projected_simulated_rows(),
+        )
+        return simulated_ghost_source_lookup
+
+    def _current_ghost_source_entry(
+        entry: Mapping[str, object],
+    ) -> dict[str, object] | None:
+        source_entry = geometry_manual_lookup_source_entry(
+            _current_ghost_source_lookup(),
+            entry,
+        )
+        if isinstance(source_entry, Mapping):
+            return dict(source_entry)
+        source_entry = geometry_manual_lookup_source_entry(
+            _simulated_ghost_source_lookup(),
+            entry,
+        )
+        return dict(source_entry) if isinstance(source_entry, Mapping) else None
+
     if prefer_cache and int(background_index) == int(current_background_index):
         cache_data = get_cache_data(
             param_set=params_local,
@@ -14224,30 +14343,9 @@ def build_geometry_manual_initial_pairs_display(
         nonlocal projected_detector_source_lookup
         if projected_detector_source_lookup is not None:
             return projected_detector_source_lookup
-        source_rows: list[dict[str, object]] = []
-        if callable(source_rows_for_background):
-            try:
-                raw_rows = source_rows_for_background(
-                    int(background_index),
-                    params_local,
-                    consumer="initial_pairs_detector_projection",
-                )
-            except TypeError:
-                try:
-                    raw_rows = source_rows_for_background(int(background_index), params_local)
-                except Exception:
-                    raw_rows = []
-            except Exception:
-                raw_rows = []
-            source_rows = [dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)]
-        if source_rows and callable(project_peaks_to_current_view):
-            try:
-                projected_rows = project_peaks_to_current_view(source_rows)
-            except Exception:
-                projected_rows = source_rows
-            source_rows = [
-                dict(entry) for entry in (projected_rows or ()) if isinstance(entry, Mapping)
-            ]
+        source_rows = _projected_source_rows_for_consumer(
+            "initial_pairs_detector_projection",
+        )
         if source_rows and callable(filter_active_rows):
             try:
                 source_rows = filter_active_rows(source_rows)
@@ -14279,6 +14377,7 @@ def build_geometry_manual_initial_pairs_display(
             initial_entry["q_group_key"] = raw_group_key
         elif isinstance(raw_group_key, list):
             initial_entry["q_group_key"] = tuple(raw_group_key)
+        saved_entry_is_ghost = _entry_is_ghost_ray_source(entry)
         bg_coords = _geometry_manual_saved_background_display_point_for_view(
             entry,
             use_caked_display=bool(use_caked_display),
@@ -14337,6 +14436,12 @@ def build_geometry_manual_initial_pairs_display(
                 sim_source_entry = dict(caked_projection_entry)
             else:
                 sim_source_entry = _geometry_manual_caked_qr_projection_source(entry)
+        ghost_source_refresh_required = (
+            not bool(use_caked_display)
+            and (saved_entry_is_ghost or _entry_is_ghost_ray_source(sim_source_entry))
+        )
+        if ghost_source_refresh_required:
+            sim_source_entry = _current_ghost_source_entry(entry)
         if (
             not bool(use_caked_display)
             and not detector_replay_from_caked_projection
@@ -14409,25 +14514,23 @@ def build_geometry_manual_initial_pairs_display(
             _copy_q_values_from_sources(initial_entry, entry)
             initial_pairs_display.append(initial_entry)
             continue
-        saved_entry_is_ghost = bool(
-            isinstance(entry, Mapping) and (entry.get("is_ghost_ray") or entry.get("ghost_ray"))
-        )
-        source_row_is_current_ghost = bool(
-            isinstance(sim_entry, Mapping)
-            and (sim_entry.get("is_ghost_ray") or sim_entry.get("ghost_ray"))
-        )
+        source_row_is_current_ghost = _entry_is_ghost_ray_source(sim_entry)
         if (
             not caked_projection_resolved
             and not detector_replay_from_caked_projection
             and not saved_entry_is_ghost
             and not source_row_is_current_ghost
+            and not ghost_source_refresh_required
         ):
             sim_entry = geometry_manual_apply_refined_simulated_override(
                 entry,
                 sim_entry,
                 prefer_caked_display=use_caked_display,
             )
-        if saved_entry_is_ghost and not isinstance(sim_entry, dict):
+        if (
+            (saved_entry_is_ghost or ghost_source_refresh_required)
+            and not isinstance(sim_entry, dict)
+        ):
             initial_entry["sim_display_unresolved"] = True
             _copy_q_values_from_sources(initial_entry, entry)
             _copy_sim_identity_fields(initial_entry, entry)

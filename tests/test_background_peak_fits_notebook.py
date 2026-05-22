@@ -22,6 +22,7 @@ import pytest
 from scipy.ndimage import binary_dilation, gaussian_filter1d
 from scipy.optimize import least_squares, nnls
 
+from scripts.diagnostics import run_all_background_peak_fits as background_peak_fit_runner
 from scripts.diagnostics import background_peak_fit_worker as peak_fit_worker
 from scripts.diagnostics.run_all_background_peak_fits import (
     _execute_notebook,
@@ -148,12 +149,19 @@ def _script_functions(*names: str) -> dict[str, object]:
         wanted.add("smooth_qr_rod_profile_density")
     if "smooth_qr_rod_profile_density" in wanted:
         wanted.add("as_float")
+    if "choose_gui_state_file" in wanted:
+        wanted.add("gui_state_file_choice_runtime_mode")
     if "choose_final_output_dir" in wanted:
         wanted.add("final_output_dir_choice_runtime_mode")
     if wanted & {"qr_rod_pre_editor_stage_is_valid", "qr_rod_profile_cache_has_final_fit"}:
         wanted.add("hk0_qz_marker_count")
         wanted.add("rod_profile_has_real_hk0_qz_rows")
-    if wanted & {"final_output_dir_choice_runtime_mode", "choose_final_output_dir"}:
+    if wanted & {
+        "gui_state_file_choice_runtime_mode",
+        "choose_gui_state_file",
+        "final_output_dir_choice_runtime_mode",
+        "choose_final_output_dir",
+    }:
         wanted.add("qr_rod_peak_edit_runtime_mode")
     if wanted & {
         "apply_radial_background_subtraction_to_detector",
@@ -1450,11 +1458,14 @@ def test_radial_background_policy_signature_records_auto_scale_metadata() -> Non
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     assert "RADIAL_BACKGROUND_AUTO_SCALE_SIGNATURE" in source
     assert '"scale_source": str(normalized.get("scale_source", "manual_or_legacy"))' in source
-    assert "RADIAL_BACKGROUND_AUTO_SCALE_SIGNATURE" in source[
-        source.index("def radial_background_subtraction_policy_signature(") : source.index(
-            "\ndef _radial_background_phi_delta_deg("
-        )
-    ]
+    assert (
+        "RADIAL_BACKGROUND_AUTO_SCALE_SIGNATURE"
+        in source[
+            source.index("def radial_background_subtraction_policy_signature(") : source.index(
+                "\ndef _radial_background_phi_delta_deg("
+            )
+        ]
+    )
 
 
 def test_parallel_script_auto_radial_scale_runs_after_peak_entries_before_popup() -> None:
@@ -1552,13 +1563,13 @@ def test_parallel_script_qr_rod_peak_editor_rejects_stale_background_policy_edit
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     load_section = source[
         source.index("if qr_rod_peak_edits_path:") : source.index(
-            "\nqr_rod_nonzero_editor_result = edit_qr_rod_region_editor("
+            "\nqr_rod_region_editor_result = edit_qr_rod_region_editor("
         )
     ]
     save_section = source[
-        source.index(
-            'if bool(qr_rod_specular_editor_result.get("accepted", False))'
-        ) : source.index("\nrod_profile_table = rod_profile_table_for_l_window(")
+        source.index('if bool(qr_rod_region_editor_result.get("accepted", False))') : source.index(
+            "\nrod_profile_table = rod_profile_table_for_l_window("
+        )
     ]
 
     assert "QR_ROD_PEAK_EDIT_CONTEXT_SIGNATURE" in source
@@ -2118,9 +2129,7 @@ def test_final_qr_rod_profile_plot_payload_applies_smoothing_to_gui_trace() -> N
         plot_marker_table=pd.DataFrame(),
         plot_rod_entries=[{"m": 1}],
         branch_windows=[("-", -90.0, 0.0, "-")],
-        l_axis_coefficients={
-            "1::-": {"m": 1, "branch": "-", "slope": 1.0, "intercept": 1.0}
-        },
+        l_axis_coefficients={"1::-": {"m": 1, "branch": "-", "slope": 1.0, "intercept": 1.0}},
         smoothing_sigma_bins=1.0,
     )[0]
 
@@ -2177,9 +2186,7 @@ def test_parallel_script_pbi2_rod_profile_l_axis_limits_cap_at_three() -> None:
 def test_parallel_script_pbi2_final_profile_plots_log_only_hk0_and_caps_nonzero_l() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     figure_start = source.index("rod_profile_l_axis_limits = shared_rod_profile_l_axis_limits(")
-    figure_source = source[
-        figure_start : source.index("\nlegend_handles = [", figure_start)
-    ]
+    figure_source = source[figure_start : source.index("\nlegend_handles = [", figure_start)]
     hk0_profile_source = figure_source[
         figure_source.index('if int(rod["m"]) == 0:') : figure_source.index("for col,")
     ]
@@ -4121,16 +4128,20 @@ def test_background_peak_fits_batch_file_uses_canonical_python_diagnostic() -> N
     )
 
     assert "--notebook" in source
-    assert "all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py" in source
+    assert (
+        "all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py" in source
+    )
     assert "all_background_peak_fits.ipynb" not in source
 
 
 def test_legacy_comparison_script_delegates_to_canonical_background_diagnostic() -> None:
     source = COMPARISON_SCRIPT_PATH.read_text(encoding="utf-8")
 
-    assert "runpy.run_path(str(CANONICAL_DIAGNOSTIC), run_name=\"__main__\")" in source
-    assert "all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py" in source
-    assert "label=\"Simulation\"" not in source
+    assert 'runpy.run_path(str(CANONICAL_DIAGNOSTIC), run_name="__main__")' in source
+    assert (
+        "all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py" in source
+    )
+    assert 'label="Simulation"' not in source
     assert "saved final Qr-rod fit cache" not in source
     assert "rod_profile_hk0_l_axis_limits = rod_profile_l_axis_limits_for_sample(" not in source
 
@@ -4234,6 +4245,98 @@ def test_final_output_dir_choice_prompts_only_when_interactive_without_overrides
     )
 
 
+def test_gui_state_file_choice_prompts_only_for_default_interactive_state() -> None:
+    namespace = _script_functions("gui_state_file_choice_runtime_mode")
+    runtime_mode = namespace["gui_state_file_choice_runtime_mode"]
+
+    assert (
+        runtime_mode(
+            "auto",
+            state_override="",
+            state_was_defaulted=True,
+            backend_name="TkAgg",
+            env={},
+        )
+        == "popup"
+    )
+    assert (
+        runtime_mode(
+            "auto",
+            state_override=r"C:\states\explicit.json",
+            state_was_defaulted=False,
+            backend_name="TkAgg",
+            env={},
+        )
+        == "skip"
+    )
+    assert (
+        runtime_mode(
+            "auto",
+            state_override="",
+            state_was_defaulted=True,
+            backend_name="Agg",
+            env={},
+        )
+        == "skip"
+    )
+    assert (
+        runtime_mode(
+            "popup",
+            state_override=r"C:\states\explicit.json",
+            state_was_defaulted=False,
+            backend_name="Agg",
+            env={},
+        )
+        == "popup"
+    )
+
+
+def test_choose_gui_state_file_uses_current_state_folder_and_destroys_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    namespace = _script_functions("choose_gui_state_file")
+    choose_gui_state_file = namespace["choose_gui_state_file"]
+    destroyed: list[bool] = []
+    calls: list[dict[str, object]] = []
+    default_state = tmp_path / "states" / "PbI2.json"
+    selected_state = tmp_path / "states" / "Bi2Se3.json"
+    default_state.parent.mkdir()
+
+    class _FakeRoot:
+        def withdraw(self) -> None:
+            return None
+
+        def destroy(self) -> None:
+            destroyed.append(True)
+
+    fake_tk = ModuleType("tkinter")
+    fake_filedialog = ModuleType("tkinter.filedialog")
+    fake_tk.Tk = lambda: _FakeRoot()  # type: ignore[attr-defined]
+
+    def _askopenfilename(**kwargs) -> str:
+        calls.append(dict(kwargs))
+        return str(selected_state)
+
+    fake_filedialog.askopenfilename = _askopenfilename  # type: ignore[attr-defined]
+    fake_tk.filedialog = fake_filedialog  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "tkinter", fake_tk)
+    monkeypatch.setitem(sys.modules, "tkinter.filedialog", fake_filedialog)
+
+    chosen = choose_gui_state_file(
+        mode="popup",
+        default_state_path=default_state,
+        state_override="",
+        backend_name="TkAgg",
+        env={},
+    )
+
+    assert chosen == selected_state
+    assert calls[0]["initialdir"] == str(default_state.parent)
+    assert ("JSON state files", "*.json") in calls[0]["filetypes"]
+    assert destroyed == [True]
+
+
 def test_choose_final_output_dir_destroys_tk_root_when_dialog_raises(
     monkeypatch,
 ) -> None:
@@ -4272,10 +4375,12 @@ def test_choose_final_output_dir_destroys_tk_root_when_dialog_raises(
     assert destroyed == [True]
 
 
-def test_parallel_script_save_folder_chooser_updates_all_output_dirs_after_sample_detection() -> None:
+def test_parallel_script_save_folder_chooser_updates_all_output_dirs_after_sample_detection() -> (
+    None
+):
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
 
-    assert "SAVE_OUTPUT_DIR_EDIT_MODE_OVERRIDE = \"\"" in source
+    assert 'SAVE_OUTPUT_DIR_EDIT_MODE_OVERRIDE = ""' in source
     assert "RA_SIM_ALL_BACKGROUND_SAVE_DIR_EDIT_MODE" in source
 
     refresh_output = source.index("refresh_figure_output_dir()")
@@ -4361,6 +4466,31 @@ def test_background_peak_fits_runner_executes_python_diagnostic_with_process_gua
         "file": str(diagnostic_path),
     }
     assert os.environ.get("RA_SIM_ALL_BACKGROUND_PROCESS_GUARD") is None
+
+
+def test_background_peak_fits_runner_allows_missing_default_state_for_startup_chooser(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / "pyproject.toml").write_text("[project]\nname='test'\n", encoding="utf-8")
+    diagnostic_path = repo_root / "diagnostic.py"
+    diagnostic_path.write_text("", encoding="utf-8")
+    default_state = tmp_path / "states" / "missing.json"
+    calls: list[dict[str, object]] = []
+
+    def _fake_execute_notebook(**kwargs) -> None:
+        calls.append(dict(kwargs))
+
+    monkeypatch.setattr(background_peak_fit_runner, "DEFAULT_STATE_PATH", default_state)
+    monkeypatch.setattr(background_peak_fit_runner, "_execute_notebook", _fake_execute_notebook)
+    monkeypatch.delenv("RA_SIM_ALL_BACKGROUND_STATE", raising=False)
+
+    assert background_peak_fit_runner.main(["--notebook", str(diagnostic_path)]) == 0
+    assert calls
+    assert calls[0]["state_path"] == default_state.resolve()
+    assert calls[0]["state_was_defaulted"] is True
 
 
 def test_parallel_script_windows_process_backend_requires_runner_guard() -> None:
@@ -4700,11 +4830,10 @@ def test_final_qr_rod_region_overlays_are_rebuilt_after_gui_editor() -> None:
     if not PARALLEL_SCRIPT_PATH.exists():
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
-    nonzero_call = source.index("qr_rod_nonzero_editor_result = edit_qr_rod_region_editor(")
-    specular_call = source.index("qr_rod_specular_editor_result = edit_qr_rod_region_editor(")
+    combined_call = source.index("qr_rod_region_editor_result = edit_qr_rod_region_editor(")
     window_filter = source.index(
         "rod_profile_table = rod_profile_table_for_l_window(",
-        specular_call,
+        combined_call,
     )
     accepted_overlay_signature = source.index(
         "accepted_region_overlay_signature = final_region_overlay_signature_from_overlays(",
@@ -4733,7 +4862,7 @@ def test_final_qr_rod_region_overlays_are_rebuilt_after_gui_editor() -> None:
         final_overlay_rebuild,
     )
 
-    assert nonzero_call < specular_call < window_filter < accepted_overlay_signature
+    assert combined_call < window_filter < accepted_overlay_signature
     assert accepted_overlay_signature < cache_key_call < fitting_disabled
     assert fitting_disabled < post_cache_marker_table < final_output_state < final_overlay_rebuild
     assert final_profile_selection < detector_overlay_selection
@@ -4871,7 +5000,9 @@ def test_final_region_overlay_bounds_come_from_final_profile_table() -> None:
         theta_initial_deg=12.5,
         specular_roi={},
     )
-    assert not any(int(item["m"]) == 1 and str(item["branch"]) == "-" for item in plus_only_overlays)
+    assert not any(
+        int(item["m"]) == 1 and str(item["branch"]) == "-" for item in plus_only_overlays
+    )
 
 
 def test_final_outputs_ignore_poison_pre_editor_region_overlays() -> None:
@@ -5163,9 +5294,9 @@ def test_final_qr_rod_region_specs_are_saved_with_gui_fields() -> None:
         )
     ]
     save_section = source[
-        source.index('region_specs_table = final_qr_rod_output_state["region_specs_table"]') : source.index(
-            "profile_audit_csv ="
-        )
+        source.index(
+            'region_specs_table = final_qr_rod_output_state["region_specs_table"]'
+        ) : source.index("profile_audit_csv =")
     ]
 
     assert 'region_specs_stem = f"figure7_{SAMPLE_STEM}_qr_rod_region_specs"' in save_section
@@ -5210,12 +5341,13 @@ def test_parallel_script_hk0_delta_qr_does_not_replace_nonzero_delta_qr() -> Non
     if not PARALLEL_SCRIPT_PATH.exists():
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
-    specular_result = source.index("qr_rod_specular_editor_result = edit_qr_rod_region_editor(")
-    combined_result = source.index("qr_rod_region_editor_result = {", specular_result)
-    specular_section = source[specular_result:combined_result]
+    editor_call = source.index("qr_rod_region_editor_result = edit_qr_rod_region_editor(")
+    combined_result = source.index("qr_rod_region_editor_result = {", editor_call)
+    editor_section = source[
+        editor_call : source.index(")\nmarker_table = pd.DataFrame", editor_call)
+    ]
 
-    assert "qr_rod_specular_delta_qr" not in specular_section
-    assert "qr_rod_delta_qr = max(" not in specular_section
+    assert "qr_rod_specular_delta_qr" not in editor_section
     assert '"delta_qr": float(qr_rod_delta_qr)' in source[combined_result:]
     assert '"specular_delta_qr"' not in source[combined_result:]
     assert '"specular_editor_delta_qr"' not in source
@@ -5809,9 +5941,7 @@ def test_final_profile_l_filter_uses_gui_accepted_coefficients() -> None:
             {"m": 1, "branch": "-", "qz_marker": 2.0, "fit_l": 100.0},
         ]
     )
-    accepted_coefficients = {
-        "1::-": {"m": 1, "branch": "-", "slope": 1.0, "intercept": 0.0}
-    }
+    accepted_coefficients = {"1::-": {"m": 1, "branch": "-", "slope": 1.0, "intercept": 0.0}}
 
     filtered = filter_profile(
         profile_table,
@@ -5834,9 +5964,9 @@ def test_final_figure_threads_gui_l_axis_coefficients_to_plot_helpers() -> None:
         )
     ]
     final_plot = source[
-        source.index("rod_profile_l_axis_limits = shared_rod_profile_l_axis_limits(") : source.index(
-            "final_detector_rod_trace_payloads_by_key"
-        )
+        source.index(
+            "rod_profile_l_axis_limits = shared_rod_profile_l_axis_limits("
+        ) : source.index("final_detector_rod_trace_payloads_by_key")
     ]
     plot_payload_helper = source[
         source.index("def final_qr_rod_profile_plot_payload(") : source.index(
@@ -5920,7 +6050,7 @@ def test_final_hk0_axis_autoscales_from_gui_specular_trace() -> None:
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     assignment_section = source[
-        source.index("qr_rod_specular_l_min = as_float(") : source.index(
+        source.index("qr_rod_specular_phi_min_deg = as_float(") : source.index(
             "if np.isfinite(qr_rod_specular_phi_min_deg):"
         )
     ]
@@ -5938,8 +6068,8 @@ def test_final_hk0_axis_autoscales_from_gui_specular_trace() -> None:
         )
     ]
 
-    assert 'qr_rod_specular_editor_result.get("l_min")' in assignment_section
-    assert 'qr_rod_specular_editor_result.get("l_max")' in assignment_section
+    assert 'qr_rod_region_editor_result.get("phi_min")' in assignment_section
+    assert 'qr_rod_region_editor_result.get("two_theta_max")' in assignment_section
     assert "specular_l_min=qr_rod_specular_l_min" not in l_window_section
     assert "specular_l_max=qr_rod_specular_l_max" not in l_window_section
     assert "rod_profile_hk0_l_axis_limits = None" in limits_section
@@ -5972,9 +6102,7 @@ def test_final_gui_vs_final_profile_audit_uses_accepted_profile_rows() -> None:
     audit = audit_table(
         profile_table,
         marker_source=marker_table,
-        l_axis_coefficients={
-            "1::-": {"m": 1, "branch": "-", "slope": 2.0, "intercept": 0.5}
-        },
+        l_axis_coefficients={"1::-": {"m": 1, "branch": "-", "slope": 2.0, "intercept": 0.5}},
     )
 
     assert audit["gui_L"].tolist() == pytest.approx([4.5])
@@ -6015,9 +6143,7 @@ def test_final_profile_audit_compares_gui_rows_to_post_cache_final_rows() -> Non
         final_profile_table,
         gui_profile_table=gui_profile_table,
         marker_source=pd.DataFrame(),
-        l_axis_coefficients={
-            "1::-": {"m": 1, "branch": "-", "slope": 2.0, "intercept": 0.5}
-        },
+        l_axis_coefficients={"1::-": {"m": 1, "branch": "-", "slope": 2.0, "intercept": 0.5}},
     )
 
     assert audit["gui_L"].tolist() == pytest.approx([4.5])
@@ -6034,10 +6160,10 @@ def test_final_profile_audit_call_receives_accepted_gui_rows() -> None:
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     accepted_profile_snapshot = source.index("accepted_profile_table = rod_profile_table.copy()")
-    final_output_state_call = source.index("final_qr_rod_output_state = build_final_qr_rod_output_state(")
-    final_output_state = source[
-        final_output_state_call : source.index("profile_audit_csv =")
-    ]
+    final_output_state_call = source.index(
+        "final_qr_rod_output_state = build_final_qr_rod_output_state("
+    )
+    final_output_state = source[final_output_state_call : source.index("profile_audit_csv =")]
     output_state_helper = source[
         source.index("def build_final_qr_rod_output_state(") : source.index(
             "\ndef rod_profile_table_for_l_window("
@@ -6888,7 +7014,10 @@ def test_parallel_script_unified_editor_has_region_controls() -> None:
             "\n    def set_region_roi_bound("
         )
     ]
-    for forbidden in ("mark_region_profile_refresh_pending", "mark_detector_preview_refresh_pending"):
+    for forbidden in (
+        "mark_region_profile_refresh_pending",
+        "mark_detector_preview_refresh_pending",
+    ):
         if forbidden in smoothing_setter_source:
             pytest.fail(f"smoothing slider unexpectedly triggers {forbidden}")
 
@@ -8844,11 +8973,11 @@ def test_parallel_script_qr_rod_peak_editor_import_applies_hk0_parameters(
                 "parameters": {
                     "specular": {
                         "phi_min": -4.5,
-                            "phi_max": 6.5,
-                            "two_theta_min": 8.5,
-                            "two_theta_max": 18.5,
-                            "smoothing_sigma_bins": 3.25,
-                        }
+                        "phi_max": 6.5,
+                        "two_theta_min": 8.5,
+                        "two_theta_max": 18.5,
+                        "smoothing_sigma_bins": 3.25,
+                    }
                 },
             }
         ),
@@ -9044,7 +9173,7 @@ def test_parallel_script_qr_rod_region_editor_edit_path_applies_hk0_parameters(
                         "phi_max": 6.5,
                         "two_theta_min": 8.5,
                         "two_theta_max": 18.5,
-                    }
+                    },
                 },
             }
         ),
@@ -9490,17 +9619,15 @@ def test_parallel_script_unified_editor_result_updates_final_profile_table() -> 
     if not PARALLEL_SCRIPT_PATH.exists():
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
-    nonzero_call = source.index("qr_rod_nonzero_editor_result = edit_qr_rod_region_editor(")
-    specular_call = source.index("qr_rod_specular_editor_result = edit_qr_rod_region_editor(")
-    combined_result = source.index("qr_rod_region_editor_result = {", specular_call)
+    editor_call = source.index("qr_rod_region_editor_result = edit_qr_rod_region_editor(")
+    combined_result = source.index("qr_rod_region_editor_result = {", editor_call)
     cache_key_call = source.index("qr_rod_peak_edit_cache_key(", combined_result)
     fitting_disabled = source.index("Qr-rod peak fitting disabled", combined_result)
-    section = source[nonzero_call:fitting_disabled]
+    section = source[editor_call:fitting_disabled]
 
     assert "def recompute_qr_rod_region_profiles(" in source
     assert "profile_update_callback=recompute_qr_rod_region_profiles" in section
-    assert 'qr_rod_nonzero_editor_result.get("rod_profile_table", rod_profile_table)' in section
-    assert 'qr_rod_specular_editor_result.get("rod_profile_table", rod_profile_table)' in section
+    assert 'qr_rod_region_editor_result.get("rod_profile_table", rod_profile_table)' in section
     assert "merge_qr_rod_editor_phase_table(" in section
     assert "rod_profile_table_for_l_window(" in section
     assert "rod_profile_table=rod_profile_table" in section
@@ -9514,56 +9641,65 @@ def test_parallel_script_unified_editor_result_updates_final_profile_table() -> 
         "qr_rod_editor_theta_initial_deg)"
     ) in source
     assert "delta_qr_override=delta_qr_value" in source
-    assert nonzero_call < specular_call < combined_result < cache_key_call < fitting_disabled
+    assert editor_call < combined_result < cache_key_call < fitting_disabled
     assert "add_joint_qz_fit_columns(" not in source[combined_result:fitting_disabled]
 
 
-def test_parallel_script_specular_phase_reuses_pre_editor_hk0_profiles() -> None:
+def test_parallel_script_combined_editor_starts_from_current_profiles() -> None:
     if not PARALLEL_SCRIPT_PATH.exists():
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
-    nonzero_result = source.index(
-        'rod_profile_table = pd.DataFrame(\n    qr_rod_nonzero_editor_result.get("rod_profile_table", rod_profile_table)'
-    )
-    specular_seed = source.index("qr_rod_specular_editor_profile_table =", nonzero_result)
-    specular_call = source.index("qr_rod_specular_editor_result = edit_qr_rod_region_editor(")
-    specular_section = source[
-        specular_call : source.index(")\nmarker_table = pd.DataFrame", specular_call)
+    editor_call = source.index("qr_rod_region_editor_result = edit_qr_rod_region_editor(")
+    editor_section = source[
+        editor_call : source.index(")\nmarker_table = pd.DataFrame", editor_call)
     ]
 
-    assert nonzero_result < specular_seed < specular_call
-    assert (
-        'qr_rod_editor_base_profiles,\n    editor_phase="specular"'
-        in source[specular_seed:specular_call]
-    )
-    assert "qr_rod_specular_editor_profile_table" in specular_section
+    assert "marker_table,\n    rod_profile_table," in editor_section
+    assert "required_marker_table=specular_l_marker_table" in editor_section
+    assert 'editor_phase="all"' in editor_section
+    assert "qr_rod_specular_editor_profile_table" not in source
 
 
 def test_parallel_script_qr_rod_marker_editor_runs_nonzero_then_specular_phases() -> None:
     if not PARALLEL_SCRIPT_PATH.exists():
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
-    nonzero_call = source.index("qr_rod_nonzero_editor_result = edit_qr_rod_region_editor(")
-    specular_call = source.index("qr_rod_specular_editor_result = edit_qr_rod_region_editor(")
+    combined_call = source.index("qr_rod_region_editor_result = edit_qr_rod_region_editor(")
     label_editor_call = source.index("rod_label_entries = edit_detector_region_label_positions(")
-    nonzero_section = source[
-        nonzero_call : source.index(")\nmarker_table = pd.DataFrame", nonzero_call)
-    ]
-    specular_section = source[
-        specular_call : source.index(")\nmarker_table = pd.DataFrame", specular_call)
+    combined_section = source[
+        combined_call : source.index(")\nmarker_table = pd.DataFrame", combined_call)
     ]
 
-    assert nonzero_call < specular_call < label_editor_call
-    assert 'editor_phase="nonzero"' in nonzero_section
-    assert 'editor_phase="specular"' in specular_section
-    assert "edit_path=None" in nonzero_section
-    assert "l_min=qr_rod_editor_initial_l_min" in nonzero_section
-    assert "l_min=qr_rod_specular_editor_initial_l_min" in specular_section
-    assert "l_max=qr_rod_specular_editor_initial_l_max" in specular_section
-    assert "edit_path=None" in specular_section
+    assert combined_call < label_editor_call
+    assert "qr_rod_nonzero_editor_result = edit_qr_rod_region_editor(" not in source
+    assert "qr_rod_specular_editor_result = edit_qr_rod_region_editor(" not in source
+    assert 'editor_phase="all"' in combined_section
+    assert "edit_path=None" in combined_section
+    assert "l_min=qr_rod_editor_initial_l_min" in combined_section
+    assert "l_max=qr_rod_editor_initial_l_max" in combined_section
+    assert "phi_min=specular_phi_min_deg" in combined_section
+    assert "two_theta_min=specular_theta_min_deg" in combined_section
     assert "edit_path=qr_rod_peak_edits_path" not in source
-    assert 'if bool(qr_rod_specular_editor_result.get("accepted", False))' in source
+    assert 'if bool(qr_rod_region_editor_result.get("accepted", False))' in source
     assert "saved final Qr-rod peak edits" in source
+
+
+def test_parallel_script_combined_qr_rod_editor_shows_nonzero_and_hk0_controls() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    function_source = source[
+        source.index("def show_qr_rod_peak_marker_popup(") : source.index(
+            "\ndef edit_qr_rod_region_editor("
+        )
+    ]
+
+    assert 'phase in {"", "all", "combined", "nonzero"}' in function_source
+    assert 'phase in {"", "all", "combined", "specular", "hk0", "00l"}' in function_source
+    assert "if nonzero_controls_active:" in function_source
+    assert "if roi_controls_active:" in function_source
+    assert 'payload["nonzero"] = {' in function_source
+    assert 'payload["specular"] = {' in function_source
 
 
 def test_parallel_script_qr_rod_peak_editor_titles_include_phase() -> None:
@@ -9589,16 +9725,12 @@ def test_parallel_script_detector_qr_preview_is_passed_to_unified_editor() -> No
     helper_def = source.index("def build_qr_rod_detector_region_preview_figure(")
     preview_setup = source.index("qr_rod_detector_region_preview_figures = []")
     preview_create = source.index("build_qr_rod_detector_region_preview_figure(", preview_setup)
-    nonzero_editor_call = source.index("qr_rod_nonzero_editor_result = edit_qr_rod_region_editor(")
-    editor_call = source.index("qr_rod_specular_editor_result = edit_qr_rod_region_editor(")
+    editor_call = source.index("qr_rod_region_editor_result = edit_qr_rod_region_editor(")
     final_detector_save = source.index(
         "detector_region_png, detector_region_pdf = save_manuscript_figure"
     )
     editor_call_section = source[
         editor_call : source.index(")\nmarker_table = pd.DataFrame", editor_call)
-    ]
-    nonzero_editor_call_section = source[
-        nonzero_editor_call : source.index(")\nmarker_table = pd.DataFrame", nonzero_editor_call)
     ]
     preview_helper_section = source[helper_def:preview_setup]
 
@@ -9612,7 +9744,6 @@ def test_parallel_script_detector_qr_preview_is_passed_to_unified_editor() -> No
         "            qr_rod_detector_region_preview_update_callback,"
     ) in source[preview_setup:editor_call]
     assert "companion_figures=qr_rod_detector_region_preview_figures" in editor_call_section
-    assert "companion_figures=qr_rod_detector_region_preview_figures" in nonzero_editor_call_section
     assert (
         "region_preview_update_callback=qr_rod_detector_region_preview_update_callback"
         in editor_call_section
@@ -9796,8 +9927,9 @@ def test_parallel_script_qr_rod_peak_editor_shows_hk0_in_log_view() -> None:
     assert 'ax.set_ylabel("Intensity (log)" if editor_log_y else "Intensity", fontsize=8)' in (
         function_source
     )
-    assert "if editor_log_y:\n                apply_positive_log_y_axis(ax, y, y_smoothed, y_markers)" in (
-        function_source
+    assert (
+        "if editor_log_y:\n                apply_positive_log_y_axis(ax, y, y_smoothed, y_markers)"
+        in (function_source)
     )
     assert 'ax.set_yscale("linear")' in function_source
 

@@ -281,7 +281,7 @@ Current status: the collection baseline is stable at 2055 tests, but the four-fi
 | Geometry recovery diagnostics | `scripts/debug/validate_geometry_preflight_rebind.py` | `python scripts/debug/validate_geometry_preflight_rebind.py --state <state.json> --mode <mode>` | Optional report JSON or fresh state export. | Validates grouped-pick preflight rebinding behavior. |
 | Debug and analysis tools | `scripts/debug/view_sim_image.py` | `python scripts/debug/view_sim_image.py` | Reads generated artifact scripts/debug/simulation.npz and shows a plot. | Views the simulated image written by run_diffraction_test.py. |
 | Geometry recovery diagnostics | `scripts/diagnostics/check_geometry_fit_handoff.py` | `python scripts/diagnostics/check_geometry_fit_handoff.py` | Handoff diagnostics on stdout. | Checks geometry-fit handoff payloads for manual Qr/Qz workflows. |
-| Debug and analysis tools | `scripts/diagnostics/comparison.py` | `python scripts/diagnostics/comparison.py` | Comparison diagnostics on stdout. | Legacy comparison probe for diagnostic fitting work. |
+| Debug and analysis tools | `scripts/diagnostics/comparison.py` | `python scripts/diagnostics/comparison.py` | Background peak-fit diagnostics. | Compatibility entry point that delegates to the maintained parallel background peak-fit diagnostic. |
 | Geometry landscape and fitting performance | `scripts/geometry_fit_landscape.py` | `python scripts/geometry_fit_landscape.py --state <state.json> --outdir <dir>` | landscape_runs.csv, baseline_metadata.json, landscape_figure.png. | Sweeps geometry-fit parameters around a saved GUI baseline. |
 | GUI timing and performance | `scripts/measure_gui_timing.py` | `python scripts/measure_gui_timing.py --scenario <name> --trials <n>` | Generated artifacts under artifacts/perf/gui_timing/<stamp>/. | Runs GUI timing trials and summarizes JSONL timing events. |
 
@@ -414,7 +414,7 @@ config, or artifact schema changed.
 | `scripts/debug/visualize_new4_qr_fit_coordinates.py` | Visualizes Bi2Se3 Qr fit-coordinate diagnostics. |
 | `scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py` | Runs parallel background peak-fit diagnostics with a shared linear baseline. |
 | `scripts/diagnostics/background_peak_fit_worker.py` | Worker helper for background peak-fit diagnostic batches. |
-| `scripts/diagnostics/run_all_background_peak_fits.py` | Launches the background peak-fit diagnostic batch runner. |
+| `scripts/diagnostics/run_all_background_peak_fits.py` | Launches the maintained Python background peak-fit diagnostic batch runner by default. |
 | `tests/test_background_peak_fits_notebook.py` | Checks notebook-oriented background peak-fit workflows. |
 | `tests/test_beam_center_pick_helpers.py` | Checks beam-center pick helper behavior. |
 | `tests/test_disordered_phase_current_refresh.py` | Checks disordered-phase current refresh behavior. |

@@ -1649,6 +1649,56 @@ def _resolve_optics_cif_path(atom_site_values=None):
     return str(cif_file)
 
 
+_debug_disable_ht_integer_bragg = False
+_debug_refraction_effects_disabled = False
+_DEBUG_REFRACTION_DISABLED_SOURCE_META = ("refraction_disabled", None)
+
+
+def _debug_integer_bragg_mode_enabled() -> bool:
+    return bool(globals().get("_debug_disable_ht_integer_bragg", False))
+
+
+def _debug_refraction_disabled() -> bool:
+    return bool(globals().get("_debug_refraction_effects_disabled", False))
+
+
+def _current_primary_source_mode() -> str:
+    return "integer_bragg" if _debug_integer_bragg_mode_enabled() else "ht"
+
+
+def _debug_integer_bragg_toggle_label() -> str:
+    if _debug_integer_bragg_mode_enabled():
+        return "Enable HT"
+    return "Disable HT: Integer Bragg"
+
+
+def _debug_refraction_toggle_label() -> str:
+    if _debug_refraction_disabled():
+        return "Enable Refraction"
+    return "Disable Refraction"
+
+
+def _refresh_debug_toggle_button_labels() -> None:
+    label_specs = (
+        ("debug_integer_bragg_toggle_label_var", _debug_integer_bragg_toggle_label()),
+        ("debug_refraction_toggle_label_var", _debug_refraction_toggle_label()),
+    )
+    for var_name, text in label_specs:
+        var = globals().get(var_name)
+        setter = getattr(var, "set", None)
+        if callable(setter):
+            try:
+                setter(text)
+            except Exception:
+                pass
+
+
+def _current_effective_n2() -> complex:
+    if _debug_refraction_disabled():
+        return 1.0 + 0.0j
+    return complex(n2)
+
+
 def _current_nominal_n2(active_cif_path=None):
     """Return the nominal complex index for the active beam wavelength."""
 
@@ -1675,6 +1725,10 @@ def _current_nominal_n2(active_cif_path=None):
 def _current_sample_n2_array(wavelength_angstrom_array, active_cif_path=None):
     """Return wavelength-specific complex indices for the active beam samples."""
 
+    if _debug_refraction_disabled():
+        wavelength_snapshot = _n2_wavelength_snapshot_from_angstrom(wavelength_angstrom_array)
+        return np.ones(wavelength_snapshot.shape[0], dtype=np.complex128)
+
     optics_path = _resolve_optics_cif_path() if active_cif_path is None else str(active_cif_path)
     wavelength_m = np.asarray(wavelength_angstrom_array, dtype=np.float64) * 1.0e-10
     return resolve_index_of_refraction_array(
@@ -1684,12 +1738,20 @@ def _current_sample_n2_array(wavelength_angstrom_array, active_cif_path=None):
 
 
 def _current_sample_n2_source_meta(active_cif_path=None):
+    if _debug_refraction_disabled():
+        return _DEBUG_REFRACTION_DISABLED_SOURCE_META
     optics_path = _resolve_optics_cif_path() if active_cif_path is None else str(active_cif_path)
     return _normalize_n2_source_meta(("cif_path", optics_path))
 
 
 def _current_sample_n2_payload(wavelength_angstrom_array, active_cif_path=None):
     wavelength_snapshot = _n2_wavelength_snapshot_from_angstrom(wavelength_angstrom_array)
+    if _debug_refraction_disabled():
+        return (
+            np.ones(wavelength_snapshot.shape[0], dtype=np.complex128),
+            _DEBUG_REFRACTION_DISABLED_SOURCE_META,
+            wavelength_snapshot,
+        )
     source_meta = _current_sample_n2_source_meta(active_cif_path=active_cif_path)
     n2_sample_array = _current_sample_n2_array(
         wavelength_snapshot,
@@ -2152,7 +2214,7 @@ def _show_azimuthal_radial_plot_demo() -> None:
             cv=c_var.get(),
             lambda_=lambda_,
             psi=psi,
-            n2=n2,
+            n2=_current_effective_n2(),
             center=[center_x_var.get(), center_y_var.get()],
             num_samples=simulation_runtime_state.num_samples,
             divergence_sigma=divergence_sigma,
@@ -4157,6 +4219,7 @@ def build_mosaic_params(*, sample_count=None, solve_q_steps=None, rng_seed=None)
         "n2_sample_array": n2_sample_array,
         "_n2_sample_array_source": n2_source_meta,
         "_n2_sample_array_wavelength_snapshot": n2_wavelength_snapshot,
+        "_refraction_effects_disabled": bool(_debug_refraction_disabled()),
         "sigma_mosaic_deg": sigma_mosaic_var.get(),
         "gamma_mosaic_deg": gamma_mosaic_var.get(),
         "eta": eta_var.get(),
@@ -11656,7 +11719,7 @@ def _initialize_runtime_controls_block_05() -> None:
                 "cor_angle_deg_factory": (lambda: float(cor_angle_var.get())),
                 "pixel_size_m": float(pixel_size_m),
                 "wavelength": float(lambda_),
-                "n2": n2,
+                "n2": _current_effective_n2,
             },
             overlay_bootstrap_kwargs={
                 "ax": ax,
@@ -12301,7 +12364,7 @@ def _initialize_runtime_controls_block_09() -> None:
                 )
             ),
             on_hkl_pick_mode_changed_factory=lambda: _handle_hkl_pick_mode_changed,
-            n2=n2,
+            n2=_current_effective_n2,
             process_peaks_parallel=_process_peaks_parallel_safe_prefer_python_runner,
             tcl_error_types=(tk.TclError,),
         )
@@ -15505,6 +15568,13 @@ def _invalidate_for_update_action(
         and not policy.defer_q_group_refresh_until_rows_available
     ):
         _request_geometry_q_group_refresh_if_available()
+    if not (
+        bool(getattr(policy, "retain_source_row_snapshots", True))
+        and bool(getattr(policy, "retain_manual_pick_cache", True))
+    ):
+        set_overlay_state = globals().get("_set_geometry_fit_last_overlay_state")
+        if callable(set_overlay_state):
+            set_overlay_state(None)
     return policy
 
 
@@ -17611,6 +17681,7 @@ def update_mosaic_cache():
             simulation_runtime_state.profile_cache.get("_sampling_signature", sampling_signature)
         ),
         os.path.abspath(str(active_optics_cif_path)),
+        bool(_debug_refraction_disabled()),
     )
     if simulation_runtime_state.profile_cache.get("_optics_signature") != optics_signature:
         (
@@ -17638,6 +17709,7 @@ def update_mosaic_cache():
             "solve_q_mode": current_solve_q_values().mode_flag,
             "bandwidth_percent": active_bandwidth * 100.0,
             "sample_weights": sample_weights_array,
+            "_refraction_effects_disabled": bool(_debug_refraction_disabled()),
         }
     )
 
@@ -20786,11 +20858,11 @@ def _refresh_settled_overlays() -> None:
         _request_overlay_canvas_redraw(force=True)
         _flush_pending_geometry_fit_holistic_residual()
         return
+    refresh_integration_region_visuals()
     if not _geometry_overlays_enabled():
         gui_controllers.clear_geometry_preview_skip_once(geometry_preview_state)
         _clear_all_geometry_overlay_artists(redraw=True)
         return
-    refresh_integration_region_visuals()
     qr_cylinder_overlay_runtime_refresh(redraw=True, update_status=False)
     if _live_geometry_preview_enabled():
         if gui_controllers.consume_geometry_preview_skip_once(geometry_preview_state):
@@ -25665,7 +25737,7 @@ def do_update():
             "active_primary_contribution_keys": list(primary_requested_contribution_keys),
             "accumulate_image": bool(accumulate_image_requested),
             "qr_cylinder_replace_simulation": bool(qr_cylinder_replace_requested),
-            "n2_value": n2,
+            "n2_value": _current_effective_n2(),
             "primary_data": selected_primary_data,
             "primary_intensities": selected_primary_intensities,
             "secondary_data": secondary_data,
@@ -29654,6 +29726,7 @@ def _geometry_source_snapshot_signature_from_params(
         int(mosaic_params["solve_q_mode"]),
         int(mosaic_params.get("events_per_beam_phase", DEFAULT_EVENTS_PER_BEAM_PHASE)),
         tuple(mosaic_params.get("_sampling_signature", ())),
+        int(bool(mosaic_params.get("_refraction_effects_disabled", False))),
         round(_geometry_source_signature_numeric(sf_prune_bias), 3),
         int((sf_prune_stats or {}).get("qr_kept", 0)),
         int((sf_prune_stats or {}).get("hkl_primary_kept", 0)),
@@ -35605,7 +35678,7 @@ def on_fit_mosaic_click():
         "sample_length_m": sample_length_var.get(),
         "sample_depth_m": sample_depth_var.get(),
         "chi": chi_var.get(),
-        "n2": n2,
+        "n2": _current_effective_n2(),
         "mosaic_params": mosaic_params,
         "debye_x": debye_x_var.get(),
         "debye_y": debye_y_var.get(),
@@ -36629,7 +36702,7 @@ def on_fit_ordered_structure_click():
                     "debye_y": float(debye_y_current),
                     "optics_mode": int(mask_optics_mode),
                     "collect_hit_tables": True,
-                    "n2_value": n2,
+                    "n2_value": _current_effective_n2(),
                     "primary_data": current_primary_data,
                     "primary_intensities": current_primary_intensities,
                     "secondary_data": np.empty((0, 3), dtype=np.float64),
@@ -36887,7 +36960,7 @@ def on_fit_ordered_structure_click():
                 "debye_y": float(trial_debye_y),
                 "optics_mode": int(base_optics_mode),
                 "collect_hit_tables": False,
-                "n2_value": n2,
+                "n2_value": _current_effective_n2(),
                 "primary_data": primary_data,
                 "primary_intensities": primary_intensities,
                 "secondary_data": np.empty((0, 3), dtype=np.float64),
@@ -37226,6 +37299,7 @@ def save_q_space_representation():
         "_n2_sample_array_wavelength_snapshot": simulation_runtime_state.profile_cache.get(
             "_n2_sample_array_wavelength_snapshot"
         ),
+        "_refraction_effects_disabled": bool(_debug_refraction_disabled()),
         "sigma_mosaic_deg": simulation_runtime_state.profile_cache.get("sigma_mosaic_deg", 0.0),
         "gamma_mosaic_deg": simulation_runtime_state.profile_cache.get("gamma_mosaic_deg", 0.0),
         "eta": simulation_runtime_state.profile_cache.get("eta", 0.0),
@@ -37259,7 +37333,7 @@ def save_q_space_representation():
         psi_z_var.get(),
         zs_var.get(),
         zb_var.get(),
-        n2,
+        _current_effective_n2(),
         mosaic_params["beam_x_array"],
         mosaic_params["beam_y_array"],
         mosaic_params["theta_array"],
@@ -40255,6 +40329,48 @@ def _initialize_runtime_controls_block_44() -> None:
     _set_analysis_popout_button_state(detached=False)
 
 
+def _toggle_debug_integer_bragg_mode() -> None:
+    global _debug_disable_ht_integer_bragg
+
+    _debug_disable_ht_integer_bragg = not _debug_integer_bragg_mode_enabled()
+    _refresh_debug_toggle_button_labels()
+    update_occupancies()
+    try:
+        mode_text = "integer Bragg peaks" if _debug_integer_bragg_mode_enabled() else "HT"
+        progress_label.config(text=f"Debug primary source: {mode_text}.")
+    except Exception:
+        pass
+
+
+def _toggle_debug_refraction_effects() -> None:
+    global _debug_refraction_effects_disabled
+
+    _debug_refraction_effects_disabled = not _debug_refraction_disabled()
+    _refresh_debug_toggle_button_labels()
+    try:
+        if isinstance(simulation_runtime_state.profile_cache, dict):
+            simulation_runtime_state.profile_cache.pop("_optics_signature", None)
+    except Exception:
+        pass
+    try:
+        update_mosaic_cache()
+    except Exception:
+        pass
+    _invalidate_for_update_action(
+        UpdateAction.FULL_SIMULATION,
+        physics_signature_changed=True,
+        hit_table_signature_changed=True,
+        q_group_content_signature_changed=True,
+        detector_geometry_changed=False,
+    )
+    schedule_update()
+    try:
+        mode_text = "disabled" if _debug_refraction_disabled() else "enabled"
+        progress_label.config(text=f"Refraction effects {mode_text}.")
+    except Exception:
+        pass
+
+
 def run_debug_simulation():
 
     gamma_val = float(gamma_var.get())
@@ -40279,6 +40395,7 @@ def run_debug_simulation():
         "wavelength_array": simulation_runtime_state.profile_cache.get("wavelength_array", []),
         "sample_weights": simulation_runtime_state.profile_cache.get("sample_weights"),
         "n2_sample_array": simulation_runtime_state.profile_cache.get("n2_sample_array"),
+        "_refraction_effects_disabled": bool(_debug_refraction_disabled()),
         "sigma_mosaic_deg": simulation_runtime_state.profile_cache.get("sigma_mosaic_deg", 0.0),
         "gamma_mosaic_deg": simulation_runtime_state.profile_cache.get("gamma_mosaic_deg", 0.0),
         "eta": simulation_runtime_state.profile_cache.get("eta", 0.0),
@@ -40313,7 +40430,7 @@ def run_debug_simulation():
         psi_z_var.get(),
         zs_val,
         zb_val,
-        n2,
+        _current_effective_n2(),
         mosaic_params["beam_x_array"],
         mosaic_params["beam_y_array"],
         mosaic_params["theta_array"],
@@ -40348,14 +40465,29 @@ def _initialize_runtime_controls_block_45() -> None:
         mosaic_frame, \
         sampling_pruning_frame, \
         legacy_resolution_options, \
-        initial_resolution
+        initial_resolution, \
+        debug_integer_bragg_toggle_label_var, \
+        debug_refraction_toggle_label_var
 
+    debug_integer_bragg_toggle_label_var = tk.StringVar(value=_debug_integer_bragg_toggle_label())
+    debug_refraction_toggle_label_var = tk.StringVar(value=_debug_refraction_toggle_label())
+    debug_parent = (
+        workspace_panels_view_state.workspace_debug_frame.frame
+        if workspace_panels_view_state.workspace_debug_frame is not None
+        else workspace_panels_view_state.workspace_actions_frame
+    )
+    ttk.Button(
+        debug_parent,
+        textvariable=debug_integer_bragg_toggle_label_var,
+        command=_toggle_debug_integer_bragg_mode,
+    ).pack(side=tk.TOP, padx=5, pady=2)
+    ttk.Button(
+        debug_parent,
+        textvariable=debug_refraction_toggle_label_var,
+        command=_toggle_debug_refraction_effects,
+    ).pack(side=tk.TOP, padx=5, pady=2)
     gui_views.populate_stacked_button_group(
-        (
-            workspace_panels_view_state.workspace_debug_frame.frame
-            if workspace_panels_view_state.workspace_debug_frame is not None
-            else workspace_panels_view_state.workspace_actions_frame
-        ),
+        debug_parent,
         [
             ("Run Debug Simulation", run_debug_simulation),
             ("Force Update", lambda: update_occupancies()),
@@ -42402,9 +42534,20 @@ def _build_geometry_fit_async_job(
     manual_fit_uses_caked_space = any(
         str(kind) == "caked" for kind in manual_fit_space_by_background.values()
     )
+    locked_qr_projection_required_by_background = (
+        gui_geometry_fit.geometry_manual_locked_qr_projection_required_by_background(
+            required_indices,
+            manual_pairs_by_background,
+        )
+    )
+    locked_qr_projection_required = any(
+        bool(value) for value in locked_qr_projection_required_by_background.values()
+    )
     targeted_projection_view_mode = _geometry_fit_targeted_projection_view_mode()
     initial_projection_view_mode = (
-        "caked" if manual_fit_uses_caked_space else targeted_projection_view_mode
+        "caked"
+        if manual_fit_uses_caked_space or locked_qr_projection_required
+        else targeted_projection_view_mode
     )
     manual_caked_fit_space_required_by_background = (
         gui_geometry_fit.geometry_manual_caked_fit_space_required_by_background(
@@ -42412,6 +42555,9 @@ def _build_geometry_fit_async_job(
             requested_projection_view_mode=initial_projection_view_mode,
         )
     )
+    for idx, required in locked_qr_projection_required_by_background.items():
+        if bool(required):
+            manual_caked_fit_space_required_by_background[int(idx)] = True
     manual_fit_requires_caked_space = any(
         bool(value) for value in manual_caked_fit_space_required_by_background.values()
     )
@@ -42545,7 +42691,26 @@ def _build_geometry_fit_async_job(
                     for row in live_rows_by_background.get(current_background_idx, ())
                     if isinstance(row, Mapping)
                 ]
-                if current_live_rows:
+                fallback_keys = {
+                    key
+                    for row in fallback_rows
+                    if (key := _geometry_fit_live_source_row_merge_key(row)) is not None
+                }
+                current_keys = {
+                    key
+                    for row in current_live_rows
+                    if (key := _geometry_fit_live_source_row_merge_key(row)) is not None
+                }
+                if (
+                    current_manual_pairs
+                    and str(fallback_diag.get("job_local_fallback_source") or "")
+                    == "saved_manual_pairs"
+                    and not (fallback_keys & current_keys)
+                ):
+                    live_rows_by_background[current_background_idx] = [
+                        dict(row) for row in fallback_rows
+                    ]
+                elif current_live_rows:
                     merged_rows = list(current_live_rows)
                     merged_key_indices: dict[tuple[object, ...], int] = {}
                     for row_index, row in enumerate(merged_rows):
@@ -46054,6 +46219,14 @@ def _run_async_geometry_fit_worker_job(
 
     def _worker_manual_caked_fit_space_required_for_background(background_index: int) -> bool:
         background_idx = int(background_index)
+        locked_required = (
+            gui_geometry_fit.geometry_manual_locked_qr_projection_required_by_background(
+                [background_idx],
+                {background_idx: _worker_manual_pairs_for_background(background_idx)},
+            )
+        )
+        if bool(locked_required.get(background_idx, False)):
+            return True
         required_by_background = job_data.get("manual_caked_fit_space_required_by_background")
         if isinstance(required_by_background, Mapping):
             raw_value = required_by_background.get(
@@ -46802,7 +46975,7 @@ def _initialize_runtime_controls_block_50() -> None:
             current_optics_mode_flag=_current_optics_mode_flag,
             lambda_value=lambda_,
             psi=psi,
-            n2=lambda: n2,
+            n2=_current_effective_n2,
             pixel_size_value=float(pixel_size_m),
         ),
         manual_dataset_bindings_factory_kwargs={
@@ -47158,6 +47331,7 @@ def _rebuild_diffraction_inputs(
         tcl_error_types=(tk.TclError,),
         force=force,
         trigger_update=trigger_update,
+        primary_source_mode=_current_primary_source_mode(),
     )
     _sync_structure_model_aliases()
 

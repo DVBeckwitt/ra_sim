@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from pathlib import Path
 
 from ra_sim.gui import structure_model
@@ -419,6 +420,74 @@ def test_build_ht_cache_resolves_expanded_map_lazily_for_non_uniform_occupancies
     assert captured["occ"] == [0.8, 0.6, 0.8]
 
 
+def test_build_integer_bragg_inputs_uses_generator_and_drops_fractional_rows() -> None:
+    calls = []
+
+    def fake_miller_generator(
+        mx,
+        cif_file,
+        occ,
+        lambda_angstrom,
+        energy,
+        intensity_threshold,
+        two_theta_range,
+    ):
+        calls.append(
+            (
+                mx,
+                cif_file,
+                tuple(occ),
+                lambda_angstrom,
+                energy,
+                intensity_threshold,
+                two_theta_range,
+            )
+        )
+        return (
+            np.array(
+                [
+                    [1.0, 0.0, 1.0],
+                    [1.0, 0.0, 1.5],
+                    [2.0, 1.0, 2.0],
+                ],
+                dtype=np.float64,
+            ),
+            np.array([4.0, 8.0, 6.0], dtype=np.float64),
+            np.array([1, 1, 2], dtype=np.int32),
+            [["integer-1"], ["fractional"], ["integer-2"]],
+        )
+
+    state = structure_model.StructureModelState(
+        cif_file="primary.cif",
+        cf=None,
+        blk=None,
+        occ=[0.8],
+        mx=8,
+        lambda_angstrom=1.54,
+        energy=12.0,
+        intensity_threshold=1.5,
+        two_theta_range=(0.0, 35.0),
+        miller_generator=fake_miller_generator,
+    )
+
+    miller, intensities, degeneracy, details = structure_model.build_integer_bragg_inputs(
+        state,
+        occ_values=[0.5],
+        cif_path_override="active-primary.cif",
+    )
+
+    assert calls == [
+        (8, "active-primary.cif", (0.5,), 1.54, 12.0, 1.5, (0.0, 35.0))
+    ]
+    np.testing.assert_array_equal(
+        miller,
+        np.array([[1.0, 0.0, 1.0], [2.0, 1.0, 2.0]], dtype=np.float64),
+    )
+    np.testing.assert_array_equal(intensities, np.array([4.0, 6.0], dtype=np.float64))
+    np.testing.assert_array_equal(degeneracy, np.array([1, 2], dtype=np.int32))
+    assert details == [["integer-1"], ["integer-2"]]
+
+
 def test_rebuild_diffraction_inputs_updates_state_and_runtime(monkeypatch) -> None:
     monkeypatch.setattr(
         structure_model,
@@ -517,6 +586,85 @@ def test_rebuild_diffraction_inputs_updates_state_and_runtime(monkeypatch) -> No
     assert runtime_state.last_sim_signature is None
     assert runtime_state.last_simulation_signature is None
     assert np.array_equal(runtime_state.sim_miller1_all, np.array([[1.0, 0.0, 1.0]]))
+    assert calls == [("filters", {"trigger_update": False}), ("schedule", None)]
+
+
+def test_rebuild_diffraction_inputs_integer_bragg_mode_bypasses_ht(monkeypatch) -> None:
+    monkeypatch.setattr(
+        structure_model,
+        "build_ht_cache",
+        lambda *_args, **_kwargs: pytest.fail("HT cache should not be rebuilt"),
+    )
+
+    def fake_miller_generator(*_args, **_kwargs):
+        return (
+            np.array([[1.0, 0.0, 1.0], [2.0, 1.0, 2.0]], dtype=np.float64),
+            np.array([4.0, 6.0], dtype=np.float64),
+            np.array([1, 2], dtype=np.int32),
+            [["integer-1"], ["integer-2"]],
+        )
+
+    state = structure_model.StructureModelState(
+        cif_file="primary.cif",
+        cf=None,
+        blk=None,
+        occ=[1.0],
+        defaults={"a": 1.0, "c": 2.0},
+        mx=8,
+        lambda_angstrom=1.54,
+        intensity_threshold=1.0,
+        two_theta_range=(0.0, 10.0),
+        has_second_cif=False,
+        miller_generator=fake_miller_generator,
+    )
+    runtime_state = SimpleNamespace(
+        last_sim_signature="old-image",
+        last_simulation_signature="old",
+        sim_miller1_all=None,
+        sim_intens1_all=None,
+        sim_primary_qr_all={"stale": object()},
+        sim_miller2_all=None,
+        sim_intens2_all=None,
+    )
+    calls = []
+
+    structure_model.rebuild_diffraction_inputs(
+        state,
+        new_occ=[0.5],
+        p_vals=[0.1, 0.2, 0.3],
+        weights=[0.5, 0.3, 0.2],
+        a_axis=1.0,
+        c_axis=2.0,
+        finite_stack_flag=True,
+        layers=8,
+        phase_delta_expression_current="0",
+        phi_l_divisor_current=1.0,
+        atom_site_values=[],
+        iodine_z_current=0.2,
+        rod_points_per_gz=500,
+        atom_site_override_state=SimpleNamespace(temp_path=None, source_path=None, signature=None),
+        simulation_runtime_state=runtime_state,
+        combine_weighted_intensities=lambda a, _b, **_kwargs: np.asarray(a, dtype=float),
+        build_intensity_dataframes=lambda *_args: ("summary", "details"),
+        apply_bragg_qr_filters=lambda **kwargs: calls.append(("filters", kwargs)),
+        schedule_update=lambda: calls.append(("schedule", None)),
+        weight1=1.0,
+        weight2=0.0,
+        force=True,
+        trigger_update=True,
+        primary_source_mode="integer_bragg",
+    )
+
+    np.testing.assert_array_equal(
+        state.miller,
+        np.array([[1.0, 0.0, 1.0], [2.0, 1.0, 2.0]], dtype=np.float64),
+    )
+    np.testing.assert_array_equal(state.intensities, np.array([4.0, 6.0], dtype=np.float64))
+    assert state.sim_primary_qr_all == {}
+    assert runtime_state.sim_primary_qr_all == {}
+    assert state.ht_curves_cache["primary_source_mode"] == "integer_bragg"
+    assert runtime_state.last_sim_signature is None
+    assert runtime_state.last_simulation_signature is None
     assert calls == [("filters", {"trigger_update": False}), ("schedule", None)]
 
 

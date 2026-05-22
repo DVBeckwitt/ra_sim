@@ -13590,6 +13590,99 @@ def test_apply_main_caked_view_toggle_drops_display_only_overlay_records(
     assert calls == [("set_overlay", None)]
 
 
+def test_refresh_settled_overlays_updates_integration_when_geometry_hidden(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    calls: list[object] = []
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_resolved_primary_analysis_display_mode",
+        lambda: "detector",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_fit_caked_roi_preview_enabled",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "_geometry_overlays_enabled", lambda: False)
+    monkeypatch.setattr(
+        runtime_session,
+        "refresh_integration_region_visuals",
+        lambda: calls.append("refresh_integration"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_all_geometry_overlay_artists",
+        lambda **kwargs: calls.append(("clear_geometry", bool(kwargs.get("redraw")))),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "clear_geometry_preview_skip_once",
+        lambda _state: calls.append("clear_preview_skip"),
+    )
+    monkeypatch.setattr(runtime_session, "geometry_preview_state", object(), raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "qr_cylinder_overlay_runtime_refresh",
+        lambda **_kwargs: pytest.fail("geometry QR overlay should stay hidden"),
+        raising=False,
+    )
+
+    runtime_session._refresh_settled_overlays()
+
+    assert calls == [
+        "refresh_integration",
+        "clear_preview_skip",
+        ("clear_geometry", True),
+    ]
+
+
+def test_full_simulation_invalidation_clears_geometry_fit_overlay_state(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    state = SimpleNamespace(
+        source_row_snapshots={0: {"rows": [{"source_row_index": 1}]}},
+        geometry_q_group_entries_cache_signature=("old-q-group-cache",),
+        geometry_q_group_entries_cache=[{"q_group_key": ("q_group", "primary", 1, 5)}],
+        manual_pick_cache_signature=("old-manual-cache",),
+        manual_pick_cache_data={"rows": [1]},
+        hkl_pick_simulation_points_payload_cache={"payload": True},
+        disabled_qr_sets={("primary", 1)},
+        disabled_qz_sections={("primary", 1, 0)},
+        pending_legacy_disabled_qz_sections=set(),
+    )
+    calls: list[object] = []
+
+    monkeypatch.setattr(runtime_session, "simulation_runtime_state", state, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_set_geometry_fit_last_overlay_state",
+        lambda overlay_state: calls.append(("set_overlay", overlay_state)),
+        raising=False,
+    )
+
+    runtime_session._invalidate_for_update_action(
+        runtime_session.UpdateAction.FULL_SIMULATION,
+        physics_signature_changed=True,
+        hit_table_signature_changed=True,
+        q_group_content_signature_changed=True,
+    )
+
+    assert ("set_overlay", None) in calls
+    assert state.source_row_snapshots == {}
+    assert state.manual_pick_cache_signature is None
+    assert state.geometry_q_group_entries_cache == []
+
+
 def test_clear_geometry_pick_artists_skips_missing_overlay_redraw_callback(
     monkeypatch,
 ) -> None:
@@ -16112,6 +16205,43 @@ def test_async_geometry_fit_job_preserves_caked_runtime_fields(monkeypatch, tmp_
     assert detector_job["projection_view_mode"] == "detector"
     assert detector_job["caked_views_by_background"] == {}
     assert detector_job["geometry_runtime_cfg"]["solver"].get("dynamic_point_geometry_fit") is None
+
+    manual_pairs[:] = [
+        {
+            "pair_id": "locked-detector-0",
+            "manual_background_input_origin": "detector",
+            "background_detector_x": 10.0,
+            "background_detector_y": 20.0,
+            "background_detector_input_frame": "native_detector",
+            "q_group_key": ("q_group", "primary", 1, 5),
+            "hkl": (-1, 0, 5),
+            "source_branch_index": 0,
+            "source_row_index": 11,
+            "source_reflection_index": 92,
+        }
+    ]
+    ensure_calls.clear()
+    execution_bindings.simulation_runtime_state.geometry_fit_job_counter = 0
+    with monkeypatch.context() as locked_context:
+        locked_context.setattr(
+            runtime_session,
+            "_geometry_fit_targeted_projection_view_mode",
+            lambda: "detector",
+            raising=False,
+        )
+        locked_context.setattr(
+            runtime_session,
+            "_geometry_fit_caked_view_for_index",
+            lambda _idx: dict(caked_payload),
+            raising=False,
+        )
+        locked_detector_job = runtime_session._build_geometry_fit_async_job(bindings)
+
+    assert ensure_calls == ["ensure"]
+    assert locked_detector_job["manual_fit_space_by_background"] == {0: "detector"}
+    assert locked_detector_job["manual_caked_fit_space_required_by_background"] == {0: True}
+    assert locked_detector_job["projection_view_mode"] == "caked"
+    assert locked_detector_job["caked_views_by_background"][0]["detector_shape"] == (4, 4)
 
     manual_pairs[:] = [
         {
@@ -26063,7 +26193,7 @@ def test_runtime_selected_qr_rod_detector_shared_inputs_reread_current_settings(
         stored_peak_table_lattice=[],
         stored_hit_table_signature=("hit", 1),
     )
-    config_values = {"gamma": 1.0}
+    config_values = {"gamma": 1.0, "theta": 8.0}
     q_map_calls = []
     phi_calls = []
     shape_lookup_calls = []
@@ -26083,7 +26213,7 @@ def test_runtime_selected_qr_rod_detector_shared_inputs_reread_current_settings(
             psi_z_deg=0.0,
             zs=0.0,
             zb=0.0,
-            theta_initial_deg=0.0,
+            theta_initial_deg=config_values["theta"],
             cor_angle_deg=0.0,
             pixel_size_m=1.0,
             wavelength=1.0,
@@ -26092,7 +26222,7 @@ def test_runtime_selected_qr_rod_detector_shared_inputs_reread_current_settings(
 
     def _q_maps(*, config, detector_shape):
         shape = tuple(int(value) for value in detector_shape)
-        q_map_calls.append((shape, float(config.gamma_deg)))
+        q_map_calls.append((shape, float(config.gamma_deg), float(config.theta_initial_deg)))
         return (
             np.ones(shape, dtype=float),
             np.ones(shape, dtype=float),
@@ -26176,6 +26306,7 @@ def test_runtime_selected_qr_rod_detector_shared_inputs_reread_current_settings(
     range_state.include_selected_qr_rod_shape_value = True
     simulation_state.unscaled_image = np.ones((3, 2), dtype=float)
     config_values["gamma"] = 2.0
+    config_values["theta"] = 12.0
     second = runtime_session._current_selected_qr_rod_detector_shared_inputs()
 
     assert first["selected_qr_rod_keys"] == [key_a]
@@ -26185,6 +26316,7 @@ def test_runtime_selected_qr_rod_detector_shared_inputs_reread_current_settings(
     assert first["include_selected_qr_rod_shape"] is False
     assert first["detector_shape"] == (2, 3)
     assert first["config"].gamma_deg == 1.0
+    assert first["config"].theta_initial_deg == 8.0
     assert second["selected_qr_rod_keys"] == [key_b]
     assert second["delta_qr"] == 0.2
     assert (second["qz_min"], second["qz_max"]) == (-1.0, 3.0)
@@ -26192,7 +26324,8 @@ def test_runtime_selected_qr_rod_detector_shared_inputs_reread_current_settings(
     assert second["include_selected_qr_rod_shape"] is True
     assert second["detector_shape"] == (3, 2)
     assert second["config"].gamma_deg == 2.0
-    assert q_map_calls == [((2, 3), 1.0), ((3, 2), 2.0)]
+    assert second["config"].theta_initial_deg == 12.0
+    assert q_map_calls == [((2, 3), 1.0, 8.0), ((3, 2), 2.0, 12.0)]
     assert [call[1] for call in phi_calls] == [(2, 3), (3, 2)]
     assert shape_lookup_calls == [((key_b,), (("primary", 2),), (3, 2))]
 
