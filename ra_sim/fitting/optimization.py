@@ -5641,9 +5641,14 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
     matched_pair_count = 0
     missing_pairs = 0
     fixed_source_resolved_count = 0
-    qr_fit_expected_count = sum(
-        1 for entry in normalized_measured if _fixed_manual_qr_pair_requires_shared_resolver(entry)
-    )
+    qr_fit_expected_count = 0
+    locked_qr_detector_same_frame_metric_required_count = 0
+    for entry in normalized_measured:
+        if not _fixed_manual_qr_pair_requires_shared_resolver(entry):
+            continue
+        qr_fit_expected_count += 1
+        if str(entry.get("manual_background_input_origin", "") or "").strip().lower() == "detector":
+            locked_qr_detector_same_frame_metric_required_count += 1
     qr_fit_resolved_count = 0
     qr_fit_missing_pairs: List[Dict[str, object]] = []
     fit_space_anchor_count_cached = 0
@@ -7731,6 +7736,12 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         else float("nan")
     )
     summary["detector_pixel_metric_complete"] = bool(detector_pixel_metric_is_same_frame_complete)
+    summary["locked_qr_detector_same_frame_metric_required_count"] = int(
+        locked_qr_detector_same_frame_metric_required_count
+    )
+    summary["locked_qr_detector_same_frame_metric_required"] = bool(
+        locked_qr_detector_same_frame_metric_required_count > 0
+    )
     summary["detector_pixel_metric_reject_reason"] = (
         ""
         if detector_pixel_metric_is_same_frame_complete
@@ -17333,6 +17344,8 @@ def _fit_prediction_detector_point_for_frame(
 
     if frame == "native_detector":
         for key in (
+            "final_prediction_detector_native_px",
+            "dynamic_final_detector_native_px",
             "sim_nominal_native_px",
             "sim_nominal_detector_native_px",
             "fit_prediction_detector_native_px",
@@ -17355,6 +17368,8 @@ def _fit_prediction_detector_point_for_frame(
 
     if frame == "display_detector":
         for key in (
+            "final_prediction_detector_display_px",
+            "dynamic_final_detector_display_px",
             "sim_nominal_detector_display_px",
             "resolved_detector_display_px",
             "sim_nominal_detector_px",
@@ -20821,16 +20836,21 @@ def _resolve_qr_fit_prediction_from_trial_params(
     out["fit_qr_branch_key_missing_fields"] = list(locked_missing_fields)
     source_rows_payload: Dict[str, object] | None = None
 
-    handoff_payload = _resolve_locked_qr_handoff_native_prediction(
-        pair=pair,
-        trial_params=trial_params,
-        fit_context=fit_context,
-        locked_correspondence=locked_correspondence,
-        dataset_ctx=dataset_ctx,
-    )
-    if handoff_payload is not None:
-        out.update(handoff_payload)
-        return out
+    def _handoff_native_payload() -> Dict[str, object] | None:
+        return _resolve_locked_qr_handoff_native_prediction(
+            pair=pair,
+            trial_params=trial_params,
+            fit_context=fit_context,
+            locked_correspondence=locked_correspondence,
+            dataset_ctx=dataset_ctx,
+        )
+
+    handoff_payload: Dict[str, object] | None = None
+    if not hit_tables:
+        handoff_payload = _handoff_native_payload()
+        if handoff_payload is not None:
+            out.update(handoff_payload)
+            return out
 
     def _trial_source_rows_payload() -> Dict[str, object]:
         nonlocal source_rows_payload
@@ -21141,6 +21161,12 @@ def _resolve_qr_fit_prediction_from_trial_params(
                         "sim_refined_detector_native_px": list(projected_native),
                         "fit_prediction_detector_native_px": list(projected_native),
                         "fit_prediction_detector_native_px_source": native_source,
+                        "final_prediction_detector_native_px": list(projected_native),
+                        "final_prediction_detector_native_px_source": (
+                            "dynamic_final_forward_simulation"
+                        ),
+                        "final_prediction_caked_deg": list(projected_caked),
+                        "final_prediction_source": "dynamic_final_forward_simulation",
                         "caked_projection_signature": projection_meta.get(
                             "fit_space_local_params_signature"
                         ),
@@ -21328,6 +21354,11 @@ def _resolve_qr_fit_prediction_from_trial_params(
         )
         return out
     if sim_point is None:
+        if handoff_payload is None:
+            handoff_payload = _handoff_native_payload()
+        if handoff_payload is not None:
+            out.update(handoff_payload)
+            return out
         reason = str(resolution_payload.get("resolution_reason", "locked_branch_unavailable"))
         if point_only_projection and bool(
             resolution_payload.get("source_row_is_caked_display_surface", False)
@@ -21394,6 +21425,8 @@ def _resolve_qr_fit_prediction_from_trial_params(
             "sim_refined_detector_native_px": list(projected_native_px),
             "fit_prediction_detector_native_px": list(projected_native_px),
             "fit_prediction_detector_native_px_source": "exact_projector_from_native",
+            "final_prediction_detector_native_px": list(projected_native_px),
+            "final_prediction_detector_native_px_source": "dynamic_final_forward_simulation",
             "caked_projection_signature": projection_meta.get("fit_space_local_params_signature"),
             "cake_bundle_signature": projection_meta.get("cake_bundle_signature"),
             "fit_space_projector_kind": projection_meta.get("fit_space_projector_kind"),
@@ -21428,10 +21461,19 @@ def _resolve_qr_fit_prediction_from_trial_params(
         else projected_nominal_caked
     )
     if point_only_projection:
+        detector_point_source = str(
+            resolution_payload.get("resolved_detector_point_source") or ""
+        ).strip()
+        final_detector_display = _finite_pair(
+            resolution_payload.get("resolved_detector_display_px")
+        )
+        if detector_point_source in {
+            "locked_hit_table_row",
+            "provider_local_stale_hit_table_row",
+        }:
+            final_detector_display = None
         hit_table_detector_source = str(
-            resolution_payload.get("locked_qr_detector_point_source")
-            or resolution_payload.get("resolved_detector_point_source")
-            or ""
+            resolution_payload.get("locked_qr_detector_point_source") or detector_point_source or ""
         )
         current_hit_table_detector_point = hit_table_detector_source in {
             "trial_hit_tables_locked_representative",
@@ -21518,6 +21560,13 @@ def _resolve_qr_fit_prediction_from_trial_params(
                     float(projected_nominal_caked[0]),
                     float(projected_nominal_caked[1]),
                 ],
+                "final_prediction_detector_native_px": list(projected_native_px),
+                "final_prediction_detector_native_px_source": ("dynamic_final_forward_simulation"),
+                "final_prediction_caked_deg": [
+                    float(projected_nominal_caked[0]),
+                    float(projected_nominal_caked[1]),
+                ],
+                "final_prediction_source": "dynamic_final_forward_simulation",
                 "optimizer_source_source": "point_only_detector_projection",
                 "objective_source_authority": "point_only_detector_projection",
                 "source_authority_match": bool(
@@ -21550,6 +21599,18 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 "available": True,
             }
         )
+        if final_detector_display is not None:
+            out.update(
+                {
+                    "final_prediction_detector_display_px": [
+                        float(final_detector_display[0]),
+                        float(final_detector_display[1]),
+                    ],
+                    "final_prediction_detector_display_px_source": (
+                        "dynamic_final_forward_simulation"
+                    ),
+                }
+            )
         for key in (
             "dynamic_baseline_anchor_caked_deg",
             "dynamic_baseline_anchor_source",

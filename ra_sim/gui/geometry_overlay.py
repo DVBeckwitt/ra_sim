@@ -235,6 +235,9 @@ def build_geometry_fit_visual_probe_records(
     *,
     extent: Sequence[object] | None = None,
     search_radius_px: int = 8,
+    image_source: str | None = None,
+    axis_xlim: Sequence[object] | None = None,
+    axis_ylim: Sequence[object] | None = None,
 ) -> list[dict[str, object]]:
     """Compare drawn fit markers against the visible simulation image peak."""
 
@@ -268,13 +271,22 @@ def build_geometry_fit_visual_probe_records(
                 "image_peak_point": image_peak_point,
                 "image_peak_index": peak_probe.get("image_peak_index"),
                 "image_peak_value": peak_probe.get("peak_value"),
+                "point_pixel_index": peak_probe.get("point_pixel_index"),
+                "search_window": peak_probe.get("search_window"),
                 "artist_to_record_delta": _point_delta(artist_point, record_point),
                 "artist_to_image_peak_delta": _point_delta(artist_point, image_peak_point),
                 "record_to_image_peak_delta": _point_delta(record_point, image_peak_point),
                 "image_extent": tuple(float(value) for value in extent)
                 if extent is not None
                 else None,
+                "image_source": str(image_source) if image_source is not None else "",
                 "image_shape": image_shape,
+                "axis_xlim": tuple(float(value) for value in axis_xlim)
+                if axis_xlim is not None
+                else None,
+                "axis_ylim": tuple(float(value) for value in axis_ylim)
+                if axis_ylim is not None
+                else None,
                 "search_radius_px": int(max(0, int(search_radius_px))),
             }
         )
@@ -1669,6 +1681,8 @@ def build_geometry_fit_overlay_records(
                 continue
             final_sim_display_payload = _first_point_with_source(
                 raw_entry,
+                "final_prediction_detector_display_px",
+                "dynamic_final_detector_display_px",
                 "fit_prediction_detector_display_px",
                 "predicted_detector_display_px",
                 "sim_refined_detector_display_px",
@@ -1677,6 +1691,8 @@ def build_geometry_fit_overlay_records(
             )
             final_sim_native_payload = _first_point_with_source(
                 raw_entry,
+                "final_prediction_detector_native_px",
+                "dynamic_final_detector_native_px",
                 "fit_prediction_detector_native_px",
                 "predicted_detector_native_px",
                 "sim_refined_detector_native_px",
@@ -1760,6 +1776,8 @@ def build_geometry_fit_overlay_records(
             )
             final_sim_caked_payload = _first_point_with_source(
                 raw_entry,
+                "final_prediction_caked_deg",
+                "dynamic_final_caked_deg",
                 "sim_visual_caked_deg",
                 "predicted_refined_caked_deg",
                 "sim_refined_caked_deg",
@@ -1784,6 +1802,8 @@ def build_geometry_fit_overlay_records(
                 record["final_sim_caked_display_source"] = str(final_sim_caked_source)
                 render_caked_payload = _first_point_with_source(
                     raw_entry,
+                    "final_prediction_caked_deg",
+                    "dynamic_final_caked_deg",
                     "sim_visual_caked_deg",
                     "sim_refined_caked_deg",
                     "fit_prediction_caked_deg",

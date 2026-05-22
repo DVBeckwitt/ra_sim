@@ -23824,12 +23824,20 @@ def build_geometry_fit_rejection_reason_lines(
                 point_match_summary.get("unweighted_peak_max_px", metric_max_value)
             )
     detector_metric_complete = False
+    detector_metric_required = False
     detector_rms_px = float("nan")
     detector_max_px = float("nan")
+    detector_metric_reject_reason = ""
     if isinstance(point_match_summary, Mapping):
         detector_metric_complete = bool(
             point_match_summary.get("detector_pixel_metric_complete", False)
         )
+        detector_metric_required = bool(
+            point_match_summary.get("locked_qr_detector_same_frame_metric_required", False)
+        )
+        detector_metric_reject_reason = str(
+            point_match_summary.get("detector_pixel_metric_reject_reason", "") or ""
+        ).strip()
         detector_rms_px = _geometry_fit_metric_float(
             point_match_summary.get(
                 "final_rms_px",
@@ -23975,6 +23983,13 @@ def build_geometry_fit_rejection_reason_lines(
                         limit=float(GEOMETRY_FIT_ACCEPT_MAX_RMS_PX),
                     )
                 )
+        elif detector_metric_required and not headless_caked_angular_acceptance:
+            reasons.append(
+                "Detector-origin locked Qr/Qz acceptance requires a complete same-frame "
+                "detector-pixel metric."
+            )
+            if detector_metric_reject_reason:
+                reasons.append(f"Detector metric missing reason: {detector_metric_reject_reason}.")
     elif metric_space in {"detector_px", "legacy_detector_px"} and metric_unit == "px":
         if float(metric_value) > GEOMETRY_FIT_ACCEPT_MAX_RMS_PX and (
             not headless_caked_angular_acceptance
@@ -25126,6 +25141,15 @@ def build_geometry_fit_visual_probe_lines(
         f"visual_probe_artist_to_image_peak_med={med_delta:.3f}",
         f"visual_probe_artist_to_image_peak_max={max_delta:.3f}",
     ]
+    first_record = records[0]
+    lines.append(
+        "visual_probe_image_context "
+        f"source={first_record.get('image_source', '')} "
+        f"shape={first_record.get('image_shape', '<none>')} "
+        f"extent={first_record.get('image_extent', '<none>')} "
+        f"axis_xlim={first_record.get('axis_xlim', '<none>')} "
+        f"axis_ylim={first_record.get('axis_ylim', '<none>')}"
+    )
     if np.isfinite(max_delta) and max_delta > 2.0:
         lines.append("visual_probe_warning=fit_sim_marker_image_mismatch")
     for entry in records[: max(0, int(max_records))]:
@@ -25146,6 +25170,9 @@ def build_geometry_fit_visual_probe_lines(
             f"record={_geometry_fit_probe_point_text(entry.get('record_point'))} "
             f"artist={_geometry_fit_probe_point_text(entry.get('artist_point'))} "
             f"image_peak={_geometry_fit_probe_point_text(entry.get('image_peak_point'))} "
+            f"point_pixel_index={entry.get('point_pixel_index', '<none>')} "
+            f"image_peak_index={entry.get('image_peak_index', '<none>')} "
+            f"search_window={entry.get('search_window', '<none>')} "
             "artist_to_record={:.3f} artist_to_image_peak={:.3f} "
             "record_to_image_peak={:.3f} peak_value={:.6g}".format(
                 _geometry_fit_metric_float(entry.get("artist_to_record_delta", np.nan)),

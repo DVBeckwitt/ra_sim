@@ -40081,6 +40081,34 @@ def test_gui_dynamic_caked_metric_enforces_same_frame_detector_thresholds() -> N
     assert all("mixed" not in reason.lower() for reason in reasons)
 
 
+def test_detector_origin_locked_qr_requires_same_frame_detector_metric() -> None:
+    result = SimpleNamespace(
+        success=True,
+        point_match_summary={
+            "acceptance_metric_space": "caked_deg",
+            "metric_unit": "deg",
+            "final_rms_deg": 0.0,
+            "final_max_deg": 0.0,
+            "matched_pair_count": 4,
+            "manual_caked_residual_row_count": 4,
+            "detector_pixel_metric_complete": False,
+            "locked_qr_detector_same_frame_metric_required": True,
+            "locked_qr_detector_same_frame_metric_required_count": 4,
+            "detector_pixel_metric_reject_reason": (
+                "not_all_rows_have_same_frame_detector_predictions"
+            ),
+        },
+    )
+
+    reasons = geometry_fit.build_geometry_fit_rejection_reason_lines(result, rms=0.0)
+
+    assert (
+        "Detector-origin locked Qr/Qz acceptance requires a complete same-frame "
+        "detector-pixel metric."
+    ) in reasons
+    assert any("not_all_rows_have_same_frame_detector_predictions" in reason for reason in reasons)
+
+
 def test_runtime_context_string_does_not_enable_headless_angular_acceptance() -> None:
     assert not geometry_fit.geometry_fit_runtime_allows_headless_caked_angular_acceptance(
         {"runtime_context": "headless"}

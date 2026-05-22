@@ -8,6 +8,8 @@ from ra_sim.gui.geometry_overlay import (
     compute_holistic_sim_residual,
     compute_geometry_overlay_frame_diagnostics,
     build_geometry_fit_visual_probe_records,
+    detector_display_to_native_coords,
+    detector_native_to_display_coords,
     inverse_transform_points_orientation,
     probe_display_image_peak_near_point,
     rotate_point_for_display,
@@ -117,6 +119,89 @@ def test_build_geometry_fit_visual_probe_records_compares_artist_record_and_imag
     assert probes[0]["artist_to_record_delta"] == pytest.approx(0.5)
     assert probes[0]["record_to_image_peak_delta"] == pytest.approx(5.0)
     assert probes[0]["artist_to_image_peak_delta"] > 4.5
+
+
+def test_visual_probe_reports_image_source_extent_and_pixel_index():
+    image = np.zeros((8, 8), dtype=np.float64)
+    image[4, 5] = 9.0
+
+    probes = build_geometry_fit_visual_probe_records(
+        [
+            {
+                "overlay_match_index": 2,
+                "record_point": (1.0, 1.0),
+                "artist_point": (1.5, 1.0),
+                "record_source": "final_prediction_detector_display_px",
+            }
+        ],
+        image,
+        extent=(-0.5, 7.5, -0.5, 7.5),
+        search_radius_px=6,
+        image_source="simulation",
+        axis_xlim=(-0.5, 7.5),
+        axis_ylim=(7.5, -0.5),
+    )
+
+    assert probes[0]["image_source"] == "simulation"
+    assert probes[0]["image_shape"] == (8, 8)
+    assert probes[0]["image_extent"] == pytest.approx((-0.5, 7.5, -0.5, 7.5))
+    assert probes[0]["axis_xlim"] == pytest.approx((-0.5, 7.5))
+    assert probes[0]["axis_ylim"] == pytest.approx((7.5, -0.5))
+    assert probes[0]["point_pixel_index"] == pytest.approx((1.0, 1.5))
+    assert probes[0]["search_window"] == (0, 7, 0, 7)
+    assert probes[0]["image_peak_index"] == (4, 5)
+    assert probes[0]["image_peak_value"] == pytest.approx(9.0)
+
+
+def test_visual_probe_downsampled_extent_roundtrip_keeps_data_coordinates_consistent():
+    image = np.zeros((4, 4), dtype=np.float64)
+    image[2, 1] = 7.0
+
+    probes = build_geometry_fit_visual_probe_records(
+        [
+            {
+                "overlay_match_index": 0,
+                "record_point": (15.0, 25.0),
+                "artist_point": (15.0, 25.0),
+            }
+        ],
+        image,
+        extent=(0.0, 40.0, 0.0, 40.0),
+        search_radius_px=1,
+        image_source="downsampled_simulation",
+    )
+
+    assert probes[0]["status"] == "ok"
+    assert probes[0]["point_pixel_index"] == pytest.approx((2.0, 1.0))
+    assert probes[0]["image_peak_point"] == pytest.approx((15.0, 25.0))
+    assert probes[0]["artist_to_image_peak_delta"] == pytest.approx(0.0)
+
+
+def test_detector_native_display_roundtrip_for_locked_qr_live_points():
+    native_shape = (3000, 3000)
+    live_points = [
+        ((1381.0, 1897.0), (1102.0, 1381.0)),
+        ((1375.0, 1165.0), (1834.0, 1375.0)),
+        ((1072.0, 1133.0), (1866.0, 1072.0)),
+        ((1094.0, 1919.0), (1080.0, 1094.0)),
+    ]
+
+    for native_point, expected_display in live_points:
+        display_point = detector_native_to_display_coords(
+            native_point[0],
+            native_point[1],
+            native_shape,
+            3,
+        )
+        assert display_point == pytest.approx(expected_display)
+
+        roundtrip_native = detector_display_to_native_coords(
+            display_point[0],
+            display_point[1],
+            native_shape,
+            3,
+        )
+        assert roundtrip_native == pytest.approx(native_point)
 
 
 def test_build_geometry_fit_overlay_records_preserves_duplicate_hkls():
@@ -653,6 +738,59 @@ def test_build_geometry_fit_overlay_records_prefers_fit_prediction_sim_points():
     assert records[0]["final_sim_caked_display"] == pytest.approx((40.6, 12.4))
     assert records[0]["final_sim_display_source"] == "fit_prediction_detector_display_px"
     assert records[0]["final_sim_caked_display_source"] == "fit_prediction_caked_deg"
+
+
+def test_dynamic_locked_qr_overlay_does_not_use_handoff_native_as_final_marker():
+    records = build_geometry_fit_overlay_records(
+        [
+            {
+                "overlay_match_index": 0,
+                "hkl": (-1, 0, 5),
+                "sim_display": (1102.0, 1381.0),
+                "bg_display": (1070.0, 1414.0),
+            }
+        ],
+        [
+            {
+                "match_status": "matched",
+                "overlay_match_index": 0,
+                "hkl": (-1, 0, 5),
+                "source_branch_index": 0,
+                "q_group_key": ("q_group", "primary", 1, 5),
+                "simulated_x": 999.0,
+                "simulated_y": 998.0,
+                "measured_x": 1070.0,
+                "measured_y": 1414.0,
+                "fit_prediction_detector_native_px": (1381.0, 1897.0),
+                "fit_prediction_detector_display_px": (1102.0, 1381.0),
+                "fit_prediction_source": "locked_manual_qr:saved_detector_display_to_native",
+                "final_prediction_detector_native_px": (1414.0, 1929.0),
+                "final_prediction_detector_display_px": (1070.0, 1414.0),
+                "final_prediction_detector_native_px_source": (
+                    "dynamic_final_forward_simulation"
+                ),
+                "final_prediction_caked_deg": (21.9, 166.0),
+                "distance_px": 0.0,
+            }
+        ],
+        native_shape=(3000, 3000),
+        orientation_choice={
+            "indexing_mode": "xy",
+            "k": 0,
+            "flip_x": False,
+            "flip_y": False,
+            "flip_order": "yx",
+        },
+        sim_display_rotate_k=0,
+        background_display_rotate_k=3,
+    )
+
+    assert records[0]["final_sim_native"] == pytest.approx((1414.0, 1929.0))
+    assert records[0]["final_sim_display"] == pytest.approx((1070.0, 1414.0))
+    assert records[0]["final_sim_native_source"] == "final_prediction_detector_native_px"
+    assert records[0]["final_sim_display_source"] == "final_prediction_detector_display_px"
+    assert records[0]["final_sim_caked_display"] == pytest.approx((21.9, 166.0))
+    assert records[0]["final_sim_caked_display_source"] == "final_prediction_caked_deg"
 
 
 def test_build_geometry_fit_overlay_records_uses_fit_prediction_display_as_caked_fallback():

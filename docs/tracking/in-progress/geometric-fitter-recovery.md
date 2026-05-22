@@ -5,9 +5,34 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-05-21
+Last updated: 2026-05-22
 
 ## Summary
+
+2026-05-22 locked Qr/Qz detector/caked mapping slice: visual probe records now
+report the probed image source, image shape, image extent, axes limits, marker
+pixel index, image peak index, and search window so detector-marker/image-raster
+mismatches can be distinguished from artist drift. Geometry overlay records now
+prefer explicit `final_prediction_detector_*` and `final_prediction_caked_deg`
+fields over handoff prediction anchors. The locked-Qr dynamic resolver uses
+current trial hit-table detector points before falling back to the saved
+handoff-native anchor, and successful dynamic detector projections emit
+`final_prediction_*` payload fields for the overlay. Detector-origin locked-Qr
+caked fits now declare when same-frame detector-pixel acceptance is required,
+and GUI rejection text fails closed if that required metric is missing. Feature
+status: implemented for the detector/caked drift diagnostic path and covered by
+targeted overlay, dynamic prediction, visual-probe, and GUI acceptance tests.
+Migration/deprecation status: no saved-state, CLI, config, or artifact schema
+migration is required.
+
+2026-05-22 shipping review cleanup: same-frame detector acceptance now reads
+explicit final locked-Qr detector predictions before handoff prediction anchors,
+so acceptance and overlay agree on the fitted marker source. Visual-probe logs
+now distinguish simulation and background raster probes by source label, which
+prevents marker/raster drift reports from being ambiguous. CI status: targeted
+geometry tests and `python -m ra_sim.dev check` are required before commit.
+Migration/deprecation status: no compatibility migration or deprecation is
+needed; these are diagnostic and acceptance-source fixes for the existing route.
 
 2026-05-21 locked Qr/Qz pipeline-validation slice: row-level caked projection
 readiness now counts projected live rows whose locked identity is carried only

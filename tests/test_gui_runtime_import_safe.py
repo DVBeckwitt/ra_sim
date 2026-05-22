@@ -662,6 +662,8 @@ def test_runtime_session_geometry_fit_visual_probe_logs_drawn_marker_to_image_de
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     image = np.zeros((8, 8), dtype=np.float64)
     image[4, 5] = 9.0
+    background = np.zeros((8, 8), dtype=np.float64)
+    background[2, 2] = 6.0
     lines: list[str] = []
 
     class _ImageArtist:
@@ -675,6 +677,8 @@ def test_runtime_session_geometry_fit_visual_probe_logs_drawn_marker_to_image_de
             return True
 
     monkeypatch.setattr(runtime_session, "image_display", _ImageArtist(), raising=False)
+    monkeypatch.setattr(runtime_session, "background_display", _ImageArtist(), raising=False)
+    runtime_session.background_display.get_array = lambda: background
     monkeypatch.setattr(
         runtime_session,
         "_geometry_fit_cmd_line",
@@ -697,6 +701,8 @@ def test_runtime_session_geometry_fit_visual_probe_logs_drawn_marker_to_image_de
 
     assert any("visual_probe_records=1" in line for line in lines)
     assert any("visual_probe_artist_to_image_peak_max=5.000" in line for line in lines)
+    assert any("source=simulation:image_display" in line for line in lines)
+    assert any("source=background:background_display" in line for line in lines)
     assert any("idx=3 HKL=(0, 0, 9)" in line for line in lines)
 
 

@@ -3260,8 +3260,11 @@ def _draw_geometry_fit_overlay(
     _log_geometry_fit_visual_probe_records(visual_probe_records)
 
 
-def _current_geometry_fit_visual_probe_image_context() -> dict[str, object] | None:
-    image_artist = globals().get("image_display")
+def _geometry_fit_visual_probe_context_for_artist(
+    artist_name: str,
+    source: str,
+) -> dict[str, object] | None:
+    image_artist = globals().get(artist_name)
     if image_artist is None:
         return None
     try:
@@ -3279,11 +3282,33 @@ def _current_geometry_fit_visual_probe_image_context() -> dict[str, object] | No
         extent = tuple(float(value) for value in extent_raw)
     except Exception:
         extent = None
+    try:
+        axis_xlim = tuple(float(value) for value in ax.get_xlim())
+    except Exception:
+        axis_xlim = None
+    try:
+        axis_ylim = tuple(float(value) for value in ax.get_ylim())
+    except Exception:
+        axis_ylim = None
     return {
         "image": image_array,
         "extent": extent,
-        "source": "image_display",
+        "source": source,
+        "axis_xlim": axis_xlim,
+        "axis_ylim": axis_ylim,
     }
+
+
+def _current_geometry_fit_visual_probe_image_contexts() -> list[dict[str, object]]:
+    contexts: list[dict[str, object]] = []
+    for artist_name, source in (
+        ("image_display", "simulation:image_display"),
+        ("background_display", "background:background_display"),
+    ):
+        context = _geometry_fit_visual_probe_context_for_artist(artist_name, source)
+        if context is not None:
+            contexts.append(context)
+    return contexts
 
 
 def _log_geometry_fit_visual_probe_records(
@@ -3294,8 +3319,8 @@ def _log_geometry_fit_visual_probe_records(
     ]
     if not draw_records:
         return
-    image_context = _current_geometry_fit_visual_probe_image_context()
-    if image_context is None:
+    image_contexts = _current_geometry_fit_visual_probe_image_contexts()
+    if not image_contexts:
         probe_records = [
             {
                 **entry,
@@ -3306,18 +3331,31 @@ def _log_geometry_fit_visual_probe_records(
             }
             for entry in draw_records
         ]
-    else:
+        try:
+            simulation_runtime_state.geometry_fit_last_visual_probe_records = probe_records
+        except Exception:
+            pass
+        for line in gui_geometry_fit.build_geometry_fit_visual_probe_lines(probe_records):
+            _geometry_fit_cmd_line(line)
+        return
+
+    all_probe_records: list[dict[str, object]] = []
+    for image_context in image_contexts:
         probe_records = build_geometry_fit_visual_probe_records(
             draw_records,
             image_context.get("image"),
             extent=image_context.get("extent"),
+            image_source=str(image_context.get("source", "") or ""),
+            axis_xlim=image_context.get("axis_xlim"),
+            axis_ylim=image_context.get("axis_ylim"),
         )
+        all_probe_records.extend(probe_records)
+        for line in gui_geometry_fit.build_geometry_fit_visual_probe_lines(probe_records):
+            _geometry_fit_cmd_line(line)
     try:
-        simulation_runtime_state.geometry_fit_last_visual_probe_records = probe_records
+        simulation_runtime_state.geometry_fit_last_visual_probe_records = all_probe_records
     except Exception:
         pass
-    for line in gui_geometry_fit.build_geometry_fit_visual_probe_lines(probe_records):
-        _geometry_fit_cmd_line(line)
 
 
 def _draw_initial_geometry_pairs_overlay(
