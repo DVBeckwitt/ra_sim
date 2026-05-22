@@ -43901,7 +43901,13 @@ def _run_async_geometry_fit_worker_job(
                 ai=_worker_geometry_fit_caking_integrator,
                 center=lambda: center_pair,
                 detector_distance=lambda: float(params_local.get("corto_detector", 0.0) or 0.0),
-                pixel_size=float(pixel_size_m),
+                pixel_size=float(
+                    params_local.get(
+                        "pixel_size_m",
+                        globals().get("pixel_size_m", DEFAULT_PIXEL_SIZE_M),
+                    )
+                    or DEFAULT_PIXEL_SIZE_M
+                ),
                 caked_transform_bundle=lambda: (
                     exact_caked_bundle
                     if isinstance(exact_caked_bundle, CakeTransformBundle)
@@ -44150,14 +44156,32 @@ def _run_async_geometry_fit_worker_job(
         )
         normalized_mode = str(job_data.get("projection_view_mode") or "detector").strip().lower()
         strict_projection_mode = normalized_mode in {"caked", "q_space"}
-        if not copied_projected_rows and not strict_projection_mode:
-            copied_projected_rows = _geometry_fit_rows_for_background(
-                int(background_index),
-                _project_source_rows_for_background(
+        projection_failure_reason: str | None = None
+        projected_from_stored_rows = False
+        if not copied_projected_rows:
+            if strict_projection_mode:
+                try:
+                    copied_projected_rows = _geometry_fit_rows_for_background(
+                        int(background_index),
+                        _project_source_rows_for_background(
+                            int(background_index),
+                            copied_stored_rows,
+                            mode_override=normalized_mode,
+                            strict_caked_projection=True,
+                        ),
+                    )
+                    projected_from_stored_rows = bool(copied_projected_rows)
+                except Exception as exc:
+                    copied_projected_rows = []
+                    projection_failure_reason = f"projection_error:{type(exc).__name__}"
+            else:
+                copied_projected_rows = _geometry_fit_rows_for_background(
                     int(background_index),
-                    copied_stored_rows,
-                ),
-            )
+                    _project_source_rows_for_background(
+                        int(background_index),
+                        copied_stored_rows,
+                    ),
+                )
         resolved_diagnostics = dict(diagnostics) if isinstance(diagnostics, Mapping) else {}
         resolved_diagnostics.setdefault("source", "geometry_fit_background_cache")
         resolved_diagnostics.setdefault(
@@ -44188,6 +44212,14 @@ def _run_async_geometry_fit_worker_job(
             "projected_peak_count",
             int(len(copied_projected_rows)),
         )
+        if projected_from_stored_rows:
+            resolved_diagnostics["projected_peak_count"] = int(len(copied_projected_rows))
+            resolved_diagnostics.setdefault("projected_rows_generated_from_stored_rows", True)
+        if projection_failure_reason is not None:
+            resolved_diagnostics.setdefault(
+                "projection_failure_reason",
+                str(projection_failure_reason),
+            )
         resolved_diagnostics.setdefault("cache_source", str(cache_source))
         resolved_diagnostics.setdefault("signature_match", True)
         resolved_diagnostics.setdefault(

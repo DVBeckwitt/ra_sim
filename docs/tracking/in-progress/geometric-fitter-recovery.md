@@ -1684,6 +1684,32 @@ Locked Qr/Qz optimizer-request handoff preservation, 2026-05-21:
   of `23cd6dc6`. Rollback is a normal git revert of the handoff-preservation
   patch, focused regressions, and this tracking update.
 
+Detector-origin locked Qr/Qz projected-row generation, 2026-05-22:
+
+- Bug/error status: fixed the detector-mode locked-Qr preflight block where
+  selected source rows existed and an exact caked projector was available, but
+  strict caked worker bundles kept `projected_rows=[]`, causing
+  `locked_qr_projection_readiness ... expected_rows=4 projected_rows=0` and a
+  hard preflight failure before dataset build.
+- The runtime cache bundle builder now generates caked projected rows from
+  stored detector source rows when the fit path is in strict caked/q-space
+  projection mode and no projected rows were returned by the source-row rebuild.
+  Projection failures still leave `projected_rows=[]` and fail closed at the
+  existing locked-Qr projection gate.
+- The worker caked projection callback now resolves pixel size from the job's
+  fit parameters with the existing module/default fallback, avoiding a worker
+  failure when tests or headless jobs do not expose a module-level
+  `pixel_size_m`.
+- Feature status: no new GUI control, CLI flag, public API, config key,
+  saved-state schema, artifact schema, dependency, CI workflow, deprecation, or
+  migration.
+- Validation: focused locked-Qr projection and caked-projection worker tests,
+  neighboring projection-readiness/source-row rebuild tests, `git diff
+  --check`, and `python -m ra_sim.dev check` pass.
+- Shipping status: ready as a normal bug-fix slice. Rollback is a normal git
+  revert of the runtime bundle projection fallback, focused regression, and
+  this tracking update.
+
 Locked Qr/Qz handoff simplification follow-up, 2026-05-21:
 
 - Bug/error status: unchanged from the handoff-preservation fix. The follow-up
