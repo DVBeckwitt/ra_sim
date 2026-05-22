@@ -9,6 +9,18 @@ Last updated: 2026-05-22
 
 ## Summary
 
+2026-05-22 post-review shipping status: reviewed the Qr/Qz ghost refresh,
+runtime debug-physics handoff, and Qr-rod editor payload simplification for
+correctness, code size, security, performance, migration/deprecation impact,
+and test coverage. Bug/error status remains fixed for stale saved ghost-square
+refresh and duplicate Qr-rod edit-parameter payload handling. Feature status:
+debug physics toggles remain runtime-only and documented; no saved-state,
+config, CLI, artifact schema, dependency, or public API changed. Migration and
+deprecation status: none required. CI/shipping status: `python -m ra_sim.dev
+check`, the focused Qr-rod editor subset, the full background peak-fit notebook
+regression file, and `git diff --check` pass; rollback remains a normal git
+revert of the latest small commits.
+
 2026-05-22 Qr/Qz ghost refresh and debug-physics handoff: saved Qr/Qz
 ghost-representative squares keep the existing refreshed-source behavior while
 the lookup implementation is simplified to try current source rows first and
