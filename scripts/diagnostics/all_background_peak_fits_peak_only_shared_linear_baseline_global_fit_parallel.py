@@ -14678,6 +14678,290 @@ def qz_to_l_linear_coeff(
     return 1.0, 0.0
 
 
+def final_qr_rod_supported_profile_group(
+    profile_group: pd.DataFrame,
+) -> tuple[pd.DataFrame, float, np.ndarray, np.ndarray] | None:
+    group = pd.DataFrame(profile_group).copy()
+    if group.empty or not {"qz_min", "qz_max"}.issubset(group.columns):
+        return None
+    if "pixel_count" in group:
+        pixel_counts = pd.to_numeric(group["pixel_count"], errors="coerce").to_numpy(
+            dtype=np.float64
+        )
+        supported = np.isfinite(pixel_counts) & (pixel_counts > 0.0)
+        if not np.any(supported):
+            return None
+        group = group.loc[supported].copy()
+        pixel_count_sum = float(np.nansum(pixel_counts[supported]))
+    else:
+        pixel_count_sum = float(len(group))
+    qz_min_values = pd.to_numeric(group["qz_min"], errors="coerce").to_numpy(dtype=np.float64)
+    qz_max_values = pd.to_numeric(group["qz_max"], errors="coerce").to_numpy(dtype=np.float64)
+    finite = (
+        np.isfinite(qz_min_values) & np.isfinite(qz_max_values) & (qz_max_values > qz_min_values)
+    )
+    if not np.any(finite):
+        return None
+    return group, pixel_count_sum, qz_min_values[finite], qz_max_values[finite]
+
+
+def final_specular_qr_rod_region_overlay_from_profile_table(
+    profile_table: pd.DataFrame,
+    *,
+    specular_roi: dict[str, object],
+) -> list[dict[str, object]]:
+    table = pd.DataFrame(profile_table).copy()
+    if table.empty or not {"m", "branch", "qz_min", "qz_max"}.issubset(table.columns):
+        return []
+    m_values = pd.to_numeric(table["m"], errors="coerce").to_numpy(dtype=np.float64)
+    branch_values = table["branch"].astype(str).to_numpy(dtype=object)
+    supported = final_qr_rod_supported_profile_group(
+        table.loc[(m_values == 0.0) & (branch_values == "qz")]
+    )
+    if supported is None:
+        return []
+    sub, pixel_count_sum, qz_min_values, qz_max_values = supported
+    roi = dict(specular_roi or {})
+    return [
+        {
+            "source": "specular",
+            "m": 0,
+            "hk": 0,
+            "branch": "qz",
+            "branch_label": "qz",
+            "qr": 0.0,
+            "qr_original": 0.0,
+            "qr_fit_count": 0,
+            "qr_fit_sample_count": 0,
+            "qr_fit_method": "specular_roi",
+            "delta_qr": 0.0,
+            "theta_initial_deg": float("nan"),
+            "qz_min": float(np.nanmin(qz_min_values)),
+            "qz_max": float(np.nanmax(qz_max_values)),
+            "pixel_count_sum": pixel_count_sum,
+            "profile_rows": int(len(sub)),
+            "phi_min": as_float(roi.get("phi_min"), np.nan),
+            "phi_max": as_float(roi.get("phi_max"), np.nan),
+            "two_theta_min": as_float(roi.get("two_theta_min"), np.nan),
+            "two_theta_max": as_float(roi.get("two_theta_max"), np.nan),
+        }
+    ]
+
+
+def final_qr_rod_region_overlays_from_profile_table(
+    profile_table: pd.DataFrame,
+    rod_entries: list[dict[str, object]],
+    *,
+    delta_qr: float,
+    theta_initial_deg: float,
+    specular_roi: dict[str, object],
+) -> list[dict[str, object]]:
+    table = pd.DataFrame(profile_table).copy()
+    overlays: list[dict[str, object]] = []
+    required_columns = {"m", "branch", "qz_min", "qz_max"}
+    if table.empty or not required_columns.issubset(table.columns):
+        return overlays
+
+    rod_by_source_m: dict[tuple[str, int], dict[str, object]] = {}
+    rod_by_m: dict[int, dict[str, object]] = {}
+    for raw_rod in rod_entries or []:
+        if not isinstance(raw_rod, dict):
+            continue
+        try:
+            m_int = int(raw_rod["m"])
+        except Exception:
+            continue
+        rod = dict(raw_rod)
+        source = str(rod.get("source", ""))
+        rod_by_source_m[(source, m_int)] = rod
+        rod_by_m.setdefault(m_int, rod)
+
+    def first_finite(source_group: pd.DataFrame, column: str, fallback: float) -> float:
+        if column not in source_group:
+            return float(fallback)
+        values = pd.to_numeric(source_group[column], errors="coerce").to_numpy(dtype=np.float64)
+        finite_values = values[np.isfinite(values)]
+        return float(finite_values[0]) if finite_values.size else float(fallback)
+
+    def first_text(source_group: pd.DataFrame, column: str, fallback: str) -> str:
+        if column not in source_group:
+            return str(fallback)
+        for value in source_group[column].astype(str).to_numpy(dtype=object):
+            text = str(value).strip()
+            if text and text.lower() != "nan":
+                return text
+        return str(fallback)
+
+    m_values = pd.to_numeric(table["m"], errors="coerce").to_numpy(dtype=np.float64)
+    table = table.loc[np.isfinite(m_values)].copy()
+    if table.empty:
+        return overlays
+    table["m"] = pd.to_numeric(table["m"], errors="coerce").astype(int)
+    table["branch"] = table["branch"].astype(str)
+    for (m_value, branch_value), group in table.groupby(["m", "branch"], sort=False):
+        m_int = int(m_value)
+        branch_text = str(branch_value)
+        if m_int == 0 or branch_text == "qz":
+            continue
+        supported = final_qr_rod_supported_profile_group(group)
+        if supported is None:
+            continue
+        supported_group, pixel_count_sum, qz_min_values, qz_max_values = supported
+        source = first_text(supported_group, "source", "")
+        rod = rod_by_source_m.get((source, m_int)) or rod_by_m.get(m_int, {})
+        if not source:
+            source = str(rod.get("source", ""))
+        qr_value = first_finite(supported_group, "qr", as_float(rod.get("qr"), np.nan))
+        if not np.isfinite(qr_value):
+            continue
+        overlay_delta_qr = first_finite(supported_group, "delta_qr", float(delta_qr))
+        theta_initial = first_finite(
+            supported_group,
+            "theta_initial_deg_used_for_q",
+            float(theta_initial_deg),
+        )
+        overlays.append(
+            {
+                "source": source,
+                "m": m_int,
+                "branch": branch_text,
+                "branch_label": first_text(supported_group, "phi_window", branch_text),
+                "branch_sign": -1 if branch_text == "-" else 1 if branch_text == "+" else None,
+                "qr": float(qr_value),
+                "qr_original": first_finite(
+                    supported_group,
+                    "qr_original",
+                    as_float(rod.get("qr_original"), qr_value),
+                ),
+                "qr_fit_count": int(
+                    first_finite(
+                        supported_group,
+                        "qr_fit_count",
+                        rod.get("qr_fit_count", 0),
+                    )
+                ),
+                "qr_fit_sample_count": int(
+                    first_finite(
+                        supported_group,
+                        "qr_fit_sample_count",
+                        rod.get("qr_fit_sample_count", 0),
+                    )
+                ),
+                "qr_fit_method": first_text(
+                    supported_group,
+                    "qr_fit_method",
+                    str(rod.get("qr_fit_method", "original")),
+                ),
+                "delta_qr": float(overlay_delta_qr),
+                "theta_initial_deg": float(theta_initial),
+                "qz_min": float(np.nanmin(qz_min_values)),
+                "qz_max": float(np.nanmax(qz_max_values)),
+                "pixel_count_sum": pixel_count_sum,
+                "profile_rows": int(len(supported_group)),
+            }
+        )
+
+    overlays.extend(
+        final_specular_qr_rod_region_overlay_from_profile_table(
+            table,
+            specular_roi=dict(specular_roi or {}),
+        )
+    )
+    return overlays
+
+
+def final_region_overlay_signature_from_overlays(
+    region_overlays: object,
+) -> tuple[tuple[object, ...], ...]:
+    records: list[tuple[object, ...]] = []
+    for item in region_overlays or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            records.append(
+                (
+                    str(item.get("source", "")),
+                    int(item.get("m", 0)),
+                    str(item.get("branch", "")),
+                    round(as_float(item.get("qr"), np.nan), 9),
+                    round(as_float(item.get("delta_qr"), np.nan), 9),
+                    round(as_float(item.get("qz_min"), np.nan), 9),
+                    round(as_float(item.get("qz_max"), np.nan), 9),
+                    round(as_float(item.get("theta_initial_deg"), np.nan), 9),
+                )
+            )
+        except Exception:
+            continue
+    return tuple(sorted(records, key=lambda row: tuple(str(value) for value in row)))
+
+
+def final_qr_rod_region_specs_table(
+    region_overlays: object,
+    *,
+    l_min: object,
+    l_max: object,
+    theta_initial_deg: object,
+    specular_roi: dict[str, object],
+    accepted_from_gui: bool,
+) -> pd.DataFrame:
+    roi = dict(specular_roi or {})
+    columns = [
+        "m",
+        "branch",
+        "source",
+        "qr",
+        "delta_qr",
+        "qz_min",
+        "qz_max",
+        "l_min",
+        "l_max",
+        "theta_initial_deg",
+        "phi_min",
+        "phi_max",
+        "two_theta_min",
+        "two_theta_max",
+        "pixel_count_sum",
+        "profile_rows",
+        "accepted_from_gui",
+    ]
+    rows: list[dict[str, object]] = []
+    for item in region_overlays or []:
+        if not isinstance(item, dict):
+            continue
+        m_value = int(as_float(item.get("m"), 0))
+        rows.append(
+            {
+                "m": m_value,
+                "branch": str(item.get("branch", "")),
+                "source": str(item.get("source", "")),
+                "qr": as_float(item.get("qr"), np.nan),
+                "delta_qr": as_float(item.get("delta_qr"), np.nan),
+                "qz_min": as_float(item.get("qz_min"), np.nan),
+                "qz_max": as_float(item.get("qz_max"), np.nan),
+                "l_min": as_float(l_min, np.nan),
+                "l_max": as_float(l_max, np.nan),
+                "theta_initial_deg": as_float(
+                    item.get("theta_initial_deg"),
+                    as_float(theta_initial_deg, np.nan),
+                ),
+                "phi_min": as_float(item.get("phi_min"), as_float(roi.get("phi_min"), np.nan)),
+                "phi_max": as_float(item.get("phi_max"), as_float(roi.get("phi_max"), np.nan)),
+                "two_theta_min": as_float(
+                    item.get("two_theta_min"),
+                    as_float(roi.get("two_theta_min"), np.nan),
+                ),
+                "two_theta_max": as_float(
+                    item.get("two_theta_max"),
+                    as_float(roi.get("two_theta_max"), np.nan),
+                ),
+                "pixel_count_sum": as_float(item.get("pixel_count_sum"), np.nan),
+                "profile_rows": int(as_float(item.get("profile_rows"), 0)),
+                "accepted_from_gui": bool(accepted_from_gui),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
 def rod_profile_table_for_l_window(
     profile_table: pd.DataFrame,
     marker_source: pd.DataFrame,
@@ -15580,7 +15864,7 @@ qr_rod_region_editor_result = {
     or bool(qr_rod_specular_editor_result.get("accepted", False)),
     "source": qr_rod_peak_edit_source,
 }
-if bool(qr_rod_specular_editor_result.get("accepted", False)) and qr_rod_peak_edits_path:
+if bool(qr_rod_region_editor_result.get("accepted", False)) and qr_rod_peak_edits_path:
     try:
         saved_path = write_qr_rod_peak_edits(
             qr_rod_peak_edits_path,
@@ -15599,6 +15883,14 @@ rod_profile_table = rod_profile_table_for_l_window(
     qr_rod_editor_l_min,
     qr_rod_editor_l_max,
 )
+final_region_overlays = final_qr_rod_region_overlays_from_profile_table(
+    rod_profile_table,
+    rod_entries,
+    delta_qr=qr_rod_delta_qr,
+    theta_initial_deg=qr_rod_editor_theta_initial_deg,
+    specular_roi=SPECULAR_ROI_SIGNATURE,
+)
+final_region_overlay_signature = final_region_overlay_signature_from_overlays(final_region_overlays)
 qr_rod_peak_edit_key = qr_rod_peak_edit_cache_key(
     None if qr_rod_peak_edit_source == "last_cached" else qr_rod_peak_edits_path or None,
     marker_table=marker_table if qr_rod_peak_edit_source != "last_cached" else None,
@@ -15614,6 +15906,7 @@ qr_rod_peak_edit_key = qr_rod_peak_edit_cache_key(
         "editor_l_min": float(qr_rod_editor_l_min),
         "editor_l_max": float(qr_rod_editor_l_max),
         "editor_theta_initial_deg": float(qr_rod_editor_theta_initial_deg),
+        "final_region_overlay_signature": final_region_overlay_signature,
     },
 )
 if qr_rod_profile_cache_has_final_fit(qr_rod_profile_cache or {}, qr_rod_peak_edit_key):
@@ -15689,9 +15982,30 @@ marker_csv = OUT_DIR / f"{ROD_PROFILE_MARKER_STEM}.csv"
 marker_table.to_csv(marker_csv, index=False)
 component_csv = OUT_DIR / f"{ROD_PROFILE_STEM}_tail_components.csv"
 rod_component_table.to_csv(component_csv, index=False)
+region_specs_table = final_qr_rod_region_specs_table(
+    final_region_overlays,
+    l_min=qr_rod_editor_l_min,
+    l_max=qr_rod_editor_l_max,
+    theta_initial_deg=qr_rod_editor_theta_initial_deg,
+    specular_roi=SPECULAR_ROI_SIGNATURE,
+    accepted_from_gui=bool(qr_rod_region_editor_result.get("accepted", False)),
+)
+region_specs_stem = f"figure7_{SAMPLE_STEM}_qr_rod_region_specs"
+region_specs_csv = OUT_DIR / f"{region_specs_stem}.csv"
+region_specs_json = OUT_DIR / f"{region_specs_stem}.json"
+region_specs_table.to_csv(region_specs_csv, index=False)
+region_specs_records = json.loads(
+    region_specs_table.to_json(orient="records", double_precision=12, default_handler=str)
+)
+region_specs_json.write_text(
+    json.dumps(region_specs_records, indent=2, sort_keys=True),
+    encoding="utf-8",
+)
 print(f"saved={rod_profile_csv}")
 print(f"saved={marker_csv}")
 print(f"saved={component_csv}")
+print(f"saved={region_specs_csv}")
+print(f"saved={region_specs_json}")
 
 plot_marker_table = marker_table.copy()
 if not plot_marker_table.empty and "m" in plot_marker_table:
@@ -16022,7 +16336,10 @@ def plot_tail_component_distributions(
 
 hidden_plot_hk = set(int(value) for value in QR_ROD_HIDDEN_PLOT_HK)
 drawable_profile_keys = drawable_rod_profile_keys(rod_profile_table, plot_marker_table)
-detector_plot_rod_entries = detector_complete_branch_rod_entries(rod_entries, region_overlays)
+detector_plot_rod_entries = detector_complete_branch_rod_entries(
+    rod_entries,
+    final_region_overlays,
+)
 detector_plot_rod_entries_all = list(detector_plot_rod_entries)
 detector_plot_rod_entries = [
     rod for rod in detector_plot_rod_entries_all if int(rod["m"]) not in hidden_plot_hk
@@ -17534,7 +17851,7 @@ def append_detector_rod_label_entry(
 detector_overlay_rods = detector_overlay_rod_entries(
     rod_entries,
     allow_generated=ALLOW_GENERATED_ROD_REFERENCES,
-    region_overlays=region_overlays,
+    region_overlays=final_region_overlays,
 )
 final_detector_rod_trace_payloads_by_key: dict[tuple[str, int], list[dict[str, object]]] = {
     rod_identity_key(rod): projected_qr_detector_trace_payloads(
@@ -17565,7 +17882,7 @@ for index, rod in enumerate(detector_overlay_rods):
     for branch_name, phi_min, phi_max in (("-", -90.0, 0.0), ("+", 0.0, 90.0)):
         overlays = [
             item
-            for item in region_overlays
+            for item in final_region_overlays
             if int(item["m"]) == m_value
             and str(item.get("source", rod.get("source", ""))) == str(rod.get("source", ""))
             and str(item["branch"]) == branch_name
@@ -17599,12 +17916,13 @@ for index, rod in enumerate(detector_overlay_rods):
             detector_overlay_qz_bounds_by_key[
                 (str(rod.get("source", "")), m_value, branch_name)
             ] = (float(qz_min), float(qz_max))
+            overlay_delta_qr = max(1.0e-9, as_float(item.get("delta_qr"), qr_rod_delta_qr))
             visual = gui_qr_cylinder_overlay.build_detector_selected_qr_rod_band_visual_payload(
                 qr_map=qr_map,
                 qz_map=qz_map,
                 valid_q=valid_q_map,
                 qr_center=float(item["qr"]),
-                delta_qr=float(qr_rod_delta_qr),
+                delta_qr=float(overlay_delta_qr),
                 qz_min=float(qz_min),
                 qz_max=float(qz_max),
                 detector_phi_deg=profile_detector_phi_map,

@@ -314,9 +314,15 @@ Current status as of 2026-05-21:
   when the nonzero editor phase runs before the HK=0 phase. Accepted
   nonzero `L Min` / `L Max` bounds are reused when drawing final
   detector-region Qr-rod overlays, so exported detector images clip rod bands
-  the same way the picker preview did. Accepted HK=0/specular profile rows are
-  also hashed into the final Qr-rod cache identity, so the final figure cannot
-  reuse stale cached `m=0` data after the GUI selection changes.
+  the same way the picker preview did. The final detector-region and final
+  profile figure paths now rebuild their region overlays from the
+  GUI-accepted `rod_profile_table`, `Delta Qr`, `L Min` / `L Max`, `theta_i`,
+  and specular phi/2theta ROI instead of reusing the pre-editor
+  `region_overlays`; the accepted region specs are saved as
+  `figure7_<sample>_qr_rod_region_specs.csv` and `.json` next to the profile
+  CSV. Accepted HK=0/specular profile rows are also hashed into the final
+  Qr-rod cache identity, so the final figure cannot reuse stale cached `m=0`
+  data after the GUI selection changes.
 - PbI2 manuscript figures default to
   `C:\Users\Kenpo\OneDrive\Documents\GitHub\PhD Work\2D-Manuscript-Draft\figures\results_pbi2`.
   Other samples keep the `results_ordered` default, and

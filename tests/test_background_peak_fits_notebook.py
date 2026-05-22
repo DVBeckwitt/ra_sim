@@ -102,6 +102,10 @@ def _script_functions(*names: str) -> dict[str, object]:
         wanted.add("rod_profile_marker_l_mapping_is_valid")
     if wanted & {"l_reference_rows", "qz_values_to_l_axis", "qz_to_l_linear_coeff"}:
         wanted.add("rod_profile_marker_l_mapping_is_valid")
+    if "final_qr_rod_region_overlays_from_profile_table" in wanted:
+        wanted.add("as_float")
+        wanted.add("final_qr_rod_supported_profile_group")
+        wanted.add("final_specular_qr_rod_region_overlay_from_profile_table")
     if wanted & {"qr_rod_pre_editor_stage_is_valid", "qr_rod_profile_cache_has_final_fit"}:
         wanted.add("hk0_qz_marker_count")
         wanted.add("rod_profile_has_real_hk0_qz_rows")
@@ -640,7 +644,7 @@ def test_parallel_script_detector_overlay_filters_generated_rods_by_default() ->
         )
     ]
     assert "detector_overlay_rods = detector_overlay_rod_entries(" in detector_figure_source
-    assert "region_overlays=region_overlays" in detector_figure_source
+    assert "region_overlays=final_region_overlays" in detector_figure_source
 
 
 def test_parallel_script_final_rod_plot_filters_incomplete_detector_branch_support() -> None:
@@ -4178,6 +4182,193 @@ def test_parallel_script_detector_export_clips_nonzero_rods_to_accepted_l_window
         "positive_qz_min=POSITIVE_QZ_MIN",
     ):
         assert token in detector_export
+
+
+def test_final_qr_rod_region_overlays_are_rebuilt_after_gui_editor() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    nonzero_call = source.index("qr_rod_nonzero_editor_result = edit_qr_rod_region_editor(")
+    specular_call = source.index("qr_rod_specular_editor_result = edit_qr_rod_region_editor(")
+    window_filter = source.index(
+        "rod_profile_table = rod_profile_table_for_l_window(",
+        specular_call,
+    )
+    final_overlay_rebuild = source.index(
+        "final_region_overlays = final_qr_rod_region_overlays_from_profile_table(",
+        window_filter,
+    )
+    cache_key_call = source.index("qr_rod_peak_edit_cache_key(", final_overlay_rebuild)
+    final_profile_selection = source.index(
+        "detector_plot_rod_entries = detector_complete_branch_rod_entries(",
+        final_overlay_rebuild,
+    )
+    detector_overlay_selection = source.index(
+        "detector_overlay_rods = detector_overlay_rod_entries(",
+        final_overlay_rebuild,
+    )
+
+    assert nonzero_call < specular_call < window_filter < final_overlay_rebuild
+    assert final_overlay_rebuild < cache_key_call < final_profile_selection
+    assert final_profile_selection < detector_overlay_selection
+
+
+def test_final_region_overlay_bounds_come_from_final_profile_table() -> None:
+    namespace = _script_functions("final_qr_rod_region_overlays_from_profile_table")
+    build_overlays = namespace["final_qr_rod_region_overlays_from_profile_table"]
+    profile_table = pd.DataFrame(
+        [
+            {
+                "m": 1,
+                "branch": "-",
+                "qz_min": 1.2,
+                "qz_max": 1.8,
+                "qr": 9.1,
+                "delta_qr": 0.12,
+                "theta_initial_deg_used_for_q": 7.5,
+                "pixel_count": 4,
+            },
+            {
+                "m": 1,
+                "branch": "-",
+                "qz_min": 1.8,
+                "qz_max": 2.4,
+                "qr": 9.1,
+                "delta_qr": 0.12,
+                "theta_initial_deg_used_for_q": 7.5,
+                "pixel_count": 6,
+            },
+            {
+                "m": 1,
+                "branch": "+",
+                "qz_min": 0.5,
+                "qz_max": 3.0,
+                "qr": 9.1,
+                "delta_qr": 0.12,
+                "theta_initial_deg_used_for_q": 7.5,
+                "pixel_count": 0,
+            },
+        ]
+    )
+    rod_entries = [
+        {
+            "source": "primary",
+            "m": 1,
+            "qr": 8.9,
+            "qr_original": 8.8,
+            "qr_fit_count": 3,
+            "qr_fit_sample_count": 9,
+            "qr_fit_method": "saved_q_group_rows",
+        }
+    ]
+
+    overlays = build_overlays(
+        profile_table,
+        rod_entries,
+        delta_qr=0.30,
+        theta_initial_deg=12.5,
+        specular_roi={},
+    )
+
+    assert len(overlays) == 1
+    overlay = overlays[0]
+    assert overlay["source"] == "primary"
+    assert overlay["branch"] == "-"
+    assert overlay["qz_min"] == pytest.approx(1.2)
+    assert overlay["qz_max"] == pytest.approx(2.4)
+    assert overlay["qr"] == pytest.approx(9.1)
+    assert overlay["delta_qr"] == pytest.approx(0.12)
+    assert overlay["theta_initial_deg"] == pytest.approx(7.5)
+    assert overlay["pixel_count_sum"] == pytest.approx(10.0)
+    assert overlay["profile_rows"] == 2
+
+
+def test_final_detector_figure_does_not_use_pre_editor_region_overlays_after_editor() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    detector_export = source[
+        source.index("detector_overlay_rods = detector_overlay_rod_entries(") : source.index(
+            "specular_color = OKABE_ITO"
+        )
+    ]
+
+    assert "final_region_overlays" in detector_export
+    assert "region_overlays=region_overlays" not in detector_export
+    assert "for item in region_overlays" not in detector_export
+    assert 'item.get("delta_qr")' in detector_export
+    assert "delta_qr=float(overlay_delta_qr)" in detector_export
+    assert "delta_qr=float(qr_rod_delta_qr)" not in detector_export
+
+
+def test_final_region_overlay_signature_is_in_final_fit_cache_key() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    final_overlay_rebuild = source.index(
+        "final_region_overlays = final_qr_rod_region_overlays_from_profile_table("
+    )
+    cache_key_call = source.index("qr_rod_peak_edit_cache_key(", final_overlay_rebuild)
+    cache_key_section = source[final_overlay_rebuild : cache_key_call + 1400]
+
+    assert (
+        "final_region_overlay_signature = "
+        "final_region_overlay_signature_from_overlays(final_region_overlays)"
+    ) in cache_key_section
+    assert '"final_region_overlay_signature": final_region_overlay_signature' in cache_key_section
+
+
+def test_final_qr_rod_region_specs_are_saved_with_gui_fields() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    specs_function = source[
+        source.index("def final_qr_rod_region_specs_table(") : source.index(
+            "\ndef rod_profile_table_for_l_window("
+        )
+    ]
+    save_section = source[
+        source.index("region_specs_table = final_qr_rod_region_specs_table(") : source.index(
+            "plot_marker_table = marker_table.copy()"
+        )
+    ]
+
+    assert 'region_specs_stem = f"figure7_{SAMPLE_STEM}_qr_rod_region_specs"' in save_section
+    assert "region_specs_table.to_csv(region_specs_csv, index=False)" in save_section
+    assert "region_specs_json.write_text(" in save_section
+    for column in (
+        "delta_qr",
+        "l_min",
+        "l_max",
+        "theta_initial_deg",
+        "phi_min",
+        "phi_max",
+        "two_theta_min",
+        "two_theta_max",
+        "pixel_count_sum",
+        "profile_rows",
+        "accepted_from_gui",
+    ):
+        assert f'"{column}"' in specs_function
+
+
+def test_final_peak_edits_save_when_either_editor_phase_accepts() -> None:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    combined_result = source.index("qr_rod_region_editor_result = {")
+    save_section = source[
+        combined_result : source.index(
+            "rod_profile_table = rod_profile_table_for_l_window(",
+            combined_result,
+        )
+    ]
+
+    assert 'bool(qr_rod_region_editor_result.get("accepted", False))' in save_section
+    assert (
+        'bool(qr_rod_specular_editor_result.get("accepted", False)) and qr_rod_peak_edits_path'
+        not in save_section
+    )
 
 
 def test_parallel_script_hk0_delta_qr_does_not_replace_nonzero_delta_qr() -> None:
