@@ -469,6 +469,147 @@ def test_locked_qr_caked_projection_frame_mismatch_blocks_preflight() -> None:
     assert "bg0" in error
 
 
+def test_locked_qr_same_native_point_projects_same_caked_across_manual_handoff_objective_overlay():
+    q_group_key = ("q_group", "primary", 1, 5)
+    hkl = (-1, 0, 5)
+    identity = {
+        "q_group_key": q_group_key,
+        "hkl": hkl,
+        "normalized_hkl": hkl,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "source_table_index": 92,
+        "source_reflection_index": 92,
+        "source_row_index": 11,
+        "source_label": "primary",
+    }
+    observed_native = (1100.0, 1366.0)
+    prediction_native = (1095.0, 1160.0)
+    projected_caked = (40.139, -37.750)
+
+    def projector(cols, rows, *, local_params, anchor_kind, input_frame):
+        del rows, anchor_kind
+        assert str(input_frame) == "native_detector"
+        assert float(local_params["theta_initial"]) == pytest.approx(2.5)
+        assert float(local_params["gamma"]) == pytest.approx(0.25)
+        assert float(local_params["Gamma"]) == pytest.approx(-0.5)
+        return {
+            "two_theta_deg": np.asarray([projected_caked[0]], dtype=np.float64),
+            "phi_deg": np.asarray([projected_caked[1]], dtype=np.float64),
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "valid": True,
+            "native_cols": np.asarray(cols, dtype=np.float64),
+        }
+
+    dataset = {
+        "label": "bg0",
+        "background_index": 0,
+        "provider_pairs": [
+            {
+                **identity,
+                "provider_selected_source_identity_canonical": dict(identity),
+                "fit_source_resolution_kind": "provider_fixed_source_local",
+                "optimizer_request_has_fixed_source": True,
+            }
+        ],
+        "manual_point_pairs": [{**identity}],
+        "measured_display": [{**identity, "x": 1100.0, "y": 1366.0}],
+        "measured_for_fit": [
+            {
+                **identity,
+                "background_detector_x": observed_native[0],
+                "background_detector_y": observed_native[1],
+                "background_two_theta_deg": projected_caked[0],
+                "background_phi_deg": projected_caked[1],
+            }
+        ],
+        "initial_pairs_display": [
+            {
+                **identity,
+                "sim_native": prediction_native,
+                "simulated_two_theta_deg": 28.381,
+                "simulated_phi_deg": 57.881,
+            }
+        ],
+        "source_rows_for_trace": [
+            {
+                **identity,
+                "sim_visual_detector_native_px": prediction_native,
+                "sim_visual_caked_deg": projected_caked,
+            }
+        ],
+        "spec": {
+            "fit_space_projector": projector,
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "fit_space_projector_id": "bg0-exact-cake-gen42",
+            "caked_bundle_generation": 42,
+            "phi_convention": "gui_wrapped_phi_deg",
+            "_manual_caked_fit_space_required": True,
+            "solver_requested_objective_space": "caked_deg",
+        },
+    }
+
+    rows = geometry_fit.build_geometry_fit_qr_handoff_audit_rows(
+        dataset,
+        base_fit_params={"theta_initial": 2.5, "gamma": 0.25, "Gamma": -0.5},
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    contract = row["locked_qr_caked_projection_contract"]
+    assert contract["projector_id"] == "bg0-exact-cake-gen42"
+    assert contract["caked_bundle_generation"] == 42
+    assert contract["background_index"] == 0
+    assert contract["theta_initial"] == pytest.approx(2.5)
+    assert contract["gamma"] == pytest.approx(0.25)
+    assert contract["Gamma"] == pytest.approx(-0.5)
+    assert contract["phi_convention"] == "gui_wrapped_phi_deg"
+    assert contract["input_frame"] == "native_detector"
+    assert contract["native_detector_px"] == pytest.approx(prediction_native)
+    assert contract["caked_deg"] == pytest.approx(projected_caked)
+    assert row["manual_trace_sim_caked_deg"] == pytest.approx(projected_caked)
+    assert row["fit_prediction_caked_deg"] == pytest.approx(projected_caked)
+    assert row["predicted_caked_deg"] == pytest.approx(projected_caked)
+    assert row["locked_qr_caked_projection_frame_status"] == "match"
+
+    overlay_records = geometry_overlay.build_geometry_fit_overlay_records(
+        [
+            {
+                "overlay_match_index": 0,
+                "hkl": hkl,
+                "sim_display": prediction_native,
+                "bg_display": observed_native,
+            }
+        ],
+        [
+            {
+                **row,
+                "match_status": "matched",
+                "overlay_match_index": 0,
+                "simulated_x": prediction_native[0],
+                "simulated_y": prediction_native[1],
+                "measured_x": observed_native[0],
+                "measured_y": observed_native[1],
+                "final_prediction_detector_native_px": prediction_native,
+                "final_prediction_caked_deg": contract["caked_deg"],
+                "distance_px": 0.0,
+            }
+        ],
+        native_shape=(3000, 3000),
+        orientation_choice={
+            "indexing_mode": "xy",
+            "k": 0,
+            "flip_x": False,
+            "flip_y": False,
+            "flip_order": "yx",
+        },
+        sim_display_rotate_k=0,
+        background_display_rotate_k=0,
+    )
+
+    assert overlay_records[0]["final_sim_caked_display"] == pytest.approx(projected_caked)
+
+
 def test_qr_handoff_audit_includes_all_locked_qr_groups() -> None:
     groups = [
         (("q_group", "primary", 1, 5), (-1, 0, 5)),

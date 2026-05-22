@@ -3235,6 +3235,65 @@ def _locked_qr_caked_projection_frame_diagnostic(
     }
 
 
+def _locked_qr_caked_projection_contract(
+    *,
+    dataset: Mapping[str, object],
+    spec: Mapping[str, object],
+    base_fit_params: Mapping[str, object] | None,
+    native_point: tuple[float, float] | None,
+    caked_point: tuple[float, float] | None,
+) -> dict[str, object]:
+    params = dict(base_fit_params or {})
+    projector_kind = str(spec.get("fit_space_projector_kind") or "").strip()
+    projector_id = str(
+        spec.get("fit_space_projector_id")
+        or spec.get("projector_id")
+        or spec.get("fit_space_projector_kind")
+        or "unknown"
+    )
+    generation = _geometry_fit_coerce_nonnegative_index(
+        spec.get(
+            "caked_bundle_generation",
+            spec.get(
+                "fit_space_projector_generation",
+                spec.get("source_cache_generation_id"),
+            ),
+        )
+    )
+    background_index = _geometry_fit_coerce_nonnegative_index(
+        dataset.get(
+            "background_index",
+            dataset.get(
+                "dataset_index",
+                spec.get("background_index", spec.get("dataset_index")),
+            ),
+        )
+    )
+    theta_initial = _geometry_fit_finite_float(
+        params.get("theta_initial", spec.get("theta_initial", dataset.get("theta_base")))
+    )
+    gamma = _geometry_fit_finite_float(params.get("gamma", spec.get("gamma")))
+    gamma_cap = _geometry_fit_finite_float(params.get("Gamma", spec.get("Gamma")))
+    phi_convention = str(spec.get("phi_convention") or "gui_wrapped_phi_deg")
+    return {
+        "projector_id": projector_id,
+        "projector_kind": projector_kind or None,
+        "caked_bundle_generation": generation,
+        "background_index": background_index,
+        "theta_initial": theta_initial,
+        "gamma": gamma,
+        "Gamma": gamma_cap,
+        "phi_convention": phi_convention,
+        "input_frame": "native_detector",
+        "native_detector_px": (
+            (float(native_point[0]), float(native_point[1])) if native_point is not None else None
+        ),
+        "caked_deg": (
+            (float(caked_point[0]), float(caked_point[1])) if caked_point is not None else None
+        ),
+    }
+
+
 def _geometry_fit_audit_project_native_to_caked(
     native_point: tuple[float, float] | None,
     *,
@@ -3908,6 +3967,13 @@ def build_geometry_fit_qr_handoff_audit_rows(
             fit_prediction_native=fit_prediction_native,
             fit_prediction_caked=fit_prediction_caked,
         )
+        projection_contract = _locked_qr_caked_projection_contract(
+            dataset=dataset,
+            spec=spec,
+            base_fit_params=base_fit_params,
+            native_point=fit_prediction_native,
+            caked_point=fit_prediction_caked,
+        )
 
         observed_native_delta = _geometry_fit_audit_point_delta(
             fit_observed_native,
@@ -4094,6 +4160,7 @@ def build_geometry_fit_qr_handoff_audit_rows(
             ),
             "manual_trace_sim_detector_native_px": manual_trace_sim_native,
             "manual_trace_sim_caked_deg": manual_trace_sim_caked,
+            "locked_qr_caked_projection_contract": projection_contract,
             "observed_source": "background/manual",
             "predicted_source": "simulation",
             "observed_detector_native_px": fit_observed_native,
@@ -4214,6 +4281,7 @@ def build_geometry_fit_qr_handoff_audit_lines(
         "fit_prediction_caked_deg",
         "manual_trace_sim_detector_native_px",
         "manual_trace_sim_caked_deg",
+        "locked_qr_caked_projection_contract",
         "manual_trace_to_fit_prediction_detector_native_delta_px",
         "manual_trace_to_fit_prediction_caked_delta_deg",
         "manual_trace_to_fit_prediction_caked_delta_norm_deg",

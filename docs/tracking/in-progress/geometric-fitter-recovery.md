@@ -9,6 +9,25 @@ Last updated: 2026-05-22
 
 ## Summary
 
+2026-05-22 locked Qr/Qz projection-contract diagnostics: locked-Qr handoff
+audit rows now include `locked_qr_caked_projection_contract`, a compact
+diagnostic payload that records the exact projector id/kind, caked bundle
+generation, background index, `theta_initial`, `gamma`, `Gamma`, phi
+convention, input frame, native detector point, and projected caked point used
+for the fit handoff. This makes the existing projection-frame preflight block
+auditable across manual/source trace, handoff/objective rows, final residual
+summary, and overlay records instead of relying only on coordinate values.
+Bug/error status: fixed for the missing diagnostic contract rung; mismatches
+still fail at `locked_qr_caked_projection_frame_mismatch` and matching frames
+now carry enough provenance to prove they are same projector/same frame.
+Feature status: no new GUI control, CLI flag, config key, saved-state schema,
+artifact schema, dependency, public API, CI workflow, deprecation, or migration.
+Validation: focused projection-frame and overlay regressions, locked-Qr
+geometry-fitting/handoff subsets, runtime projection-readiness subset, and
+`python -m ra_sim.dev check` pass. Shipping status: ready as a normal bug-fix
+diagnostic slice; rollback is a normal git revert of the audit-contract helper,
+regression test, and this tracking update.
+
 2026-05-22 locked Qr/Qz projection-frame contract slice: locked-Qr handoff
 audit rows now compare source-trace simulated caked coordinates against the
 exact fit-space projection for the same simulated native detector point. If the
