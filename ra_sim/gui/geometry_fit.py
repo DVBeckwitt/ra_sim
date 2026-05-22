@@ -18352,6 +18352,10 @@ def _locked_qr_fit_space_projection_readiness(
             "finite_locked_qr_rows": 0,
             "missing_locked_qr_rows": [],
             "nonfinite_locked_qr_rows": [],
+            "projection_degenerate": False,
+            "projection_degeneracy_reason": None,
+            "projection_distinct_detector_point_count": 0,
+            "projection_distinct_caked_point_count": 0,
             "fit_space_projection_ready": False,
             "caked_view_storage_required_for_fit": True,
             "failure_reason": None,
@@ -18416,6 +18420,63 @@ def _locked_qr_fit_space_projection_readiness(
             )
         )
 
+    def _finite_pair_for_keys(
+        row: Mapping[str, object],
+        keys: Sequence[tuple[str, str]],
+    ) -> tuple[float, float] | None:
+        for x_key, y_key in keys:
+            try:
+                x_value = float(row.get(x_key))
+                y_value = float(row.get(y_key))
+            except Exception:
+                continue
+            if np.isfinite(x_value) and np.isfinite(y_value):
+                return float(x_value), float(y_value)
+        return None
+
+    def _detector_point(row: Mapping[str, object]) -> tuple[float, float] | None:
+        return _finite_pair_for_keys(
+            row,
+            (
+                ("detector_display_x", "detector_display_y"),
+                ("detector_x", "detector_y"),
+                ("background_detector_x", "background_detector_y"),
+                ("display_col", "display_row"),
+                ("sim_col", "sim_row"),
+                ("x", "y"),
+            ),
+        )
+
+    def _caked_point(row: Mapping[str, object]) -> tuple[float, float] | None:
+        return _finite_pair_for_keys(
+            row,
+            (
+                ("background_two_theta_deg", "background_phi_deg"),
+                ("caked_x", "caked_y"),
+                ("raw_caked_x", "raw_caked_y"),
+            ),
+        )
+
+    def _rounded_point(point: tuple[float, float]) -> tuple[float, float]:
+        return round(float(point[0]), 6), round(float(point[1]), 6)
+
+    selected_rows = [
+        row for row in rows if any(_row_matches_pair(row, pair) for pair in locked_required_pairs)
+    ]
+    projected_pairs = [
+        (detector_point, caked_point)
+        for row in selected_rows
+        if (detector_point := _detector_point(row)) is not None
+        and (caked_point := _caked_point(row)) is not None
+    ]
+    distinct_detector_points = {_rounded_point(point) for point, _caked in projected_pairs}
+    distinct_caked_points = {_rounded_point(point) for _detector, point in projected_pairs}
+    projection_degenerate = bool(
+        len(projected_pairs) >= 2
+        and len(distinct_detector_points) > 1
+        and len(distinct_caked_points) < len(distinct_detector_points)
+    )
+
     locked_pairs_by_id = {
         str(entry.get("pair_id") or f"pair[{idx}]"): entry
         for idx, entry in enumerate(locked_required_pairs)
@@ -18452,6 +18513,12 @@ def _locked_qr_fit_space_projection_readiness(
         "finite_locked_qr_rows": int(projected_count),
         "missing_locked_qr_rows": missing_pair_ids,
         "nonfinite_locked_qr_rows": nonfinite_pair_ids,
+        "projection_degenerate": bool(projection_degenerate),
+        "projection_degeneracy_reason": (
+            "locked_qr_projection_degenerate" if projection_degenerate else None
+        ),
+        "projection_distinct_detector_point_count": int(len(distinct_detector_points)),
+        "projection_distinct_caked_point_count": int(len(distinct_caked_points)),
         "fit_space_projection_ready": bool(ready),
         "caked_view_storage_required_for_fit": False,
         "failure_reason": failure_reason,

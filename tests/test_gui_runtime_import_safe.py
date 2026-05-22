@@ -17639,6 +17639,149 @@ def test_runtime_session_locked_qr_projection_ready_storage_timeout_does_not_fai
     assert readiness_events[-1]["caked_view_storage_status"] == "deferred"
 
 
+def _run_locked_qr_projection_missing_worker_case(
+    monkeypatch,
+    *,
+    manual_fit_space: str,
+) -> tuple[object, list[int], list[dict[str, object]]]:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    dataset_calls: list[int] = []
+    job = _make_geometry_fit_worker_job(runtime_session)
+    locked_pair = dict(
+        _geometry_fit_worker_required_pair(),
+        background_index=0,
+        fit_source_resolution_kind="provider_fixed_source_local",
+        optimizer_request_has_fixed_source=True,
+    )
+    perf_lock = threading.Lock()
+    perf_state = {"value": 0.0}
+
+    def _fake_perf_counter() -> float:
+        with perf_lock:
+            perf_state["value"] += 0.25
+            return float(perf_state["value"])
+
+    job["manual_caked_fit_space_required_by_background"] = {0: True}
+    job["manual_fit_space_by_background"] = {0: manual_fit_space}
+    job["manual_pairs_by_background"] = {0: [locked_pair]}
+    job["live_rows_by_background"] = {
+        0: [dict(_geometry_fit_worker_live_row(), background_index=0)]
+    }
+    job["live_rows_signature_by_background"] = {0: ("sig", 0)}
+    if manual_fit_space == "caked":
+        job["pick_uses_caked_space"] = True
+
+    monkeypatch.setattr(runtime_session, "perf_counter", _fake_perf_counter)
+    monkeypatch.setattr(
+        runtime_session,
+        "simulation_runtime_state",
+        SimpleNamespace(
+            geometry_fit_caking_ai_cache={},
+            analysis_preview_bins=(4, 4),
+            ai_cache={},
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "image_size", 4, raising=False)
+    monkeypatch.setattr(runtime_session, "DISPLAY_ROTATE_K", 0, raising=False)
+    monkeypatch.setattr(runtime_session, "_build_analysis_integrator", lambda _cfg: object())
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_fit_caked_roi_selection",
+        lambda *_args, **_kwargs: {
+            "enabled": False,
+            "valid": False,
+            "pixel_count": 0,
+            "fraction": 0.0,
+            "half_width_px": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "temporary_numba_thread_limit",
+        lambda *_args, **_kwargs: contextlib.nullcontext(),
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "caking",
+        lambda *_args, **_kwargs: threading.Event().wait(1.0) or object(),
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "build_geometry_manual_fit_dataset",
+        lambda background_index, **_kwargs: dataset_calls.append(int(background_index)) or {},
+    )
+
+    def _prepare_geometry_fit_run(**kwargs):
+        kwargs["build_dataset"](
+            0,
+            theta_base=0.0,
+            base_fit_params={"theta_initial": 0.0},
+            orientation_cfg={},
+            stage_callback=kwargs.get("stage_callback"),
+        )
+        return runtime_session.gui_geometry_fit.GeometryFitPreparationResult()
+
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "prepare_geometry_fit_run",
+        _prepare_geometry_fit_run,
+    )
+
+    action_result = runtime_session._run_async_geometry_fit_worker_job(job)
+    events = _drain_geometry_fit_worker_events(job["event_queue"])
+    readiness_events = [
+        dict(event.get("payload") or {})
+        for event in events
+        if str(event.get("kind")) == "locked_qr_projection_readiness"
+    ]
+
+    return action_result, dataset_calls, readiness_events
+
+
+def test_runtime_session_locked_qr_projection_missing_stops_before_dataset_build(
+    monkeypatch,
+) -> None:
+    (
+        action_result,
+        dataset_calls,
+        readiness_events,
+    ) = _run_locked_qr_projection_missing_worker_case(
+        monkeypatch,
+        manual_fit_space="detector",
+    )
+
+    assert dataset_calls == []
+    assert action_result.error_text is not None
+    assert "exact caked fit-space projection is missing" in action_result.error_text
+    assert readiness_events
+    assert readiness_events[-1]["expected_locked_qr_rows"] == 1
+    assert readiness_events[-1]["projected_locked_qr_rows"] == 0
+    assert readiness_events[-1]["fit_space_projection_ready"] is False
+    assert readiness_events[-1]["failure_reason"] == "locked_qr_fit_space_projection_missing"
+
+
+def test_runtime_session_caked_origin_locked_qr_projection_missing_does_not_gate_dataset_build(
+    monkeypatch,
+) -> None:
+    (
+        action_result,
+        dataset_calls,
+        readiness_events,
+    ) = _run_locked_qr_projection_missing_worker_case(
+        monkeypatch,
+        manual_fit_space="caked",
+    )
+
+    assert action_result.error_text is None
+    assert dataset_calls == [0]
+    assert readiness_events
+    assert readiness_events[-1]["expected_locked_qr_rows"] == 1
+    assert readiness_events[-1]["projected_locked_qr_rows"] == 0
+    assert readiness_events[-1]["fit_space_projection_ready"] is False
+    assert readiness_events[-1]["storage_timeout_fatal"] is False
+
+
 def test_runtime_session_manual_caked_source_cache_timeout_fails_before_dataset_build(
     monkeypatch,
 ) -> None:

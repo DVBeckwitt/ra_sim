@@ -9,6 +9,21 @@ Last updated: 2026-05-22
 
 ## Summary
 
+2026-05-22 locked Qr/Qz projection-readiness gate: detector-origin explicit
+fixed-source locked Qr/Qz fits now fail before dataset build when selected-row
+exact caked projections are missing or nonfinite. Full caked image storage can
+still time out or defer when row projections are complete, and caked-origin
+locked-Qr baselines remain allowed to proceed from their saved caked anchors.
+A detector-origin row-level projection miss no longer proceeds into
+`manual_caked_route_check` or the dynamic angular optimizer. Projection
+readiness diagnostics also flag collapsed selected-row projections as
+`locked_qr_projection_degenerate` so repeated caked values from distinct
+detector points are visible before fitting without being triggered by unrelated
+projected rows. Feature status: implemented for the worker preflight route and
+covered by runtime-session and GUI readiness regressions. Migration/deprecation
+status: no saved-state, CLI, config, public API, dependency, or artifact-schema
+migration is required.
+
 2026-05-22 locked Qr/Qz caked-origin classifier slice: caked-view locked Qr/Qz
 fits keep the existing accepted handoff/identity baseline behavior, and branch
 source-pairing diagnostics now ignore `caked_simulation_image` refinements as

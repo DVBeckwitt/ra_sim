@@ -70,6 +70,10 @@
     `caked_simulation_image` refinement rows are not treated as same-authority
     detector branch proof unless explicit same-frame detector authority is
     present, and surfaced that authority in the Qr/Qz handoff audit.
+  - Fixed detector-origin locked Qr/Qz preflight so explicit fixed-source rows
+    cannot continue to dataset build when selected-row exact caked projections
+    are missing, while caked-origin baselines and full caked image storage
+    deferral remain valid.
   - Added an explicit branch-line angle residual for locked two-branch Qr/Qz
     manual caked geometry fits in both GUI and headless saved-state routes,
     while keeping single-branch or branch-ambiguous groups out of the line

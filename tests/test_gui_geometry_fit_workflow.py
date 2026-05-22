@@ -27511,6 +27511,127 @@ def test_locked_qr_fit_space_projection_readiness_rejects_missing_row() -> None:
     assert readiness["missing_locked_qr_rows"] == ["bg0:g1:branch1"]
 
 
+def test_locked_qr_projection_readiness_flags_degenerate_projected_rows() -> None:
+    required_pairs = [
+        _targeted_required_pair(
+            pair_id=f"bg0:g1:branch{branch}",
+            hkl=(-1, 0, 10),
+            branch_index=branch,
+            q_group_key=("q_group", "primary", 1, 10),
+            extra={
+                "source_reflection_index": 10,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": branch,
+                "source_peak_index": branch,
+                "fit_source_resolution_kind": "provider_fixed_source_local",
+                "optimizer_request_has_fixed_source": True,
+            },
+        )
+        for branch in (0, 1)
+    ]
+    projected_rows = [
+        {
+            **required_pairs[0],
+            "sim_col": 100.0,
+            "sim_row": 200.0,
+            "background_two_theta_deg": 17.839,
+            "background_phi_deg": -180.0,
+        },
+        {
+            **required_pairs[1],
+            "sim_col": 180.0,
+            "sim_row": 260.0,
+            "background_two_theta_deg": 17.839,
+            "background_phi_deg": -180.0,
+        },
+    ]
+
+    readiness = geometry_fit._locked_qr_fit_space_projection_readiness(
+        projected_rows,
+        required_pairs=required_pairs,
+    )
+
+    assert readiness["fit_space_projection_ready"] is True
+    assert readiness["projection_degenerate"] is True
+    assert readiness["projection_degeneracy_reason"] == "locked_qr_projection_degenerate"
+
+
+def test_locked_qr_projection_readiness_ignores_unselected_degenerate_rows() -> None:
+    required_pairs = [
+        _targeted_required_pair(
+            pair_id=f"bg0:g1:branch{branch}",
+            hkl=(-1, 0, 10),
+            branch_index=branch,
+            q_group_key=("q_group", "primary", 1, 10),
+            extra={
+                "source_reflection_index": 10,
+                "source_reflection_namespace": "full_reflection",
+                "source_reflection_is_full": True,
+                "source_row_index": branch,
+                "source_peak_index": branch,
+                "fit_source_resolution_kind": "provider_fixed_source_local",
+                "optimizer_request_has_fixed_source": True,
+            },
+        )
+        for branch in (0, 1)
+    ]
+    projected_rows = [
+        {
+            **required_pairs[0],
+            "sim_col": 100.0,
+            "sim_row": 200.0,
+            "background_two_theta_deg": 17.839,
+            "background_phi_deg": -180.0,
+        },
+        {
+            **required_pairs[1],
+            "sim_col": 180.0,
+            "sim_row": 260.0,
+            "background_two_theta_deg": 21.125,
+            "background_phi_deg": 0.0,
+        },
+        {
+            "hkl": (2, 0, 20),
+            "q_group_key": ("q_group", "primary", 2, 20),
+            "source_reflection_index": 20,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 0,
+            "source_peak_index": 0,
+            "sim_col": 300.0,
+            "sim_row": 400.0,
+            "background_two_theta_deg": 30.0,
+            "background_phi_deg": 40.0,
+        },
+        {
+            "hkl": (3, 0, 30),
+            "q_group_key": ("q_group", "primary", 3, 30),
+            "source_reflection_index": 30,
+            "source_reflection_namespace": "full_reflection",
+            "source_reflection_is_full": True,
+            "source_row_index": 0,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "sim_col": 500.0,
+            "sim_row": 600.0,
+            "background_two_theta_deg": 30.0,
+            "background_phi_deg": 40.0,
+        },
+    ]
+
+    readiness = geometry_fit._locked_qr_fit_space_projection_readiness(
+        projected_rows,
+        required_pairs=required_pairs,
+    )
+
+    assert readiness["fit_space_projection_ready"] is True
+    assert readiness["projection_degenerate"] is False
+    assert readiness["projection_distinct_detector_point_count"] == 2
+    assert readiness["projection_distinct_caked_point_count"] == 2
+
+
 def test_validate_geometry_fit_live_source_rows_rejection_counts_follow_hkl_then_branch() -> None:
     validation = geometry_fit.validate_geometry_fit_live_source_rows(
         [

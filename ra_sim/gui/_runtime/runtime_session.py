@@ -45731,6 +45731,9 @@ def _run_async_geometry_fit_worker_job(
                 projection_ready = bool(
                     locked_qr_readiness.get("fit_space_projection_ready", False)
                 )
+                projection_degenerate = bool(
+                    locked_qr_readiness.get("projection_degenerate", False)
+                )
                 storage_required = bool(
                     locked_qr_readiness.get("caked_view_storage_required_for_fit", True)
                 )
@@ -45740,6 +45743,7 @@ def _run_async_geometry_fit_worker_job(
                     f"expected_rows={expected_rows} projected_rows={projected_rows} "
                     f"finite_rows={finite_rows} "
                     f"projection_ready={str(projection_ready).lower()} "
+                    f"projection_degenerate={str(projection_degenerate).lower()} "
                     f"storage_required_for_fit={str(storage_required).lower()} "
                     f"storage_status={str(storage_status)} "
                     f"storage_timeout_fatal={str(bool(storage_timeout_fatal)).lower()}"
@@ -45825,6 +45829,62 @@ def _run_async_geometry_fit_worker_job(
                 locked_qr_readiness.get("fit_space_projection_ready", False)
             )
 
+            def _locked_qr_pair_requires_projection_gate(pair: object) -> bool:
+                if not isinstance(pair, Mapping):
+                    return False
+                fit_kind = str(pair.get("fit_source_resolution_kind", "") or "").strip().lower()
+                return bool(
+                    gui_geometry_fit.geometry_fit_entry_has_fixed_manual_caked_qr(
+                        pair,
+                        require_explicit_branch=True,
+                    )
+                    and (
+                        bool(pair.get("optimizer_request_has_fixed_source", False))
+                        or "fixed_source" in fit_kind
+                    )
+                )
+
+            def _manual_fit_space_kind_for_background(background_index: int) -> str:
+                stored_spaces = job_data.get("manual_fit_space_by_background")
+                if isinstance(stored_spaces, Mapping):
+                    raw_kind = stored_spaces.get(
+                        int(background_index),
+                        stored_spaces.get(str(int(background_index))),
+                    )
+                    kind = str(raw_kind or "").strip().lower()
+                    if kind in {"caked", "mixed"}:
+                        return kind
+                if bool(job_data.get("pick_uses_caked_space", False)):
+                    return "caked"
+                return "detector"
+
+            manual_fit_space_kind = _manual_fit_space_kind_for_background(int(background_idx))
+            locked_qr_projection_gate_required = (
+                any(_locked_qr_pair_requires_projection_gate(pair) for pair in required_pairs)
+                and manual_fit_space_kind != "caked"
+            )
+            locked_qr_caked_origin_baseline = bool(
+                locked_qr_expected_rows > 0 and manual_fit_space_kind == "caked"
+            )
+
+            def _locked_qr_projection_missing() -> bool:
+                return bool(
+                    locked_qr_projection_gate_required
+                    and locked_qr_expected_rows > 0
+                    and not locked_qr_projection_ready
+                )
+
+            def _caked_storage_timeout_fatal(caked_stored: bool) -> bool:
+                return bool(
+                    _locked_qr_projection_missing()
+                    or (
+                        caked_required
+                        and not caked_stored
+                        and not locked_qr_projection_ready
+                        and not locked_qr_caked_origin_baseline
+                    )
+                )
+
             def _caked_storage_status(outcome: Mapping[str, object]) -> str:
                 if bool(outcome.get("caked_view_stored", False)):
                     return "ready"
@@ -45847,17 +45907,17 @@ def _run_async_geometry_fit_worker_job(
                     payload=resolved_outcome,
                 )
                 storage_status = _caked_storage_status(resolved_outcome)
-                storage_timeout_fatal = bool(
-                    caked_required and not caked_stored and not locked_qr_projection_ready
-                )
+                locked_qr_projection_missing = _locked_qr_projection_missing()
                 _emit_locked_qr_projection_readiness(
                     storage_status=storage_status,
-                    storage_timeout_fatal=storage_timeout_fatal,
+                    storage_timeout_fatal=_caked_storage_timeout_fatal(caked_stored),
                     last_chance_poll_ready=last_chance_poll_ready,
                 )
+                if locked_qr_projection_missing:
+                    raise RuntimeError(_locked_qr_projection_error_text(locked_qr_readiness))
                 if not caked_required or caked_stored:
                     return False
-                if locked_qr_projection_ready:
+                if locked_qr_projection_ready or locked_qr_caked_origin_baseline:
                     return True
                 if locked_qr_expected_rows > 0:
                     raise RuntimeError(_locked_qr_projection_error_text(locked_qr_readiness))
@@ -45889,13 +45949,20 @@ def _run_async_geometry_fit_worker_job(
                     payload={"status": "timeout"},
                 )
                 announce_caked_timeout()
+                locked_qr_projection_missing = _locked_qr_projection_missing()
                 _emit_locked_qr_projection_readiness(
-                    storage_status="deferred" if locked_qr_projection_ready else "timeout",
-                    storage_timeout_fatal=bool(caked_required and not locked_qr_projection_ready),
+                    storage_status=(
+                        "deferred"
+                        if locked_qr_projection_ready or locked_qr_caked_origin_baseline
+                        else "timeout"
+                    ),
+                    storage_timeout_fatal=_caked_storage_timeout_fatal(False),
                     last_chance_poll_ready=False,
                 )
+                if locked_qr_projection_missing:
+                    raise RuntimeError(_locked_qr_projection_error_text(locked_qr_readiness))
                 if caked_required:
-                    if locked_qr_projection_ready:
+                    if locked_qr_projection_ready or locked_qr_caked_origin_baseline:
                         continue
                     if locked_qr_expected_rows > 0:
                         raise RuntimeError(_locked_qr_projection_error_text(locked_qr_readiness))
