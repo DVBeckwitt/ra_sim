@@ -45707,7 +45707,9 @@ def _run_async_geometry_fit_worker_job(
                         "caked/source cache or reduce the fit simulation grid before rerunning."
                     )
                 continue
-            bundle_row_count = int(len(bundle.projected_rows or bundle.stored_rows or ()))
+            projected_rows_len = int(len(bundle.projected_rows or ()))
+            stored_rows_len = int(len(bundle.stored_rows or ()))
+            bundle_row_count = int(projected_rows_len or stored_rows_len)
             source_cache_generation_id = int(_current_source_cache_generation(int(background_idx)))
             bundle_payload = {
                 "background_index": int(background_idx),
@@ -45721,9 +45723,18 @@ def _run_async_geometry_fit_worker_job(
             }
             locked_qr_readiness = dict(
                 gui_geometry_fit._locked_qr_fit_space_projection_readiness(
-                    bundle.projected_rows or bundle.stored_rows,
+                    bundle.projected_rows,
                     required_pairs=required_pairs,
                 )
+            )
+            locked_qr_readiness.update(
+                {
+                    "readiness_input_source": (
+                        "projected_rows" if projected_rows_len > 0 else "none"
+                    ),
+                    "projected_rows_len": int(projected_rows_len),
+                    "stored_rows_len": int(stored_rows_len),
+                }
             )
 
             def _locked_qr_projection_error_text(readiness: Mapping[str, object]) -> str:
@@ -45855,21 +45866,6 @@ def _run_async_geometry_fit_worker_job(
                 locked_qr_readiness.get("fit_space_projection_ready", False)
             )
 
-            def _locked_qr_pair_requires_projection_gate(pair: object) -> bool:
-                if not isinstance(pair, Mapping):
-                    return False
-                fit_kind = str(pair.get("fit_source_resolution_kind", "") or "").strip().lower()
-                return bool(
-                    gui_geometry_fit.geometry_fit_entry_has_fixed_manual_caked_qr(
-                        pair,
-                        require_explicit_branch=True,
-                    )
-                    and (
-                        bool(pair.get("optimizer_request_has_fixed_source", False))
-                        or "fixed_source" in fit_kind
-                    )
-                )
-
             def _manual_fit_space_kind_for_background(background_index: int) -> str:
                 stored_spaces = job_data.get("manual_fit_space_by_background")
                 if isinstance(stored_spaces, Mapping):
@@ -45886,8 +45882,7 @@ def _run_async_geometry_fit_worker_job(
 
             manual_fit_space_kind = _manual_fit_space_kind_for_background(int(background_idx))
             locked_qr_projection_gate_required = (
-                any(_locked_qr_pair_requires_projection_gate(pair) for pair in required_pairs)
-                and manual_fit_space_kind != "caked"
+                locked_qr_expected_rows > 0 and manual_fit_space_kind != "caked"
             )
             locked_qr_caked_origin_baseline = bool(
                 locked_qr_expected_rows > 0 and manual_fit_space_kind == "caked"

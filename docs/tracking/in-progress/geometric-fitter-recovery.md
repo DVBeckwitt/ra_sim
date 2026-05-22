@@ -9,6 +9,23 @@ Last updated: 2026-05-22
 
 ## Summary
 
+2026-05-22 locked Qr/Qz canonical-payload guard: detector-origin locked Qr/Qz
+preflight now treats selected-row exact caked projections as the mandatory
+artifact for fitting. Readiness validation uses `projected_rows` only, records
+`projected_rows_len` and `stored_rows_len` for diagnostics, and fails before
+dataset build when expected selected rows are not projected. Stored detector
+rows are diagnostic only and no longer satisfy the projection gate. The dynamic
+locked-Qr prediction resolver now tries the authoritative handoff-native
+prediction anchor before hit-table/source-row rediscovery and fails closed if
+that handoff projection cannot be made, so nominal caked fields cannot replace
+the preflight payload. Bug/error status: fixed for the
+`expected_rows=4 projected_rows=0` fail-open path and for stale hit-table
+authority overriding clean handoff anchors. CI status: focused locked-Qr
+runtime, GUI workflow, handoff, and geometry-fitting tests pass, and
+`python -m ra_sim.dev check` passes. Migration/deprecation status: no
+saved-state, CLI, config, public API, dependency, or artifact-schema migration
+is required; rollback is a normal git revert.
+
 2026-05-22 locked Qr/Qz projection-readiness gate: detector-origin explicit
 fixed-source locked Qr/Qz fits now fail before dataset build when selected-row
 exact caked projections are missing or nonfinite. Full caked image storage can
@@ -45,8 +62,8 @@ pixel index, image peak index, and search window so detector-marker/image-raster
 mismatches can be distinguished from artist drift. Geometry overlay records now
 prefer explicit `final_prediction_detector_*` and `final_prediction_caked_deg`
 fields over handoff prediction anchors. The locked-Qr dynamic resolver uses
-current trial hit-table detector points before falling back to the saved
-handoff-native anchor, and successful dynamic detector projections emit
+the saved handoff-native anchor before hit-table/source-row rediscovery, and
+successful dynamic detector projections emit
 `final_prediction_*` payload fields for the overlay. Detector-origin locked-Qr
 caked fits now declare when same-frame detector-pixel acceptance is required,
 and GUI rejection text fails closed if that required metric is missing. Feature

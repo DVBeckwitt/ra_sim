@@ -266,6 +266,17 @@ def test_worker_live_rows_payload_uses_background_requested_signature(monkeypatc
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     job = _worker_job(runtime_session)
     _patch_worker_prepare(monkeypatch, runtime_session)
+    job["live_rows_by_background"] = {
+        0: [
+            {
+                **_live_row("primary"),
+                "background_two_theta_deg": 1.0,
+                "background_phi_deg": 2.0,
+                "caked_x": 1.0,
+                "caked_y": 2.0,
+            }
+        ]
+    }
     monkeypatch.setattr(
         runtime_session,
         "_simulate_hit_tables_for_fit",

@@ -20901,12 +20901,10 @@ def _resolve_qr_fit_prediction_from_trial_params(
             dataset_ctx=dataset_ctx,
         )
 
-    handoff_payload: Dict[str, object] | None = None
-    if not hit_tables:
-        handoff_payload = _handoff_native_payload()
-        if handoff_payload is not None:
-            out.update(handoff_payload)
-            return out
+    handoff_payload = _handoff_native_payload()
+    if handoff_payload is not None:
+        out.update(handoff_payload)
+        return out
 
     def _trial_source_rows_payload() -> Dict[str, object]:
         nonlocal source_rows_payload

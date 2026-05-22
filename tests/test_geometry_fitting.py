@@ -6010,27 +6010,27 @@ def test_locked_qr_dynamic_prediction_prefers_handoff_native_over_stale_source_r
     assert prediction["used_sim_nominal_caked_for_objective"] is False
 
 
-def test_locked_qr_dynamic_prediction_prefers_current_hit_table_over_handoff_native():
+def test_locked_qr_dynamic_prediction_prefers_handoff_native_even_when_hit_tables_exist():
     handoff_native = (1381.0, 1890.0)
-    final_native = (1414.0, 1929.0)
-    final_caked = (21.5, 168.0)
+    handoff_caked = (21.977, 166.250)
+    stale_native = (1414.0, 1929.0)
     projector_inputs: list[tuple[float, float]] = []
 
     def source_rows_builder(*, local_params=None):
         del local_params
-        raise AssertionError("current hit table should resolve before source rows")
+        raise AssertionError("handoff native should resolve before source rows")
 
     def projector(cols, rows, *, local_params=None, **_kwargs):
         del local_params
         col = float(np.asarray(cols, dtype=float).reshape(-1)[0])
         row = float(np.asarray(rows, dtype=float).reshape(-1)[0])
         projector_inputs.append((col, row))
-        assert (col, row) == pytest.approx(final_native)
+        assert (col, row) == pytest.approx(handoff_native)
         return _point_only_projector_payload(
-            final_caked[0],
-            final_caked[1],
-            native_col=final_native[0],
-            native_row=final_native[1],
+            handoff_caked[0],
+            handoff_caked[1],
+            native_col=handoff_native[0],
+            native_row=handoff_native[1],
         )
 
     locked = _locked_qr_fixed_source_entry(
@@ -6051,7 +6051,7 @@ def test_locked_qr_dynamic_prediction_prefers_current_hit_table_over_handoff_nat
             "dataset_ctx": _point_only_qr_dataset_ctx(source_rows_builder, projector),
             "hit_tables": [
                 np.asarray(
-                    [[1.0, final_native[0], final_native[1], 10.0, 2.0, 0.0, 0.0]],
+                    [[1.0, stale_native[0], stale_native[1], 10.0, 2.0, 0.0, 0.0]],
                     dtype=np.float64,
                 )
             ],
@@ -6066,11 +6066,87 @@ def test_locked_qr_dynamic_prediction_prefers_current_hit_table_over_handoff_nat
         locked,
     )
 
-    assert projector_inputs == [pytest.approx(final_native)]
-    assert prediction["locked_qr_detector_point_source"] == "trial_hit_tables_locked_representative"
-    assert prediction["final_prediction_detector_native_px"] == pytest.approx(list(final_native))
-    assert prediction["fit_prediction_detector_native_px"] == pytest.approx(list(final_native))
-    assert prediction["fit_prediction_caked_deg"] == pytest.approx(list(final_caked))
+    assert projector_inputs == [pytest.approx(handoff_native)]
+    assert prediction["locked_qr_detector_point_source"] == (
+        "handoff_fit_prediction_detector_native_px"
+    )
+    assert prediction["source_rows_rebuilt_or_reused"] == "skipped_handoff_native_anchor"
+    assert prediction["fit_prediction_detector_native_px"] == pytest.approx(list(handoff_native))
+    assert prediction["fit_prediction_caked_deg"] == pytest.approx(list(handoff_caked))
+    assert prediction["used_sim_nominal_caked_for_objective"] is False
+
+
+def test_locked_qr_dynamic_prediction_does_not_fall_back_to_nominal_when_handoff_projection_fails():
+    handoff_native = (1381.0, 1890.0)
+    stale_native = (1414.0, 1929.0)
+    stale_nominal_caked = (28.381, 57.881)
+    projector_inputs: list[tuple[float, float]] = []
+
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        raise AssertionError("unprojectable handoff should fail closed before source rows")
+
+    def projector(cols, rows, *, local_params=None, **_kwargs):
+        del local_params
+        col = float(np.asarray(cols, dtype=float).reshape(-1)[0])
+        row = float(np.asarray(rows, dtype=float).reshape(-1)[0])
+        projector_inputs.append((col, row))
+        return {
+            "two_theta_deg": np.asarray([np.nan], dtype=np.float64),
+            "phi_deg": np.asarray([np.nan], dtype=np.float64),
+            "native_cols": np.asarray([col], dtype=np.float64),
+            "native_rows": np.asarray([row], dtype=np.float64),
+            "fit_space_source": "dataset_fit_space_projector",
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "fit_space_local_params_signature": "unit-test",
+            "cake_bundle_signature": "unit-test",
+            "input_frame": "native_detector",
+            "invalid_reason": "unit_test_projection_failed",
+            "valid": False,
+        }
+
+    locked = _locked_qr_fixed_source_entry(
+        source_table_index=0,
+        resolved_table_index=0,
+        source_reflection_index=0,
+        source_row_index=0,
+        best_sample_index=None,
+        fit_prediction_detector_native_px=list(handoff_native),
+        fit_prediction_caked_deg=[21.977, 166.250],
+        fit_prediction_caked_authority="exact_projector_from_native",
+        sim_nominal_caked_deg=list(stale_nominal_caked),
+        simulated_two_theta_deg=stale_nominal_caked[0],
+        simulated_phi_deg=stale_nominal_caked[1],
+    )
+
+    prediction = opt._resolve_qr_fit_prediction_from_trial_params(
+        locked,
+        {"Gamma": 1.0},
+        {
+            "dataset_ctx": _point_only_qr_dataset_ctx(source_rows_builder, projector),
+            "hit_tables": [
+                np.asarray(
+                    [[1.0, stale_native[0], stale_native[1], 10.0, 2.0, 0.0, 0.0]],
+                    dtype=np.float64,
+                )
+            ],
+            "sim_buffer": opt._fit_hit_table_only_sim_buffer(),
+            "image_size": 4000,
+            "fit_center": [2000.0, 2000.0],
+            "detector_distance": 0.1,
+            "pixel_size": 1.0,
+            "prediction_source_rows_cache": {},
+            "_qr_fit_point_only_projection": True,
+        },
+        locked,
+    )
+
+    assert projector_inputs == [pytest.approx(handoff_native)]
+    assert prediction["available"] is False
+    assert prediction["unavailable_reason"] == "locked_qr_dynamic_prediction_unprojectable"
+    assert prediction["fit_prediction_caked_authority"] == "unknown"
+    assert prediction.get("predicted_caked_deg") != pytest.approx(list(stale_nominal_caked))
+    assert prediction.get("objective_sim_caked_deg") != pytest.approx(list(stale_nominal_caked))
 
 
 def _locked_qr_dynamic_live_shape_context(branch_payloads=None):
