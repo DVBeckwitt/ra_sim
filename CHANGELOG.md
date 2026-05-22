@@ -36,6 +36,7 @@
   - Added final Qr-rod output-state diagnostics so Figure 7 region specs, detector overlays, marker plotting inputs, and GUI-vs-final audits are built from one post-cache accepted state and reject stale pre-editor overlay drift.
   - Linked the Qr-rod marker editor and detector-preview windows so closing either window also closes the other.
   - Fixed theta_i GUI updates so simulation source rows and geometry Qr/Qz picker content signatures refresh selected Qr sets instead of reusing stale row snapshots.
+  - Fixed saved Qr/Qz ghost-representative placements so changing simulation parameters refreshes their simulated marker positions from current source rows while preserving measured background clicks.
   - Raised the default background max-intensity estimate for sparse bright peaks by using a higher robust percentile while keeping slider ceilings tied to the true finite image range.
 
 - **Config and path migration**

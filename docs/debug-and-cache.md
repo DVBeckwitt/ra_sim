@@ -583,6 +583,11 @@ simulation source-row content identity. Changing it is a full-simulation
 update, refreshes Qr/Qz picker rows and geometry source-row snapshots, and
 retains only user masks such as enabled/disabled Qr groups. This prevents
 selected Qr/Qz sets from reusing stale source rows after sample-tilt changes.
+Saved manual Qr/Qz placements from zero-intensity ghost representatives keep
+their measured background point, but their simulated marker is replayed from
+the current source row after simulation changes. If the current ghost source
+identity is missing, the marker is reported unresolved instead of drawing the
+old saved simulated pixel as current truth.
 
 Generated disordered-phase Qr/Qz groups are structural rows, not live display
 artifacts. When `Include generated disordered-phase Qr refs` is enabled and a

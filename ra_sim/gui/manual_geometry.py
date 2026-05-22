@@ -14409,12 +14409,30 @@ def build_geometry_manual_initial_pairs_display(
             _copy_q_values_from_sources(initial_entry, entry)
             initial_pairs_display.append(initial_entry)
             continue
-        if not caked_projection_resolved and not detector_replay_from_caked_projection:
+        saved_entry_is_ghost = bool(
+            isinstance(entry, Mapping) and (entry.get("is_ghost_ray") or entry.get("ghost_ray"))
+        )
+        source_row_is_current_ghost = bool(
+            isinstance(sim_entry, Mapping)
+            and (sim_entry.get("is_ghost_ray") or sim_entry.get("ghost_ray"))
+        )
+        if (
+            not caked_projection_resolved
+            and not detector_replay_from_caked_projection
+            and not saved_entry_is_ghost
+            and not source_row_is_current_ghost
+        ):
             sim_entry = geometry_manual_apply_refined_simulated_override(
                 entry,
                 sim_entry,
                 prefer_caked_display=use_caked_display,
             )
+        if saved_entry_is_ghost and not isinstance(sim_entry, dict):
+            initial_entry["sim_display_unresolved"] = True
+            _copy_q_values_from_sources(initial_entry, entry)
+            _copy_sim_identity_fields(initial_entry, entry)
+            initial_pairs_display.append(initial_entry)
+            continue
         if detector_replay_from_caked_projection and not callable(project_peaks_to_current_view):
             initial_entry["sim_display_unresolved"] = True
             _copy_q_values_from_sources(initial_entry, entry)

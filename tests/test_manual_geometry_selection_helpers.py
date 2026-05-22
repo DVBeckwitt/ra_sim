@@ -6150,6 +6150,160 @@ def test_geometry_manual_session_initial_pairs_display_ignores_refresh_errors() 
     assert entries[0]["qz"] == 2.0
 
 
+def test_saved_qr_pair_refreshes_ghost_source_after_simulation_change() -> None:
+    group_key = ("q_group", "primary", 1, 5)
+    identity = {
+        "label": "-1,0,5",
+        "hkl": (-1, 0, 5),
+        "q_group_key": group_key,
+        "source_table_index": 1,
+        "source_row_index": 30,
+        "source_reflection_index": 500,
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "is_ghost_ray": True,
+    }
+    saved_pair = {
+        **identity,
+        "x": 200.0,
+        "y": 210.0,
+        "refined_sim_x": 100.0,
+        "refined_sim_y": 110.0,
+        "refined_sim_native_x": 1000.0,
+        "refined_sim_native_y": 1110.0,
+        "sim_col": 100.0,
+        "sim_row": 110.0,
+    }
+    current_ghost_row = {
+        **identity,
+        "display_col": 125.0,
+        "display_row": 140.0,
+        "sim_col": 125.0,
+        "sim_row": 140.0,
+        "native_col": 1025.0,
+        "native_row": 1140.0,
+    }
+
+    measured, displayed = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=False,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        get_cache_data=lambda **_kwargs: {},
+        source_rows_for_background=lambda *_args, **_kwargs: [dict(current_ghost_row)],
+        build_simulated_lookup=_build_lookup,
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert measured[0]["x"] == 200.0
+    assert measured[0]["y"] == 210.0
+    assert displayed[0]["bg_display"] == (200.0, 210.0)
+    assert displayed[0]["sim_display"] == (125.0, 140.0)
+    assert displayed[0]["sim_display"] != (100.0, 110.0)
+
+
+def test_saved_qr_pair_refresh_matches_ghost_branch_identity() -> None:
+    group_key = ("q_group", "primary", 1, 5)
+    base_identity = {
+        "label": "-1,0,5",
+        "hkl": (-1, 0, 5),
+        "q_group_key": group_key,
+        "source_table_index": 1,
+        "source_reflection_index": 500,
+        "source_reflection_is_full": True,
+        "is_ghost_ray": True,
+    }
+    saved_pairs = [
+        {
+            **base_identity,
+            "source_row_index": 30,
+            "source_branch_index": 0,
+            "x": 200.0,
+            "y": 210.0,
+            "refined_sim_x": 100.0,
+            "refined_sim_y": 110.0,
+        },
+        {
+            **base_identity,
+            "source_row_index": 31,
+            "source_branch_index": 1,
+            "x": 220.0,
+            "y": 230.0,
+            "refined_sim_x": 300.0,
+            "refined_sim_y": 310.0,
+        },
+    ]
+    current_rows = [
+        {
+            **base_identity,
+            "source_row_index": 40,
+            "source_branch_index": 1,
+            "sim_col": 325.0,
+            "sim_row": 340.0,
+        },
+        {
+            **base_identity,
+            "source_row_index": 39,
+            "source_branch_index": 0,
+            "sim_col": 125.0,
+            "sim_row": 140.0,
+        },
+    ]
+
+    _measured, displayed = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=False,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [dict(entry) for entry in saved_pairs],
+        get_cache_data=lambda **_kwargs: {},
+        source_rows_for_background=lambda *_args, **_kwargs: [dict(row) for row in current_rows],
+        build_simulated_lookup=_build_lookup,
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert [entry["source_branch_index"] for entry in displayed] == [0, 1]
+    assert [entry["sim_display"] for entry in displayed] == [
+        (125.0, 140.0),
+        (325.0, 340.0),
+    ]
+
+
+def test_saved_qr_pair_missing_current_ghost_source_does_not_reuse_old_sim_position() -> None:
+    saved_pair = {
+        "label": "-1,0,5",
+        "hkl": (-1, 0, 5),
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "source_table_index": 1,
+        "source_row_index": 30,
+        "source_reflection_index": 500,
+        "source_reflection_is_full": True,
+        "source_branch_index": 0,
+        "x": 200.0,
+        "y": 210.0,
+        "refined_sim_x": 100.0,
+        "refined_sim_y": 110.0,
+        "is_ghost_ray": True,
+    }
+
+    _measured, displayed = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=False,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        get_cache_data=lambda **_kwargs: {},
+        source_rows_for_background=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=_build_lookup,
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert displayed[0]["bg_display"] == (200.0, 210.0)
+    assert "sim_display" not in displayed[0]
+    assert displayed[0]["sim_display_unresolved"] is True
+
+
 def test_geometry_manual_session_initial_pairs_display_uses_caked_coords_for_legacy_group_rows() -> (
     None
 ):
