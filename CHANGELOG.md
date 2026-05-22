@@ -66,6 +66,10 @@
     rows count when their identity is nested in canonical provenance, and a
     failed or worse optimizer candidate cannot replace an already-acceptable
     identity baseline with a manual-outlier rejection.
+  - Fixed caked-origin locked Qr/Qz failure classification so diagnostic
+    `caked_simulation_image` refinement rows are not treated as same-authority
+    detector branch proof unless explicit same-frame detector authority is
+    present, and surfaced that authority in the Qr/Qz handoff audit.
   - Added an explicit branch-line angle residual for locked two-branch Qr/Qz
     manual caked geometry fits in both GUI and headless saved-state routes,
     while keeping single-branch or branch-ambiguous groups out of the line

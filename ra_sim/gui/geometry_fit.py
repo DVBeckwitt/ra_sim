@@ -3848,6 +3848,32 @@ def build_geometry_fit_qr_handoff_audit_rows(
         elif sim_caked_meta.get("sim_refined_caked_unavailable_reason"):
             first_divergence = "sim_refined_caked_deg"
 
+        sim_refinement_source = _geometry_fit_audit_first(entries, "sim_refinement_source")
+        sim_refined_detector_authority = _geometry_fit_audit_first(
+            entries,
+            "sim_refined_detector_authority",
+        )
+        sim_refined_detector_same_frame = _geometry_fit_audit_first(
+            entries,
+            "sim_refined_detector_same_frame",
+        )
+        sim_refined_detector_authority_text = str(sim_refined_detector_authority or "").strip()
+        sim_refined_has_same_frame_proof = (
+            sim_refined_detector_same_frame is True
+            and sim_refined_detector_authority_text
+            not in {
+                "caked_simulation_image",
+                "diagnostic_caked_image",
+                "unknown",
+            }
+        )
+        if (
+            str(sim_refinement_source or "").strip() == "caked_simulation_image"
+            and not sim_refined_has_same_frame_proof
+        ):
+            sim_refined_detector_authority = "diagnostic_caked_image"
+            sim_refined_detector_same_frame = False
+
         row = {
             "pair_index": int(pair_index),
             "q_group_key": q_group_key,
@@ -3877,6 +3903,8 @@ def build_geometry_fit_qr_handoff_audit_rows(
                 or "no saved detector-display refined sim point"
             ),
             "sim_refined_detector_native_px": sim_refined_native,
+            "sim_refined_detector_authority": sim_refined_detector_authority,
+            "sim_refined_detector_same_frame": sim_refined_detector_same_frame,
             "sim_refined_caked_deg": sim_refined_caked,
             "sim_refined_caked_authority": (
                 "exact_projector_from_native"
@@ -3886,7 +3914,7 @@ def build_geometry_fit_qr_handoff_audit_rows(
                 else None
             ),
             "sim_refinement_status": _geometry_fit_audit_first(entries, "sim_refinement_status"),
-            "sim_refinement_source": _geometry_fit_audit_first(entries, "sim_refinement_source"),
+            "sim_refinement_source": sim_refinement_source,
             "sim_refinement_delta_detector_px": _geometry_fit_audit_first(
                 entries,
                 "sim_refinement_delta_detector_px",
@@ -4028,6 +4056,8 @@ def build_geometry_fit_qr_handoff_audit_lines(
         "sim_nominal_caked_deg",
         "sim_refined_detector_display_px",
         "sim_refined_detector_native_px",
+        "sim_refined_detector_authority",
+        "sim_refined_detector_same_frame",
         "sim_refined_caked_deg",
         "sim_refinement_status",
         "sim_refinement_source",

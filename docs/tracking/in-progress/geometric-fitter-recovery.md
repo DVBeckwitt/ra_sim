@@ -9,6 +9,21 @@ Last updated: 2026-05-22
 
 ## Summary
 
+2026-05-22 locked Qr/Qz caked-origin classifier slice: caked-view locked Qr/Qz
+fits keep the existing accepted handoff/identity baseline behavior, and branch
+source-pairing diagnostics now ignore `caked_simulation_image` refinements as
+detector/native branch proof unless a same-frame detector authority is explicit.
+The handoff audit marks those caked-image refinements as
+`sim_refined_detector_authority=diagnostic_caked_image` and
+`sim_refined_detector_same_frame=false`, so downstream classifiers do not turn a
+valid caked-source baseline into `branch_source_pairing_mismatch`. Explicit
+same-frame detector proof remains valid branch evidence, and handoff audit text
+now prints the authority and same-frame fields for review. Feature status:
+implemented for the caked-origin locked-Qr route and covered by focused
+optimization and GUI handoff regressions for both diagnostic and explicit-proof
+paths. Migration/deprecation status: no saved-state, CLI, config, public API,
+dependency, or artifact-schema migration is required.
+
 2026-05-22 locked Qr/Qz detector/caked mapping slice: visual probe records now
 report the probed image source, image shape, image extent, axes limits, marker
 pixel index, image peak index, and search window so detector-marker/image-raster

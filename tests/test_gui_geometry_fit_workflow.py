@@ -525,6 +525,117 @@ def test_qr_handoff_audit_uses_nested_locked_qr_identity_fields() -> None:
     assert row["source_row_index"] == identity["source_row_index"]
 
 
+def test_caked_origin_handoff_marks_caked_sim_refinement_diagnostic() -> None:
+    identity = {
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "hkl": (-1, 0, 5),
+        "normalized_hkl": (-1, 0, 5),
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "source_table_index": 5,
+        "source_reflection_index": 5,
+        "source_row_index": 50,
+        "source_label": "primary",
+    }
+    rows = geometry_fit.build_geometry_fit_qr_handoff_audit_rows(
+        {
+            "provider_pairs": [
+                {
+                    **identity,
+                    "provider_selected_source_identity_canonical": dict(identity),
+                    "fit_source_resolution_kind": "provider_fixed_source_local",
+                    "optimizer_request_has_fixed_source": True,
+                }
+            ],
+            "manual_point_pairs": [{}],
+            "measured_display": [{"x": 1005.0, "y": 1905.0}],
+            "measured_for_fit": [
+                {
+                    "background_two_theta_deg": 22.762,
+                    "background_phi_deg": 164.667,
+                }
+            ],
+            "initial_pairs_display": [
+                {
+                    **identity,
+                    "simulated_two_theta_deg": 21.977,
+                    "simulated_phi_deg": 166.250,
+                    "sim_refinement_source": "caked_simulation_image",
+                    "sim_refined_caked_deg": (28.381, 57.881),
+                }
+            ],
+            "source_rows_for_trace": [],
+            "spec": {
+                "_manual_caked_fit_space_required": True,
+                "solver_requested_objective_space": "caked_deg",
+            },
+        }
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["sim_refinement_source"] == "caked_simulation_image"
+    assert rows[0]["sim_refined_detector_authority"] == "diagnostic_caked_image"
+    assert rows[0]["sim_refined_detector_same_frame"] is False
+    audit_text = "\n".join(geometry_fit.build_geometry_fit_qr_handoff_audit_lines(rows))
+    assert "sim_refined_detector_authority=diagnostic_caked_image" in audit_text
+    assert "sim_refined_detector_same_frame=False" in audit_text
+
+
+def test_caked_origin_handoff_preserves_explicit_same_frame_refinement_proof() -> None:
+    identity = {
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "hkl": (-1, 0, 5),
+        "normalized_hkl": (-1, 0, 5),
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "source_table_index": 5,
+        "source_reflection_index": 5,
+        "source_row_index": 50,
+        "source_label": "primary",
+    }
+    rows = geometry_fit.build_geometry_fit_qr_handoff_audit_rows(
+        {
+            "provider_pairs": [
+                {
+                    **identity,
+                    "provider_selected_source_identity_canonical": dict(identity),
+                    "fit_source_resolution_kind": "provider_fixed_source_local",
+                    "optimizer_request_has_fixed_source": True,
+                }
+            ],
+            "manual_point_pairs": [{}],
+            "measured_display": [{"x": 1005.0, "y": 1905.0}],
+            "measured_for_fit": [
+                {
+                    "background_two_theta_deg": 22.762,
+                    "background_phi_deg": 164.667,
+                }
+            ],
+            "initial_pairs_display": [
+                {
+                    **identity,
+                    "simulated_two_theta_deg": 21.977,
+                    "simulated_phi_deg": 166.250,
+                    "sim_refinement_source": "caked_simulation_image",
+                    "sim_refined_detector_authority": "exact_projector_from_native",
+                    "sim_refined_detector_same_frame": True,
+                    "sim_refined_caked_deg": (28.381, 57.881),
+                }
+            ],
+            "source_rows_for_trace": [],
+            "spec": {
+                "_manual_caked_fit_space_required": True,
+                "solver_requested_objective_space": "caked_deg",
+            },
+        }
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["sim_refinement_source"] == "caked_simulation_image"
+    assert rows[0]["sim_refined_detector_authority"] == "exact_projector_from_native"
+    assert rows[0]["sim_refined_detector_same_frame"] is True
+
+
 def _make_prepared_run(
     *,
     joint_background_mode: bool,

@@ -676,6 +676,53 @@ def _annotate_worst_dynamic_angular_rows_with_candidates(
     def _identity_token(value: object) -> str:
         return repr(_dynamic_reanchor_jsonable(value))
 
+    def _finite_caked_pair(row: Mapping[str, object], key: str) -> tuple[float, float] | None:
+        value = row.get(key)
+        if not isinstance(value, (list, tuple, np.ndarray)) or len(value) < 2:
+            return None
+        first = _safe_float(value[0], float("nan"))
+        second = _safe_float(value[1], float("nan"))
+        if np.isfinite(first) and np.isfinite(second):
+            return float(first), float(second)
+        return None
+
+    def _uses_caked_source_authority(row: Mapping[str, object]) -> bool:
+        return any(
+            str(row.get(key, "") or "").strip() == "sim_visual_caked_deg"
+            for key in (
+                "objective_source_authority",
+                "optimizer_source_source",
+                "dynamic_source_source",
+                "actual_source",
+                "source_kind",
+                "dynamic_baseline_anchor_actual_source",
+            )
+        )
+
+    def _candidate_is_diagnostic_caked_image_refinement(
+        row: Mapping[str, object],
+    ) -> bool:
+        detector_authority = str(row.get("sim_refined_detector_authority", "") or "").strip()
+        same_frame = row.get("sim_refined_detector_same_frame")
+        if same_frame is True and detector_authority not in {
+            "",
+            "caked_simulation_image",
+            "diagnostic_caked_image",
+            "unknown",
+        }:
+            return False
+        if bool(row.get("sim_refined_detector_same_frame", True)) is False:
+            return True
+        return any(
+            str(row.get(key, "") or "").strip()
+            in {"caked_simulation_image", "diagnostic_caked_image"}
+            for key in (
+                "sim_refinement_source",
+                "sim_refinement_caked_image_source",
+                "sim_refined_detector_authority",
+            )
+        )
+
     def _row_caked_pair(row: Mapping[str, object]) -> tuple[float, float] | None:
         for key in (
             "sim_visual_caked_deg",
@@ -684,12 +731,9 @@ def _annotate_worst_dynamic_angular_rows_with_candidates(
             "predicted_caked_deg",
             "observed_caked_deg",
         ):
-            value = row.get(key)
-            if isinstance(value, (list, tuple, np.ndarray)) and len(value) >= 2:
-                first = _safe_float(value[0], float("nan"))
-                second = _safe_float(value[1], float("nan"))
-                if np.isfinite(first) and np.isfinite(second):
-                    return float(first), float(second)
+            pair = _finite_caked_pair(row, key)
+            if pair is not None:
+                return pair
         first = _safe_float(row.get("two_theta_deg", row.get("caked_x")), float("nan"))
         second = _safe_float(row.get("phi_deg", row.get("caked_y")), float("nan"))
         if np.isfinite(first) and np.isfinite(second):
@@ -722,6 +766,8 @@ def _annotate_worst_dynamic_angular_rows_with_candidates(
         same_candidate_count = 0
         nearest_branch_index: object = None
         nearest_norm = float("nan")
+        caked_image_refinement_candidate_skip_count = 0
+        row_uses_caked_source_authority = _uses_caked_source_authority(annotated)
         if observed is not None:
             for candidate in source_rows_by_dataset.get(dataset_index, ()) or ():
                 if not isinstance(candidate, Mapping):
@@ -729,6 +775,13 @@ def _annotate_worst_dynamic_angular_rows_with_candidates(
                 if _identity_token(candidate.get("q_group_key")) != q_group_token:
                     continue
                 if _identity_token(candidate.get("hkl")) != hkl_token:
+                    continue
+                if (
+                    row_uses_caked_source_authority
+                    and _candidate_is_diagnostic_caked_image_refinement(candidate)
+                    and _finite_caked_pair(candidate, "sim_visual_caked_deg") is None
+                ):
+                    caked_image_refinement_candidate_skip_count += 1
                     continue
                 candidate_pair = _row_caked_pair(candidate)
                 if candidate_pair is None:
@@ -747,6 +800,9 @@ def _annotate_worst_dynamic_angular_rows_with_candidates(
         unwrapped_phi = _safe_float(annotated.get("delta_phi_deg_unwrapped"), float("nan"))
         wrapped_phi = _safe_float(annotated.get("wrapped_delta_phi_deg"), float("nan"))
         annotated["same_q_group_hkl_candidate_count"] = int(same_candidate_count)
+        annotated["caked_image_refinement_candidate_skip_count"] = int(
+            caked_image_refinement_candidate_skip_count
+        )
         annotated["nearest_same_q_group_hkl_candidate_branch_index"] = nearest_branch_index
         annotated["nearest_same_q_group_hkl_candidate_residual_norm_deg"] = float(nearest_norm)
         annotated["locked_branch_residual_norm_deg"] = float(locked_norm)

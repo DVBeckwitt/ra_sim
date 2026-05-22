@@ -9523,6 +9523,152 @@ def test_worst_row_candidate_diagnostic_identifies_branch_swap_without_remapping
     assert classification["recommended_next_fix"] == "repair_locked_branch_identity"
 
 
+def test_caked_origin_locked_qr_ignores_unproven_caked_image_refinement() -> None:
+    rows = [
+        {
+            "dataset_index": 0,
+            "dataset_label": "bg0",
+            "pair_id": "q5-branch0",
+            "q_group_key": ["q_group", "primary", 1, 5],
+            "hkl": [-1, 0, 5],
+            "source_branch_index": 0,
+            "observed_caked_deg": [22.762, 164.667],
+            "predicted_caked_deg": [28.381, 57.881],
+            "objective_source_authority": "sim_visual_caked_deg",
+            "optimizer_source_source": "sim_visual_caked_deg",
+            "fit_prediction_caked_authority": "dynamic_trial_projection",
+            "sim_refinement_caked_image_source": "caked_simulation_image",
+            "delta_two_theta_deg": 5.619,
+            "delta_phi_deg_unwrapped": -106.786,
+            "wrapped_delta_phi_deg": -106.786,
+            "angular_residual_norm_deg": 106.934,
+            "weighted_delta_two_theta_deg": 5.619,
+            "weighted_delta_phi_deg": -106.786,
+        }
+    ]
+    annotated = opt._annotate_worst_dynamic_angular_rows_with_candidates(
+        rows,
+        source_rows_by_dataset={
+            0: [
+                {
+                    "q_group_key": ["q_group", "primary", 1, 5],
+                    "hkl": [-1, 0, 5],
+                    "source_branch_index": 0,
+                    "sim_refined_caked_deg": [28.381, 57.881],
+                    "sim_refinement_source": "caked_simulation_image",
+                },
+                {
+                    "q_group_key": ["q_group", "primary", 1, 5],
+                    "hkl": [-1, 0, 5],
+                    "source_branch_index": 1,
+                    "sim_refined_caked_deg": [22.8, 164.2],
+                    "sim_refinement_source": "caked_simulation_image",
+                },
+            ],
+        },
+    )
+
+    assert annotated[0]["same_q_group_hkl_candidate_count"] == 0
+    assert annotated[0]["caked_image_refinement_candidate_skip_count"] == 2
+    assert annotated[0]["branch_swap_would_help"] is False
+
+    classification = opt._classify_dynamic_angular_failure(
+        {
+            "raw_angular_summary_matches_array_audit": True,
+            "objective_param_sensitivity_status": "sensitive",
+            "worst_angular_residual_rows": annotated,
+            "angular_residual_by_dataset": [
+                {
+                    "dataset_index": 0,
+                    "raw_angular_row_count": 1,
+                    "raw_angular_rms_deg": 106.934,
+                }
+            ],
+            "raw_angular_rms_deg": 106.934,
+            "raw_angular_max_deg": 106.934,
+        }
+    )
+    assert classification["dynamic_angular_failure_classification"] == (
+        "manual_outliers_or_physical_bad_fit"
+    )
+
+
+def test_caked_origin_locked_qr_keeps_explicit_same_frame_caked_image_branch_proof() -> None:
+    rows = [
+        {
+            "dataset_index": 0,
+            "dataset_label": "bg0",
+            "pair_id": "q5-branch0",
+            "q_group_key": ["q_group", "primary", 1, 5],
+            "hkl": [-1, 0, 5],
+            "source_branch_index": 0,
+            "observed_caked_deg": [22.762, 164.667],
+            "predicted_caked_deg": [28.381, 57.881],
+            "objective_source_authority": "sim_visual_caked_deg",
+            "optimizer_source_source": "sim_visual_caked_deg",
+            "fit_prediction_caked_authority": "dynamic_trial_projection",
+            "sim_refinement_caked_image_source": "caked_simulation_image",
+            "delta_two_theta_deg": 5.619,
+            "delta_phi_deg_unwrapped": -106.786,
+            "wrapped_delta_phi_deg": -106.786,
+            "angular_residual_norm_deg": 106.934,
+            "weighted_delta_two_theta_deg": 5.619,
+            "weighted_delta_phi_deg": -106.786,
+        }
+    ]
+    same_frame_proof = {
+        "sim_refinement_source": "caked_simulation_image",
+        "sim_refined_detector_authority": "exact_projector_from_native",
+        "sim_refined_detector_same_frame": True,
+    }
+    annotated = opt._annotate_worst_dynamic_angular_rows_with_candidates(
+        rows,
+        source_rows_by_dataset={
+            0: [
+                {
+                    "q_group_key": ["q_group", "primary", 1, 5],
+                    "hkl": [-1, 0, 5],
+                    "source_branch_index": 0,
+                    "sim_refined_caked_deg": [28.381, 57.881],
+                    **same_frame_proof,
+                },
+                {
+                    "q_group_key": ["q_group", "primary", 1, 5],
+                    "hkl": [-1, 0, 5],
+                    "source_branch_index": 1,
+                    "sim_refined_caked_deg": [22.8, 164.2],
+                    **same_frame_proof,
+                },
+            ],
+        },
+    )
+
+    assert annotated[0]["same_q_group_hkl_candidate_count"] == 2
+    assert annotated[0]["caked_image_refinement_candidate_skip_count"] == 0
+    assert annotated[0]["nearest_same_q_group_hkl_candidate_branch_index"] == 1
+    assert annotated[0]["branch_swap_would_help"] is True
+
+    classification = opt._classify_dynamic_angular_failure(
+        {
+            "raw_angular_summary_matches_array_audit": True,
+            "objective_param_sensitivity_status": "sensitive",
+            "worst_angular_residual_rows": annotated,
+            "angular_residual_by_dataset": [
+                {
+                    "dataset_index": 0,
+                    "raw_angular_row_count": 1,
+                    "raw_angular_rms_deg": 106.934,
+                }
+            ],
+            "raw_angular_rms_deg": 106.934,
+            "raw_angular_max_deg": 106.934,
+        }
+    )
+    assert classification["dynamic_angular_failure_classification"] == (
+        "branch_source_pairing_mismatch"
+    )
+
+
 def test_dynamic_angular_classifies_locked_qr_authority_mismatch_as_internal() -> None:
     classification = opt._classify_dynamic_angular_failure(
         {
