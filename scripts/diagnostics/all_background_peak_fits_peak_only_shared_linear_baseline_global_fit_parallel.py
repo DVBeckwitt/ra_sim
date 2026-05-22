@@ -4269,10 +4269,14 @@ def radial_background_subtraction_config_from_state(
     smooth_sigma = 6.0
     clip_zero = False
 
-    if clean_text(mode_override):
+    mode_override_text = clean_text(mode_override)
+    scale_override_text = clean_text(scale_override)
+    if mode_override_text:
         mode = clean_mode(mode_override, mode)
-    if clean_text(scale_override):
+    if scale_override_text:
         scale = clean_float(scale_override, scale, minimum=0.0)
+        if not mode_override_text and scale > 0.0:
+            mode = "radial"
     if clean_text(percentile_override):
         percentile = clean_percentile(percentile_override, percentile)
     if clean_text(smooth_sigma_override):
@@ -4294,7 +4298,7 @@ def radial_background_subtraction_config_from_state(
 def _radial_background_subtraction_config_from_mapping(
     config: dict[str, object],
 ) -> dict[str, object]:
-    return radial_background_subtraction_config_from_state(
+    normalized = radial_background_subtraction_config_from_state(
         {},
         mode_override=config.get("mode"),
         scale_override=config.get("scale"),
@@ -4302,6 +4306,10 @@ def _radial_background_subtraction_config_from_mapping(
         smooth_sigma_override=config.get("smooth_sigma"),
         clip_zero_override=config.get("clip_zero"),
     )
+    for key in ("scale_source", "auto_scale"):
+        if key in config:
+            normalized[key] = config[key]
+    return normalized
 
 
 def radial_background_subtraction_policy_signature(config: dict[str, object]) -> dict[str, object]:
@@ -4315,6 +4323,463 @@ def radial_background_subtraction_policy_signature(config: dict[str, object]) ->
         "percentile": round(float(normalized["percentile"]), 12),
         "smooth_sigma": round(float(normalized["smooth_sigma"]), 12),
         "clip_zero": bool(normalized["clip_zero"]),
+        "scale_source": str(normalized.get("scale_source", "manual_or_legacy")),
+        "scale_algorithm": (
+            RADIAL_BACKGROUND_AUTO_SCALE_SIGNATURE
+            if str(normalized.get("scale_source", "")) == "auto_sideband"
+            else ""
+        ),
+    }
+
+
+RADIAL_BACKGROUND_AUTO_SCALE_SIGNATURE = "sideband_scale_v1"
+RADIAL_BACKGROUND_AUTO_SCALE_MIN_PIXELS = 5000
+RADIAL_BACKGROUND_AUTO_SCALE_MAX = 1.2
+RADIAL_BACKGROUND_AUTO_SCALE_PEAK_MARGIN = 1.25
+RADIAL_BACKGROUND_AUTO_SCALE_MAD_CLIP = 3.0
+
+
+def radial_background_auto_scale_metadata() -> dict[str, object]:
+    return {
+        "scale_source": "auto_sideband",
+        "algorithm": RADIAL_BACKGROUND_AUTO_SCALE_SIGNATURE,
+    }
+
+
+def radial_background_auto_scale_failure(
+    reason: str,
+    *,
+    scale: float = 0.0,
+    **diagnostics: object,
+) -> dict[str, object]:
+    return {
+        "success": False,
+        "reason": str(reason),
+        "scale": float(scale),
+        **diagnostics,
+        **radial_background_auto_scale_metadata(),
+    }
+
+
+def robust_background_model_scale(
+    image: object,
+    model: object,
+    mask: object,
+    *,
+    clamp_min: float = 0.0,
+    clamp_max: float = RADIAL_BACKGROUND_AUTO_SCALE_MAX,
+    min_pixels: int = RADIAL_BACKGROUND_AUTO_SCALE_MIN_PIXELS,
+) -> dict[str, object]:
+    image_values = np.asarray(image, dtype=np.float64)
+    model_values = np.asarray(model, dtype=np.float64)
+    mask_values = np.asarray(mask, dtype=bool)
+    if image_values.shape != model_values.shape or image_values.shape != mask_values.shape:
+        return radial_background_auto_scale_failure("shape_mismatch", pixel_count=0)
+    finite_model = model_values[np.isfinite(model_values)]
+    b_abs = np.abs(finite_model)
+    if b_abs.size == 0:
+        return radial_background_auto_scale_failure("no_finite_model", pixel_count=0)
+    floor = max(1.0e-12, 1.0e-6 * float(np.nanpercentile(b_abs, 90.0)))
+    valid = (
+        np.isfinite(image_values)
+        & np.isfinite(model_values)
+        & mask_values
+        & (model_values > float(floor))
+    )
+    pixel_count = int(np.count_nonzero(valid))
+    if pixel_count < max(1, int(min_pixels)):
+        return radial_background_auto_scale_failure(
+            "too_few_pixels",
+            pixel_count=pixel_count,
+            model_floor=float(floor),
+        )
+    image_sample = np.asarray(image_values[valid], dtype=np.float64)
+    model_sample = np.asarray(model_values[valid], dtype=np.float64)
+    ratio = image_sample / model_sample
+    ratio = ratio[np.isfinite(ratio)]
+    if ratio.size == 0:
+        return radial_background_auto_scale_failure(
+            "no_finite_ratio",
+            pixel_count=pixel_count,
+            model_floor=float(floor),
+        )
+    scale0 = float(np.nanmedian(ratio))
+    residual = image_sample - float(scale0) * model_sample
+    residual_median = float(np.nanmedian(residual))
+    mad = 1.4826 * float(np.nanmedian(np.abs(residual - residual_median)))
+    kept_pixel_count = int(image_sample.size)
+    scale_raw = float(scale0)
+    if np.isfinite(mad) and mad > 0.0:
+        keep = (
+            np.abs(residual - residual_median)
+            <= float(RADIAL_BACKGROUND_AUTO_SCALE_MAD_CLIP) * mad
+        )
+        if np.any(keep):
+            kept_ratio = image_sample[keep] / model_sample[keep]
+            kept_ratio = kept_ratio[np.isfinite(kept_ratio)]
+            if kept_ratio.size:
+                scale_raw = float(np.nanmedian(kept_ratio))
+                kept_pixel_count = int(kept_ratio.size)
+    if not np.isfinite(scale_raw):
+        return radial_background_auto_scale_failure(
+            "nonfinite_scale",
+            pixel_count=pixel_count,
+            kept_pixel_count=kept_pixel_count,
+            model_floor=float(floor),
+            mad=float(mad),
+        )
+    scale = min(float(clamp_max), max(float(clamp_min), float(scale_raw)))
+    return {
+        "success": True,
+        "scale": float(scale),
+        "raw_scale": float(scale_raw),
+        "initial_scale": float(scale0),
+        "pixel_count": pixel_count,
+        "kept_pixel_count": kept_pixel_count,
+        "model_floor": float(floor),
+        "mad": float(mad),
+        **radial_background_auto_scale_metadata(),
+    }
+
+
+def radial_background_auto_scale_mask(
+    *,
+    theta_map: object,
+    phi_map: object,
+    entries: list[dict[str, object]],
+    detector_qr_map: object | None = None,
+    rod_qr_values: object | None = None,
+    qr_delta: float = 0.0,
+) -> dict[str, object]:
+    theta = np.asarray(theta_map, dtype=np.float64)
+    phi = np.asarray(phi_map, dtype=np.float64)
+    if theta.shape != phi.shape:
+        return {
+            "mask": np.zeros(theta.shape, dtype=bool),
+            "mask_source": "shape_mismatch",
+            "pixel_count": 0,
+        }
+    finite = np.isfinite(theta) & np.isfinite(phi)
+    off_peak = finite.copy()
+    theta_half_width = float(THETA_HALF_WINDOW_DEG) * float(
+        RADIAL_BACKGROUND_AUTO_SCALE_PEAK_MARGIN
+    )
+    phi_half_width = float(PHI_HALF_WINDOW_DEG) * float(
+        RADIAL_BACKGROUND_AUTO_SCALE_PEAK_MARGIN
+    )
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        angles = nearest_detector_angles_from_entry(entry, theta, phi)
+        if angles is None:
+            continue
+        theta_seed, phi_seed = angles
+        peak_mask = (
+            np.abs(theta - float(theta_seed)) <= theta_half_width
+        ) & (
+            np.abs(_radial_background_phi_delta_deg(phi, float(phi_seed))) <= phi_half_width
+        )
+        off_peak &= ~peak_mask
+
+    if detector_qr_map is not None:
+        qr = np.asarray(detector_qr_map, dtype=np.float64)
+        if qr.shape == theta.shape:
+            qr_exclusion = np.zeros(theta.shape, dtype=bool)
+            qr_width = max(0.0, float(qr_delta)) * float(QR_ROD_BG_SIDE_BAND_OUTER_SCALE)
+            if qr_width > 0.0:
+                qr_exclusion |= np.isfinite(qr) & (qr <= qr_width)
+            qr_values = np.asarray(
+                rod_qr_values if rod_qr_values is not None else [],
+                dtype=np.float64,
+            ).reshape(-1)
+            for qr_value in qr_values:
+                if np.isfinite(qr_value) and qr_width > 0.0:
+                    qr_exclusion |= np.isfinite(qr) & (
+                        np.abs(qr - float(qr_value)) <= qr_width
+                    )
+            off_peak &= ~qr_exclusion
+
+    heldout_phi = off_peak & ((phi < -90.0) | (phi > 90.0))
+    if int(np.count_nonzero(heldout_phi)) >= int(RADIAL_BACKGROUND_AUTO_SCALE_MIN_PIXELS):
+        mask = heldout_phi
+        mask_source = "heldout_phi"
+    else:
+        mask = off_peak
+        mask_source = "fallback_all_phi"
+    return {
+        "mask": np.asarray(mask, dtype=bool),
+        "mask_source": mask_source,
+        "pixel_count": int(np.count_nonzero(mask)),
+        "finite_pixel_count": int(np.count_nonzero(finite)),
+    }
+
+
+def should_use_auto_radial_background_scale(
+    variables: dict[str, object],
+    *,
+    mode_override_text: object,
+    scale_override_text: object,
+) -> bool:
+    variables = variables if isinstance(variables, dict) else {}
+    mode_text = "" if mode_override_text is None else str(mode_override_text).strip().lower()
+    mode_text = mode_text.replace("_", "-")
+    scale_text = "" if scale_override_text is None else str(scale_override_text).strip().lower()
+    if mode_text in {"off", "none", "false", "no", "0", "skip"}:
+        return False
+    if scale_text == "auto":
+        return True
+    if scale_text:
+        try:
+            numeric_scale = float(scale_text)
+        except Exception:
+            numeric_scale = float("nan")
+        if np.isfinite(numeric_scale):
+            return False
+    saved_mode = str(variables.get("background_subtraction_mode_var", "")).strip().lower()
+    saved_mode = saved_mode.replace("_", "-")
+    saved_enabled = str(variables.get("background_subtraction_enabled_var", "")).strip().lower()
+    saved_radial = saved_mode in {"radial", "on", "true", "yes", "1"} or saved_enabled in {
+        "true",
+        "yes",
+        "1",
+        "on",
+    }
+    try:
+        saved_scale = float(str(variables.get("background_subtraction_scale_var", "")).strip())
+    except Exception:
+        saved_scale = float("nan")
+    if saved_radial and np.isfinite(saved_scale) and saved_scale > 0.0:
+        return False
+    return True
+
+
+def radial_background_auto_scale_qr_values_from_state(state_payload: object) -> np.ndarray:
+    payload = state_payload if isinstance(state_payload, dict) else {}
+    geometry = payload.get("geometry", {})
+    geometry = geometry if isinstance(geometry, dict) else {}
+    values: list[float] = []
+    for row in geometry.get("q_group_rows", []) or []:
+        if not isinstance(row, dict) or row.get("included", True) is False:
+            continue
+        qr = as_float(row.get("qr"), np.nan)
+        if np.isfinite(qr):
+            values.append(float(qr))
+    if not values:
+        return np.asarray([], dtype=np.float64)
+    return np.asarray(sorted(set(round(float(value), 12) for value in values)), dtype=np.float64)
+
+
+def radial_background_auto_scale_sample_indices(
+    background_count: int, *, max_backgrounds: int = 5
+) -> list[int]:
+    count = max(0, int(background_count))
+    limit = max(1, int(max_backgrounds))
+    if count <= limit:
+        return list(range(count))
+    raw = np.linspace(0, count - 1, limit, dtype=np.float64)
+    return sorted({int(np.clip(round(float(value)), 0, count - 1)) for value in raw})
+
+
+def radial_background_detector_qr_map_for_auto_scale(
+    *,
+    detector_shape: tuple[int, int],
+    variables: dict[str, object],
+    tilt_deg: float,
+    backend_rotation_k: int,
+    backend_flip_x: bool,
+    backend_flip_y: bool,
+    center_row_px: float,
+    center_col_px: float,
+    distance_m: float,
+    pixel_size_m: float,
+    wavelength_m: float,
+) -> np.ndarray | None:
+    helper = getattr(gui_qr_cylinder_overlay, "detector_qr_qz_maps_for_projection", None)
+    if helper is None:
+        return None
+    try:
+        config = gui_qr_cylinder_overlay.build_qr_cylinder_overlay_render_config(
+            render_in_caked_space=True,
+            image_size=int(detector_shape[0]),
+            display_rotate_k=int(backend_rotation_k),
+            center_col=float(center_col_px),
+            center_row=float(center_row_px),
+            distance_cor_to_detector=float(distance_m),
+            gamma_deg=as_float(variables.get("gamma_var"), 0.0),
+            Gamma_deg=as_float(variables.get("Gamma_var"), 0.0),
+            chi_deg=as_float(variables.get("chi_var"), 0.0),
+            psi_deg=as_float(variables.get("psi_var"), 0.0),
+            psi_z_deg=as_float(variables.get("psi_z_var"), 0.0),
+            zs=as_float(variables.get("zs_var"), 0.0),
+            zb=as_float(variables.get("zb_var"), 0.0),
+            theta_initial_deg=float(tilt_deg),
+            cor_angle_deg=as_float(variables.get("cor_angle_var"), 0.0),
+            pixel_size_m=float(pixel_size_m),
+            wavelength=float(wavelength_m) * 1.0e10,
+            n2=globals().get("n2_value", complex(1.0, 0.0)),
+            phi_samples=max(361, int(as_float(variables.get("rod_points_per_gz_var"), 721))),
+        )
+        maps = helper(config=config, detector_shape=tuple(detector_shape))
+    except Exception:
+        return None
+    if not isinstance(maps, tuple) or not maps:
+        return None
+    qr = np.asarray(maps[0], dtype=np.float64)
+    if qr.shape != tuple(detector_shape):
+        return None
+    return qr
+
+
+def estimate_default_radial_background_subtraction_scale(
+    *,
+    background_files: list[str],
+    background_tilt_deg: dict[int, float],
+    entries_by_bg: dict[int, list[dict[str, object]]],
+    variables: dict[str, object],
+    backend_rotation_k: int,
+    backend_flip_x: bool,
+    backend_flip_y: bool,
+    center_row_px: float,
+    center_col_px: float,
+    distance_m: float,
+    pixel_size_m: float,
+    wavelength_m: float,
+    max_backgrounds: int = 5,
+) -> dict[str, object]:
+    sampled_indices = radial_background_auto_scale_sample_indices(
+        len(background_files), max_backgrounds=max_backgrounds
+    )
+    if not sampled_indices:
+        return radial_background_auto_scale_failure(
+            "no_backgrounds",
+            background_count=0,
+            used_background_indices=[],
+            per_background=[],
+        )
+    rod_qr_values = radial_background_auto_scale_qr_values_from_state(globals().get("state", {}))
+    per_background: list[dict[str, object]] = []
+    scales: list[float] = []
+    for bg_idx in sampled_indices:
+        try:
+            bg_path = Path(background_files[int(bg_idx)]).expanduser()
+            native = np.asarray(read_osc(bg_path), dtype=np.float64)
+            detector_image = apply_background_backend_orientation(
+                native,
+                flip_x=backend_flip_x,
+                flip_y=backend_flip_y,
+                rotation_k=backend_rotation_k,
+            )
+            detector_image = np.asarray(detector_image, dtype=np.float64)
+            ai = FastAzimuthalIntegrator(
+                dist=float(distance_m),
+                poni1=float(center_row_px) * float(pixel_size_m),
+                poni2=float(center_col_px) * float(pixel_size_m),
+                pixel1=float(pixel_size_m),
+                pixel2=float(pixel_size_m),
+                wavelength=float(wavelength_m),
+            )
+            theta_map, raw_phi_map = detector_pixel_angular_maps(detector_image.shape, ai.geometry)
+            phi_map = raw_phi_to_gui_phi(raw_phi_map)
+            caked_result = ai.integrate2d(
+                detector_image,
+                npt_rad=NPT_RADIAL,
+                npt_azim=NPT_AZIMUTH,
+                correctSolidAngle=BACKGROUND_SOLID_ANGLE_CORRECTION,
+                method="lut",
+                unit="2th_deg",
+                engine=EXACT_CAKE_ENGINE,
+                workers=CAKE_WORKERS,
+            )
+            caked_image, theta_axis, phi_axis = caked_density_image_from_result(caked_result)
+            model_payload = apply_radial_background_subtraction_to_detector(
+                detector_image,
+                theta_map,
+                {
+                    "mode": "radial",
+                    "scale": 1.0,
+                    "percentile": 20.0,
+                    "smooth_sigma": 6.0,
+                    "clip_zero": False,
+                },
+                phi_map=phi_map,
+                caked_image=caked_image,
+                theta_axis=theta_axis,
+                phi_axis=phi_axis,
+            )
+            qr_map = radial_background_detector_qr_map_for_auto_scale(
+                detector_shape=tuple(detector_image.shape),
+                variables=variables,
+                tilt_deg=float(background_tilt_deg.get(int(bg_idx), 0.0)),
+                backend_rotation_k=backend_rotation_k,
+                backend_flip_x=backend_flip_x,
+                backend_flip_y=backend_flip_y,
+                center_row_px=center_row_px,
+                center_col_px=center_col_px,
+                distance_m=distance_m,
+                pixel_size_m=pixel_size_m,
+                wavelength_m=wavelength_m,
+            )
+            mask_payload = radial_background_auto_scale_mask(
+                theta_map=theta_map,
+                phi_map=phi_map,
+                entries=list(entries_by_bg.get(int(bg_idx), [])),
+                detector_qr_map=qr_map,
+                rod_qr_values=rod_qr_values,
+                qr_delta=as_float(variables.get("delta_qr_var"), 0.0),
+            )
+            scale_payload = robust_background_model_scale(
+                detector_image,
+                model_payload["background_model"],
+                mask_payload["mask"],
+            )
+            row = {
+                "background_index": int(bg_idx),
+                "background_name": Path(background_files[int(bg_idx)]).name,
+                "mask_source": str(mask_payload.get("mask_source", "")),
+                "mask_pixel_count": int(mask_payload.get("pixel_count", 0)),
+                **scale_payload,
+            }
+            per_background.append(row)
+            if bool(scale_payload.get("success", False)):
+                scale = as_float(scale_payload.get("scale"), np.nan)
+                if np.isfinite(scale) and scale > 0.0:
+                    scales.append(float(scale))
+        except Exception as exc:
+            per_background.append(
+                {
+                    "background_index": int(bg_idx),
+                    "background_name": Path(background_files[int(bg_idx)]).name,
+                    "success": False,
+                    "reason": str(exc),
+                    "scale": 0.0,
+                }
+            )
+    if not scales:
+        return radial_background_auto_scale_failure(
+            "no_successful_background_scales",
+            background_count=0,
+            used_background_indices=sampled_indices,
+            per_background=per_background,
+        )
+    final_scale = min(
+        float(RADIAL_BACKGROUND_AUTO_SCALE_MAX),
+        max(0.0, float(np.nanmedian(np.asarray(scales, dtype=np.float64)))),
+    )
+    mask_sources = sorted(
+        {
+            str(row.get("mask_source", ""))
+            for row in per_background
+            if bool(row.get("success", False)) and str(row.get("mask_source", ""))
+        }
+    )
+    return {
+        "success": True,
+        "scale": float(final_scale),
+        **radial_background_auto_scale_metadata(),
+        "background_count": int(len(scales)),
+        "used_background_indices": sampled_indices,
+        "mask_source": ",".join(mask_sources),
+        "per_background": per_background,
     }
 
 
@@ -4872,13 +5337,16 @@ def show_radial_background_subtraction_popup(
         )
         return caked_density_image_from_result(preview_result)
 
-    raw_caked_image, caked_theta_axis, caked_phi_axis = caked_preview_from_detector(raw_detector)
-    caked_phi_axis = np.asarray(caked_phi_axis, dtype=np.float64)
-    visible_phi_mask = (caked_phi_axis >= -90.0) & (caked_phi_axis <= 90.0)
+    raw_caked_image_full, caked_theta_axis, caked_phi_axis_full = caked_preview_from_detector(
+        raw_detector
+    )
+    raw_caked_image_full = np.asarray(raw_caked_image_full, dtype=np.float64)
+    caked_phi_axis_full = np.asarray(caked_phi_axis_full, dtype=np.float64)
+    visible_phi_mask = (caked_phi_axis_full >= -90.0) & (caked_phi_axis_full <= 90.0)
     if not np.any(visible_phi_mask):
-        visible_phi_mask = np.isfinite(caked_phi_axis)
-    raw_caked_image = raw_caked_image[visible_phi_mask, :]
-    caked_phi_axis = caked_phi_axis[visible_phi_mask]
+        visible_phi_mask = np.isfinite(caked_phi_axis_full)
+    raw_caked_image = raw_caked_image_full[visible_phi_mask, :]
+    caked_phi_axis = caked_phi_axis_full[visible_phi_mask]
     caked_preview_step = preview_stride(tuple(int(v) for v in raw_caked_image.shape))
     raw_caked_preview = np.asarray(
         raw_caked_image[::caked_preview_step, ::caked_preview_step],
@@ -4918,9 +5386,9 @@ def show_radial_background_subtraction_popup(
                 "clip_zero": False,
             },
             phi_map=phi_map,
-            caked_image=raw_caked_image,
+            caked_image=raw_caked_image_full,
             theta_axis=caked_theta_axis,
-            phi_axis=caked_phi_axis,
+            phi_axis=caked_phi_axis_full,
         )
         return cached_radial_payload
 
@@ -4945,7 +5413,8 @@ def show_radial_background_subtraction_popup(
             else:
                 payload = cached_radial_payload
             model_caked_full = np.asarray(payload["caked_background_model"], dtype=np.float64)
-            model_caked_image = model_caked_full[::caked_preview_step, ::caked_preview_step]
+            model_caked_visible = model_caked_full[visible_phi_mask, :]
+            model_caked_image = model_caked_visible[::caked_preview_step, ::caked_preview_step]
             if bool(config["clip_zero"]):
                 detector_model = np.asarray(payload["background_model"], dtype=np.float64)
                 detector_corrected = raw_detector - scale * detector_model
@@ -4957,15 +5426,16 @@ def show_radial_background_subtraction_popup(
                 corrected_caked_full, _theta_axis, _corrected_phi_axis = (
                     caked_preview_from_detector(detector_corrected)
                 )
-                corrected_caked_full = corrected_caked_full[visible_phi_mask, :]
+                corrected_caked_visible = corrected_caked_full[visible_phi_mask, :]
                 corrected_caked_image = np.asarray(
-                    corrected_caked_full[::caked_preview_step, ::caked_preview_step],
+                    corrected_caked_visible[::caked_preview_step, ::caked_preview_step],
                     dtype=np.float64,
                 )
             else:
                 corrected_caked_image = raw_caked_preview - scale * model_caked_image
             fit_surface_caked_full = np.asarray(payload["caked_fit_surface"], dtype=np.float64)
-            fit_surface_caked_image = fit_surface_caked_full[
+            fit_surface_caked_visible = fit_surface_caked_full[visible_phi_mask, :]
+            fit_surface_caked_image = fit_surface_caked_visible[
                 ::caked_preview_step,
                 ::caked_preview_step,
             ]
@@ -5929,17 +6399,33 @@ PBI2_PLOT_BASELINE_TO_PEAK_CANCEL_RATIO = 0.50
 PBI2_NONZERO_MARKER_L_MIN_SPAN_RATIO = 0.5
 PBI2_ROD_PROFILE_L_AXIS_MAX = 3.0
 SPECULAR_QR_ROD_L_MIN = PBI2_SPECULAR_QR_ROD_L_MIN if IS_PBI2_SAMPLE_STEM else 0.0
+rod_phi_samples = max(361, int(as_float(variables.get("rod_points_per_gz_var"), 721)))
+psi_deg = as_float(variables.get("psi_var"), 0.0)
+
+entries_by_bg, background_peak_entry_source = background_peak_entries_from_state(
+    state,
+    background_files=background_files,
+    background_tilt_deg=BACKGROUND_TILT_DEG,
+    sample_name=SAMPLE_NAME,
+    excluded_peaks_by_tilt_normalized=EXCLUDED_PEAKS_BY_TILT_NORMALIZED,
+)
+scale_override_text = _setting_text(
+    "RADIAL_BACKGROUND_SUBTRACTION_SCALE_OVERRIDE",
+    "RA_SIM_RADIAL_BACKGROUND_SUBTRACTION_SCALE",
+    "",
+)
+mode_override_text = _setting_text(
+    "RADIAL_BACKGROUND_SUBTRACTION_MODE_OVERRIDE",
+    "RA_SIM_RADIAL_BACKGROUND_SUBTRACTION_MODE",
+    "",
+)
 radial_background_subtraction_config = radial_background_subtraction_config_from_state(
     variables,
-    mode_override=_setting_text(
-        "RADIAL_BACKGROUND_SUBTRACTION_MODE_OVERRIDE",
-        "RA_SIM_RADIAL_BACKGROUND_SUBTRACTION_MODE",
-        "",
-    ),
-    scale_override=_setting_text(
-        "RADIAL_BACKGROUND_SUBTRACTION_SCALE_OVERRIDE",
-        "RA_SIM_RADIAL_BACKGROUND_SUBTRACTION_SCALE",
-        "",
+    mode_override=mode_override_text,
+    scale_override=(
+        ""
+        if str(scale_override_text).strip().lower() == "auto"
+        else scale_override_text
     ),
     percentile_override=_setting_text(
         "RADIAL_BACKGROUND_SUBTRACTION_PERCENTILE_OVERRIDE",
@@ -5957,6 +6443,35 @@ radial_background_subtraction_config = radial_background_subtraction_config_from
         "",
     ),
 )
+auto_scale_payload: dict[str, object] = {}
+if should_use_auto_radial_background_scale(
+    variables,
+    mode_override_text=mode_override_text,
+    scale_override_text=scale_override_text,
+):
+    auto_scale_payload = estimate_default_radial_background_subtraction_scale(
+        background_files=background_files,
+        background_tilt_deg=BACKGROUND_TILT_DEG,
+        entries_by_bg=entries_by_bg,
+        variables=variables,
+        backend_rotation_k=backend_rotation_k,
+        backend_flip_x=backend_flip_x,
+        backend_flip_y=backend_flip_y,
+        center_row_px=center_row_px,
+        center_col_px=center_col_px,
+        distance_m=distance_m,
+        pixel_size_m=PIXEL_SIZE_M,
+        wavelength_m=WAVELENGTH_M,
+    )
+    auto_scale_value = as_float(auto_scale_payload.get("scale"), np.nan)
+    if bool(auto_scale_payload.get("success", False)) and auto_scale_value > 0.0:
+        radial_background_subtraction_config = {
+            **radial_background_subtraction_config,
+            "mode": "radial",
+            "scale": float(auto_scale_value),
+            "scale_source": "auto_sideband",
+            "auto_scale": auto_scale_payload,
+        }
 radial_bg_edit_mode = _setting_text(
     "RADIAL_BACKGROUND_SUBTRACTION_EDIT_MODE_OVERRIDE",
     "RA_SIM_RADIAL_BACKGROUND_SUBTRACTION_EDIT_MODE",
@@ -5996,11 +6511,17 @@ RADIAL_BACKGROUND_SUBTRACTION_CONFIG = _radial_background_subtraction_config_fro
 RADIAL_BACKGROUND_SUBTRACTION_POLICY_SIGNATURE = radial_background_subtraction_policy_signature(
     RADIAL_BACKGROUND_SUBTRACTION_CONFIG
 )
+radial_auto_payload = RADIAL_BACKGROUND_SUBTRACTION_CONFIG.get("auto_scale", {})
+radial_auto_payload = radial_auto_payload if isinstance(radial_auto_payload, dict) else {}
 print(
     "central-phi caked plane background subtraction: "
     f"mode={RADIAL_BACKGROUND_SUBTRACTION_CONFIG['mode']} "
     f"model={RADIAL_BACKGROUND_SUBTRACTION_POLICY_SIGNATURE['model_kind']} "
     f"scale={float(RADIAL_BACKGROUND_SUBTRACTION_CONFIG['scale']):.4g} "
+    f"scale_source={RADIAL_BACKGROUND_SUBTRACTION_POLICY_SIGNATURE['scale_source']} "
+    f"scale_algorithm={RADIAL_BACKGROUND_SUBTRACTION_POLICY_SIGNATURE['scale_algorithm']} "
+    f"auto_background_count={int(radial_auto_payload.get('background_count', 0))} "
+    f"auto_mask_source={str(radial_auto_payload.get('mask_source', ''))} "
     f"phi_fit_min={float(RADIAL_BACKGROUND_SUBTRACTION_POLICY_SIGNATURE['phi_fit_min']):.4g} "
     f"phi_fit_max={float(RADIAL_BACKGROUND_SUBTRACTION_POLICY_SIGNATURE['phi_fit_max']):.4g} "
     f"clip_zero={bool(RADIAL_BACKGROUND_SUBTRACTION_CONFIG['clip_zero'])} "
@@ -6032,17 +6553,6 @@ QR_ROD_PEAK_EDIT_CONTEXT_SIGNATURE = {
     "rod_reference_policy": ROD_REFERENCE_POLICY_SIGNATURE,
     "rod_profile_policy": ROD_PROFILE_BACKGROUND_POLICY_SIGNATURE,
 }
-rod_phi_samples = max(361, int(as_float(variables.get("rod_points_per_gz_var"), 721)))
-psi_deg = as_float(variables.get("psi_var"), 0.0)
-
-
-entries_by_bg, background_peak_entry_source = background_peak_entries_from_state(
-    state,
-    background_files=background_files,
-    background_tilt_deg=BACKGROUND_TILT_DEG,
-    sample_name=SAMPLE_NAME,
-    excluded_peaks_by_tilt_normalized=EXCLUDED_PEAKS_BY_TILT_NORMALIZED,
-)
 
 NO_BACKGROUND_PEAK_ENTRIES_MESSAGE = (
     "fit validation failed: no background peak entries found in geometry.manual_pairs or usable "

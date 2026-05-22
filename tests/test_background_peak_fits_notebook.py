@@ -140,6 +140,9 @@ def _script_functions(*names: str) -> dict[str, object]:
         "caked_background_plane_from_image",
         "radial_background_model_from_detector",
         "radial_background_subtraction_policy_signature",
+        "radial_background_auto_scale_mask",
+        "robust_background_model_scale",
+        "should_use_auto_radial_background_scale",
         "show_radial_background_subtraction_popup",
     }:
         wanted.add("radial_background_subtraction_config_from_state")
@@ -148,6 +151,11 @@ def _script_functions(*names: str) -> dict[str, object]:
         wanted.add("caked_background_plane_from_image")
         wanted.add("radial_background_model_from_detector")
         wanted.add("radial_background_profile_from_detector")
+        wanted.add("radial_background_auto_scale_failure")
+        wanted.add("radial_background_auto_scale_metadata")
+        wanted.add("as_float")
+        wanted.add("nearest_detector_angles_from_entry")
+        wanted.add("detector_xy_from_entry")
     tree = ast.parse(
         PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8"), filename=str(PARALLEL_SCRIPT_PATH)
     )
@@ -213,6 +221,13 @@ def _script_functions(*names: str) -> dict[str, object]:
         "QR_ROD_BG_SIDE_BAND_OUTER_SCALE": 2.80,
         "QR_ROD_BG_MIN_SIDE_PIXELS": 8,
         "QR_ROD_BG_PERCENTILE": 50.0,
+        "RADIAL_BACKGROUND_AUTO_SCALE_SIGNATURE": "sideband_scale_v1",
+        "RADIAL_BACKGROUND_AUTO_SCALE_MIN_PIXELS": 5000,
+        "RADIAL_BACKGROUND_AUTO_SCALE_MAX": 1.2,
+        "RADIAL_BACKGROUND_AUTO_SCALE_PEAK_MARGIN": 1.25,
+        "RADIAL_BACKGROUND_AUTO_SCALE_MAD_CLIP": 3.0,
+        "THETA_HALF_WINDOW_DEG": 1.8,
+        "PHI_HALF_WINDOW_DEG": 6.0,
     }
     exec(compile(module, str(PARALLEL_SCRIPT_PATH), "exec"), namespace)
     return namespace
@@ -903,6 +918,8 @@ def test_radial_background_config_uses_legacy_state_only_as_defaults() -> None:
 
     default_config = build_config(saved)
     override_config = build_config(saved, mode_override="off", scale_override="0")
+    numeric_scale_config = build_config({}, scale_override="0.7")
+    explicit_off_config = build_config({}, mode_override="off", scale_override="0.7")
 
     assert default_config["mode"] == "radial"
     assert default_config["scale"] == pytest.approx(0.75)
@@ -911,6 +928,100 @@ def test_radial_background_config_uses_legacy_state_only_as_defaults() -> None:
     assert default_config["clip_zero"] is False
     assert override_config["mode"] == "off"
     assert override_config["scale"] == pytest.approx(0.0)
+    assert numeric_scale_config["mode"] == "radial"
+    assert numeric_scale_config["scale"] == pytest.approx(0.7)
+    assert explicit_off_config["mode"] == "off"
+    assert explicit_off_config["scale"] == pytest.approx(0.0)
+
+
+def test_robust_background_model_scale_ignores_bright_outliers() -> None:
+    namespace = _script_functions("robust_background_model_scale")
+    robust_scale = namespace["robust_background_model_scale"]
+    model = np.full((100, 100), 100.0, dtype=np.float64)
+    image = 0.65 * model
+    image[10:20, 10:20] += 10000.0
+    mask = np.ones_like(model, dtype=bool)
+
+    payload = robust_scale(image, model, mask, min_pixels=100)
+
+    assert payload["success"] is True
+    assert payload["scale"] == pytest.approx(0.65, abs=0.02)
+    assert payload["pixel_count"] >= 9900
+    assert payload["scale_source"] == "auto_sideband"
+
+
+def test_radial_background_auto_scale_mask_excludes_peak_rois() -> None:
+    namespace = _script_functions("radial_background_auto_scale_mask")
+    build_mask = namespace["radial_background_auto_scale_mask"]
+    theta_axis = np.linspace(0.0, 10.0, 201, dtype=np.float64)
+    phi_axis = np.linspace(-150.0, 150.0, 201, dtype=np.float64)
+    theta_map, phi_map = np.meshgrid(theta_axis, phi_axis)
+
+    payload = build_mask(
+        theta_map=theta_map,
+        phi_map=phi_map,
+        entries=[{"background_two_theta_deg": 5.0, "background_phi_deg": 0.0}],
+    )
+
+    mask = np.asarray(payload["mask"], dtype=bool)
+    peak_region = (np.abs(theta_map - 5.0) <= 1.8) & (
+        np.abs(((phi_map - 0.0 + 180.0) % 360.0) - 180.0) <= 7.5
+    )
+    assert payload["mask_source"] == "heldout_phi"
+    assert np.count_nonzero(mask) > 0
+    assert not np.any(mask[peak_region])
+    assert np.any(mask[phi_map < -90.0])
+    assert np.any(mask[phi_map > 90.0])
+
+
+def test_default_radial_background_scale_uses_auto_when_no_override() -> None:
+    namespace = _script_functions("should_use_auto_radial_background_scale")
+    should_auto = namespace["should_use_auto_radial_background_scale"]
+
+    assert (
+        should_auto(
+            {},
+            mode_override_text="",
+            scale_override_text="",
+        )
+        is True
+    )
+    assert (
+        should_auto(
+            {},
+            mode_override_text="",
+            scale_override_text="auto",
+        )
+        is True
+    )
+    assert (
+        should_auto(
+            {},
+            mode_override_text="",
+            scale_override_text="0.7",
+        )
+        is False
+    )
+    assert (
+        should_auto(
+            {},
+            mode_override_text="off",
+            scale_override_text="",
+        )
+        is False
+    )
+    assert (
+        should_auto(
+            {
+                "background_subtraction_enabled_var": True,
+                "background_subtraction_mode_var": "radial",
+                "background_subtraction_scale_var": 0.75,
+            },
+            mode_override_text="",
+            scale_override_text="",
+        )
+        is False
+    )
 
 
 def test_radial_background_profile_uses_lower_percentile_and_ignores_bright_peak() -> None:
@@ -1147,17 +1258,20 @@ def test_parallel_script_radial_background_popup_displays_caked_not_raw_detector
 
     assert "ai.integrate2d(" in popup_source
     assert "caked_density_image_from_result(preview_result)" in popup_source
-    assert "raw_caked_image" in popup_source
+    assert "raw_caked_image_full" in popup_source
     assert "raw_caked_preview" in popup_source
     assert "model_caked_image" in popup_source
     assert "corrected_caked_image" in popup_source
     assert "caked_theta_axis" in popup_source
+    assert "caked_phi_axis_full" in popup_source
     assert "visible_phi_mask" in popup_source
-    assert "caked_phi_axis >= -90.0" in popup_source
-    assert "caked_phi_axis <= 90.0" in popup_source
-    assert "raw_caked_image = raw_caked_image[visible_phi_mask, :]" in popup_source
-    assert "corrected_caked_full = corrected_caked_full[visible_phi_mask, :]" in popup_source
-    assert "caked_image=raw_caked_image" in popup_source
+    assert "caked_phi_axis_full >= -90.0" in popup_source
+    assert "caked_phi_axis_full <= 90.0" in popup_source
+    assert "raw_caked_image = raw_caked_image_full[visible_phi_mask, :]" in popup_source
+    assert "corrected_caked_full[visible_phi_mask, :]" in popup_source
+    assert "model_caked_full[visible_phi_mask, :]" in popup_source
+    assert "caked_image=raw_caked_image_full" in popup_source
+    assert "phi_axis=caked_phi_axis_full" in popup_source
     assert "Raw caked image" in popup_source
     assert "Caked background plane (-90 <= phi <= 90)" in popup_source
     assert "Corrected caked image" in popup_source
@@ -1285,13 +1399,75 @@ def test_parallel_script_radial_background_policy_changes_final_qr_rod_cache_key
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     signature_source = source[
         source.index("ROD_PROFILE_BACKGROUND_POLICY_SIGNATURE =") : source.index(
-            "\nrod_phi_samples ="
+            "\nQR_ROD_PEAK_EDIT_CONTEXT_SIGNATURE ="
         )
     ]
     assert '"radial_background_subtraction": RADIAL_BACKGROUND_SUBTRACTION_POLICY_SIGNATURE' in (
         signature_source
     )
     assert "RADIAL_BACKGROUND_SUBTRACTION_POLICY_SIGNATURE" in source
+
+
+def test_radial_background_policy_signature_records_auto_scale_metadata() -> None:
+    namespace = _script_functions("radial_background_subtraction_policy_signature")
+    signature = namespace["radial_background_subtraction_policy_signature"]
+
+    policy = signature(
+        {
+            "mode": "radial",
+            "scale": 0.65,
+            "percentile": 20.0,
+            "smooth_sigma": 6.0,
+            "clip_zero": False,
+            "scale_source": "auto_sideband",
+            "auto_scale": {"algorithm": "sideband_scale_v1"},
+        }
+    )
+
+    assert policy["scale_source"] == "auto_sideband"
+    assert policy["scale_algorithm"] == "sideband_scale_v1"
+
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    assert "RADIAL_BACKGROUND_AUTO_SCALE_SIGNATURE" in source
+    assert '"scale_source": str(normalized.get("scale_source", "manual_or_legacy"))' in source
+    assert "RADIAL_BACKGROUND_AUTO_SCALE_SIGNATURE" in source[
+        source.index("def radial_background_subtraction_policy_signature(") : source.index(
+            "\ndef _radial_background_phi_delta_deg("
+        )
+    ]
+
+
+def test_parallel_script_auto_radial_scale_runs_after_peak_entries_before_popup() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    entries_call = source.index("entries_by_bg, background_peak_entry_source =")
+    override_text = source.index("scale_override_text = _setting_text(", entries_call)
+    auto_call = source.index(
+        "auto_scale_payload = estimate_default_radial_background_subtraction_scale(",
+        override_text,
+    )
+    popup_call = source.index(
+        "radial_background_subtraction_config = show_radial_background_subtraction_popup(",
+        auto_call,
+    )
+
+    assert entries_call < override_text < auto_call < popup_call
+    assert "should_use_auto_radial_background_scale(" in source[override_text:popup_call]
+    assert '"scale_source": "auto_sideband"' in source[auto_call:popup_call]
+    assert '"auto_scale": auto_scale_payload' in source[auto_call:popup_call]
+
+
+def test_parallel_script_radial_background_prints_auto_scale_metadata() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    print_source = source[
+        source.index('"central-phi caked plane background subtraction: "') : source.index(
+            "\nROD_PROFILE_BACKGROUND_POLICY_SIGNATURE ="
+        )
+    ]
+
+    assert "scale_source=" in print_source
+    assert "scale_algorithm=" in print_source
+    assert "auto_background_count=" in print_source
+    assert "auto_mask_source=" in print_source
 
 
 def test_parallel_script_qr_rod_peak_edits_validate_background_policy(tmp_path: Path) -> None:
@@ -1954,7 +2130,7 @@ def test_parallel_script_nonzero_profile_loop_uses_pbi2_shared_branch_bounds() -
     ]
     signature_source = source[
         source.index("ROD_PROFILE_BACKGROUND_POLICY_SIGNATURE =") : source.index(
-            "\nrod_phi_samples ="
+            "\nQR_ROD_PEAK_EDIT_CONTEXT_SIGNATURE ="
         )
     ]
 

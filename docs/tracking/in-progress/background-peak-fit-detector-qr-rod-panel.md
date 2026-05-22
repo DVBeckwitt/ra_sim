@@ -972,6 +972,24 @@ Passing checks:
   version, public API, saved-state, config, or artifact-schema change is
   required. Shipping status: ready for local use, with manual real-output
   visual review still recommended before manuscript use.
+- 2026-05-22 radial background auto-scale closeout: blank
+  `RA_SIM_RADIAL_BACKGROUND_SUBTRACTION_SCALE` now estimates a robust
+  sideband subtraction scale from held-out/off-peak detector pixels before the
+  caked-plane popup opens. Explicit numeric scale overrides still win, and
+  explicit `RA_SIM_RADIAL_BACKGROUND_SUBTRACTION_MODE=off` keeps subtraction
+  disabled. The popup fits its background model from the full caked phi range
+  and only crops to `-90 <= phi <= 90` for display. Cache policy diagnostics
+  now record the auto scale source and algorithm. Validation passed with scoped
+  compileall, `python -m pytest --assert=plain tests/test_background_peak_fits_notebook.py -k "radial_background or auto_scale" -ra`
+  (`16 passed, 244 deselected`), `git diff --check`, and
+  `python -m ra_sim.dev check` (`295 passed`, Ruff clean, mypy clean).
+  Feature status: complete for the caked-plane radial subtraction default-scale
+  path. Bug/error status: no open failure in the auto-scale test slice.
+  Migration/deprecation status: no dependency, CI workflow, version, public API,
+  saved-state schema, or artifact-schema migration is required because explicit
+  saved and environment overrides remain stable. Shipping status: local quality
+  gates passed; real detector-output visual review remains recommended before
+  manuscript use.
 
 Known validation limits:
 
@@ -983,9 +1001,10 @@ Known validation limits:
   cache reuse, and interactive Qr-rod marker editor still need a real
   Bi2Se3/Bi2Te3 script run after this slice.
 - The caked plane background popup still needs a manual interactive run with
-  `RA_SIM_RADIAL_BACKGROUND_SUBTRACTION_EDIT_MODE=popup` and cache resets to
-  verify the labeled `-90 <= phi <= 90` caked plane preview and scale-slider
-  acceptance on current raw data.
+  `RA_SIM_RADIAL_BACKGROUND_SUBTRACTION_EDIT_MODE=popup`, blank or `auto`
+  `RA_SIM_RADIAL_BACKGROUND_SUBTRACTION_SCALE`, and cache resets to verify the
+  auto-scale slider default, labeled `-90 <= phi <= 90` caked plane preview,
+  and scale-slider acceptance on current raw data.
 - Visual acceptance still needs manual script-output review: colored detector
   background, HK labels near low-L rod bases, the central `HK=0` specular ROI,
   the `hk0_l3_star.png` crop fully containing the L=3 intensity, the Qr-rod
