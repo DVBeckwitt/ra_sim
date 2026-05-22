@@ -337,6 +337,28 @@ def test_full_simulation_clears_stale_rows_but_retains_qr_masks() -> None:
     assert _mask_snapshot(state) == masks
 
 
+def test_theta_initial_full_simulation_clears_qr_rows_but_preserves_masks() -> None:
+    state = _state()
+    masks = _mask_snapshot(state)
+
+    policy = invalidate_for_update_action(
+        state,
+        UpdateAction.FULL_SIMULATION,
+        physics_signature_changed=True,
+        hit_table_signature_changed=True,
+        q_group_content_signature_changed=True,
+    )
+
+    assert policy.require_q_group_refresh_after_apply is True
+    assert policy.defer_q_group_refresh_until_rows_available is True
+    assert state.source_row_snapshots == {}
+    assert state.geometry_q_group_entries_cache_signature is None
+    assert state.geometry_q_group_entries_cache == []
+    assert state.manual_pick_cache_signature is None
+    assert state.manual_pick_cache_data == {}
+    assert _mask_snapshot(state) == masks
+
+
 def test_cache_invalidation_never_clears_disabled_qr_or_qz_masks() -> None:
     for action in UpdateAction:
         state = _state()

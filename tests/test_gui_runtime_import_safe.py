@@ -6019,6 +6019,145 @@ def test_runtime_session_manual_rebuild_rows_only_clears_stale_q_group_hit_table
     assert entries[0]["total_intensity"] == 7.0
 
 
+def test_runtime_source_rows_from_hit_tables_carry_theta_initial(monkeypatch) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_copy_hit_tables",
+        lambda tables: list(tables or ()),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_q_group_manager,
+        "build_geometry_fit_full_order_source_rows",
+        lambda *_args, **_kwargs: (
+            [
+                {
+                    "display_col": 30.0,
+                    "display_row": 40.0,
+                    "native_col": 30.0,
+                    "native_row": 40.0,
+                    "hkl": (1, 0, 1),
+                    "hkl_raw": (1.0, 0.0, 1.0),
+                    "source_label": "primary",
+                    "source_table_index": 0,
+                    "source_row_index": 1,
+                    "q_group_key": ("q_group", "primary", 1, 1),
+                }
+            ],
+            [(3.0, 5.0, "primary")],
+            [7],
+        ),
+        raising=False,
+    )
+
+    rows, _lattice, _hit_tables, _indices = (
+        runtime_session._geometry_manual_build_source_rows_from_hit_tables(
+            [object()],
+            image_size_value=64,
+            params_local={"a": 3.0, "c": 5.0, "theta_initial": 7.25},
+            allow_nominal_hkl_indices=True,
+        )
+    )
+
+    assert rows[0]["theta_initial"] == 7.25
+    assert rows[0]["theta_initial_deg"] == 7.25
+
+
+def test_runtime_commit_uses_theta_aware_source_row_content_signature(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    geometry_fit = importlib.import_module("ra_sim.gui.geometry_fit")
+    state_module = importlib.import_module("ra_sim.gui.state")
+
+    hit_tables = [np.asarray([[12.0, 10.0, 20.0, 0.0, 1.0, 0.0, 1.0]], dtype=float)]
+    fresh_rows = [
+        {
+            "display_col": 30.0,
+            "display_row": 40.0,
+            "native_col": 30.0,
+            "native_row": 40.0,
+            "hkl": (1, 0, 1),
+            "hkl_raw": (1.0, 0.0, 1.0),
+            "weight": 7.0,
+            "source_label": "primary",
+            "source_table_index": 0,
+            "source_row_index": 1,
+            "q_group_key": ("q_group", "primary", 1, 1),
+            "theta_initial": 7.25,
+        }
+    ]
+    runtime_state = state_module.SimulationRuntimeState(last_simulation_signature=("base", 0))
+    background_state = state_module.BackgroundRuntimeState()
+    background_state.current_background_index = 0
+
+    monkeypatch.setattr(runtime_session, "simulation_runtime_state", runtime_state, raising=False)
+    monkeypatch.setattr(
+        runtime_session, "background_runtime_state", background_state, raising=False
+    )
+    monkeypatch.setattr(runtime_session, "image_size", 64, raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_retain_runtime_optional_cache",
+        lambda *_args, **_kwargs: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_manual_set_runtime_peak_cache_from_projected_rows",
+        lambda _rows: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_set_geometry_manual_source_snapshot_diagnostics",
+        lambda **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_trace_live_cache_event",
+        lambda *_args, **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "hit_tables_to_max_positions",
+        lambda tables: list(tables or ()),
+        raising=False,
+    )
+
+    rebuild_result = geometry_fit.GeometryFitSourceRowRebuildResult(
+        background_index=0,
+        requested_signature=("sig", 1),
+        requested_signature_summary="sig-1",
+        projected_rows=[dict(entry) for entry in fresh_rows],
+        stored_rows=[dict(entry) for entry in fresh_rows],
+        rebuild_source="live_runtime_cache",
+        rebuild_attempts=["live_runtime_cache"],
+        diagnostics={},
+        peak_table_lattice=[(3.0, 5.0, "primary")],
+        hit_tables=hit_tables,
+        source_reflection_indices=[7],
+        metadata={},
+    )
+
+    runtime_session._commit_geometry_manual_source_row_rebuild_result(rebuild_result)
+
+    assert runtime_state.stored_q_group_content_signature == (
+        runtime_session.gui_geometry_q_group_manager._geometry_q_group_content_signature_from_source_rows(
+            fresh_rows
+        )
+    )
+    assert runtime_state.stored_q_group_content_signature != (
+        runtime_session.gui_geometry_q_group_manager._geometry_q_group_content_signature_from_hit_tables(
+            hit_tables
+        )
+    )
+
+
 def test_manual_rebuild_source_snapshot_is_row_content_aware_and_reusable(
     monkeypatch,
 ) -> None:
@@ -8393,6 +8532,54 @@ def test_combined_state_publisher_uses_serialized_active_peak_row_sides(
     )
     assert fallback_diagnostics["active_sides"] == ("primary",)
     assert fallback_diagnostics["combined_row_count"] == 1
+
+
+def test_combined_state_publisher_content_signature_tracks_theta_initial(
+    monkeypatch,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    state_module = importlib.import_module("ra_sim.gui.state")
+
+    runtime_state = state_module.SimulationRuntimeState(
+        stored_hit_table_signature=("current-hit-tables",),
+        stored_primary_sim_image=np.ones((128, 128), dtype=np.float64),
+        stored_primary_max_positions=[
+            np.asarray([[100.0, 10.0, 11.0, 0.0, 1.0, 0.0, 0.0]], dtype=np.float64)
+        ],
+        stored_primary_peak_table_lattice=[(5.0, 6.0, "primary")],
+    )
+    monkeypatch.setattr(runtime_session, "simulation_runtime_state", runtime_state, raising=False)
+    monkeypatch.setattr(runtime_session, "weight1_var", _RuntimeVar(1.0), raising=False)
+    monkeypatch.setattr(runtime_session, "weight2_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_caked_intersection_cache",
+        lambda: None,
+        raising=False,
+    )
+
+    runtime_session._publish_combined_simulation_state(
+        image_size_value=128,
+        primary_a_value=5.0,
+        primary_c_value=6.0,
+        secondary_a_value=7.0,
+        secondary_c_value=8.0,
+        active_peak_row_sides=("primary",),
+        theta_initial_value=5.0,
+    )
+    theta_five_signature = runtime_state.stored_q_group_content_signature
+
+    runtime_session._publish_combined_simulation_state(
+        image_size_value=128,
+        primary_a_value=5.0,
+        primary_c_value=6.0,
+        secondary_a_value=7.0,
+        secondary_c_value=8.0,
+        active_peak_row_sides=("primary",),
+        theta_initial_value=7.5,
+    )
+
+    assert runtime_state.stored_q_group_content_signature != theta_five_signature
 
 
 def test_combined_state_publisher_does_not_filter_serialized_sides_by_active_weight(

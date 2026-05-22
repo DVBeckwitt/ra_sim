@@ -2491,6 +2491,31 @@ def test_geometry_q_group_manager_source_row_content_signature_ignores_view_fiel
     )
 
 
+def test_geometry_q_group_manager_source_row_content_signature_tracks_theta_initial() -> None:
+    base_rows = [
+        {
+            "source_table_index": 0,
+            "source_row_index": 1,
+            "source_reflection_index": 7,
+            "source_label": "primary",
+            "hkl_raw": [1.0, 0.0, 0.0],
+            "intensity": 12.0,
+            "theta_initial": 5.0,
+        }
+    ]
+
+    base_signature = geometry_q_group_manager._geometry_q_group_content_signature_from_source_rows(
+        base_rows
+    )
+    theta_variant_signature = (
+        geometry_q_group_manager._geometry_q_group_content_signature_from_source_rows(
+            [dict(base_rows[0], theta_initial=7.5)]
+        )
+    )
+
+    assert theta_variant_signature != base_signature
+
+
 def test_geometry_q_group_manager_build_entries_snapshot_invalidates_on_q_group_content_signature_change() -> (
     None
 ):

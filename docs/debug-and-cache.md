@@ -578,6 +578,12 @@ caked-view cache. Detector/caked view switches must not invalidate or filter
 the Qr/Qz group universe. CIF, unit-cell, or simulation-hit-table changes do
 invalidate it.
 
+Status as of 2026-05-22: `theta_i` / `theta_initial` is part of the live
+simulation source-row content identity. Changing it is a full-simulation
+update, refreshes Qr/Qz picker rows and geometry source-row snapshots, and
+retains only user masks such as enabled/disabled Qr groups. This prevents
+selected Qr/Qz sets from reusing stale source rows after sample-tilt changes.
+
 Generated disordered-phase Qr/Qz groups are structural rows, not live display
 artifacts. When `Include generated disordered-phase Qr refs` is enabled and a
 nonzero disordered stacking component is active, the runtime generates the

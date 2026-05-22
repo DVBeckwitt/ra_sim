@@ -400,6 +400,12 @@ def _geometry_q_group_source_row_signature(
         _geometry_q_group_signature_value(str(entry.get("source_label", "primary"))),
         _geometry_q_group_signature_value(hkl_value),
         _geometry_q_group_signature_value(intensity_value),
+        _geometry_q_group_signature_value(
+            entry.get(
+                "theta_initial",
+                entry.get("theta_initial_deg", entry.get("theta_i")),
+            )
+        ),
         _geometry_q_group_signature_value(entry.get("native_col")),
         _geometry_q_group_signature_value(entry.get("native_row")),
     )

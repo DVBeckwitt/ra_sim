@@ -131,6 +131,23 @@ def test_full_simulation_retains_masks_but_does_not_reuse_stale_rows() -> None:
     assert policy.reason == "full_simulation_stale_rows"
 
 
+def test_theta_physics_full_simulation_refreshes_qr_rows_but_retains_masks() -> None:
+    policy = _policy(
+        UpdateAction.FULL_SIMULATION,
+        physics_signature_changed=True,
+        hit_table_signature_changed=True,
+        q_group_content_signature_changed=True,
+    )
+
+    assert policy.retain_geometry_q_group_entries is False
+    assert policy.retain_geometry_q_group_masks is True
+    assert policy.retain_source_row_snapshots is False
+    assert policy.retain_intersection_caches is False
+    assert policy.retain_manual_pick_cache is False
+    assert policy.require_q_group_refresh_after_apply is True
+    assert policy.defer_q_group_refresh_until_rows_available is True
+
+
 def test_qr_selector_masks_are_always_retained_by_cache_policy() -> None:
     actions: list[object] = list(UpdateAction) + ["unknown-action"]
 

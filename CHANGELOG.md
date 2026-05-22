@@ -34,6 +34,7 @@
   - Fixed final Qr-rod fit cache identity so accepted HK=0 profile rows from the specular editor cannot be replaced by stale cached final-figure data.
   - Fixed final Qr-rod profile figures so accepted GUI marker L-axis coefficients, profile rows, `background_density` data, HK=0 axis bounds, and detector overlays remain the final Figure 7 source of truth after final-fit cache resolution, with a saved GUI-vs-final profile audit CSV.
   - Linked the Qr-rod marker editor and detector-preview windows so closing either window also closes the other.
+  - Fixed theta_i GUI updates so simulation source rows and geometry Qr/Qz picker content signatures refresh selected Qr sets instead of reusing stale row snapshots.
   - Raised the default background max-intensity estimate for sparse bright peaks by using a higher robust percentile while keeping slider ceilings tied to the true finite image range.
 
 - **Config and path migration**

@@ -136,6 +136,32 @@ def test_orientation_change_requires_full_simulation() -> None:
     assert decision.requires_worker is True
 
 
+def test_theta_initial_change_requires_full_simulation() -> None:
+    previous = _signatures()
+    current = replace(
+        previous,
+        physics_sig=(
+            "physics",
+            ("distance_m", 0.1),
+            ("rotations", 0.0, 0.0, 0.0),
+            ("wavelength", 1.54),
+            ("pixel_size", 1.0e-4),
+            ("sample_geometry", 1.0, 2.0, 3.0),
+            ("theta_initial", 7.5),
+            ("solve_q", "adaptive", 128, 1.0e-6),
+            ("beam_sampling", 1),
+            ("mosaic_sampling", 1),
+            ("optics_mode", "exact"),
+        ),
+        full_image_sig=("full_image", "theta-initial-7.5"),
+    )
+
+    decision = classify_update(previous, current, RuntimeCacheState())
+
+    assert decision.action is UpdateAction.FULL_SIMULATION
+    assert decision.requires_worker is True
+
+
 def test_center_plus_distance_change_requires_full_simulation() -> None:
     previous = _signatures()
     current = replace(

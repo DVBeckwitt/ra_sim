@@ -19157,6 +19157,7 @@ def _publish_combined_simulation_state(
     secondary_a_value: float,
     secondary_c_value: float,
     active_peak_row_sides: Sequence[object] | None = None,
+    theta_initial_value: float | None = None,
 ) -> dict[str, object]:
     w1 = float(weight1_var.get())
     w2 = float(weight2_var.get())
@@ -19340,6 +19341,17 @@ def _publish_combined_simulation_state(
             max_positions_local
         )
     )
+    if theta_initial_value is not None:
+        try:
+            theta_initial_float = float(theta_initial_value)
+        except Exception:
+            theta_initial_float = float("nan")
+        if np.isfinite(theta_initial_float):
+            row_content_signature = (
+                "q_group_content_with_theta_initial",
+                row_content_signature,
+                ("theta_initial", round(float(theta_initial_float), 6)),
+            )
     simulation_runtime_state.stored_q_group_content_signature = row_content_signature
     simulation_runtime_state.stored_source_reflection_indices_local = (
         list(source_reflection_indices_local)
@@ -26359,6 +26371,7 @@ def do_update():
             secondary_a_value=float(secondary_a),
             secondary_c_value=float(secondary_c),
             active_peak_row_sides=publish_active_peak_row_sides,
+            theta_initial_value=float(theta_init_up),
         )
         run_primary = bool(combined_state_diagnostics.get("run_primary", False))
         run_secondary = bool(combined_state_diagnostics.get("run_secondary", False))
@@ -30074,6 +30087,10 @@ def _geometry_manual_build_source_rows_from_hit_tables(
         primary_c = float(params_local.get("c", np.nan))
     except Exception:
         primary_c = float("nan")
+    try:
+        theta_initial_value = float(params_local.get("theta_initial", np.nan))
+    except Exception:
+        theta_initial_value = float("nan")
 
     raw_rows, peak_table_lattice, source_reflection_indices = (
         gui_geometry_q_group_manager.build_geometry_fit_full_order_source_rows(
@@ -30089,6 +30106,10 @@ def _geometry_manual_build_source_rows_from_hit_tables(
         )
     )
     raw_rows = [dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)]
+    if np.isfinite(theta_initial_value):
+        for entry in raw_rows:
+            entry["theta_initial"] = float(theta_initial_value)
+            entry["theta_initial_deg"] = float(theta_initial_value)
     return raw_rows, peak_table_lattice, copied_hit_tables, source_reflection_indices
 
 
@@ -31185,7 +31206,18 @@ def _commit_geometry_manual_source_row_rebuild_result(
             )
     hit_tables_local = rebuild_result.hit_tables
     q_group_content_signature = None
-    if hit_tables_local is not None:
+    source_rows_carry_theta = any(
+        isinstance(entry, Mapping)
+        and ("theta_initial" in entry or "theta_initial_deg" in entry or "theta_i" in entry)
+        for entry in stored_rows
+    )
+    if stored_rows and (source_rows_carry_theta or hit_tables_local is None):
+        q_group_content_signature = (
+            gui_geometry_q_group_manager._geometry_q_group_content_signature_from_source_rows(
+                stored_rows
+            )
+        )
+    if q_group_content_signature is None and hit_tables_local is not None:
         q_group_content_signature = (
             gui_geometry_q_group_manager._geometry_q_group_content_signature_from_hit_tables(
                 hit_tables_local
@@ -31199,12 +31231,6 @@ def _commit_geometry_manual_source_row_rebuild_result(
         simulation_runtime_state.stored_max_positions_local = list(max_positions_local)
     else:
         simulation_runtime_state.stored_max_positions_local = None
-    if q_group_content_signature is None:
-        q_group_content_signature = (
-            gui_geometry_q_group_manager._geometry_q_group_content_signature_from_source_rows(
-                stored_rows
-            )
-        )
     simulation_runtime_state.stored_q_group_content_signature = q_group_content_signature
     simulation_runtime_state.stored_source_reflection_indices_local = (
         list(rebuild_result.source_reflection_indices)
