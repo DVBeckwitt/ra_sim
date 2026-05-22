@@ -9,6 +9,23 @@ Last updated: 2026-05-22
 
 ## Summary
 
+2026-05-22 Qr/Qz ghost refresh and debug-physics handoff: saved Qr/Qz
+ghost-representative squares keep the existing refreshed-source behavior while
+the lookup implementation is simplified to try current source rows first and
+current simulated ghost rows only after a miss. Advanced/Debug physics toggles
+for integer-Bragg primary peaks and refraction-disabled vacuum `n2` are
+documented as runtime-only diagnostics, and the refraction-disabled runtime
+payload now uses the same vacuum-array helper in both direct and payload paths.
+Bug/error status: fixed for stale saved ghost squares that could otherwise fail
+to follow current ghost rays when source rows were present but did not contain
+the selected ghost. Feature status: the debug physics toggles are documented
+for operator use and remain session-local; no CLI flag, config key, saved-state
+schema, artifact schema, dependency, or public API changed. Migration and
+deprecation status: no migration, compatibility shim, or deprecation notice is
+required. CI status: targeted GUI structure/signature/manual-geometry/runtime
+tests, `compileall`, and `python -m ra_sim.dev check` pass. Shipping status:
+ready as a normal bug-fix/documentation slice; rollback is a normal git revert.
+
 2026-05-22 locked Qr/Qz projection-contract diagnostics: locked-Qr handoff
 audit rows now include `locked_qr_caked_projection_contract`, a compact
 diagnostic payload that records the exact projector id/kind, caked bundle

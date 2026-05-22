@@ -14207,13 +14207,12 @@ def build_geometry_manual_initial_pairs_display(
         if current_ghost_source_lookup is not None:
             return current_ghost_source_lookup
         current_ghost_source_lookup = {}
-        if bool(reuse_only):
-            return current_ghost_source_lookup
-        current_ghost_source_lookup = _ghost_source_lookup_from_rows(
-            _active_projected_source_rows_for_consumer(
-                "initial_pairs_ghost_source",
-            ),
-        )
+        if not bool(reuse_only):
+            current_ghost_source_lookup = _ghost_source_lookup_from_rows(
+                _active_projected_source_rows_for_consumer(
+                    "initial_pairs_ghost_source",
+                ),
+            )
         return current_ghost_source_lookup
 
     def _simulated_ghost_source_lookup() -> GeometryManualLookupMap:
@@ -14221,27 +14220,20 @@ def build_geometry_manual_initial_pairs_display(
         if simulated_ghost_source_lookup is not None:
             return simulated_ghost_source_lookup
         simulated_ghost_source_lookup = {}
-        if bool(reuse_only):
-            return simulated_ghost_source_lookup
-        simulated_ghost_source_lookup = _ghost_source_lookup_from_rows(
-            _active_projected_simulated_rows(),
-        )
+        if not bool(reuse_only):
+            simulated_ghost_source_lookup = _ghost_source_lookup_from_rows(
+                _active_projected_simulated_rows(),
+            )
         return simulated_ghost_source_lookup
 
     def _current_ghost_source_entry(
         entry: Mapping[str, object],
     ) -> dict[str, object] | None:
-        source_entry = geometry_manual_lookup_source_entry(
-            _current_ghost_source_lookup(),
-            entry,
-        )
-        if isinstance(source_entry, Mapping):
-            return dict(source_entry)
-        source_entry = geometry_manual_lookup_source_entry(
-            _simulated_ghost_source_lookup(),
-            entry,
-        )
-        return dict(source_entry) if isinstance(source_entry, Mapping) else None
+        for lookup in (_current_ghost_source_lookup, _simulated_ghost_source_lookup):
+            source_entry = geometry_manual_lookup_source_entry(lookup(), entry)
+            if isinstance(source_entry, Mapping):
+                return dict(source_entry)
+        return None
 
     if prefer_cache and int(background_index) == int(current_background_index):
         cache_data = get_cache_data(

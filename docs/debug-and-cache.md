@@ -22,6 +22,19 @@ Important points:
 - geometry-fit and mosaic-fit log file creation have dedicated toggles
 - optional retained caches are controlled separately from logging output
 
+The simulation GUI Advanced/Debug panel also has runtime-only physics toggles
+for diagnostic comparisons:
+
+- `Disable HT: Integer Bragg` switches the primary structure-factor source from
+  Hendricks-Teller rods to integer CIF Bragg peaks, placing all primary
+  structure-factor weight at integer HKL rows until `Enable HT` is pressed.
+- `Disable Refraction` forces the active simulation and fit payloads to use
+  vacuum `n2=1+0j` and invalidates optics-dependent caches until `Enable
+  Refraction` is pressed.
+
+These buttons are not saved-state or config settings. They are intended for
+one-session comparisons while debugging simulation physics.
+
 ## Output Locations
 
 The default output directories come from `config/dir_paths.yaml`.

@@ -3509,24 +3509,36 @@ def edit_qr_rod_region_editor(
             )
     runtime_mode = qr_rod_peak_edit_runtime_mode(mode, backend_name=backend_name, env=env)
 
-    def fallback_result(source: str) -> dict[str, object]:
-        fallback_parameters = {}
+    def active_peak_edit_parameters(
+        values: dict[str, object] | None = None,
+    ) -> dict[str, dict[str, float]]:
+        values = values or {}
+        parameters: dict[str, dict[str, float]] = {}
         if imports_nonzero_parameters:
-            fallback_parameters["nonzero"] = {
-                "delta_qr": float(current_delta_qr),
-                "l_min": float(current_l_min),
-                "l_max": float(current_l_max),
-                "theta_initial_deg": float(current_theta_initial_deg),
-                "smoothing_sigma_bins": float(current_smoothing_sigma_bins),
+            parameters["nonzero"] = {
+                "delta_qr": float(values.get("delta_qr", current_delta_qr)),
+                "l_min": float(values.get("l_min", current_l_min)),
+                "l_max": float(values.get("l_max", current_l_max)),
+                "theta_initial_deg": float(
+                    values.get("theta_initial_deg", current_theta_initial_deg)
+                ),
+                "smoothing_sigma_bins": float(
+                    values.get("smoothing_sigma_bins", current_smoothing_sigma_bins)
+                ),
             }
         if imports_specular_parameters:
-            fallback_parameters["specular"] = {
-                "phi_min": float(current_phi_min),
-                "phi_max": float(current_phi_max),
-                "two_theta_min": float(current_two_theta_min),
-                "two_theta_max": float(current_two_theta_max),
-                "smoothing_sigma_bins": float(current_smoothing_sigma_bins),
+            parameters["specular"] = {
+                "phi_min": float(values.get("phi_min", current_phi_min)),
+                "phi_max": float(values.get("phi_max", current_phi_max)),
+                "two_theta_min": float(values.get("two_theta_min", current_two_theta_min)),
+                "two_theta_max": float(values.get("two_theta_max", current_two_theta_max)),
+                "smoothing_sigma_bins": float(
+                    values.get("smoothing_sigma_bins", current_smoothing_sigma_bins)
+                ),
             }
+        return parameters
+
+    def fallback_result(source: str) -> dict[str, object]:
         return {
             "marker_table": table,
             "rod_profile_table": fallback_profile_table.copy(),
@@ -3541,7 +3553,7 @@ def edit_qr_rod_region_editor(
             "two_theta_max": float(current_two_theta_max),
             "smoothing_sigma_bins": float(current_smoothing_sigma_bins),
             "l_axis_coefficients": {},
-            "peak_edit_parameters": fallback_parameters,
+            "peak_edit_parameters": active_peak_edit_parameters(),
             "accepted": False,
             "source": source,
         }
@@ -3567,43 +3579,6 @@ def edit_qr_rod_region_editor(
         "two_theta_max": float(current_two_theta_max),
         "smoothing_sigma_bins": float(current_smoothing_sigma_bins),
     }
-
-    def current_phase_peak_edit_parameters() -> dict[str, dict[str, float]]:
-        parameters: dict[str, dict[str, float]] = {}
-        if imports_nonzero_parameters:
-            parameters["nonzero"] = {
-                "delta_qr": float(region_control_state.get("delta_qr", current_delta_qr)),
-                "l_min": float(region_control_state.get("l_min", current_l_min)),
-                "l_max": float(region_control_state.get("l_max", current_l_max)),
-                "theta_initial_deg": float(
-                    region_control_state.get("theta_initial_deg", current_theta_initial_deg)
-                ),
-                "smoothing_sigma_bins": float(
-                    region_control_state.get(
-                        "smoothing_sigma_bins",
-                        current_smoothing_sigma_bins,
-                    )
-                ),
-            }
-        if imports_specular_parameters:
-            parameters["specular"] = {
-                "phi_min": float(region_control_state.get("phi_min", current_phi_min)),
-                "phi_max": float(region_control_state.get("phi_max", current_phi_max)),
-                "two_theta_min": float(
-                    region_control_state.get("two_theta_min", current_two_theta_min)
-                ),
-                "two_theta_max": float(
-                    region_control_state.get("two_theta_max", current_two_theta_max)
-                ),
-                "smoothing_sigma_bins": float(
-                    region_control_state.get(
-                        "smoothing_sigma_bins",
-                        current_smoothing_sigma_bins,
-                    )
-                ),
-            }
-        return parameters
-
     try:
         edited_markers, accepted = show_qr_rod_peak_marker_popup(
             table,
@@ -3645,7 +3620,7 @@ def edit_qr_rod_region_editor(
         "l_axis_coefficients": normalized_l_axis_coefficients_payload(
             region_control_state.get("l_axis_coefficients", {})
         ),
-        "peak_edit_parameters": current_phase_peak_edit_parameters(),
+        "peak_edit_parameters": active_peak_edit_parameters(region_control_state),
         "accepted": bool(accepted),
         "source": "popup" if accepted else source_mode,
     }
@@ -3656,22 +3631,13 @@ def edit_qr_rod_region_editor(
                 for key, value in imported_peak_edit_parameters.items()
                 if isinstance(value, dict)
             }
-            if imports_nonzero_parameters:
-                save_parameters["nonzero"] = {
-                    "delta_qr": float(result["delta_qr"]),
-                    "l_min": float(result["l_min"]),
-                    "l_max": float(result["l_max"]),
-                    "theta_initial_deg": float(result["theta_initial_deg"]),
-                    "smoothing_sigma_bins": float(result["smoothing_sigma_bins"]),
+            save_parameters.update(
+                {
+                    str(key): dict(value)
+                    for key, value in result.get("peak_edit_parameters", {}).items()
+                    if isinstance(value, dict)
                 }
-            if imports_specular_parameters:
-                save_parameters["specular"] = {
-                    "phi_min": float(result["phi_min"]),
-                    "phi_max": float(result["phi_max"]),
-                    "two_theta_min": float(result["two_theta_min"]),
-                    "two_theta_max": float(result["two_theta_max"]),
-                    "smoothing_sigma_bins": float(result["smoothing_sigma_bins"]),
-                }
+            )
             saved_path = write_qr_rod_peak_edits(
                 path_text,
                 pd.DataFrame(result["marker_table"]),

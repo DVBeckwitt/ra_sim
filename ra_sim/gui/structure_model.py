@@ -1719,21 +1719,8 @@ def rebuild_diffraction_inputs(
             occ_values=new_occ,
             cif_path_override=active_cif,
         )
+        combined_ht_local = {}
         combined_qr_local = {}
-        state.ht_curves_cache = {
-            "curves": {},
-            "qr_curves": combined_qr_local,
-            "arrays": arrays_local,
-            "a": float(a_axis),
-            "c": float(c_axis),
-            "iodine_z": float(iodine_z_current),
-            "phi_l_divisor": float(phi_l_divisor_current),
-            "phase_delta_expression": str(phase_delta_expression_current),
-            "finite_stack": bool(finite_stack_flag),
-            "stack_layers": int(layers),
-            "rod_points_per_gz": int(rod_points_per_gz),
-            "primary_source_mode": primary_source_mode,
-        }
     else:
         active_ht_entries = active_weighted_ht_entries(p_vals, weights)
         caches = [get_cache(label, p_value) for label, p_value, _weight in active_ht_entries]
@@ -1744,20 +1731,20 @@ def rebuild_diffraction_inputs(
         )
         combined_qr_local = ht_dict_to_qr_dict(combined_ht_local)
         arrays_local = ht_dict_to_arrays(combined_ht_local)
-        state.ht_curves_cache = {
-            "curves": combined_ht_local,
-            "qr_curves": combined_qr_local,
-            "arrays": arrays_local,
-            "a": float(a_axis),
-            "c": float(c_axis),
-            "iodine_z": float(iodine_z_current),
-            "phi_l_divisor": float(phi_l_divisor_current),
-            "phase_delta_expression": str(phase_delta_expression_current),
-            "finite_stack": bool(finite_stack_flag),
-            "stack_layers": int(layers),
-            "rod_points_per_gz": int(rod_points_per_gz),
-            "primary_source_mode": primary_source_mode,
-        }
+    state.ht_curves_cache = {
+        "curves": combined_ht_local,
+        "qr_curves": combined_qr_local,
+        "arrays": arrays_local,
+        "a": float(a_axis),
+        "c": float(c_axis),
+        "iodine_z": float(iodine_z_current),
+        "phi_l_divisor": float(phi_l_divisor_current),
+        "phase_delta_expression": str(phase_delta_expression_current),
+        "finite_stack": bool(finite_stack_flag),
+        "stack_layers": int(layers),
+        "rod_points_per_gz": int(rod_points_per_gz),
+        "primary_source_mode": primary_source_mode,
+    }
     state.last_occ_for_ht = list(new_occ)
     state.last_p_triplet = list(p_vals)
     state.last_weights = list(weights)

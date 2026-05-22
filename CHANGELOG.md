@@ -47,6 +47,7 @@
   - Fixed saved Qr/Qz ghost-representative placements so changing simulation parameters refreshes their simulated marker positions from current source rows or current simulated-peak rows even when the saved placed row no longer carries ghost provenance, rejects stale warm-cache simulated pixels when the current ghost is missing, and preserves measured background clicks.
   - Fixed detector-mode locked Qr/Qz geometry-fit preflight so selected detector rows generate exact caked projected rows before the locked-Qr projection readiness gate runs, and current saved manual pairs replace unmatched stale live-preview source rows during fit job build.
   - Raised the default background max-intensity estimate for sparse bright peaks by using a higher robust percentile while keeping slider ceilings tied to the true finite image range.
+  - Added Advanced/Debug GUI toggles to compare primary integer-Bragg peaks against Hendricks-Teller rods and to disable refraction effects by forcing vacuum `n2` with optics-cache invalidation.
 
 - **Config and path migration**
   - Renamed background-path keys in config from `dark_image`/`osc_files` to `simulation_dark_osc_file`/`simulation_background_osc_files`.

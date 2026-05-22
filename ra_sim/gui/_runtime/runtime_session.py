@@ -1654,6 +1654,10 @@ _debug_refraction_effects_disabled = False
 _DEBUG_REFRACTION_DISABLED_SOURCE_META = ("refraction_disabled", None)
 
 
+def _vacuum_sample_n2_array(wavelength_snapshot) -> np.ndarray:
+    return np.ones(wavelength_snapshot.shape[0], dtype=np.complex128)
+
+
 def _debug_integer_bragg_mode_enabled() -> bool:
     return bool(globals().get("_debug_disable_ht_integer_bragg", False))
 
@@ -1727,7 +1731,7 @@ def _current_sample_n2_array(wavelength_angstrom_array, active_cif_path=None):
 
     if _debug_refraction_disabled():
         wavelength_snapshot = _n2_wavelength_snapshot_from_angstrom(wavelength_angstrom_array)
-        return np.ones(wavelength_snapshot.shape[0], dtype=np.complex128)
+        return _vacuum_sample_n2_array(wavelength_snapshot)
 
     optics_path = _resolve_optics_cif_path() if active_cif_path is None else str(active_cif_path)
     wavelength_m = np.asarray(wavelength_angstrom_array, dtype=np.float64) * 1.0e-10
@@ -1748,7 +1752,7 @@ def _current_sample_n2_payload(wavelength_angstrom_array, active_cif_path=None):
     wavelength_snapshot = _n2_wavelength_snapshot_from_angstrom(wavelength_angstrom_array)
     if _debug_refraction_disabled():
         return (
-            np.ones(wavelength_snapshot.shape[0], dtype=np.complex128),
+            _vacuum_sample_n2_array(wavelength_snapshot),
             _DEBUG_REFRACTION_DISABLED_SOURCE_META,
             wavelength_snapshot,
         )

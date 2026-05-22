@@ -3242,6 +3242,11 @@ Important detail:
 - `debug.global.disable_all` disables logging/debug output only.
 - `debug.global.disable_all` does not disable optional caches.
 - Tiny infrastructure/compile caches such as config bundle loading, CIF parsing, and compiled expression helpers stay always-on and are not controlled by `debug.cache`.
+- Advanced/Debug panel physics buttons are runtime-only diagnostics. `Disable HT:
+  Integer Bragg` replaces the primary Hendricks-Teller rod source with integer
+  CIF Bragg peaks for the current session; `Disable Refraction` forces vacuum
+  `n2=1+0j` and invalidates optics-dependent caches for the current session.
+  Neither button writes config or saved GUI state.
 
 ### Resolution order
 
