@@ -678,33 +678,6 @@ def l_axis_coefficients_signature(
     return tuple(sorted(records, key=lambda row: tuple(str(value) for value in row)))
 
 
-def freeze_qr_rod_gui_state(
-    *,
-    marker_table: object,
-    rod_profile_table: object,
-    l_axis_coefficients: object,
-    delta_qr: object,
-    l_min: object,
-    l_max: object,
-    theta_initial_deg: object,
-    specular_roi: object,
-) -> dict[str, object]:
-    roi = dict(specular_roi or {}) if isinstance(specular_roi, dict) else {}
-    return {
-        "marker_table": pd.DataFrame(marker_table).copy(),
-        "rod_profile_table": pd.DataFrame(rod_profile_table).copy(),
-        "l_axis_coefficients": normalized_l_axis_coefficients_payload(l_axis_coefficients),
-        "delta_qr": float(delta_qr),
-        "l_min": float(l_min),
-        "l_max": float(l_max),
-        "theta_initial_deg": float(theta_initial_deg),
-        "specular_phi_min_deg": float(roi.get("phi_min", np.nan)),
-        "specular_phi_max_deg": float(roi.get("phi_max", np.nan)),
-        "specular_theta_min_deg": float(roi.get("two_theta_min", np.nan)),
-        "specular_theta_max_deg": float(roi.get("two_theta_max", np.nan)),
-    }
-
-
 def specular_qz_bounds_for_l_window(
     qz_values: object,
     marker_rows: object,
@@ -16280,16 +16253,6 @@ rod_profile_table = rod_profile_table_for_l_window(
     specular_l_min=qr_rod_specular_l_min,
     specular_l_max=qr_rod_specular_l_max,
     l_axis_coefficients=accepted_l_axis_coefficients,
-)
-qr_rod_accepted_gui_state = freeze_qr_rod_gui_state(
-    marker_table=marker_table,
-    rod_profile_table=rod_profile_table,
-    l_axis_coefficients=accepted_l_axis_coefficients,
-    delta_qr=qr_rod_delta_qr,
-    l_min=qr_rod_editor_l_min,
-    l_max=qr_rod_editor_l_max,
-    theta_initial_deg=qr_rod_editor_theta_initial_deg,
-    specular_roi=SPECULAR_ROI_SIGNATURE,
 )
 final_region_overlays = final_qr_rod_region_overlays_from_profile_table(
     rod_profile_table,

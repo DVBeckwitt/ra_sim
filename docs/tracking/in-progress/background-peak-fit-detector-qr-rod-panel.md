@@ -928,6 +928,15 @@ Passing checks:
   Qr-rod L-axis/profile rows after marker edits; no dependency, CI workflow,
   version, migration, public API, saved-state, config, or artifact-schema change
   is required.
+- 2026-05-22 accepted L-axis simplification closeout: removed the unused
+  `freeze_qr_rod_gui_state()` wrapper and its unused assignment after verifying
+  that final Figure 7 state is consumed directly through
+  `accepted_l_axis_coefficients`. Validation passed with scoped compileall,
+  `python -m pytest tests/test_background_peak_fits_notebook.py -ra`
+  (`240 passed, 8 skipped`), and `git diff --check`. Bug/error/feature status:
+  behavior preserved; cleanup only. No CI workflow, deprecation, migration,
+  version, public API, saved-state, config, artifact-schema, or launch-procedure
+  change is required.
 
 Known validation limits:
 

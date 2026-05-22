@@ -105,7 +105,6 @@ def _script_functions(*names: str) -> dict[str, object]:
         "recompute_qr_rod_region_profiles",
         "l_axis_coefficients_signature",
         "merge_l_axis_coefficients",
-        "freeze_qr_rod_gui_state",
     }:
         if "recompute_qr_rod_region_profiles" in wanted:
             wanted.add("l_axis_coefficients_signature")
@@ -5057,7 +5056,7 @@ def test_final_figure_threads_gui_l_axis_coefficients_to_plot_helpers() -> None:
         )
     ]
 
-    assert "qr_rod_accepted_gui_state = freeze_qr_rod_gui_state(" in final_state
+    assert "accepted_l_axis_coefficients = merge_l_axis_coefficients(" in final_state
     assert "l_axis_coefficients=accepted_l_axis_coefficients" in final_state
     assert '"accepted_l_axis_coefficients": l_axis_coefficients_signature(' in final_state
     assert final_plot.count("l_axis_coefficients=accepted_l_axis_coefficients") >= 6
