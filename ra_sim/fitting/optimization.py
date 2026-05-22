@@ -20642,6 +20642,150 @@ def _resolve_locked_qr_trial_detector_point_from_hit_tables(
     return None, result
 
 
+def _resolve_locked_qr_handoff_native_prediction(
+    *,
+    pair: Mapping[str, object],
+    trial_params: Mapping[str, object],
+    fit_context: Mapping[str, object],
+    locked_correspondence: Mapping[str, object],
+    dataset_ctx: object,
+) -> Dict[str, object] | None:
+    """Project the handoff-native locked Qr anchor when it is available."""
+
+    handoff_prediction_native = _finite_pair(
+        locked_correspondence.get(
+            "fit_prediction_detector_native_px",
+            pair.get("fit_prediction_detector_native_px"),
+        )
+    )
+    if handoff_prediction_native is None:
+        return None
+
+    two_theta_arr, phi_arr, projection_meta = _project_detector_points_to_fit_space(
+        dataset_ctx if isinstance(dataset_ctx, GeometryFitDatasetContext) else None,
+        np.asarray([float(handoff_prediction_native[0])], dtype=np.float64),
+        np.asarray([float(handoff_prediction_native[1])], dtype=np.float64),
+        local_params=trial_params,
+        anchor_kind="simulated",
+        input_frame="native_detector",
+        center=fit_context.get("fit_center"),
+        detector_distance=float(fit_context.get("detector_distance", np.nan)),
+        pixel_size=float(fit_context.get("pixel_size", np.nan)),
+        gamma_deg=float(fit_context.get("gamma_deg", 0.0)),
+        Gamma_deg=float(fit_context.get("Gamma_deg", 0.0)),
+    )
+    if (
+        not bool(projection_meta.get("valid", False))
+        or two_theta_arr.size < 1
+        or phi_arr.size < 1
+        or not np.isfinite(two_theta_arr[0])
+        or not np.isfinite(phi_arr[0])
+    ):
+        return {
+            "available": False,
+            "unavailable_reason": "locked_qr_dynamic_prediction_unprojectable",
+            "resolution_reason": "locked_qr_handoff_native_projection_failed",
+            "fit_prediction_caked_authority": "unknown",
+            "sim_refinement_status": "handoff_native_projection_failed",
+            "sim_refinement_policy": "point_only_fail_closed",
+            "projection_meta": dict(projection_meta),
+        }
+
+    projected_caked = [float(two_theta_arr[0]), float(phi_arr[0])]
+    native_cols = np.asarray(
+        projection_meta.get("native_cols", [handoff_prediction_native[0]]),
+        dtype=np.float64,
+    ).reshape(-1)
+    native_rows = np.asarray(
+        projection_meta.get("native_rows", [handoff_prediction_native[1]]),
+        dtype=np.float64,
+    ).reshape(-1)
+    projected_native = [
+        float(native_cols[0]) if native_cols.size else float(handoff_prediction_native[0]),
+        float(native_rows[0]) if native_rows.size else float(handoff_prediction_native[1]),
+    ]
+    nominal_caked = _dynamic_reanchor_jsonable(
+        _fit_qr_caked_pair_from_entry(locked_correspondence, "sim_nominal_caked_deg")
+    )
+    return {
+        "available": True,
+        "resolution_reason": "locked_qr_handoff_native_anchor_projected",
+        "locked_qr_detector_point_source": "handoff_fit_prediction_detector_native_px",
+        "source_rows_rebuilt_or_reused": "skipped_handoff_native_anchor",
+        "trial_source_rows_available": False,
+        "trial_source_rows_count": 0,
+        "trial_source_rows_signature": None,
+        "trial_source_rows_source": None,
+        "objective_cache_mode": "handoff_native_anchor",
+        "objective_cache_hit": False,
+        "objective_cache_reject_reason": None,
+        "objective_process_peaks_called": False,
+        "fit_prediction_caked_deg": list(projected_caked),
+        "predicted_caked_deg": list(projected_caked),
+        "objective_sim_caked_deg": list(projected_caked),
+        "fit_prediction_caked_authority": "dynamic_trial_projection_from_prediction_native",
+        "sim_refined_caked_authority": "dynamic_trial_projection_from_prediction_native",
+        "optimizer_simulated_source_two_theta_phi": list(projected_caked),
+        "optimizer_source_source": "handoff_native_anchor_projection",
+        "objective_source_authority": "point_only_detector_projection",
+        "source_authority_match": True,
+        "sim_nominal_projected_caked_deg": list(projected_caked),
+        "sim_nominal_caked_raw_deg": nominal_caked,
+        "sim_nominal_caked_deg": nominal_caked,
+        "sim_refined_caked_raw_deg": list(projected_caked),
+        "sim_refined_caked_deg": list(projected_caked),
+        "sim_refinement_delta_caked_deg": [0.0, 0.0],
+        "sim_refinement_delta_caked_norm_deg": 0.0,
+        "sim_refinement_status": "handoff_native_projected_to_caked",
+        "sim_refinement_policy": "exact_projector_from_handoff_native",
+        "sim_refinement_caked_image_source": "point_only_detector_projection",
+        "sim_refinement_subpixel": "no",
+        "sim_refinement_subpixel_status": "none",
+        "sim_refinement_subpixel_method": "none",
+        "sim_refinement_bin_center_only": False,
+        "sim_refinement_peak_value": 0.0,
+        "sim_refinement_local_max_intensity": 0.0,
+        "sim_refinement_local_sum_intensity": 0.0,
+        "sim_refinement_local_nonzero_count": 0,
+        "dynamic_baseline_anchor_coordinate_baseline_used": False,
+        "live_caked_source_used_for_objective": False,
+        "static_locked_caked_prediction_retained": False,
+        "point_only_detector_projection_used": True,
+        "point_only_projector_skipped": False,
+        "point_only_detector_coordinate_source": "fit_prediction_detector_native_px",
+        "sim_nominal_detector_display_px_used_for_caked_projection": False,
+        "sim_nominal_projection_input_px": [
+            float(handoff_prediction_native[0]),
+            float(handoff_prediction_native[1]),
+        ],
+        "sim_nominal_projection_input_frame": "native_detector",
+        "sim_nominal_native_px": list(projected_native),
+        "sim_nominal_detector_native_px": list(projected_native),
+        "sim_refined_detector_native_px": list(projected_native),
+        "fit_prediction_detector_native_px": list(projected_native),
+        "fit_prediction_detector_native_px_source": "fit_prediction_detector_native_px",
+        "caked_projection_signature": projection_meta.get("fit_space_local_params_signature"),
+        "cake_bundle_signature": projection_meta.get("cake_bundle_signature"),
+        "fit_space_projector_kind": projection_meta.get("fit_space_projector_kind"),
+        "projection_meta": dict(projection_meta),
+        "fit_prediction_detector_display_px": None,
+        "fit_prediction_detector_display_px_source": (
+            "invalid_for_detector_space:native_anchor_authoritative"
+        ),
+        "resolved_detector_display_px": None,
+        "resolved_detector_native_px": list(projected_native),
+        "resolved_detector_point_input_frame": "native_detector",
+        "detector_native_reprojection_is_diagnostic": False,
+        "detector_native_reprojection_used_for_objective": True,
+        "objective_residual_coordinate_space": "caked_deg",
+        "objective_residual_units": "deg",
+        "pixel_residual_used_for_objective": False,
+        "used_sim_nominal_caked_for_objective": False,
+        "used_exact_projector": True,
+        "used_sim_refined_caked": False,
+    }
+
+
 def _resolve_qr_fit_prediction_from_trial_params(
     pair: Mapping[str, object],
     trial_params: Mapping[str, object],
@@ -20676,6 +20820,17 @@ def _resolve_qr_fit_prediction_from_trial_params(
     out["fit_qr_branch_key"] = _dynamic_reanchor_jsonable(locked_key)
     out["fit_qr_branch_key_missing_fields"] = list(locked_missing_fields)
     source_rows_payload: Dict[str, object] | None = None
+
+    handoff_payload = _resolve_locked_qr_handoff_native_prediction(
+        pair=pair,
+        trial_params=trial_params,
+        fit_context=fit_context,
+        locked_correspondence=locked_correspondence,
+        dataset_ctx=dataset_ctx,
+    )
+    if handoff_payload is not None:
+        out.update(handoff_payload)
+        return out
 
     def _trial_source_rows_payload() -> Dict[str, object]:
         nonlocal source_rows_payload

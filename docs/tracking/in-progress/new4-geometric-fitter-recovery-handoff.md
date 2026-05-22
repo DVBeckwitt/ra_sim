@@ -1570,6 +1570,51 @@ Shipping status:
 - Rollback plan is a normal commit revert. The pre-fix behavior is isolated to
   the static point-match fallback for default exact-caked manual Qr/Qz rows.
 
+## 2026-05-22 Locked Qr/Qz Handoff-Native Authority Fix
+
+Bug/error status: fixed for the targeted locked Qr/Qz dynamic-angle authority
+drift where a clean handoff-native prediction could be replaced downstream by a
+stale source-row caked diagnostic. The reported shape was `[-1,0,5] branch=0`
+with handoff residual near `1.77 deg`, while later objective/reporting paths
+could show a much larger residual by following nominal caked source data.
+
+Root cause:
+- The dynamic locked-Qr prediction resolver could rediscover the prediction
+  from source rows before honoring the optimizer request row's
+  `fit_prediction_detector_native_px`.
+- When source-row nominal caked fields were stale, downstream residuals could
+  disagree with the clean handoff payload even though the fit route was already
+  `dynamic_angular_point_match`.
+
+Fix:
+- `_resolve_qr_fit_prediction_from_trial_params(...)` now first projects the
+  locked row's handoff-native `fit_prediction_detector_native_px` through the
+  trial fit-space projector.
+- That projection is marked as
+  `dynamic_trial_projection_from_prediction_native` and skips source-row
+  rediscovery for that row.
+- Static nominal caked fields remain diagnostic only and do not populate the
+  locked-Qr objective prediction when a handoff-native anchor is present.
+
+Validation:
+- `python -m pytest -q --tb=short tests/test_geometry_fitting.py::test_locked_qr_dynamic_prediction_prefers_handoff_native_over_stale_source_row` -> `1 passed`.
+- `python -m pytest -q --tb=short tests/test_geometry_fitting.py -k "locked_qr or dynamic_prediction or caked_authority or line_angle or two_group"` -> `29 passed, 276 deselected, 7 warnings`.
+- `python -m pytest -q --tb=short tests/test_geometry_fit_live_rows_signature_handoff.py -k "locked_qr or optimizer_request or handoff"` -> `7 passed`.
+- `python -m pytest -q --tb=short tests/test_gui_geometry_fit_workflow.py -k "locked_qr or storage or projection_ready or authority or line"` -> `23 passed, 697 deselected`.
+- `python -m pytest -q --tb=short tests/test_geometry_fit_manual_fit_space_classification.py -k "locked or caked or line"` -> `13 passed, 3 deselected`.
+- `python -m compileall ra_sim/fitting/optimization.py tests/test_geometry_fitting.py` -> passed.
+- `python -m ra_sim.dev check` -> passed.
+- `git diff --check` -> passed.
+
+Shipping status:
+- Review completed across correctness, simplification, security, performance,
+  and test quality with no blocking findings.
+- No CI configuration, dependency, public API, saved-state schema, CLI, GUI
+  control, or artifact-schema migration is required.
+- No deprecation path or package version bump is required because this is a
+  backward-compatible bug fix, not release prep.
+- Rollback plan is a normal commit revert.
+
 ## Remaining work
 
 Next project: compare the real headless start-state/feature-toggle contract

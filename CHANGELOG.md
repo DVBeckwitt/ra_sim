@@ -51,6 +51,9 @@
   - Updated `load_tilt_hint` to return converted simulation-space tilt/center/distance hints.
 
 - **Fitting and optimization**
+  - Fixed locked Qr/Qz dynamic-angle fitting so handoff-native prediction
+    anchors stay authoritative over stale source-row caked diagnostics during
+    trial projection.
   - Fixed locked Qr/Qz geometry-fit handoff for multiple selected Qr groups:
     handoff audit rows are no longer hardcoded to the `(-1,0,10)` group, and
     optimizer request payloads now match locked-Qr audit rows by q-group, HKL,

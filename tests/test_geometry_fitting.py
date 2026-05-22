@@ -5934,6 +5934,82 @@ def test_locked_qr_dynamic_objective_never_uses_nominal_caked_prediction():
     )
 
 
+def test_locked_qr_dynamic_prediction_prefers_handoff_native_over_stale_source_row():
+    clean_native = (1381.0, 1890.0)
+    clean_projected_caked = (21.977, 166.250)
+    stale_native = (1200.0, 1201.0)
+    stale_nominal_caked = (28.381, 57.881)
+    projector_inputs: list[tuple[float, float]] = []
+
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        row = _point_only_dynamic_qr_row(*stale_nominal_caked)
+        row.update(
+            {
+                "native_col": stale_native[0],
+                "native_row": stale_native[1],
+                "fit_prediction_detector_native_px": list(stale_native),
+                "sim_refined_detector_native_px": list(stale_native),
+                "sim_refined_caked_deg": list(stale_nominal_caked),
+                "sim_nominal_caked_deg": list(stale_nominal_caked),
+                "simulated_two_theta_deg": stale_nominal_caked[0],
+                "simulated_phi_deg": stale_nominal_caked[1],
+            }
+        )
+        return _locked_qr_source_rows_payload([row])
+
+    def projector(cols, rows, *, local_params=None, **_kwargs):
+        del local_params
+        col = float(np.asarray(cols, dtype=float).reshape(-1)[0])
+        row = float(np.asarray(rows, dtype=float).reshape(-1)[0])
+        projector_inputs.append((col, row))
+        assert (col, row) == pytest.approx(clean_native)
+        return _point_only_projector_payload(
+            clean_projected_caked[0],
+            clean_projected_caked[1],
+            native_col=clean_native[0],
+            native_row=clean_native[1],
+        )
+
+    locked = _locked_qr_fixed_source_entry(
+        hkl=(-1, 0, 5),
+        q_group_key=("q_group", "primary", 1, 5),
+        background_two_theta_deg=22.762,
+        background_phi_deg=164.667,
+        fit_prediction_detector_native_px=list(clean_native),
+        fit_prediction_caked_deg=list(clean_projected_caked),
+        fit_prediction_caked_authority="exact_projector_from_native",
+        sim_refined_caked_deg=list(clean_projected_caked),
+        sim_nominal_caked_deg=list(stale_nominal_caked),
+    )
+
+    prediction = opt._resolve_qr_fit_prediction_from_trial_params(
+        locked,
+        {"center_x": 0.0},
+        {
+            "dataset_ctx": _point_only_qr_dataset_ctx(source_rows_builder, projector),
+            "hit_tables": (),
+            "sim_buffer": np.zeros((1, 1), dtype=np.float64),
+            "image_size": 4000,
+            "fit_center": [2000.0, 2000.0],
+            "detector_distance": 0.1,
+            "pixel_size": 1.0,
+            "prediction_source_rows_cache": {},
+            "_qr_fit_point_only_projection": True,
+        },
+        locked,
+    )
+
+    assert projector_inputs == [pytest.approx(clean_native)]
+    assert prediction["fit_prediction_detector_native_px"] == pytest.approx(list(clean_native))
+    assert prediction["fit_prediction_caked_deg"] == pytest.approx(list(clean_projected_caked))
+    assert prediction["predicted_caked_deg"] != pytest.approx(list(stale_nominal_caked))
+    assert prediction["fit_prediction_caked_authority"] == (
+        "dynamic_trial_projection_from_prediction_native"
+    )
+    assert prediction["used_sim_nominal_caked_for_objective"] is False
+
+
 def _locked_qr_dynamic_live_shape_context(branch_payloads=None):
     if branch_payloads is None:
         branch_payloads = {
