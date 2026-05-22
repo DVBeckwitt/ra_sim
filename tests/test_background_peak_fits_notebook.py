@@ -119,6 +119,15 @@ def _script_functions(*names: str) -> dict[str, object]:
         wanted.add("l_reference_rows")
         wanted.add("qz_values_to_l_axis")
         wanted.add("rod_profile_marker_l_mapping_is_valid")
+    if "build_final_qr_rod_output_state" in wanted:
+        wanted.add("final_qr_rod_region_overlays_from_profile_table")
+        wanted.add("final_region_overlay_signature_from_overlays")
+        wanted.add("final_qr_rod_region_specs_table")
+        wanted.add("final_qr_rod_gui_vs_final_profile_audit_table")
+        wanted.add("l_axis_coefficient_for_group")
+        wanted.add("l_reference_rows")
+        wanted.add("qz_values_to_l_axis")
+        wanted.add("rod_profile_marker_l_mapping_is_valid")
     if "final_qr_rod_region_overlays_from_profile_table" in wanted:
         wanted.add("as_float")
         wanted.add("final_qr_rod_supported_profile_group")
@@ -4221,9 +4230,13 @@ def test_final_qr_rod_region_overlays_are_rebuilt_after_gui_editor() -> None:
         "marker_table = marker_table_with_specular_l_markers(marker_table, specular_l_marker_table)",
         cache_resolution,
     )
-    final_overlay_rebuild = source.index(
-        "final_region_overlays = final_qr_rod_region_overlays_from_profile_table(",
+    final_output_state = source.index(
+        "final_qr_rod_output_state = build_final_qr_rod_output_state(",
         post_cache_marker_table,
+    )
+    final_overlay_rebuild = source.index(
+        'final_region_overlays = final_qr_rod_output_state["final_region_overlays"]',
+        final_output_state,
     )
     final_profile_selection = source.index(
         "detector_plot_rod_entries = detector_complete_branch_rod_entries(",
@@ -4236,10 +4249,11 @@ def test_final_qr_rod_region_overlays_are_rebuilt_after_gui_editor() -> None:
 
     assert nonzero_call < specular_call < window_filter < accepted_overlay_signature
     assert accepted_overlay_signature < cache_key_call < cache_resolution
-    assert cache_resolution < post_cache_marker_table < final_overlay_rebuild
+    assert cache_resolution < post_cache_marker_table < final_output_state < final_overlay_rebuild
     assert final_profile_selection < detector_overlay_selection
-    rebuild_call = source[final_overlay_rebuild:final_profile_selection]
-    assert "marker_source=marker_table" in rebuild_call
+    rebuild_call = source[final_output_state:final_profile_selection]
+    assert "marker_table=marker_table" in rebuild_call
+    assert "final_profile_table=rod_profile_table" in rebuild_call
 
 
 def test_final_region_overlays_are_rebuilt_after_final_fit_cache_resolution() -> None:
@@ -4251,12 +4265,16 @@ def test_final_region_overlays_are_rebuilt_after_final_fit_cache_resolution() ->
         "marker_table = marker_table_with_specular_l_markers(marker_table, specular_l_marker_table)",
         cache_resolution,
     )
-    final_overlay_rebuild = source.index(
-        "final_region_overlays = final_qr_rod_region_overlays_from_profile_table(",
+    final_output_state = source.index(
+        "final_qr_rod_output_state = build_final_qr_rod_output_state(",
         post_cache_marker_table,
     )
+    final_overlay_rebuild = source.index(
+        'final_region_overlays = final_qr_rod_output_state["final_region_overlays"]',
+        final_output_state,
+    )
     region_specs_save = source.index(
-        "region_specs_table = final_qr_rod_region_specs_table(",
+        'region_specs_table = final_qr_rod_output_state["region_specs_table"]',
         final_overlay_rebuild,
     )
     detector_overlay_selection = source.index(
@@ -4264,7 +4282,7 @@ def test_final_region_overlays_are_rebuilt_after_final_fit_cache_resolution() ->
         final_overlay_rebuild,
     )
 
-    assert cache_resolution < post_cache_marker_table < final_overlay_rebuild
+    assert cache_resolution < post_cache_marker_table < final_output_state < final_overlay_rebuild
     assert final_overlay_rebuild < region_specs_save < detector_overlay_selection
 
 
@@ -4370,6 +4388,248 @@ def test_final_region_overlay_bounds_come_from_final_profile_table() -> None:
     assert not any(int(item["m"]) == 1 and str(item["branch"]) == "-" for item in plus_only_overlays)
 
 
+def test_final_outputs_ignore_poison_pre_editor_region_overlays() -> None:
+    namespace = _script_functions("build_final_qr_rod_output_state")
+    build_output_state = namespace["build_final_qr_rod_output_state"]
+    accepted_profile_table = pd.DataFrame(
+        [
+            {
+                "m": 1,
+                "branch": "-",
+                "source": "primary",
+                "qz_center": 1.5,
+                "qz_min": 1.2,
+                "qz_max": 1.8,
+                "qr": 9.1,
+                "delta_qr": 0.12,
+                "theta_initial_deg_used_for_q": 7.5,
+                "background_density": 5.0,
+                "pixel_count": 4,
+            },
+            {
+                "m": 1,
+                "branch": "-",
+                "source": "primary",
+                "qz_center": 2.1,
+                "qz_min": 1.8,
+                "qz_max": 2.4,
+                "qr": 9.1,
+                "delta_qr": 0.12,
+                "theta_initial_deg_used_for_q": 7.5,
+                "background_density": 7.0,
+                "pixel_count": 6,
+            },
+            {
+                "m": 0,
+                "branch": "qz",
+                "qz_center": 0.4,
+                "qz_min": 0.2,
+                "qz_max": 0.6,
+                "background_density": 2.0,
+                "pixel_count": 3,
+            },
+        ]
+    )
+    stale_pre_editor_region_overlays = [
+        {
+            "source": "primary",
+            "m": 1,
+            "branch": "-",
+            "qr": 9.1,
+            "delta_qr": 99.0,
+            "qz_min": 999.0,
+            "qz_max": 1000.0,
+            "theta_initial_deg": 99.0,
+        }
+    ]
+
+    output_state = build_output_state(
+        accepted_profile_table=accepted_profile_table,
+        final_profile_table=accepted_profile_table,
+        marker_table=pd.DataFrame([{"m": 1, "branch": "-", "qz_marker": 1.5, "fit_l": 1.5}]),
+        rod_entries=[
+            {
+                "source": "primary",
+                "m": 1,
+                "qr": 8.9,
+                "qr_original": 8.8,
+                "qr_fit_count": 3,
+                "qr_fit_sample_count": 9,
+                "qr_fit_method": "saved_q_group_rows",
+            }
+        ],
+        delta_qr=0.30,
+        l_min=0.5,
+        l_max=3.0,
+        theta_initial_deg=12.5,
+        specular_roi={
+            "phi_min": -8.0,
+            "phi_max": 8.0,
+            "two_theta_min": 3.0,
+            "two_theta_max": 9.0,
+        },
+        l_axis_coefficients={"1::-": {"m": 1, "branch": "-", "slope": 1.0, "intercept": 0.0}},
+        accepted_from_gui=True,
+    )
+
+    region_specs = output_state["region_specs_table"]
+    nonzero_spec = region_specs.loc[
+        (region_specs["m"] == 1) & (region_specs["branch"] == "-")
+    ].iloc[0]
+    assert nonzero_spec["qz_min"] == pytest.approx(1.2)
+    assert nonzero_spec["qz_max"] == pytest.approx(2.4)
+    assert nonzero_spec["delta_qr"] == pytest.approx(0.12)
+    assert nonzero_spec["theta_initial_deg"] == pytest.approx(7.5)
+    assert 999.0 not in set(region_specs["qz_min"].tolist())
+    assert stale_pre_editor_region_overlays[0] not in output_state["final_region_overlays"]
+
+
+def test_final_output_state_uses_post_cache_profile_table_for_specs_and_audit() -> None:
+    namespace = _script_functions("build_final_qr_rod_output_state")
+    build_output_state = namespace["build_final_qr_rod_output_state"]
+    accepted_profile_table = pd.DataFrame(
+        [
+            {
+                "m": 1,
+                "branch": "-",
+                "source": "primary",
+                "qz_center": 2.0,
+                "qz_min": 1.2,
+                "qz_max": 2.4,
+                "qr": 9.1,
+                "delta_qr": 0.12,
+                "theta_initial_deg_used_for_q": 7.5,
+                "background_density": 5.0,
+                "pixel_count": 8,
+            }
+        ]
+    )
+    post_cache_profile_table = pd.DataFrame(
+        [
+            {
+                "m": 1,
+                "branch": "-",
+                "source": "primary",
+                "qz_center": 2.0,
+                "qz_min": 1.4,
+                "qz_max": 2.6,
+                "qr": 9.3,
+                "delta_qr": 0.22,
+                "theta_initial_deg_used_for_q": 9.5,
+                "background_density": 7.0,
+                "pixel_count": 9,
+            }
+        ]
+    )
+
+    output_state = build_output_state(
+        accepted_profile_table=accepted_profile_table,
+        final_profile_table=post_cache_profile_table,
+        marker_table=pd.DataFrame([{"m": 1, "branch": "-", "qz_marker": 2.0, "fit_l": 2.0}]),
+        rod_entries=[
+            {
+                "source": "primary",
+                "m": 1,
+                "qr": 8.9,
+                "qr_original": 8.8,
+                "qr_fit_count": 3,
+                "qr_fit_sample_count": 9,
+                "qr_fit_method": "saved_q_group_rows",
+            }
+        ],
+        delta_qr=0.30,
+        l_min=0.5,
+        l_max=3.0,
+        theta_initial_deg=12.5,
+        specular_roi={},
+        l_axis_coefficients={"1::-": {"m": 1, "branch": "-", "slope": 2.0, "intercept": 0.5}},
+        accepted_from_gui=True,
+    )
+
+    region_specs = output_state["region_specs_table"]
+    nonzero_spec = region_specs.loc[
+        (region_specs["m"] == 1) & (region_specs["branch"] == "-")
+    ].iloc[0]
+    assert nonzero_spec["qz_min"] == pytest.approx(1.4)
+    assert nonzero_spec["qz_max"] == pytest.approx(2.6)
+    assert nonzero_spec["qr"] == pytest.approx(9.3)
+    assert nonzero_spec["delta_qr"] == pytest.approx(0.22)
+    assert nonzero_spec["theta_initial_deg"] == pytest.approx(9.5)
+
+    audit = output_state["profile_audit_table"]
+    assert audit["gui_background_density"].tolist() == pytest.approx([5.0])
+    assert audit["final_data_density"].tolist() == pytest.approx([7.0])
+    assert audit["delta_density"].tolist() == pytest.approx([2.0])
+    assert audit["pixel_count"].tolist() == pytest.approx([9.0])
+
+
+def test_final_output_state_records_gui_controls_when_profile_rows_need_fallbacks() -> None:
+    namespace = _script_functions("build_final_qr_rod_output_state")
+    build_output_state = namespace["build_final_qr_rod_output_state"]
+    final_profile_table = pd.DataFrame(
+        [
+            {
+                "m": 1,
+                "branch": "-",
+                "source": "primary",
+                "qz_center": 1.5,
+                "qz_min": 1.0,
+                "qz_max": 2.0,
+                "qr": 9.1,
+                "background_density": 5.0,
+                "pixel_count": 4,
+            },
+            {
+                "m": 0,
+                "branch": "qz",
+                "qz_center": 0.4,
+                "qz_min": 0.2,
+                "qz_max": 0.6,
+                "background_density": 2.0,
+                "pixel_count": 3,
+            },
+        ]
+    )
+
+    output_state = build_output_state(
+        accepted_profile_table=final_profile_table,
+        final_profile_table=final_profile_table,
+        marker_table=pd.DataFrame(
+            [{"m": 1, "branch": "-", "qz_marker": 1.5, "fit_l": 2.0, "display_l": 2.0}]
+        ),
+        rod_entries=[{"source": "primary", "m": 1, "qr": 9.0}],
+        delta_qr=0.33,
+        l_min=0.75,
+        l_max=3.25,
+        theta_initial_deg=11.5,
+        specular_roi={
+            "phi_min": -6.0,
+            "phi_max": 7.0,
+            "two_theta_min": 4.0,
+            "two_theta_max": 8.5,
+        },
+        l_axis_coefficients={"1::-": {"m": 1, "branch": "-", "slope": 1.0, "intercept": 0.5}},
+        accepted_from_gui=True,
+    )
+
+    specs = output_state["region_specs_table"]
+    nonzero_spec = specs.loc[(specs["m"] == 1) & (specs["branch"] == "-")].iloc[0]
+    assert nonzero_spec["delta_qr"] == pytest.approx(0.33)
+    assert nonzero_spec["l_min"] == pytest.approx(0.75)
+    assert nonzero_spec["l_max"] == pytest.approx(3.25)
+    assert nonzero_spec["theta_initial_deg"] == pytest.approx(11.5)
+    assert bool(nonzero_spec["accepted_from_gui"]) is True
+
+    hk0_spec = specs.loc[(specs["m"] == 0) & (specs["branch"] == "qz")].iloc[0]
+    assert hk0_spec["phi_min"] == pytest.approx(-6.0)
+    assert hk0_spec["phi_max"] == pytest.approx(7.0)
+    assert hk0_spec["two_theta_min"] == pytest.approx(4.0)
+    assert hk0_spec["two_theta_max"] == pytest.approx(8.5)
+
+    plot_markers = output_state["plot_marker_table"]
+    assert plot_markers["hk"].tolist() == [1]
+
+
 def test_final_detector_figure_does_not_use_pre_editor_region_overlays_after_editor() -> None:
     if not PARALLEL_SCRIPT_PATH.exists():
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
@@ -4413,12 +4673,12 @@ def test_final_qr_rod_region_specs_are_saved_with_gui_fields() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     specs_function = source[
         source.index("def final_qr_rod_region_specs_table(") : source.index(
-            "\ndef rod_profile_table_for_l_window("
+            "\ndef build_final_qr_rod_output_state("
         )
     ]
     save_section = source[
-        source.index("region_specs_table = final_qr_rod_region_specs_table(") : source.index(
-            "plot_marker_table = marker_table.copy()"
+        source.index('region_specs_table = final_qr_rod_output_state["region_specs_table"]') : source.index(
+            "profile_audit_csv ="
         )
     ]
 
@@ -5085,7 +5345,7 @@ def test_final_figure_threads_gui_l_axis_coefficients_to_plot_helpers() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     final_state = source[
         source.index("accepted_l_axis_coefficients = merge_l_axis_coefficients(") : source.index(
-            "plot_marker_table = marker_table.copy()"
+            "profile_audit_csv ="
         )
     ]
     final_plot = source[
@@ -5271,14 +5531,20 @@ def test_final_profile_audit_call_receives_accepted_gui_rows() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     accepted_profile_snapshot = source.index("accepted_profile_table = rod_profile_table.copy()")
     cache_resolution = source.index("if qr_rod_profile_cache_has_final_fit(")
-    audit_call = source[
-        source.index(
-            "profile_audit_table = final_qr_rod_gui_vs_final_profile_audit_table("
-        ) : source.index("profile_audit_csv =")
+    final_output_state = source[
+        source.index("final_qr_rod_output_state = build_final_qr_rod_output_state(") : source.index(
+            "profile_audit_csv ="
+        )
+    ]
+    output_state_helper = source[
+        source.index("def build_final_qr_rod_output_state(") : source.index(
+            "\ndef rod_profile_table_for_l_window("
+        )
     ]
 
     assert accepted_profile_snapshot < cache_resolution
-    assert "gui_profile_table=accepted_profile_table" in audit_call
+    assert "accepted_profile_table=accepted_profile_table" in final_output_state
+    assert "gui_profile_table=accepted_profile" in output_state_helper
 
 
 def test_parallel_script_qr_rod_snap_moves_all_panel_markers_to_local_peaks() -> None:

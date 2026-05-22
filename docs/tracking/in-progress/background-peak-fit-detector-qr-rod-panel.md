@@ -951,6 +951,27 @@ Passing checks:
   reuse; feature status: no new operator control; migration/deprecation status:
   no dependency, CI workflow, version, public API, saved-state, config, or
   artifact-schema change is required.
+- 2026-05-22 Figure 7 diagnostic source-state closeout: final Qr-rod output
+  artifacts now pass through one internal output-state builder that derives the
+  final detector overlays, saved region specs, marker plotting table, and
+  GUI-vs-final audit from the same accepted post-cache profile state. Regression
+  tests now poison pre-editor overlays, mutate post-cache profile rows, and
+  exercise GUI fallback controls for `Delta Qr`, L bounds, `theta_i`, HK=0
+  phi/2theta ROI, and marker aliases. Focused validation passed with
+  `python -m pytest --assert=plain tests/test_background_peak_fits_notebook.py -k "final_output_state or final_outputs_ignore_poison_pre_editor_region_overlays or final_qr_rod_region_overlays_are_rebuilt_after_gui_editor or final_region_overlays_are_rebuilt_after_final_fit_cache_resolution or final_qr_rod_region_specs_are_saved_with_gui_fields or final_profile_audit_call_receives_accepted_gui_rows" -ra`
+  (`7 passed, 247 deselected`), scoped compileall, and `git diff --check`.
+  Earlier full notebook-script validation for the same code change passed with
+  `python -m pytest --assert=plain tests/test_background_peak_fits_notebook.py -ra`
+  (`246 passed, 8 skipped`); a later full rerun after documentation edits hit
+  a Matplotlib access violation in the existing marker-editor close/preview
+  tests, and an `MPLBACKEND=Agg` full rerun exposed an older backend-sensitive
+  draw-count assertion outside this source-state slice.
+  Bug/error status: diagnostic coverage is in place for final images drifting
+  away from GUI-accepted regions after cache reuse; feature status: no new
+  operator control; migration/deprecation status: no dependency, CI workflow,
+  version, public API, saved-state, config, or artifact-schema change is
+  required. Shipping status: ready for local use, with manual real-output
+  visual review still recommended before manuscript use.
 
 Known validation limits:
 

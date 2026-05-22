@@ -15305,6 +15305,58 @@ def final_qr_rod_gui_vs_final_profile_audit_table(
     return audit.loc[:, columns]
 
 
+def build_final_qr_rod_output_state(
+    *,
+    accepted_profile_table: object,
+    final_profile_table: object,
+    marker_table: object,
+    rod_entries: object,
+    delta_qr: object,
+    l_min: object,
+    l_max: object,
+    theta_initial_deg: object,
+    specular_roi: dict[str, object],
+    l_axis_coefficients: object,
+    accepted_from_gui: bool,
+) -> dict[str, object]:
+    final_profile = pd.DataFrame(final_profile_table).copy()
+    accepted_profile = pd.DataFrame(accepted_profile_table).copy()
+    plot_marker_table = pd.DataFrame(marker_table).copy()
+    if not plot_marker_table.empty and "m" in plot_marker_table:
+        plot_marker_table["hk"] = np.asarray(plot_marker_table["m"], dtype=int)
+    final_region_overlays = final_qr_rod_region_overlays_from_profile_table(
+        final_profile,
+        list(rod_entries or ()),
+        marker_source=plot_marker_table,
+        delta_qr=as_float(delta_qr, np.nan),
+        theta_initial_deg=as_float(theta_initial_deg, np.nan),
+        specular_roi=dict(specular_roi or {}),
+    )
+    region_specs_table = final_qr_rod_region_specs_table(
+        final_region_overlays,
+        l_min=l_min,
+        l_max=l_max,
+        theta_initial_deg=theta_initial_deg,
+        specular_roi=dict(specular_roi or {}),
+        accepted_from_gui=bool(accepted_from_gui),
+    )
+    profile_audit_table = final_qr_rod_gui_vs_final_profile_audit_table(
+        final_profile,
+        gui_profile_table=accepted_profile,
+        marker_source=plot_marker_table,
+        l_axis_coefficients=l_axis_coefficients,
+    )
+    return {
+        "final_region_overlays": final_region_overlays,
+        "final_region_overlay_signature": final_region_overlay_signature_from_overlays(
+            final_region_overlays
+        ),
+        "region_specs_table": region_specs_table,
+        "plot_marker_table": plot_marker_table,
+        "profile_audit_table": profile_audit_table,
+    }
+
+
 def rod_profile_table_for_l_window(
     profile_table: pd.DataFrame,
     marker_source: pd.DataFrame,
@@ -16387,14 +16439,23 @@ if not marker_table.empty and {"m", "branch"}.issubset(marker_table.columns):
     marker_branch = marker_table["branch"].astype(str).to_numpy(dtype=object)
     marker_table = marker_table.loc[~((marker_m == 0.0) & (marker_branch == "qz"))].copy()
 marker_table = marker_table_with_specular_l_markers(marker_table, specular_l_marker_table)
-final_region_overlays = final_qr_rod_region_overlays_from_profile_table(
-    rod_profile_table,
-    rod_entries,
-    marker_source=marker_table,
+final_qr_rod_output_state = build_final_qr_rod_output_state(
+    accepted_profile_table=accepted_profile_table,
+    final_profile_table=rod_profile_table,
+    marker_table=marker_table,
+    rod_entries=rod_entries,
     delta_qr=qr_rod_delta_qr,
+    l_min=qr_rod_editor_l_min,
+    l_max=qr_rod_editor_l_max,
     theta_initial_deg=qr_rod_editor_theta_initial_deg,
     specular_roi=SPECULAR_ROI_SIGNATURE,
+    l_axis_coefficients=accepted_l_axis_coefficients,
+    accepted_from_gui=bool(qr_rod_region_editor_result.get("accepted", False)),
 )
+final_region_overlays = final_qr_rod_output_state["final_region_overlays"]
+region_specs_table = final_qr_rod_output_state["region_specs_table"]
+plot_marker_table = final_qr_rod_output_state["plot_marker_table"]
+profile_audit_table = final_qr_rod_output_state["profile_audit_table"]
 print(
     f"rod-profile joint fits: groups={int(rod_profile_table.groupby(['m', 'branch']).ngroups) if not rod_profile_table.empty else 0} workers={ROD_PROFILE_FIT_WORKERS} gpu={GPU_ACCELERATION_ENABLED}"
 )
@@ -16419,14 +16480,6 @@ marker_csv = OUT_DIR / f"{ROD_PROFILE_MARKER_STEM}.csv"
 marker_table.to_csv(marker_csv, index=False)
 component_csv = OUT_DIR / f"{ROD_PROFILE_STEM}_tail_components.csv"
 rod_component_table.to_csv(component_csv, index=False)
-region_specs_table = final_qr_rod_region_specs_table(
-    final_region_overlays,
-    l_min=qr_rod_editor_l_min,
-    l_max=qr_rod_editor_l_max,
-    theta_initial_deg=qr_rod_editor_theta_initial_deg,
-    specular_roi=SPECULAR_ROI_SIGNATURE,
-    accepted_from_gui=bool(qr_rod_region_editor_result.get("accepted", False)),
-)
 region_specs_stem = f"figure7_{SAMPLE_STEM}_qr_rod_region_specs"
 region_specs_csv = OUT_DIR / f"{region_specs_stem}.csv"
 region_specs_json = OUT_DIR / f"{region_specs_stem}.json"
@@ -16444,15 +16497,6 @@ print(f"saved={component_csv}")
 print(f"saved={region_specs_csv}")
 print(f"saved={region_specs_json}")
 
-plot_marker_table = marker_table.copy()
-if not plot_marker_table.empty and "m" in plot_marker_table:
-    plot_marker_table["hk"] = np.asarray(plot_marker_table["m"], dtype=int)
-profile_audit_table = final_qr_rod_gui_vs_final_profile_audit_table(
-    rod_profile_table,
-    gui_profile_table=accepted_profile_table,
-    marker_source=plot_marker_table,
-    l_axis_coefficients=accepted_l_axis_coefficients,
-)
 profile_audit_csv = OUT_DIR / f"figure7_{SAMPLE_STEM}_gui_vs_final_profile_audit.csv"
 profile_audit_table.to_csv(profile_audit_csv, index=False)
 print(f"saved={profile_audit_csv}")
