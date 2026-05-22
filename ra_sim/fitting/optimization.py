@@ -35675,6 +35675,9 @@ def fit_geometry_parameters(
                     point_match_summary["identity_baseline_selected"] = bool(
                         getattr(result, "identity_baseline_selected", False)
                     )
+                    point_match_summary["optimizer_failed_identity_within_acceptance"] = bool(
+                        getattr(result, "optimizer_failed_identity_within_acceptance", False)
+                    )
                 point_match_summary.update(sensitivity_summary)
                 point_match_summary.update(_classify_dynamic_angular_failure(point_match_summary))
                 if (

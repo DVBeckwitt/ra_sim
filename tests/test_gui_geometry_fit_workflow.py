@@ -39967,6 +39967,27 @@ def test_gui_dynamic_caked_metric_rejects_large_angular_residual() -> None:
     ) in reasons
 
 
+def test_locked_qr_within_acceptance_optimizer_failure_not_reported_as_rejected() -> None:
+    result = SimpleNamespace(
+        success=False,
+        point_match_summary={
+            "acceptance_metric_space": "caked_deg",
+            "metric_name": "dynamic_angular_point_match",
+            "metric_unit": "deg",
+            "final_rms_deg": 1.541396,
+            "final_max_deg": 2.422114,
+            "matched_pair_count": 4,
+            "manual_caked_residual_row_count": 4,
+            "detector_pixel_metric_complete": False,
+            "dynamic_angular_failure_classification": "within_acceptance",
+        },
+    )
+
+    reasons = geometry_fit.build_geometry_fit_rejection_reason_lines(result, rms=1.541396)
+
+    assert reasons == []
+
+
 def test_caked_angular_rejection_includes_worst_rows_and_classification() -> None:
     result = SimpleNamespace(
         success=True,

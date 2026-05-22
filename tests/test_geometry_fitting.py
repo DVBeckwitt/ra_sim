@@ -6643,6 +6643,40 @@ def test_locked_qr_solver_does_not_select_worse_failed_candidate_than_identity(m
     )
 
 
+def test_locked_qr_within_acceptance_optimizer_failure_accepts_baseline(monkeypatch):
+    def failed_within_acceptance_least_squares(residual_fn, x0, **_kwargs):
+        x = np.asarray(x0, dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            fun=np.asarray(residual_fn(x), dtype=float),
+            success=False,
+            status=0,
+            message="synthetic solver failure",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=float("nan"),
+        )
+
+    result = _fit_locked_qr_two_group_dynamic(
+        monkeypatch,
+        least_squares_impl=failed_within_acceptance_least_squares,
+    )
+
+    assert result.success
+    assert result.message == "optimizer_failed_identity_within_acceptance"
+    assert result.point_match_summary["identity_baseline_selected"] is True
+    assert result.point_match_summary["optimizer_failed_identity_within_acceptance"] is True
+    assert result.point_match_summary["matched_pair_count"] == 4
+    assert result.point_match_summary["raw_angular_rms_deg"] < 5.0
+    assert result.point_match_summary["raw_angular_max_deg"] < 10.0
+    assert result.point_match_summary["dynamic_angular_failure_classification"] == (
+        "within_acceptance"
+    )
+    assert result.point_match_summary.get("recommended_next_fix") != (
+        "remove_or_repick_manual_outliers"
+    )
+
+
 def test_qr_caked_objective_rejects_caked_display_values_as_detector_px():
     live_caked = (40.212, 39.904)
 

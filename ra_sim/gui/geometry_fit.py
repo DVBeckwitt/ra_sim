@@ -23842,28 +23842,32 @@ def build_geometry_fit_rejection_reason_lines(
                 point_match_summary.get("unweighted_peak_max_px", np.nan),
             )
         )
+
+    def _summary_int(key: str, default: int = 0) -> int:
+        if not isinstance(point_match_summary, Mapping):
+            return int(default)
+        try:
+            return int(point_match_summary.get(key, default) or default)
+        except Exception:
+            return int(default)
+
+    def _summary_int_with_fallback(key: str, fallback_key: str) -> int:
+        if not isinstance(point_match_summary, Mapping):
+            return 0
+        try:
+            return int(point_match_summary.get(key, point_match_summary.get(fallback_key, 0)) or 0)
+        except Exception:
+            return 0
+
     headless_caked_angular_acceptance = False
     if isinstance(point_match_summary, Mapping):
-        try:
-            manual_caked_rows = int(
-                point_match_summary.get("manual_caked_residual_row_count", 0) or 0
-            )
-            sim_caked_rows = int(
-                point_match_summary.get("sim_visual_caked_source_row_count", 0) or 0
-            )
-            fixed_source_rows = int(point_match_summary.get("fixed_source_resolved_count", 0) or 0)
-            matched_pair_count = int(point_match_summary.get("matched_pair_count", 0) or 0)
-            missing_pair_count = int(point_match_summary.get("missing_pair_count", 0) or 0)
-            fallback_entry_count = int(point_match_summary.get("fallback_entry_count", 0) or 0)
-            fallback_row_count = int(point_match_summary.get("fallback_row_count", 0) or 0)
-        except Exception:
-            manual_caked_rows = 0
-            sim_caked_rows = 0
-            fixed_source_rows = 0
-            matched_pair_count = 0
-            missing_pair_count = 0
-            fallback_entry_count = 0
-            fallback_row_count = 0
+        manual_caked_rows = _summary_int("manual_caked_residual_row_count")
+        sim_caked_rows = _summary_int("sim_visual_caked_source_row_count")
+        fixed_source_rows = _summary_int("fixed_source_resolved_count")
+        matched_pair_count = _summary_int("matched_pair_count")
+        missing_pair_count = _summary_int("missing_pair_count")
+        fallback_entry_count = _summary_int("fallback_entry_count")
+        fallback_row_count = _summary_int("fallback_row_count")
         headless_caked_angular_acceptance = bool(
             allow_headless_caked_angular_acceptance
             and bool(
@@ -23882,6 +23886,23 @@ def build_geometry_fit_rejection_reason_lines(
             and fallback_row_count == 0
         )
 
+    dynamic_caked_within_acceptance = False
+    if isinstance(point_match_summary, Mapping) and metric_space == "caked_deg":
+        failure_class = str(
+            point_match_summary.get("dynamic_angular_failure_classification", "") or ""
+        ).strip()
+        matched_pair_count = _summary_int("matched_pair_count")
+        missing_pair_count = _summary_int("missing_pair_count")
+        dynamic_caked_within_acceptance = bool(
+            failure_class in {"within_acceptance", "already_aligned"}
+            and matched_pair_count > 0
+            and missing_pair_count == 0
+            and np.isfinite(metric_value)
+            and float(metric_value) <= GEOMETRY_FIT_ACCEPT_MAX_CAKED_RMS_DEG
+            and np.isfinite(metric_max_value)
+            and float(metric_max_value) <= GEOMETRY_FIT_ACCEPT_MAX_CAKED_OFFSET_DEG
+        )
+
     route_failure_reason = ""
     if isinstance(point_match_summary, Mapping):
         route_failure_reason = str(
@@ -23897,22 +23918,11 @@ def build_geometry_fit_rejection_reason_lines(
         "locked_manual_qr_identity_loss",
         "manual_caked_route_invariant_violation",
     }:
-
-        def _summary_count(key: str, fallback_key: str) -> int:
-            if not isinstance(point_match_summary, Mapping):
-                return 0
-            try:
-                return int(
-                    point_match_summary.get(key, point_match_summary.get(fallback_key, 0)) or 0
-                )
-            except Exception:
-                return 0
-
-        expected_count = _summary_count(
+        expected_count = _summary_int_with_fallback(
             "expected_fixed_qr_pair_count",
             "manual_caked_fit_pair_count",
         )
-        matched_count = _summary_count("final_matched_pair_count", "matched_pair_count")
+        matched_count = _summary_int_with_fallback("final_matched_pair_count", "matched_pair_count")
         return [
             "Geometry fit rejected because final validation lost the locked manual Qr/Qz pair route.",
             (
@@ -23935,7 +23945,11 @@ def build_geometry_fit_rejection_reason_lines(
     ):
         reasons.append(str(early_stop_reason).strip())
 
-    if not bool(getattr(result, "success", True)) and not headless_caked_angular_acceptance:
+    if (
+        not bool(getattr(result, "success", True))
+        and not headless_caked_angular_acceptance
+        and not dynamic_caked_within_acceptance
+    ):
         reasons.append("Optimizer did not report success.")
 
     if not np.isfinite(metric_value):
@@ -23978,10 +23992,7 @@ def build_geometry_fit_rejection_reason_lines(
     if isinstance(point_match_summary, Mapping):
         if "matched_pair_count" in point_match_summary:
             has_matched_pair_count = True
-            try:
-                matched_pair_count = int(point_match_summary.get("matched_pair_count", 0))
-            except Exception:
-                matched_pair_count = 0
+            matched_pair_count = _summary_int("matched_pair_count")
         max_offset = _geometry_fit_metric_float(metric_max_value)
 
     manual_caked_pair_count = 0

@@ -1615,6 +1615,54 @@ Shipping status:
   backward-compatible bug fix, not release prep.
 - Rollback plan is a normal commit revert.
 
+## 2026-05-22 Locked Qr/Qz Within-Acceptance Finalizer Fix
+
+Bug/error status: fixed for the follow-up locked Qr/Qz dynamic-caked
+acceptance/control-flow failure. The live route already reached
+`dynamic_angular_point_match` with `matched=4`, caked RMS near `1.54 deg`,
+worst residuals below the caked max-offset threshold, and failure class
+`within_acceptance`; the GUI still rejected because the optimizer did not
+report `success=True`.
+
+Root cause:
+- The optimizer had an identity-baseline fallback for locked Qr/Qz dynamic fits,
+  but the public `point_match_summary` did not expose the
+  `optimizer_failed_identity_within_acceptance` flag.
+- The GUI rejection reason builder treated `result.success == False` as fatal
+  even when the dynamic caked objective was explicitly classified as
+  `within_acceptance` and passed both caked RMS and max-offset limits.
+
+Fix:
+- `fit_geometry_parameters(...)` now preserves
+  `optimizer_failed_identity_within_acceptance` in the point-match summary when
+  the locked-Qr identity baseline is selected.
+- `build_geometry_fit_rejection_reason_lines(...)` now suppresses the generic
+  "Optimizer did not report success" rejection only for dynamic caked summaries
+  classified as `within_acceptance` or `already_aligned` with finite caked RMS
+  and max residuals under the existing acceptance thresholds.
+- The rejection builder's repeated summary count parsing was consolidated into
+  local helpers without changing the public API or message behavior for true
+  rejections.
+
+Validation:
+- `python -m pytest -q --tb=short tests/test_geometry_fitting.py -k "locked_qr or baseline or optimizer_failure or within_acceptance or line_angle"` -> `30 passed, 276 deselected, 7 warnings`.
+- `python -m pytest -q --tb=short tests/test_gui_geometry_fit_workflow.py -k "locked_qr or storage or projection_ready or authority or within_acceptance or line"` -> `24 passed, 697 deselected`.
+- `python -m pytest -q --tb=short tests/test_geometry_fit_live_rows_signature_handoff.py -k "locked_qr or optimizer_request or handoff"` -> `7 passed`.
+- `python -m pytest -q --tb=short tests/test_geometry_fit_manual_fit_space_classification.py -k "locked or caked or line"` -> `13 passed, 3 deselected`.
+- `python -m ra_sim.dev check` -> passed.
+- `git diff --check` -> passed.
+
+Shipping status:
+- Review completed across correctness, simplification, security, performance,
+  and test quality with no blocking findings for the locked-Qr acceptance
+  change.
+- No CI configuration, dependency, public API, saved-state schema, CLI, GUI
+  control, artifact-schema, or migration change is required.
+- No deprecation path or package version bump is required because this is a
+  backward-compatible finalizer bug fix, not release prep.
+- Rollback plan is a normal commit revert; the behavior is isolated to dynamic
+  caked summaries already under the accepted residual thresholds.
+
 ## Remaining work
 
 Next project: compare the real headless start-state/feature-toggle contract
