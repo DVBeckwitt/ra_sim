@@ -321,8 +321,9 @@ Current status as of 2026-05-21:
   the same way the picker preview did. The final detector-region and final
   profile figure paths now rebuild their region overlays from the
   GUI-accepted `rod_profile_table`, `Delta Qr`, `L Min` / `L Max`, `theta_i`,
-  and specular phi/2theta ROI instead of reusing the pre-editor
-  `region_overlays`; the accepted region specs are saved as
+  marker table, and specular phi/2theta ROI instead of reusing the pre-editor
+  `region_overlays`; nonzero final overlays are constrained to groups still
+  present in the accepted marker table, and the accepted region specs are saved as
   `figure7_<sample>_qr_rod_region_specs.csv` and `.json` next to the profile
   CSV. Accepted HK=0/specular profile rows are also hashed into the final
   Qr-rod cache identity, so the final figure cannot reuse stale cached `m=0`

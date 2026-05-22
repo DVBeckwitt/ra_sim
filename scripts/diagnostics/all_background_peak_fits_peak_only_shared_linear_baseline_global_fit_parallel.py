@@ -14810,6 +14810,7 @@ def final_qr_rod_region_overlays_from_profile_table(
     profile_table: pd.DataFrame,
     rod_entries: list[dict[str, object]],
     *,
+    marker_source: pd.DataFrame,
     delta_qr: float,
     theta_initial_deg: float,
     specular_roi: dict[str, object],
@@ -14819,6 +14820,18 @@ def final_qr_rod_region_overlays_from_profile_table(
     required_columns = {"m", "branch", "qz_min", "qz_max"}
     if table.empty or not required_columns.issubset(table.columns):
         return overlays
+    marker_table = pd.DataFrame(marker_source).copy()
+    marker_group_keys: set[tuple[int, str]] | None = None
+    if not marker_table.empty and {"m", "branch"}.issubset(marker_table.columns):
+        marker_m_values = pd.to_numeric(marker_table["m"], errors="coerce").to_numpy(
+            dtype=np.float64
+        )
+        marker_branches = marker_table["branch"].astype(str).to_numpy(dtype=object)
+        marker_group_keys = {
+            (int(m_value), str(branch_value))
+            for m_value, branch_value in zip(marker_m_values, marker_branches, strict=False)
+            if np.isfinite(m_value)
+        }
 
     rod_by_source_m: dict[tuple[str, int], dict[str, object]] = {}
     rod_by_m: dict[int, dict[str, object]] = {}
@@ -14860,6 +14873,8 @@ def final_qr_rod_region_overlays_from_profile_table(
         m_int = int(m_value)
         branch_text = str(branch_value)
         if m_int == 0 or branch_text == "qz":
+            continue
+        if marker_group_keys is not None and (m_int, branch_text) not in marker_group_keys:
             continue
         supported = final_qr_rod_supported_profile_group(group)
         if supported is None:
@@ -15945,6 +15960,7 @@ rod_profile_table = rod_profile_table_for_l_window(
 final_region_overlays = final_qr_rod_region_overlays_from_profile_table(
     rod_profile_table,
     rod_entries,
+    marker_source=marker_table,
     delta_qr=qr_rod_delta_qr,
     theta_initial_deg=qr_rod_editor_theta_initial_deg,
     specular_roi=SPECULAR_ROI_SIGNATURE,

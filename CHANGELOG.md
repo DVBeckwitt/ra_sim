@@ -30,7 +30,7 @@
   - Fixed Qr-rod peak-edit import/export so nonzero parameters (`Delta Qr`, `L Min`, `L Max`, `theta_i`) and HK=0 ROI parameters (`Phi`, `2theta`) round-trip with marker edits, while imported HK=0 markers are not merged with stale required ROI rows.
   - Fixed HK=0 Qr-rod peak-edit imports so imported phi/2theta ROI values immediately refresh the specular editor profile, are applied when loading an edit file path directly, and do not drop saved nonzero parameters when the HK=0 edit is saved.
   - Fixed final detector-region exports so nonzero Qr-rod overlays are clipped to the accepted GUI `L Min` / `L Max` window, matching the picker preview instead of drawing the full positive-Qz rod span.
-  - Fixed Qr-rod final region figures to use GUI-accepted integration regions rather than stale pre-editor overlays.
+  - Fixed Qr-rod final region figures to use GUI-accepted integration regions and marker groups rather than stale pre-editor overlays.
   - Fixed final Qr-rod fit cache identity so accepted HK=0 profile rows from the specular editor cannot be replaced by stale cached final-figure data.
   - Linked the Qr-rod marker editor and detector-preview windows so closing either window also closes the other.
   - Raised the default background max-intensity estimate for sparse bright peaks by using a higher robust percentile while keeping slider ceilings tied to the true finite image range.

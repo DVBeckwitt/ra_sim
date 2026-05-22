@@ -4211,6 +4211,8 @@ def test_final_qr_rod_region_overlays_are_rebuilt_after_gui_editor() -> None:
     assert nonzero_call < specular_call < window_filter < final_overlay_rebuild
     assert final_overlay_rebuild < cache_key_call < final_profile_selection
     assert final_profile_selection < detector_overlay_selection
+    rebuild_call = source[final_overlay_rebuild:cache_key_call]
+    assert "marker_source=marker_table" in rebuild_call
 
 
 def test_final_region_overlay_bounds_come_from_final_profile_table() -> None:
@@ -4272,6 +4274,7 @@ def test_final_region_overlay_bounds_come_from_final_profile_table() -> None:
     overlays = build_overlays(
         profile_table,
         rod_entries,
+        marker_source=pd.DataFrame(),
         delta_qr=0.30,
         theta_initial_deg=12.5,
         specular_roi={
@@ -4303,6 +4306,15 @@ def test_final_region_overlay_bounds_come_from_final_profile_table() -> None:
     assert specular_overlay["two_theta_min"] == pytest.approx(3.0)
     assert specular_overlay["two_theta_max"] == pytest.approx(9.0)
     assert specular_overlay["pixel_count_sum"] == pytest.approx(3.0)
+    plus_only_overlays = build_overlays(
+        profile_table,
+        rod_entries,
+        marker_source=pd.DataFrame([{"m": 1, "branch": "+"}]),
+        delta_qr=0.30,
+        theta_initial_deg=12.5,
+        specular_roi={},
+    )
+    assert not any(int(item["m"]) == 1 and str(item["branch"]) == "-" for item in plus_only_overlays)
 
 
 def test_final_detector_figure_does_not_use_pre_editor_region_overlays_after_editor() -> None:
