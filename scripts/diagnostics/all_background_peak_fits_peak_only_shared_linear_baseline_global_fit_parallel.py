@@ -6,6 +6,7 @@ from __future__ import annotations
 GUI_STATE_PATH = ""
 OUTPUT_DIR = ""
 FIGURE_OUTPUT_DIR = ""
+SAVE_OUTPUT_DIR_EDIT_MODE_OVERRIDE = ""
 RUN_NAME = ""
 SAMPLE_NAME_OVERRIDE = ""
 
@@ -19,6 +20,7 @@ PROFILE_FIT_WORKERS_OVERRIDE = "16"
 ROD_PROFILE_FIT_WORKERS_OVERRIDE = "16"
 USE_GPU_OVERRIDE = "1"
 QR_ROD_PEAK_EDIT_MODE_OVERRIDE = ""
+QR_ROD_PROFILE_SMOOTHING_SIGMA_OVERRIDE = ""
 DETECTOR_LABEL_SETTINGS_PATH_OVERRIDE = ""
 RESET_PRE_EDITOR_CACHE_OVERRIDE = ""
 PBI2_DISABLE_BACKGROUND_SUBTRACTION_OVERRIDE = ""
@@ -134,6 +136,8 @@ PRE_EDITOR_CACHE_SIGNATURE = "pre_qr_rod_marker_editor_inputs_v1"
 PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE = "background_peak_fit_results_v5_caked_phi_m90_90_plane"
 PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE = "profile_fit_cache_v1"
 PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_roi_v17_caked_phi_m90_90_plane"
+QR_ROD_PROFILE_SMOOTHING_SIGMA_DEFAULT = 1.0
+QR_ROD_PROFILE_SMOOTHING_SIGMA_MAX = 8.0
 
 
 def _cache_normalize_value(value: object) -> object:
@@ -1056,6 +1060,74 @@ def qr_rod_peak_edit_runtime_mode(
     return "skip"
 
 
+def final_output_dir_choice_runtime_mode(
+    requested: object = "auto",
+    *,
+    output_dir_override: object = "",
+    figure_output_dir_override: object = "",
+    backend_name: object = None,
+    env: dict[str, object] | None = None,
+) -> str:
+    mode = str(requested or "auto").strip().lower()
+    if mode in {"0", "false", "off", "none", "no", "skip"}:
+        return "skip"
+    if mode in {"1", "true", "on", "yes", "interactive", "popup"}:
+        return "popup"
+    if str(output_dir_override or "").strip() or str(figure_output_dir_override or "").strip():
+        return "skip"
+    return qr_rod_peak_edit_runtime_mode("auto", backend_name=backend_name, env=env)
+
+
+def choose_final_output_dir(
+    *,
+    mode: object = "auto",
+    output_dir: object,
+    figure_output_dir: object,
+    output_dir_override: object = "",
+    figure_output_dir_override: object = "",
+    backend_name: object = None,
+    env: dict[str, object] | None = None,
+) -> Path | None:
+    runtime_mode = final_output_dir_choice_runtime_mode(
+        mode,
+        output_dir_override=output_dir_override,
+        figure_output_dir_override=figure_output_dir_override,
+        backend_name=backend_name,
+        env=env,
+    )
+    if runtime_mode != "popup":
+        return None
+    root = None
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        selected = filedialog.askdirectory(
+            title="Choose final output folder",
+            initialdir=str(Path(output_dir).expanduser()),
+            mustexist=False,
+        )
+    except Exception as exc:
+        if str(mode or "auto").strip().lower() == "popup":
+            raise RuntimeError(f"final output folder chooser unavailable: {exc}") from exc
+        print(f"skipped final output folder chooser: {exc}")
+        return None
+    finally:
+        if root is not None:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+    if not str(selected or "").strip():
+        return None
+    selected_path = Path(str(selected)).expanduser()
+    if not selected_path.is_absolute():
+        selected_path = Path(figure_output_dir).expanduser().parent / selected_path
+    return selected_path
+
+
 def replace_qr_rod_marker_group_qz(
     marker_table: pd.DataFrame,
     *,
@@ -1613,6 +1685,13 @@ def show_qr_rod_peak_marker_popup(
             region_control_state.get("theta_initial_deg"),
             globals().get("ROD_PROFILE_TILT_DEG", 0.0),
         )
+        current_smoothing_sigma_bins = max(
+            0.0,
+            as_float(
+                region_control_state.get("smoothing_sigma_bins"),
+                globals().get("QR_ROD_PROFILE_SMOOTHING_SIGMA_DEFAULT", 1.0),
+            ),
+        )
         region_control_state["delta_qr"] = float(current_delta_qr)
         region_control_state["l_min"] = float(current_l_min)
         region_control_state["l_max"] = float(current_l_max)
@@ -1626,6 +1705,7 @@ def show_qr_rod_peak_marker_popup(
             region_control_state["two_theta_max"] = float(current_two_theta_max)
         if np.isfinite(current_theta_initial_deg):
             region_control_state["theta_initial_deg"] = float(current_theta_initial_deg)
+        region_control_state["smoothing_sigma_bins"] = float(current_smoothing_sigma_bins)
         region_control_state["rod_profile_table"] = profiles.copy()
 
     cols = min(3, max(1, len(groups)))
@@ -1812,6 +1892,21 @@ def show_qr_rod_peak_marker_popup(
         )
         return float(value) if np.isfinite(value) else 0.0
 
+    def current_smoothing_sigma_bins() -> float:
+        value = as_float(
+            region_control_state.get("smoothing_sigma_bins"),
+            globals().get("QR_ROD_PROFILE_SMOOTHING_SIGMA_DEFAULT", 1.0),
+        )
+        if not np.isfinite(value):
+            value = as_float(globals().get("QR_ROD_PROFILE_SMOOTHING_SIGMA_DEFAULT", 1.0), 1.0)
+        return max(
+            0.0,
+            min(
+                float(value),
+                as_float(globals().get("QR_ROD_PROFILE_SMOOTHING_SIGMA_MAX", 8.0), 8.0),
+            ),
+        )
+
     def current_hk0_roi_bounds() -> tuple[float, float, float, float]:
         defaults = (
             globals().get("specular_phi_min_deg", -10.0),
@@ -1855,7 +1950,7 @@ def show_qr_rod_peak_marker_popup(
         if eventson is not None:
             widget.eventson = False
         try:
-            if str(key) == "delta_qr":
+            if str(key) in {"delta_qr", "smoothing_sigma_bins"}:
                 widget.set_val(float(value))
             else:
                 widget.set_val(f"{float(value):.6g}")
@@ -1870,9 +1965,21 @@ def show_qr_rod_peak_marker_popup(
 
     def current_phase_parameter_group() -> tuple[str, tuple[str, ...]] | None:
         if nonzero_theta_i_controls_enabled():
-            return "nonzero", ("delta_qr", "l_min", "l_max", "theta_initial_deg")
+            return "nonzero", (
+                "delta_qr",
+                "l_min",
+                "l_max",
+                "theta_initial_deg",
+                "smoothing_sigma_bins",
+            )
         if hk0_roi_controls_enabled():
-            return "specular", ("phi_min", "phi_max", "two_theta_min", "two_theta_max")
+            return "specular", (
+                "phi_min",
+                "phi_max",
+                "two_theta_min",
+                "two_theta_max",
+                "smoothing_sigma_bins",
+            )
         return None
 
     def apply_imported_peak_edit_parameters(parameters: object) -> bool:
@@ -1887,15 +1994,20 @@ def show_qr_rod_peak_marker_popup(
             return False
         applied_keys: list[str] = []
         changed = False
+        profile_changed = False
         for key in keys:
             value = as_float(phase_parameters.get(key), np.nan)
             if not np.isfinite(value):
                 continue
             if key == "delta_qr":
                 value = max(1.0e-9, float(value))
+            if key == "smoothing_sigma_bins":
+                value = max(0.0, float(value))
             old_value = as_float(region_control_state.get(key), np.nan)
             if not np.isfinite(old_value) or not np.isclose(float(old_value), float(value)):
                 changed = True
+                if key != "smoothing_sigma_bins":
+                    profile_changed = True
             region_control_state[key] = float(value)
             applied_keys.append(key)
         if not applied_keys:
@@ -1903,8 +2015,9 @@ def show_qr_rod_peak_marker_popup(
         sync_region_parameter_widgets(*applied_keys)
         if changed:
             clear_group_plot_cache()
-            mark_region_profile_refresh_pending("import_parameters")
-            mark_detector_preview_refresh_pending()
+            if profile_changed:
+                mark_region_profile_refresh_pending("import_parameters")
+                mark_detector_preview_refresh_pending()
         return changed
 
     def current_phase_peak_edit_parameters() -> dict[str, dict[str, float]]:
@@ -1925,6 +2038,7 @@ def show_qr_rod_peak_marker_popup(
                     "l_min": float(l_bounds[0]),
                     "l_max": float(l_bounds[1]),
                     "theta_initial_deg": float(current_theta_initial_deg()),
+                    "smoothing_sigma_bins": float(current_smoothing_sigma_bins()),
                 }
             }
         if phase_name == "specular":
@@ -1935,6 +2049,7 @@ def show_qr_rod_peak_marker_popup(
                     "phi_max": float(phi_max),
                     "two_theta_min": float(theta_min),
                     "two_theta_max": float(theta_max),
+                    "smoothing_sigma_bins": float(current_smoothing_sigma_bins()),
                 }
             }
         return {}
@@ -2596,6 +2711,11 @@ def show_qr_rod_peak_marker_popup(
             x_l = qz_to_editor_l(m_value, branch_value, x_qz)
             editor_log_y = int(m_value) == 0
             y_plot = positive_log_plot_values(y) if editor_log_y else y
+            y_smoothed = smooth_qr_rod_profile_density(
+                y,
+                sigma_bins=current_smoothing_sigma_bins(),
+            )
+            y_smoothed_plot = positive_log_plot_values(y_smoothed) if editor_log_y else y_smoothed
             finite_profile = np.isfinite(x_l) & np.isfinite(y)
             group_l_bounds = editor_l_bounds_for_group(int(m_value))
             if group_l_bounds is not None:
@@ -2608,6 +2728,15 @@ def show_qr_rod_peak_marker_popup(
                     y_plot[finite_profile][order],
                     color="0.25",
                     linewidth=0.9,
+                    label="Data",
+                )
+                ax.plot(
+                    x_l[finite_profile][order],
+                    y_smoothed_plot[finite_profile][order],
+                    color=globals().get("JOURNAL_FIT_COLOR", "#d95f02"),
+                    linewidth=0.9,
+                    alpha=0.88,
+                    label="Smoothed data",
                 )
             marker_l, marker_rows, y_markers, y_markers_plot, finite = marker_plot_arrays(
                 m_value, branch_value
@@ -2637,10 +2766,12 @@ def show_qr_rod_peak_marker_popup(
             ax.set_xlabel("L", fontsize=8)
             ax.set_ylabel("Intensity (log)" if editor_log_y else "Intensity", fontsize=8)
             if editor_log_y:
-                apply_positive_log_y_axis(ax, y, y_markers)
+                apply_positive_log_y_axis(ax, y, y_smoothed, y_markers)
             else:
                 ax.set_yscale("linear")
-                visible_y = np.concatenate([y[finite_profile], y_markers[finite]])
+                visible_y = np.concatenate(
+                    [y[finite_profile], y_smoothed[finite_profile], y_markers[finite]]
+                )
                 visible_y = visible_y[np.isfinite(visible_y)]
                 if visible_y.size:
                     y_min = float(np.nanmin(visible_y))
@@ -2731,6 +2862,16 @@ def show_qr_rod_peak_marker_popup(
         mark_detector_preview_refresh_pending()
         editor_debug("theta_initial.submit", text=text)
         refresh_deferred_region_controls()
+
+    def set_profile_smoothing_sigma(value: object) -> None:
+        if not region_controls_enabled:
+            return
+        sigma = as_float(value, current_smoothing_sigma_bins())
+        if not np.isfinite(sigma):
+            return
+        region_control_state["smoothing_sigma_bins"] = max(0.0, float(sigma))
+        clear_group_plot_cache()
+        redraw(preserve_limits=True)
 
     def set_region_roi_bound(key: str, text: object) -> None:
         if not hk0_roi_controls_enabled():
@@ -3047,9 +3188,20 @@ def show_qr_rod_peak_marker_popup(
 
     if region_controls_enabled:
         delta_qr_slider = None
+        smoothing_slider = None
         theta_i_box = None
         l_min_box = None
         l_max_box = None
+        smoothing_ax = fig.add_axes([0.08, 0.185, 0.30, 0.035])
+        smoothing_slider = Slider(
+            smoothing_ax,
+            "Smooth",
+            0.0,
+            as_float(globals().get("QR_ROD_PROFILE_SMOOTHING_SIGMA_MAX", 8.0), 8.0),
+            valinit=current_smoothing_sigma_bins(),
+        )
+        region_parameter_widgets["smoothing_sigma_bins"] = smoothing_slider
+        smoothing_slider.on_changed(set_profile_smoothing_sigma)
         if not roi_controls_active:
             delta_qr_ax = fig.add_axes([0.08, 0.125, 0.30, 0.045])
             l_min_ax = fig.add_axes([0.46, 0.125, 0.10, 0.045])
@@ -3094,6 +3246,8 @@ def show_qr_rod_peak_marker_popup(
         if theta_i_box is not None:
             region_widgets.append(theta_i_box)
             text_input_widgets.append(theta_i_box)
+        if smoothing_slider is not None:
+            region_widgets.append(smoothing_slider)
         if roi_controls_active:
             phi_min_value, phi_max_value, theta_min_value, theta_max_value = (
                 current_hk0_roi_bounds()
@@ -3179,6 +3333,7 @@ def edit_qr_rod_region_editor(
     l_min: object = None,
     l_max: object = None,
     theta_initial_deg: object = None,
+    smoothing_sigma_bins: object = None,
     phi_min: object = None,
     phi_max: object = None,
     two_theta_min: object = None,
@@ -3218,6 +3373,13 @@ def edit_qr_rod_region_editor(
     current_theta_initial_deg = as_float(
         theta_initial_deg, globals().get("ROD_PROFILE_TILT_DEG", 0.0)
     )
+    current_smoothing_sigma_bins = max(
+        0.0,
+        as_float(
+            smoothing_sigma_bins,
+            globals().get("QR_ROD_PROFILE_SMOOTHING_SIGMA_DEFAULT", 1.0),
+        ),
+    )
     current_phi_min = as_float(phi_min, globals().get("specular_phi_min_deg", -10.0))
     current_phi_max = as_float(phi_max, globals().get("specular_phi_max_deg", 10.0))
     current_two_theta_min = as_float(two_theta_min, globals().get("specular_theta_min_deg", 5.0))
@@ -3237,6 +3399,13 @@ def edit_qr_rod_region_editor(
                 nonzero_parameters.get("theta_initial_deg"),
                 current_theta_initial_deg,
             )
+            current_smoothing_sigma_bins = max(
+                0.0,
+                as_float(
+                    nonzero_parameters.get("smoothing_sigma_bins"),
+                    current_smoothing_sigma_bins,
+                ),
+            )
     if imports_specular_parameters:
         specular_parameters = imported_peak_edit_parameters.get("specular", {})
         if isinstance(specular_parameters, dict):
@@ -3247,6 +3416,13 @@ def edit_qr_rod_region_editor(
             )
             current_two_theta_max = as_float(
                 specular_parameters.get("two_theta_max"), current_two_theta_max
+            )
+            current_smoothing_sigma_bins = max(
+                0.0,
+                as_float(
+                    specular_parameters.get("smoothing_sigma_bins"),
+                    current_smoothing_sigma_bins,
+                ),
             )
     runtime_mode = qr_rod_peak_edit_runtime_mode(mode, backend_name=backend_name, env=env)
 
@@ -3263,6 +3439,7 @@ def edit_qr_rod_region_editor(
             "phi_max": float(current_phi_max),
             "two_theta_min": float(current_two_theta_min),
             "two_theta_max": float(current_two_theta_max),
+            "smoothing_sigma_bins": float(current_smoothing_sigma_bins),
             "l_axis_coefficients": {},
             "accepted": False,
             "source": source,
@@ -3287,6 +3464,7 @@ def edit_qr_rod_region_editor(
         "phi_max": float(current_phi_max),
         "two_theta_min": float(current_two_theta_min),
         "two_theta_max": float(current_two_theta_max),
+        "smoothing_sigma_bins": float(current_smoothing_sigma_bins),
     }
     try:
         edited_markers, accepted = show_qr_rod_peak_marker_popup(
@@ -3323,6 +3501,9 @@ def edit_qr_rod_region_editor(
         "phi_max": float(region_control_state.get("phi_max", np.nan)),
         "two_theta_min": float(region_control_state.get("two_theta_min", np.nan)),
         "two_theta_max": float(region_control_state.get("two_theta_max", np.nan)),
+        "smoothing_sigma_bins": float(
+            region_control_state.get("smoothing_sigma_bins", current_smoothing_sigma_bins)
+        ),
         "l_axis_coefficients": normalized_l_axis_coefficients_payload(
             region_control_state.get("l_axis_coefficients", {})
         ),
@@ -3342,6 +3523,7 @@ def edit_qr_rod_region_editor(
                     "l_min": float(result["l_min"]),
                     "l_max": float(result["l_max"]),
                     "theta_initial_deg": float(result["theta_initial_deg"]),
+                    "smoothing_sigma_bins": float(result["smoothing_sigma_bins"]),
                 }
             if imports_specular_parameters:
                 save_parameters["specular"] = {
@@ -3349,6 +3531,7 @@ def edit_qr_rod_region_editor(
                     "phi_max": float(result["phi_max"]),
                     "two_theta_min": float(result["two_theta_min"]),
                     "two_theta_max": float(result["two_theta_max"]),
+                    "smoothing_sigma_bins": float(result["smoothing_sigma_bins"]),
                 }
             saved_path = write_qr_rod_peak_edits(
                 path_text,
@@ -6334,6 +6517,24 @@ if detected_sample_name:
     SAMPLE_LABEL = _sample_label_from_name(SAMPLE_NAME)
 refresh_figure_stems()
 refresh_figure_output_dir()
+selected_output_dir = choose_final_output_dir(
+    mode=_setting_text(
+        "SAVE_OUTPUT_DIR_EDIT_MODE_OVERRIDE",
+        "RA_SIM_ALL_BACKGROUND_SAVE_DIR_EDIT_MODE",
+        "auto",
+    ),
+    output_dir=OUT_DIR,
+    figure_output_dir=FIGURE_OUT_DIR,
+    output_dir_override=OUTPUT_DIR,
+    figure_output_dir_override=FIGURE_OUTPUT_DIR,
+    backend_name=mpl.get_backend(),
+    env=os.environ,
+)
+if selected_output_dir is not None:
+    OUT_DIR = selected_output_dir
+    FIGURE_OUT_DIR = selected_output_dir
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    FIGURE_OUT_DIR.mkdir(parents=True, exist_ok=True)
 print(f"figures={FIGURE_OUT_DIR}")
 ACTIVE_LATTICE = active_lattice_constants_from_state(state)
 ACTIVE_LATTICE_A = float(ACTIVE_LATTICE["a"])
@@ -11553,6 +11754,32 @@ def normalized_data_simulation_payload(
     return {"data": data / scale, "simulation": simulation / scale, "scale": float(scale)}
 
 
+def smooth_qr_rod_profile_density(values: object, sigma_bins: object = 1.0) -> np.ndarray:
+    data = np.asarray(values, dtype=np.float64).reshape(-1)
+    sigma = as_float(sigma_bins, 0.0)
+    if not np.isfinite(sigma) or float(sigma) <= 0.0 or data.size < 3:
+        return data.copy()
+    sigma = min(
+        float(sigma),
+        float(globals().get("QR_ROD_PROFILE_SMOOTHING_SIGMA_MAX", 8.0)),
+    )
+    finite = np.isfinite(data)
+    if not np.any(finite):
+        return data.copy()
+    filled = np.where(finite, data, 0.0)
+    weights = finite.astype(np.float64)
+    smoothed_sum = gaussian_filter1d(filled, sigma=sigma, mode="nearest")
+    smoothed_weight = gaussian_filter1d(weights, sigma=sigma, mode="nearest")
+    smoothed = np.divide(
+        smoothed_sum,
+        smoothed_weight,
+        out=np.full(data.shape, np.nan, dtype=np.float64),
+        where=smoothed_weight > 0.0,
+    )
+    smoothed[~finite] = np.nan
+    return smoothed
+
+
 def _finite_abs_percentile(values: object, percentile: float = 90.0) -> float:
     arr = np.asarray(values, dtype=np.float64)
     finite = np.abs(arr[np.isfinite(arr)])
@@ -16560,6 +16787,17 @@ qr_rod_peak_edits_path = _setting_text(
 qr_rod_peak_edit_mode = _setting_text(
     "QR_ROD_PEAK_EDIT_MODE_OVERRIDE", "RA_SIM_QR_ROD_PEAK_EDIT_MODE", "auto"
 )
+qr_rod_profile_smoothing_sigma = max(
+    0.0,
+    as_float(
+        _setting_text(
+            "QR_ROD_PROFILE_SMOOTHING_SIGMA_OVERRIDE",
+            "RA_SIM_QR_ROD_PROFILE_SMOOTHING_SIGMA",
+            QR_ROD_PROFILE_SMOOTHING_SIGMA_DEFAULT,
+        ),
+        QR_ROD_PROFILE_SMOOTHING_SIGMA_DEFAULT,
+    ),
+)
 qr_rod_editor_initial_l_min = float(NONZERO_QR_ROD_L_MIN)
 qr_rod_editor_initial_l_max = float(NONZERO_QR_ROD_L_MAX)
 qr_rod_editor_initial_theta_initial_deg = as_float(
@@ -16619,6 +16857,13 @@ if isinstance(qr_rod_imported_nonzero_parameters, dict):
         qr_rod_imported_nonzero_parameters.get("theta_initial_deg"),
         qr_rod_editor_initial_theta_initial_deg,
     )
+    qr_rod_profile_smoothing_sigma = max(
+        0.0,
+        as_float(
+            qr_rod_imported_nonzero_parameters.get("smoothing_sigma_bins"),
+            qr_rod_profile_smoothing_sigma,
+        ),
+    )
 qr_rod_nonzero_editor_result = edit_qr_rod_region_editor(
     marker_table,
     rod_profile_table,
@@ -16629,6 +16874,7 @@ qr_rod_nonzero_editor_result = edit_qr_rod_region_editor(
     l_min=qr_rod_editor_initial_l_min,
     l_max=qr_rod_editor_initial_l_max,
     theta_initial_deg=qr_rod_editor_initial_theta_initial_deg,
+    smoothing_sigma_bins=qr_rod_profile_smoothing_sigma,
     profile_update_callback=recompute_qr_rod_region_profiles,
     region_preview_update_callback=qr_rod_detector_region_preview_update_callback,
     required_marker_table=specular_l_marker_table,
@@ -16653,6 +16899,13 @@ qr_rod_editor_theta_initial_deg = as_float(
     qr_rod_nonzero_editor_result.get("theta_initial_deg"),
     qr_rod_editor_initial_theta_initial_deg,
 )
+qr_rod_profile_smoothing_sigma = max(
+    0.0,
+    as_float(
+        qr_rod_nonzero_editor_result.get("smoothing_sigma_bins"),
+        qr_rod_profile_smoothing_sigma,
+    ),
+)
 rod_profile_table = pd.DataFrame(
     qr_rod_nonzero_editor_result.get("rod_profile_table", rod_profile_table)
 ).copy()
@@ -16669,6 +16922,13 @@ if isinstance(qr_rod_imported_specular_parameters, dict):
     )
     specular_theta_max_deg = as_float(
         qr_rod_imported_specular_parameters.get("two_theta_max"), specular_theta_max_deg
+    )
+    qr_rod_profile_smoothing_sigma = max(
+        0.0,
+        as_float(
+            qr_rod_imported_specular_parameters.get("smoothing_sigma_bins"),
+            qr_rod_profile_smoothing_sigma,
+        ),
     )
 qr_rod_specular_editor_initial_l_min, qr_rod_specular_editor_initial_l_max = (
     qr_rod_l_bounds_for_group(
@@ -16695,6 +16955,7 @@ qr_rod_specular_editor_result = edit_qr_rod_region_editor(
     phi_max=specular_phi_max_deg,
     two_theta_min=specular_theta_min_deg,
     two_theta_max=specular_theta_max_deg,
+    smoothing_sigma_bins=qr_rod_profile_smoothing_sigma,
     profile_update_callback=recompute_qr_rod_region_profiles,
     region_preview_update_callback=qr_rod_detector_region_preview_update_callback,
     required_marker_table=specular_l_marker_table,
@@ -16723,6 +16984,13 @@ qr_rod_specular_l_min = as_float(
 )
 qr_rod_specular_l_max = as_float(
     qr_rod_specular_editor_result.get("l_max"), qr_rod_editor_l_max
+)
+qr_rod_profile_smoothing_sigma = max(
+    0.0,
+    as_float(
+        qr_rod_specular_editor_result.get("smoothing_sigma_bins"),
+        qr_rod_profile_smoothing_sigma,
+    ),
 )
 if np.isfinite(qr_rod_specular_phi_min_deg):
     specular_phi_min_deg = float(qr_rod_specular_phi_min_deg)
@@ -16784,12 +17052,14 @@ qr_rod_peak_edit_parameters = {
         "l_min": float(qr_rod_editor_l_min),
         "l_max": float(qr_rod_editor_l_max),
         "theta_initial_deg": float(qr_rod_editor_theta_initial_deg),
+        "smoothing_sigma_bins": float(qr_rod_profile_smoothing_sigma),
     },
     "specular": {
         "phi_min": float(specular_phi_min_deg),
         "phi_max": float(specular_phi_max_deg),
         "two_theta_min": float(specular_theta_min_deg),
         "two_theta_max": float(specular_theta_max_deg),
+        "smoothing_sigma_bins": float(qr_rod_profile_smoothing_sigma),
     },
 }
 accepted_l_axis_coefficients = merge_l_axis_coefficients(
@@ -16841,6 +17111,7 @@ qr_rod_region_editor_result = {
     "peak_edit_parameters": qr_rod_peak_edit_parameters,
     "specular_roi": dict(SPECULAR_ROI_SIGNATURE),
     "l_axis_coefficients": accepted_l_axis_coefficients,
+    "smoothing_sigma_bins": float(qr_rod_profile_smoothing_sigma),
     "accepted": bool(qr_rod_nonzero_editor_result.get("accepted", False))
     or bool(qr_rod_specular_editor_result.get("accepted", False)),
     "source": qr_rod_peak_edit_source,
@@ -16863,8 +17134,6 @@ rod_profile_table = rod_profile_table_for_l_window(
     marker_table,
     qr_rod_editor_l_min,
     qr_rod_editor_l_max,
-    specular_l_min=qr_rod_specular_l_min,
-    specular_l_max=qr_rod_specular_l_max,
     l_axis_coefficients=accepted_l_axis_coefficients,
 )
 accepted_profile_table = rod_profile_table.copy()
@@ -16898,34 +17167,12 @@ qr_rod_peak_edit_key = qr_rod_peak_edit_cache_key(
             accepted_l_axis_coefficients
         ),
         "accepted_region_overlay_signature": accepted_region_overlay_signature,
+        "profile_smoothing_sigma_bins": float(qr_rod_profile_smoothing_sigma),
     },
 )
-if qr_rod_profile_cache_has_final_fit(qr_rod_profile_cache or {}, qr_rod_peak_edit_key):
-    rod_profile_table = pd.DataFrame(qr_rod_profile_cache["final_rod_profile_table"]).copy()
-    marker_table = pd.DataFrame(qr_rod_profile_cache["final_marker_table"]).copy()
-    rod_component_table = pd.DataFrame(qr_rod_profile_cache["final_rod_component_table"]).copy()
-    rod_profile_table.attrs["joint_fit_component_table"] = rod_component_table
-    print(f"reused final Qr-rod fit cache={QR_ROD_PROFILE_CACHE_PATH}")
-else:
-    rod_profile_table = add_joint_qz_fit_columns(
-        rod_profile_table,
-        marker_table,
-        bg=profile_bg,
-        detector_q_maps=profile_detector_q_maps,
-        detector_phi_map=profile_detector_phi_map,
-        detector_solid_angle=profile_detector_solid_angle,
-        detector_two_theta_map=profile_detector_two_theta_map,
-    )
-    rod_component_table = rod_profile_table.attrs.get("joint_fit_component_table", pd.DataFrame())
-    qr_rod_profile_cache = qr_rod_profile_cache_with_final_fit(
-        qr_rod_profile_cache,
-        rod_profile_table,
-        marker_table,
-        rod_component_table,
-        qr_rod_peak_edit_key,
-    )
-    write_qr_rod_profile_cache(QR_ROD_PROFILE_CACHE_PATH, STATE_PATH, qr_rod_profile_cache)
-    print(f"saved final Qr-rod fit cache={QR_ROD_PROFILE_CACHE_PATH}")
+rod_component_table = pd.DataFrame()
+rod_profile_table.attrs["joint_fit_component_table"] = rod_component_table
+print("Qr-rod peak fitting disabled: final profiles use GUI-integrated data only")
 rod_profile_table = filter_hidden_qr_rod_table(
     rod_profile_table, SAMPLE_STEM, hidden_hk=PBI2_HIDDEN_QR_ROD_HK
 )
@@ -16967,23 +17214,24 @@ region_specs_table = final_qr_rod_output_state["region_specs_table"]
 plot_marker_table = final_qr_rod_output_state["plot_marker_table"]
 profile_audit_table = final_qr_rod_output_state["profile_audit_table"]
 print(
-    f"rod-profile joint fits: groups={int(rod_profile_table.groupby(['m', 'branch']).ngroups) if not rod_profile_table.empty else 0} workers={ROD_PROFILE_FIT_WORKERS} gpu={GPU_ACCELERATION_ENABLED}"
+    f"rod-profile GUI traces: groups={int(rod_profile_table.groupby(['m', 'branch']).ngroups) if not rod_profile_table.empty else 0} smoothing_sigma_bins={float(qr_rod_profile_smoothing_sigma):.6g}"
 )
-if "joint_peak_density" in rod_profile_table:
-    rod_profile_table["peak_subtracted_density"] = np.asarray(
-        rod_profile_table["background_density"], dtype=np.float64
-    ) - np.asarray(rod_profile_table["joint_peak_density"], dtype=np.float64)
-    rod_profile_table["fit_residual_density"] = np.asarray(
-        rod_profile_table["background_density"], dtype=np.float64
-    ) - np.asarray(rod_profile_table["joint_fit_density"], dtype=np.float64)
-elif "joint_fit_density" in rod_profile_table:
-    rod_profile_table["peak_subtracted_density"] = np.asarray(
-        rod_profile_table["background_density"], dtype=np.float64
-    ) - np.asarray(rod_profile_table["joint_fit_density"], dtype=np.float64)
-elif "fit_density" in rod_profile_table:
-    rod_profile_table["peak_subtracted_density"] = np.asarray(
-        rod_profile_table["background_density"], dtype=np.float64
-    ) - np.asarray(rod_profile_table["fit_density"], dtype=np.float64)
+if "background_density" in rod_profile_table:
+    rod_profile_table["smoothed_background_density"] = np.nan
+    if {"m", "branch", "qz_center"}.issubset(rod_profile_table.columns):
+        for (_m_value, _branch_value), sub in rod_profile_table.groupby(["m", "branch"]):
+            order = np.argsort(pd.to_numeric(sub["qz_center"], errors="coerce").to_numpy())
+            ordered_index = sub.index.to_numpy()[order]
+            ordered_density = pd.to_numeric(
+                rod_profile_table.loc[ordered_index, "background_density"],
+                errors="coerce",
+            ).to_numpy(dtype=np.float64)
+            rod_profile_table.loc[ordered_index, "smoothed_background_density"] = (
+                smooth_qr_rod_profile_density(
+                    ordered_density,
+                    sigma_bins=qr_rod_profile_smoothing_sigma,
+                )
+            )
 rod_profile_csv = OUT_DIR / f"{ROD_PROFILE_STEM}.csv"
 rod_profile_table.to_csv(rod_profile_csv, index=False)
 marker_csv = OUT_DIR / f"{ROD_PROFILE_MARKER_STEM}.csv"
@@ -17061,6 +17309,96 @@ def positive_l_rows(
     return table[np.asarray(l_values, dtype=np.float64) > 0.0].copy()
 
 
+def final_qr_rod_profile_plot_payload(
+    *,
+    rod_profile_table: pd.DataFrame,
+    marker_table: pd.DataFrame,
+    plot_rod_entries: list[dict[str, object]],
+    branch_windows: object,
+    plot_marker_table: pd.DataFrame | None = None,
+    l_axis_coefficients: object = None,
+    smoothing_sigma_bins: object = 0.0,
+) -> list[dict[str, object]]:
+    table = pd.DataFrame(rod_profile_table).copy()
+    if table.empty or not {"m", "branch", "qz_center", "background_density"}.issubset(
+        table.columns
+    ):
+        return []
+
+    markers = (
+        pd.DataFrame(marker_table).copy()
+        if plot_marker_table is None
+        else pd.DataFrame(plot_marker_table).copy()
+    )
+    table_m = pd.to_numeric(table["m"], errors="coerce").to_numpy(dtype=np.float64)
+    table_branch = table["branch"].astype(str).to_numpy(dtype=object)
+    pixel_count = (
+        pd.to_numeric(table["pixel_count"], errors="coerce").to_numpy(dtype=np.float64)
+        if "pixel_count" in table
+        else np.ones(table.shape[0], dtype=np.float64)
+    )
+    branch_names = tuple(str(item[0]) for item in branch_windows)
+    payloads: list[dict[str, object]] = []
+
+    for rod in plot_rod_entries:
+        try:
+            m_value = int(rod["m"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        branches = ("qz",) if m_value == 0 else branch_names
+        for branch_value in branches:
+            group_mask = (
+                np.isfinite(table_m)
+                & (table_m == float(m_value))
+                & (table_branch == str(branch_value))
+                & np.isfinite(pixel_count)
+                & (pixel_count > 0.0)
+            )
+            sub = table.loc[group_mask].copy()
+            sub = positive_l_rows(
+                sub,
+                m_value=m_value,
+                branch_value=str(branch_value),
+                marker_source=markers,
+                l_axis_coefficients=l_axis_coefficients,
+            )
+            if sub.empty:
+                continue
+
+            x_values = qz_values_to_l_axis(
+                sub["qz_center"],
+                m_value=m_value,
+                branch_value=str(branch_value),
+                marker_source=markers,
+                l_axis_coefficients=l_axis_coefficients,
+            )
+            data_values = pd.to_numeric(
+                sub["background_density"], errors="coerce"
+            ).to_numpy(dtype=np.float64)
+            order = np.argsort(np.asarray(x_values, dtype=np.float64))
+            x_sorted = np.asarray(x_values, dtype=np.float64)[order]
+            data_sorted = data_values[order]
+            smoothed_sorted = smooth_qr_rod_profile_density(
+                data_sorted,
+                sigma_bins=smoothing_sigma_bins,
+            )
+            payloads.append(
+                {
+                    "m": m_value,
+                    "branch": str(branch_value),
+                    "x_l": x_sorted,
+                    "data_y": data_sorted,
+                    "smoothed_y": smoothed_sorted,
+                    "xlim_policy": "autoscale" if m_value == 0 else "shared",
+                    "labels": ("Data", "Smoothed data"),
+                    "data_column": "background_density",
+                    "smoothed_source": "background_density",
+                }
+            )
+
+    return payloads
+
+
 def rod_profile_panel_label(m_value: int, branch_value: str) -> str:
     if int(m_value) == 0:
         return "$m = 0$"
@@ -17133,6 +17471,7 @@ def shared_nonzero_rod_profile_y_axis_limits(
     fallback_limits: tuple[float, float] = (-1.0, 1.0),
     margin_fraction: float = 0.08,
     l_axis_coefficients: object = None,
+    smoothing_sigma_bins: object = 0.0,
 ) -> tuple[float, float]:
     table = pd.DataFrame(profile_table).copy()
     markers = pd.DataFrame(marker_source).copy()
@@ -17163,25 +17502,14 @@ def shared_nonzero_rod_profile_y_axis_limits(
                 sub = sub[np.asarray(l_values, dtype=np.float64) > 0.0].copy()
             if sub.empty or "background_density" not in sub:
                 continue
-            plot_decision = rod_profile_plot_model_decision(
-                str(globals().get("SAMPLE_STEM", "")),
-                m_value,
-                branch_value,
-                sub,
-                markers,
-                transverse_background_enabled=bool(
-                    globals().get("QR_ROD_TRANSVERSE_BACKGROUND_ENABLED", False)
-                ),
-                background_subtraction_disabled=bool(
-                    globals().get("PBI2_DISABLE_BACKGROUND_SUBTRACTION", False)
-                ),
+            data_values = np.asarray(sub["background_density"], dtype=np.float64)
+            y_values.append(data_values)
+            y_values.append(
+                smooth_qr_rod_profile_density(
+                    data_values,
+                    sigma_bins=smoothing_sigma_bins,
+                )
             )
-            plot_model, norm_payload = rod_profile_normalized_payload_for_plot_decision(
-                sub, plot_decision
-            )
-            y_values.append(np.asarray(norm_payload["data"], dtype=np.float64))
-            if plot_model:
-                y_values.append(np.asarray(norm_payload["simulation"], dtype=np.float64))
     if not y_values:
         return tuple(float(value) for value in fallback_limits)
     finite = np.concatenate([np.asarray([0.0], dtype=np.float64), *y_values])
@@ -17262,24 +17590,21 @@ rod_note_lines = [
     "",
     f"The figure uses only the {ROD_PROFILE_TILT_LABEL}° background. Non-specular traces are integrated directly in detector Qr/Qz space.",
     f"Nonzero rods use detector Q maps at `theta_i = {float(qr_rod_editor_theta_initial_deg):.6g}°`.",
-    f"m = 0 ROI uses caked phi/2theta bounds `phi=[{float(specular_phi_min_deg):.6g}, {float(specular_phi_max_deg):.6g}]°`, `2theta=[{float(specular_theta_min_deg):.6g}, {float(specular_theta_max_deg):.6g}]°`, and `{float(qr_rod_specular_l_min):g} <= L <= {float(qr_rod_specular_l_max):g}`.",
+    f"m = 0 ROI uses caked phi/2theta bounds `phi=[{float(specular_phi_min_deg):.6g}, {float(specular_phi_max_deg):.6g}]°`, `2theta=[{float(specular_theta_min_deg):.6g}, {float(specular_theta_max_deg):.6g}]°`; its final L axis is autoscaled from the accepted ROI trace.",
     "Before integration, each non-specular HK rod center is adjusted from fitted detector peak Qr samples; every Qz bin then uses the adjusted Qr0 +/- delta_Qr, branch, positive Qz, and the 2theta display limit before summing intensity.",
     "The detector-region figure is a detector-space Qr overlay diagnostic: the background is linear detector intensity with robust percentile clipping, translucent ribbons show the active Delta Qr support with dashed boundary strokes, solid curves are projected fitted-geometry rod centerlines, and solid-white m labels start from the default geometry before manual adjustment; the intensity scale is saved as a separate file.",
     "The plotted traces are acceptance-normalized detector-count densities unless BACKGROUND_SOLID_ANGLE_CORRECTION is enabled. Raw summed columns are retained for audit only.",
     f"Solid-angle correction enabled: `{bool(BACKGROUND_SOLID_ANGLE_CORRECTION)}`.",
-    f"Background image subtraction disabled: `{bool(BACKGROUND_IMAGE_SUBTRACTION_DISABLED)}`. When enabled, saved `peak_subtracted` image products are raw background images; fitted peak models remain saved separately.",
+    f"Background image subtraction disabled: `{bool(BACKGROUND_IMAGE_SUBTRACTION_DISABLED)}`. When enabled, saved `peak_subtracted` image products are raw background images.",
     f"Qr-sideband transverse background subtraction enabled: `{bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED)}`. When enabled, `background_density_raw` is the central rod-band density, `qr_sideband_background_density` is the same-Qz off-rod estimate, and `background_density` is their difference.",
-    f"PbI2 no-background debug mode: `{bool(PBI2_DISABLE_BACKGROUND_SUBTRACTION)}`. When enabled, PbI2 Qr-rod transverse sideband subtraction is forced off and raw `background_density` is plotted against full `joint_fit_density`.",
+    f"PbI2 no-background debug mode: `{bool(PBI2_DISABLE_BACKGROUND_SUBTRACTION)}`. When enabled, PbI2 Qr-rod transverse sideband subtraction is forced off and raw `background_density` remains the plotted data.",
     "When caked sum fields are available, density uses sum_signal / sum_normalization. Otherwise it falls back to acceptance weights, then pixel_count.",
-    "For nonzero HK rods outside the PbI2 Qr-sideband plot policy, plotted `Data` is `background_density - joint_linear_baseline_density` unless Qr-sideband subtraction is enabled; with sideband subtraction, plotted `Data` is sideband-corrected `background_density`.",
-    "For PbI2 nonzero rods with Qr-sideband subtraction, plotted `Data` remains the GUI-integrated `background_density` and the dashed `Fit` is `joint_fit_density + qr_sideband_background_density`. Marker/L mapping and Qz-baseline cancellation checks are reported as diagnostics instead of suppressing available overlays.",
+    "For every Qr-rod panel, plotted `Data` is the GUI-integrated `background_density`; the dashed trace is the same data smoothed along L.",
     f"Qr-rod profile plots use log-scaled intensity only for `HK=0`; nonzero HK panels use linear intensity and display `{NONZERO_QR_ROD_L_MIN:g} <= L <= {NONZERO_QR_ROD_L_MAX:g}`.",
-    "For non-PbI2 nonzero rods, the plotted dashed `Simulation` remains peak-only `joint_peak_density`.",
-    "For m=0 only, plotted `Data` is raw `background_density` and plotted `Simulation` is `joint_peak_density + joint_linear_baseline_density`.",
-    "The CSV includes `joint_peak_density`, `joint_linear_baseline_density`, and `joint_fit_density = joint_peak_density + joint_linear_baseline_density`.",
-    "The CSV includes `peak_subtracted_density = background_density - joint_peak_density`; this fitted-peak removal is the only subtraction product. `fit_residual_density = background_density - joint_fit_density` is reported only as a fit diagnostic.",
-    "The detector-space fit model remains in the CSV as `fit_density`. Individual component distributions are saved to the component CSV but not drawn.",
-    "Subplot labels show `m = H^2 + H*K + K^2`; marker tick labels show compressed (HK,L) values for the fitted points.",
+    "Peak fitting is disabled for the final Qr-rod profile figure; the component CSV is retained as an empty compatibility artifact.",
+    "The CSV includes `smoothed_background_density`, generated from the accepted GUI trace with the final smoothing slider value.",
+    "The detector-space fit model remains in the CSV as `fit_density` for audit only.",
+    "Subplot labels show `m = H^2 + H*K + K^2`.",
     "Nonzero-m masks still use detector-space Qr/Qz internally and extend to the projected sign endpoint.",
     "The detector-region figure labels the specular rod as `m = 0`; the displayed support is the same phi/2theta ROI arc used for profile extraction.",
     f"Hidden Qr-rod subplot HK values: `{', '.join(str(int(value)) for value in QR_ROD_HIDDEN_PLOT_HK) or 'none'}`.",
@@ -17452,77 +17777,16 @@ if skipped_empty_plot_hk:
 if not plot_rod_entries:
     raise RuntimeError("no drawable Qr-rod profile rows are available for the final figure")
 nonzero_plot_rod_entries = [rod for rod in plot_rod_entries if int(rod["m"]) != 0]
-plot_model_decision_by_key: dict[tuple[int, str], dict[str, object]] = {}
-plot_model_decision_rows: list[dict[str, object]] = []
-for rod in nonzero_plot_rod_entries:
-    m_value = int(rod["m"])
-    for branch_name, *_ in phi_windows:
-        branch_value = str(branch_name)
-        sub = rod_profile_table[
-            (rod_profile_table["m"] == m_value)
-            & (rod_profile_table["branch"] == branch_value)
-            & (rod_profile_table["pixel_count"] > 0)
-        ].copy()
-        sub = positive_l_rows(
-            sub,
-            m_value=m_value,
-            branch_value=branch_value,
-            marker_source=plot_marker_table,
-            l_axis_coefficients=accepted_l_axis_coefficients,
-        )
-        if sub.empty:
-            continue
-        plot_decision = rod_profile_plot_model_decision(
-            SAMPLE_STEM,
-            m_value,
-            branch_value,
-            sub,
-            plot_marker_table,
-            transverse_background_enabled=bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED),
-            background_subtraction_disabled=bool(PBI2_DISABLE_BACKGROUND_SUBTRACTION),
-            peak_to_data_cancel_ratio=float(PBI2_PLOT_PEAK_TO_DATA_CANCEL_RATIO),
-            baseline_to_peak_cancel_ratio=float(PBI2_PLOT_BASELINE_TO_PEAK_CANCEL_RATIO),
-        )
-        plot_model_decision_by_key[(m_value, branch_value)] = plot_decision
-        metrics = dict(plot_decision.get("metrics", {}))
-        plot_model_decision_rows.append(
-            {
-                "m": m_value,
-                "branch": branch_value,
-                "plot_model": bool(plot_decision.get("plot_model", False)),
-                "label": str(plot_decision.get("label") or ""),
-                "data_column": str(plot_decision.get("data_column") or ""),
-                "density_column": str(plot_decision.get("density_column") or ""),
-                "baseline_column": str(plot_decision.get("baseline_column") or ""),
-                "reason": str(plot_decision.get("reason", "")),
-                "valid_l_mapping": metrics.get("valid_l_mapping", ""),
-                "baseline_cancellation_suspected": metrics.get(
-                    "baseline_cancellation_suspected", ""
-                ),
-                "peak_to_data_ratio": float(metrics.get("peak_to_data_ratio", np.nan)),
-                "baseline_to_peak_ratio": float(metrics.get("baseline_to_peak_ratio", np.nan)),
-            }
-        )
-if plot_model_decision_rows:
-    rod_note_lines.extend(
-        [
-            "",
-            "## Plot model decisions",
-            "",
-            "| HK | branch | plotted model | data source | fit source | added background | reason | valid L map | Qz-baseline cancellation | peak/data p90 | baseline/peak p90 |",
-            "|---:|:---:|:---:|:---|:---|:---|:---|:---:|:---:|---:|---:|",
-        ]
-    )
-    for row in plot_model_decision_rows:
-        peak_to_data = float(row["peak_to_data_ratio"])
-        baseline_to_peak = float(row["baseline_to_peak_ratio"])
-        rod_note_lines.append(
-            f"| {int(row['m'])} | {row['branch']} | {row['label'] if row['plot_model'] else 'omitted'} | "
-            f"{row['data_column'] or '-'} | {row['density_column'] or '-'} | "
-            f"{row['baseline_column'] or '-'} | {row['reason']} | "
-            f"{row['valid_l_mapping']} | {row['baseline_cancellation_suspected']} | "
-            f"{peak_to_data:.4g} | {baseline_to_peak:.4g} |"
-        )
+rod_note_lines.extend(
+    [
+        "",
+        "## Final profile plot policy",
+        "",
+        "Peak fitting and marker placement overlays are disabled for the final Qr-rod profile figure.",
+        "Each panel plots the GUI-integrated `background_density` trace plus the same trace after Gaussian smoothing.",
+        f"Gaussian smoothing sigma: `{float(qr_rod_profile_smoothing_sigma):.6g}` bins.",
+    ]
+)
 rod_profile_note.write_text("\n".join(rod_note_lines) + "\n", encoding="utf-8")
 print(f"saved={rod_profile_note}")
 rod_profile_l_axis_limits = shared_rod_profile_l_axis_limits(
@@ -17540,12 +17804,9 @@ rod_profile_nonzero_y_axis_limits = shared_nonzero_rod_profile_y_axis_limits(
     nonzero_plot_rod_entries,
     phi_windows,
     l_axis_coefficients=accepted_l_axis_coefficients,
+    smoothing_sigma_bins=qr_rod_profile_smoothing_sigma,
 )
-rod_profile_hk0_l_axis_limits = rod_profile_l_axis_limits_for_sample(
-    SAMPLE_STEM,
-    (qr_rod_specular_l_min, qr_rod_specular_l_max),
-    pbi2_l_max=float(PBI2_ROD_PROFILE_L_AXIS_MAX),
-)
+rod_profile_hk0_l_axis_limits = None
 last_nonzero_plot_row = max(
     (row for row, rod in enumerate(plot_rod_entries) if int(rod["m"]) != 0),
     default=-1,
@@ -17579,56 +17840,39 @@ else:
     hk0_profile_grid = profile_grid
 axes = np.empty((len(plot_rod_entries), len(phi_windows)), dtype=object)
 pbi2_rod_profile_figure = sample_uses_pbi2_rod_plot_policy(SAMPLE_STEM)
+final_profile_plot_payloads = final_qr_rod_profile_plot_payload(
+    rod_profile_table=rod_profile_table,
+    marker_table=marker_table,
+    plot_marker_table=plot_marker_table,
+    plot_rod_entries=plot_rod_entries,
+    branch_windows=phi_windows,
+    l_axis_coefficients=accepted_l_axis_coefficients,
+    smoothing_sigma_bins=qr_rod_profile_smoothing_sigma,
+)
+final_profile_plot_payload_by_key = {
+    (int(payload["m"]), str(payload["branch"])): payload
+    for payload in final_profile_plot_payloads
+}
 nonzero_profile_row = 0
 for row, rod in enumerate(plot_rod_entries):
     if int(rod["m"]) == 0:
         ax = fig.add_subplot(hk0_profile_grid[0, :])
         axes[row, 0] = ax
         axes[row, 1] = ax
-        ax.set_xlim(*rod_profile_hk0_l_axis_limits)
-        sub = rod_profile_table[
-            (rod_profile_table["m"] == 0)
-            & (rod_profile_table["branch"] == "qz")
-            & (rod_profile_table["pixel_count"] > 0)
-        ].copy()
-        sub = positive_l_rows(
-            sub,
-            m_value=0,
-            branch_value="qz",
-            marker_source=plot_marker_table,
-            l_axis_coefficients=accepted_l_axis_coefficients,
-        )
+        payload = final_profile_plot_payload_by_key.get((0, "qz"))
         hk0_positive_y = np.asarray([], dtype=np.float64)
-        if not sub.empty:
-            norm_payload = normalized_data_simulation_payload(
-                sub["background_density"],
-                sub.get("joint_peak_density", sub["fit_density"]),
-                sub.get("joint_linear_baseline_density", None),
-                subtract_baseline_from_data=False,
-            )
-            data_norm = np.asarray(norm_payload["data"], dtype=np.float64)
-            simulation_norm = np.asarray(norm_payload["simulation"], dtype=np.float64)
-            x = qz_values_to_l_axis(
-                sub["qz_center"],
-                m_value=0,
-                branch_value="qz",
-                marker_source=plot_marker_table,
-                l_axis_coefficients=accepted_l_axis_coefficients,
-            )
-            order = np.argsort(x)
-            x = x[order]
-            data_norm = data_norm[order]
-            simulation_norm = simulation_norm[order]
-            hk0_visible = (x >= rod_profile_hk0_l_axis_limits[0]) & (
-                x <= rod_profile_hk0_l_axis_limits[1]
-            )
+        if payload is not None:
+            x = np.asarray(payload["x_l"], dtype=np.float64)
+            data_values = np.asarray(payload["data_y"], dtype=np.float64)
+            smoothed_values = np.asarray(payload["smoothed_y"], dtype=np.float64)
+            hk0_visible = np.isfinite(x)
             data_plot = (
-                positive_log_plot_values(data_norm) if pbi2_rod_profile_figure else data_norm
+                positive_log_plot_values(data_values) if pbi2_rod_profile_figure else data_values
             )
-            simulation_plot = (
-                positive_log_plot_values(simulation_norm)
+            smoothed_plot = (
+                positive_log_plot_values(smoothed_values)
                 if pbi2_rod_profile_figure
-                else simulation_norm
+                else smoothed_values
             )
             ax.plot(
                 x,
@@ -17641,15 +17885,15 @@ for row, rod in enumerate(plot_rod_entries):
             )
             ax.plot(
                 x,
-                simulation_plot,
+                smoothed_plot,
                 color=JOURNAL_FIT_COLOR,
                 linewidth=1.0,
                 alpha=0.96,
                 linestyle="--",
-                label="Simulation",
+                label="Smoothed data",
                 zorder=5,
             )
-            hk0_y_values = np.concatenate([data_norm[hk0_visible], simulation_norm[hk0_visible]])
+            hk0_y_values = np.concatenate([data_values[hk0_visible], smoothed_values[hk0_visible]])
             hk0_positive_y = hk0_y_values[np.isfinite(hk0_y_values) & (hk0_y_values > 0.0)]
         ax.grid(True, color=JOURNAL_GRID_COLOR, linewidth=0.45)
         ax.set_yscale("log")
@@ -17680,49 +17924,11 @@ for row, rod in enumerate(plot_rod_entries):
         axes[row, col] = ax
         ax.set_xlim(*rod_profile_l_axis_limits)
         ax.set_ylim(*rod_profile_nonzero_y_axis_limits)
-        sub = rod_profile_table[
-            (rod_profile_table["m"] == int(rod["m"]))
-            & (rod_profile_table["branch"] == branch_name)
-            & (rod_profile_table["pixel_count"] > 0)
-        ].copy()
-        sub = positive_l_rows(
-            sub,
-            m_value=int(rod["m"]),
-            branch_value=branch_name,
-            marker_source=plot_marker_table,
-            l_axis_coefficients=accepted_l_axis_coefficients,
-        )
-        if not sub.empty:
-            plot_decision = plot_model_decision_by_key.get(
-                (int(rod["m"]), str(branch_name)),
-                rod_profile_plot_model_decision(
-                    SAMPLE_STEM,
-                    int(rod["m"]),
-                    str(branch_name),
-                    sub,
-                    plot_marker_table,
-                    transverse_background_enabled=bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED),
-                    background_subtraction_disabled=bool(PBI2_DISABLE_BACKGROUND_SUBTRACTION),
-                    peak_to_data_cancel_ratio=float(PBI2_PLOT_PEAK_TO_DATA_CANCEL_RATIO),
-                    baseline_to_peak_cancel_ratio=float(PBI2_PLOT_BASELINE_TO_PEAK_CANCEL_RATIO),
-                ),
-            )
-            plot_model, norm_payload = rod_profile_normalized_payload_for_plot_decision(
-                sub, plot_decision
-            )
-            data_norm = np.asarray(norm_payload["data"], dtype=np.float64)
-            simulation_norm = np.asarray(norm_payload["simulation"], dtype=np.float64)
-            x = qz_values_to_l_axis(
-                sub["qz_center"],
-                m_value=int(rod["m"]),
-                branch_value=branch_name,
-                marker_source=plot_marker_table,
-                l_axis_coefficients=accepted_l_axis_coefficients,
-            )
-            order = np.argsort(x)
-            x = x[order]
-            data_norm = data_norm[order]
-            simulation_norm = simulation_norm[order]
+        payload = final_profile_plot_payload_by_key.get((int(rod["m"]), str(branch_name)))
+        if payload is not None:
+            data_norm = np.asarray(payload["data_y"], dtype=np.float64)
+            x = np.asarray(payload["x_l"], dtype=np.float64)
+            smoothed_norm = np.asarray(payload["smoothed_y"], dtype=np.float64)
             data_plot = data_norm
             ax.plot(
                 x,
@@ -17733,18 +17939,17 @@ for row, rod in enumerate(plot_rod_entries):
                 label="Data",
                 zorder=4,
             )
-            if plot_model:
-                simulation_plot = simulation_norm
-                ax.plot(
-                    x,
-                    simulation_plot,
-                    color=JOURNAL_FIT_COLOR,
-                    linewidth=1.0,
-                    alpha=0.96,
-                    linestyle="--",
-                    label=str(plot_decision.get("label", "Fit")),
-                    zorder=5,
-                )
+            smoothed_plot = smoothed_norm
+            ax.plot(
+                x,
+                smoothed_plot,
+                color=JOURNAL_FIT_COLOR,
+                linewidth=1.0,
+                alpha=0.96,
+                linestyle="--",
+                label="Smoothed data",
+                zorder=5,
+            )
         ax.axhline(0.0, color="0.80", linewidth=0.45)
         ax.grid(True, color=JOURNAL_GRID_COLOR, linewidth=0.45)
         ax.text(
@@ -17775,23 +17980,11 @@ for row, rod in enumerate(plot_rod_entries):
             spine.set_linewidth(0.55)
     nonzero_profile_row += 1
 
-plot_model_labels = sorted(
-    {
-        str(decision.get("label"))
-        for decision in plot_model_decision_by_key.values()
-        if bool(decision.get("plot_model")) and str(decision.get("label") or "")
-    }
-)
-if not plot_model_labels and has_hk0_profile_row:
-    plot_model_labels = ["Simulation"]
 legend_handles = [
     mpl.lines.Line2D([], [], color=JOURNAL_DATA_COLOR, linewidth=1.0, label="Data"),
-    *[
-        mpl.lines.Line2D(
-            [], [], color=JOURNAL_FIT_COLOR, linewidth=1.0, linestyle="--", label=label
-        )
-        for label in plot_model_labels
-    ],
+    mpl.lines.Line2D(
+        [], [], color=JOURNAL_FIT_COLOR, linewidth=1.0, linestyle="--", label="Smoothed data"
+    ),
 ]
 legend_ax = axes[0, -1]
 legend_ax.legend(

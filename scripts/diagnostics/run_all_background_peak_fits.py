@@ -18,7 +18,9 @@ from pathlib import Path
 from types import TracebackType
 
 
-DEFAULT_NOTEBOOK = Path(__file__).with_name("all_background_peak_fits.ipynb")
+DEFAULT_NOTEBOOK = Path(__file__).with_name(
+    "all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py"
+)
 DEFAULT_STATE_PATH = Path.home() / ".local" / "share" / "ra_sim" / "all.json"
 
 

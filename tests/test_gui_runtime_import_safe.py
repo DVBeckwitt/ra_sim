@@ -15245,7 +15245,10 @@ def test_runtime_impl_gates_raw_hit_table_capture_by_job_kind() -> None:
         'capture_secondary_raw = bool(run_secondary_enabled and job_kind_value == "full")' in block
     )
     assert "build_intersection_cache_enabled = bool(" in block
-    assert 'build_intersection_cache_for_job and job_kind_value == "full"' in block
+    assert (
+        'build_intersection_cache_for_job and job_kind_value in {"full", "primary_fill"}'
+        in block
+    )
     assert "(collect_hit_tables_enabled or build_intersection_cache_enabled)" in block
     assert "build_intersection_cache_enabled and collect_primary_hit_tables" in block
     assert "build_intersection_cache_enabled and collect_secondary_hit_tables" in block

@@ -413,6 +413,52 @@ Shipping status: ready as a focused bug-fix slice. Rollback is a normal git
 revert of the `peak_selection.py` refresh change, its regression test, and this
 documentation update.
 
+## 2026-05-22 Review Findings Patch
+
+Problem:
+
+- Runtime import-safe coverage still asserted the old full-simulation-only
+  intersection-cache source string even though `primary_fill` jobs now build
+  the same reduced intersection cache.
+- The background peak-fit diagnostic save-folder chooser could leave a hidden
+  Tk root alive if the directory dialog raised after root creation.
+- The diagnostic test helper carried one duplicate dependency addition for
+  `smooth_qr_rod_profile_density(...)`, and `choose_final_output_dir(...)`
+  extraction missed its mode helper dependency.
+
+What changed:
+
+- The runtime import-safe assertion now matches the current
+  `{"full", "primary_fill"}` source behavior.
+- `choose_final_output_dir(...)` destroys its Tk root from a `finally` block and
+  keeps the existing skip/raise behavior for auto versus forced popup modes.
+- The diagnostic helper dependency list now has one `as_float` path for
+  smoothing helpers and includes `final_output_dir_choice_runtime_mode(...)`
+  when extracting `choose_final_output_dir(...)`.
+
+Bug/error status: fixed for the failing runtime import-safe source assertion
+and for the save-folder chooser cleanup path. The chooser failure mode remains
+reported to callers exactly as before; only cleanup is hardened.
+
+Feature status: no new operator feature. This is a review-cleanup and
+validation-hardening patch.
+
+Migration/deprecation status: no public API, saved-state, config, CLI, CI
+workflow, dependency, deprecation, or migration change.
+
+Validation recorded for this patch:
+
+- `python -m pytest tests/test_gui_runtime_import_safe.py::test_runtime_impl_gates_raw_hit_table_capture_by_job_kind -ra`
+  passed.
+- `python -m pytest --assert=plain tests/test_background_peak_fits_notebook.py::test_choose_final_output_dir_destroys_tk_root_when_dialog_raises -ra`
+  passed.
+- `python -m pytest --assert=plain tests/test_background_peak_fits_notebook.py -k "smoothing or final_output_dir_choice or save_folder_chooser or comparison_script" -ra`
+  passed, `6 passed`.
+
+Shipping status: ready as a focused patch after the standard check passes.
+Rollback is a normal git revert of the runtime source assertion, chooser cleanup,
+test-helper edits, and this documentation update.
+
 ## Main Code Paths
 
 - `ra_sim/gui/geometry_q_group_manager.py`

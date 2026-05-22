@@ -7,6 +7,8 @@ import math
 import os
 import pickle
 import re
+import sys
+from types import ModuleType
 import warnings
 from pathlib import Path
 from textwrap import dedent
@@ -37,6 +39,7 @@ PARALLEL_SCRIPT_PATH = Path(
     "scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py"
 )
 RUNNER_PATH = Path("scripts/diagnostics/run_all_background_peak_fits.py")
+COMPARISON_SCRIPT_PATH = Path("scripts/diagnostics/comparison.py")
 
 
 def _notebook_source() -> str:
@@ -100,6 +103,7 @@ def _script_functions(*names: str) -> dict[str, object]:
         wanted.add("l_reference_rows")
         wanted.add("qz_to_l_linear_coeff")
         wanted.add("rod_profile_marker_l_mapping_is_valid")
+        wanted.add("smooth_qr_rod_profile_density")
     if wanted & {
         "edit_qr_rod_region_editor",
         "recompute_qr_rod_region_profiles",
@@ -114,6 +118,14 @@ def _script_functions(*names: str) -> dict[str, object]:
     if wanted & {"l_reference_rows", "qz_values_to_l_axis", "qz_to_l_linear_coeff"}:
         wanted.add("l_axis_coefficient_for_group")
         wanted.add("rod_profile_marker_l_mapping_is_valid")
+    if "final_qr_rod_profile_plot_payload" in wanted:
+        wanted.add("as_float")
+        wanted.add("l_axis_coefficient_for_group")
+        wanted.add("l_reference_rows")
+        wanted.add("positive_l_rows")
+        wanted.add("qz_values_to_l_axis")
+        wanted.add("rod_profile_marker_l_mapping_is_valid")
+        wanted.add("smooth_qr_rod_profile_density")
     if "final_qr_rod_gui_vs_final_profile_audit_table" in wanted:
         wanted.add("l_axis_coefficient_for_group")
         wanted.add("l_reference_rows")
@@ -132,9 +144,17 @@ def _script_functions(*names: str) -> dict[str, object]:
         wanted.add("as_float")
         wanted.add("final_qr_rod_supported_profile_group")
         wanted.add("final_specular_qr_rod_region_overlay_from_profile_table")
+    if "shared_nonzero_rod_profile_y_axis_limits" in wanted:
+        wanted.add("smooth_qr_rod_profile_density")
+    if "smooth_qr_rod_profile_density" in wanted:
+        wanted.add("as_float")
+    if "choose_final_output_dir" in wanted:
+        wanted.add("final_output_dir_choice_runtime_mode")
     if wanted & {"qr_rod_pre_editor_stage_is_valid", "qr_rod_profile_cache_has_final_fit"}:
         wanted.add("hk0_qz_marker_count")
         wanted.add("rod_profile_has_real_hk0_qz_rows")
+    if wanted & {"final_output_dir_choice_runtime_mode", "choose_final_output_dir"}:
+        wanted.add("qr_rod_peak_edit_runtime_mode")
     if wanted & {
         "apply_radial_background_subtraction_to_detector",
         "caked_background_plane_from_image",
@@ -1598,19 +1618,27 @@ def test_parallel_script_qr_sideband_plot_data_can_use_explicit_data_column() ->
             "\nsupport_diagnostic_stem"
         )
     ]
+    plot_payload_source = source[
+        source.index("def final_qr_rod_profile_plot_payload(") : source.index(
+            "\ndef rod_profile_panel_label("
+        )
+    ]
     final_profile_source = source[
         source.index("for row, rod in enumerate(plot_rod_entries):") : source.index(
             "\nrod_profile_png"
         )
     ]
 
-    assert "transverse_background_enabled=bool(" in y_limit_source
+    assert "transverse_background_enabled=bool(" not in y_limit_source
     assert (
         "transverse_background_enabled=bool(QR_ROD_TRANSVERSE_BACKGROUND_ENABLED)"
-        in final_profile_source
+        not in final_profile_source
     )
-    assert "rod_profile_normalized_payload_for_plot_decision(" in y_limit_source
-    assert "rod_profile_normalized_payload_for_plot_decision(" in final_profile_source
+    assert "rod_profile_normalized_payload_for_plot_decision(" not in y_limit_source
+    assert "rod_profile_normalized_payload_for_plot_decision(" not in final_profile_source
+    assert "smooth_qr_rod_profile_density(" in y_limit_source
+    assert "smooth_qr_rod_profile_density(" in plot_payload_source
+    assert 'payload["data_y"]' in final_profile_source
     assert (
         'data_column = str(plot_decision.get("data_column") or "background_density")'
         in helper_source
@@ -1960,11 +1988,154 @@ def test_parallel_script_plot_policy_keeps_non_pbi2_existing_model_selection() -
     assert decision["reason"] == "default_peak_model"
 
 
-def test_parallel_script_final_profile_plot_uses_model_decisions() -> None:
+def test_parallel_script_qr_rod_profile_smoothing_zero_preserves_values() -> None:
+    namespace = _script_functions("smooth_qr_rod_profile_density")
+    smooth_profile = namespace["smooth_qr_rod_profile_density"]
+
+    values = np.asarray([1.0, np.nan, 4.0, -2.0], dtype=np.float64)
+    smoothed = smooth_profile(values, sigma_bins=0.0)
+
+    assert smoothed.shape == values.shape
+    assert np.array_equal(smoothed, values, equal_nan=True)
+
+
+def test_parallel_script_qr_rod_profile_smoothing_reduces_spike() -> None:
+    namespace = _script_functions("smooth_qr_rod_profile_density")
+    smooth_profile = namespace["smooth_qr_rod_profile_density"]
+
+    values = np.zeros(41, dtype=np.float64)
+    values[20] = 10.0
+    smoothed = smooth_profile(values, sigma_bins=2.0)
+
+    assert smoothed.shape == values.shape
+    assert 0.0 < smoothed[20] < values[20]
+    assert np.nanmax(smoothed[:10]) < smoothed[20]
+
+
+def test_final_qr_rod_profile_plot_payload_matches_headless_gui_selection() -> None:
+    namespace = _script_functions("final_qr_rod_profile_plot_payload")
+    plot_payload = namespace["final_qr_rod_profile_plot_payload"]
+    profile_table = pd.DataFrame(
+        [
+            {
+                "m": 1,
+                "branch": "-",
+                "qz_center": 2.0,
+                "background_density": 20.0,
+                "joint_fit_density": 999.0,
+                "pixel_count": 5,
+            },
+            {
+                "m": 1,
+                "branch": "-",
+                "qz_center": 1.0,
+                "background_density": 10.0,
+                "joint_fit_density": 999.0,
+                "pixel_count": 5,
+            },
+            {
+                "m": 1,
+                "branch": "+",
+                "qz_center": 1.0,
+                "background_density": 30.0,
+                "pixel_count": 0,
+            },
+            {
+                "m": 0,
+                "branch": "qz",
+                "qz_center": 0.3,
+                "background_density": 3.0,
+                "pixel_count": 6,
+            },
+            {
+                "m": 0,
+                "branch": "qz",
+                "qz_center": 1.3,
+                "background_density": 9.0,
+                "pixel_count": 6,
+            },
+        ]
+    )
+    stale_marker_table = pd.DataFrame(
+        [
+            {"m": 1, "branch": "-", "qz_marker": 1.0, "fit_l": 100.0},
+            {"m": 1, "branch": "-", "qz_marker": 2.0, "fit_l": 300.0},
+        ]
+    )
+
+    payloads = plot_payload(
+        rod_profile_table=profile_table,
+        marker_table=stale_marker_table,
+        plot_marker_table=stale_marker_table,
+        plot_rod_entries=[{"m": 1}, {"m": 0}],
+        branch_windows=[("-", -90.0, 0.0, "-"), ("+", 0.0, 90.0, "+")],
+        l_axis_coefficients={
+            "1::-": {"m": 1, "branch": "-", "slope": 2.0, "intercept": 0.5},
+            "0::qz": {"m": 0, "branch": "qz", "slope": 1.0, "intercept": 0.0},
+        },
+        smoothing_sigma_bins=0.0,
+    )
+
+    by_key = {(int(item["m"]), str(item["branch"])): item for item in payloads}
+    assert sorted(by_key) == [(0, "qz"), (1, "-")]
+
+    nonzero = by_key[(1, "-")]
+    np.testing.assert_allclose(nonzero["x_l"], [2.5, 4.5])
+    np.testing.assert_allclose(nonzero["data_y"], [10.0, 20.0])
+    np.testing.assert_allclose(nonzero["smoothed_y"], [10.0, 20.0])
+    assert nonzero["data_column"] == "background_density"
+    assert nonzero["smoothed_source"] == "background_density"
+    assert nonzero["labels"] == ("Data", "Smoothed data")
+    assert nonzero["xlim_policy"] == "shared"
+
+    hk0 = by_key[(0, "qz")]
+    np.testing.assert_allclose(hk0["x_l"], [0.3, 1.3])
+    np.testing.assert_allclose(hk0["data_y"], [3.0, 9.0])
+    assert hk0["xlim_policy"] == "autoscale"
+
+
+def test_final_qr_rod_profile_plot_payload_applies_smoothing_to_gui_trace() -> None:
+    namespace = _script_functions(
+        "final_qr_rod_profile_plot_payload",
+        "smooth_qr_rod_profile_density",
+    )
+    plot_payload = namespace["final_qr_rod_profile_plot_payload"]
+    smooth_profile = namespace["smooth_qr_rod_profile_density"]
+    profile_table = pd.DataFrame(
+        {
+            "m": [1, 1, 1, 1, 1],
+            "branch": ["-"] * 5,
+            "qz_center": [0.0, 1.0, 2.0, 3.0, 4.0],
+            "background_density": [0.0, 0.0, 10.0, 0.0, 0.0],
+            "joint_fit_density": [100.0, 100.0, 100.0, 100.0, 100.0],
+            "pixel_count": [4, 4, 4, 4, 4],
+        }
+    )
+
+    payload = plot_payload(
+        rod_profile_table=profile_table,
+        marker_table=pd.DataFrame(),
+        plot_marker_table=pd.DataFrame(),
+        plot_rod_entries=[{"m": 1}],
+        branch_windows=[("-", -90.0, 0.0, "-")],
+        l_axis_coefficients={
+            "1::-": {"m": 1, "branch": "-", "slope": 1.0, "intercept": 1.0}
+        },
+        smoothing_sigma_bins=1.0,
+    )[0]
+
+    np.testing.assert_allclose(
+        payload["smoothed_y"],
+        smooth_profile(payload["data_y"], sigma_bins=1.0),
+    )
+    assert float(np.nanmax(payload["smoothed_y"])) < float(np.nanmax(payload["data_y"]))
+
+
+def test_parallel_script_final_profile_plot_uses_gui_data_and_smoothed_copy() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
-    helper_source = source[
-        source.index("def rod_profile_normalized_payload_for_plot_decision(") : source.index(
-            "\ndef positive_log_plot_values("
+    plot_payload_source = source[
+        source.index("def final_qr_rod_profile_plot_payload(") : source.index(
+            "\ndef rod_profile_panel_label("
         )
     ]
     final_profile_source = source[
@@ -1974,15 +2145,17 @@ def test_parallel_script_final_profile_plot_uses_model_decisions() -> None:
     ]
     nonzero_profile_source = final_profile_source[final_profile_source.index("for col,") :]
 
-    assert "plot_model_decision_by_key" in final_profile_source
-    assert "rod_profile_plot_model_decision(" in source
-    assert 'sub.get("joint_peak_density", sub["fit_density"])' not in nonzero_profile_source
-    assert "rod_profile_normalized_payload_for_plot_decision(" in nonzero_profile_source
-    assert (
-        'data_column = str(plot_decision.get("data_column") or "background_density")'
-        in helper_source
-    )
-    assert 'label=str(plot_decision.get("label", "Fit"))' in nonzero_profile_source
+    assert "plot_model_decision_by_key" not in final_profile_source
+    assert "rod_profile_plot_model_decision(" not in final_profile_source
+    assert "rod_profile_normalized_payload_for_plot_decision(" not in final_profile_source
+    assert 'sub["background_density"]' in plot_payload_source
+    assert "smooth_qr_rod_profile_density(" in plot_payload_source
+    assert "final_profile_plot_payload_by_key" in final_profile_source
+    assert 'payload["data_y"]' in final_profile_source
+    assert 'payload["smoothed_y"]' in final_profile_source
+    assert 'label="Smoothed data"' in final_profile_source
+    assert 'label="Simulation"' not in final_profile_source
+    assert 'label=str(plot_decision.get("label", "Fit"))' not in nonzero_profile_source
 
 
 def test_parallel_script_pbi2_rod_profile_l_axis_limits_cap_at_three() -> None:
@@ -2001,12 +2174,11 @@ def test_parallel_script_pbi2_rod_profile_l_axis_limits_cap_at_three() -> None:
     assert plot_limits("Bi2Se3", (2.0, 3.85), pbi2_l_max=3.0) == (2.0, 3.85)
 
 
-def test_parallel_script_pbi2_final_profile_plots_log_only_hk0_and_cap_l() -> None:
+def test_parallel_script_pbi2_final_profile_plots_log_only_hk0_and_caps_nonzero_l() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    figure_start = source.index("rod_profile_l_axis_limits = shared_rod_profile_l_axis_limits(")
     figure_source = source[
-        source.index(
-            "rod_profile_l_axis_limits = shared_rod_profile_l_axis_limits("
-        ) : source.index("\nplot_model_labels = sorted(")
+        figure_start : source.index("\nlegend_handles = [", figure_start)
     ]
     hk0_profile_source = figure_source[
         figure_source.index('if int(rod["m"]) == 0:') : figure_source.index("for col,")
@@ -2018,16 +2190,21 @@ def test_parallel_script_pbi2_final_profile_plots_log_only_hk0_and_cap_l() -> No
     assert "NONZERO_QR_ROD_L_MAX = 3.0" in source
     assert "min_l=float(NONZERO_QR_ROD_L_MIN)" in figure_source
     assert "max_l=float(NONZERO_QR_ROD_L_MAX)" in figure_source
-    assert "rod_profile_hk0_l_axis_limits = rod_profile_l_axis_limits_for_sample(" in figure_source
+    assert "rod_profile_hk0_l_axis_limits = None" in figure_source
+    assert "rod_profile_l_axis_limits_for_sample(" not in figure_source
     assert (
         "pbi2_rod_profile_figure = sample_uses_pbi2_rod_plot_policy(SAMPLE_STEM)" in figure_source
     )
-    assert "positive_log_plot_values(data_norm)" in hk0_profile_source
+    assert "positive_log_plot_values(data_values)" in hk0_profile_source
+    assert "positive_log_plot_values(smoothed_values)" in hk0_profile_source
     assert 'ax.set_yscale("log")' in hk0_profile_source
+    assert "ax.set_xlim(*rod_profile_hk0_l_axis_limits)" not in hk0_profile_source
+    assert "hk0_visible = np.isfinite(x)" in hk0_profile_source
     assert "positive_log_plot_values(data_norm)" not in nonzero_profile_source
     assert "apply_positive_log_y_axis(" not in nonzero_profile_source
     assert "data_plot = data_norm" in nonzero_profile_source
-    assert "simulation_plot = simulation_norm" in nonzero_profile_source
+    assert "smoothed_plot = smoothed_norm" in nonzero_profile_source
+    assert "simulation_plot = simulation_norm" not in nonzero_profile_source
     assert "ax.set_ylim(*rod_profile_nonzero_y_axis_limits)" in nonzero_profile_source
     assert (
         "if not pbi2_rod_profile_figure:\n            ax.set_ylim(*rod_profile_nonzero_y_axis_limits)"
@@ -3922,6 +4099,7 @@ def test_background_peak_fits_runner_exists_for_batch_state_reruns() -> None:
 
     for token in (
         "def _execute_notebook(",
+        "all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py",
         "RA_SIM_ALL_BACKGROUND_PROCESS_GUARD",
         "RA_SIM_ALL_BACKGROUND_STATE",
         "RA_SIM_ALL_BACKGROUND_RUN_NAME",
@@ -3935,6 +4113,26 @@ def test_background_peak_fits_runner_exists_for_batch_state_reruns() -> None:
         "state_count > 1",
     ):
         assert token in source
+
+
+def test_background_peak_fits_batch_file_uses_canonical_python_diagnostic() -> None:
+    source = Path("scripts/diagnostics/run_bi2te3_bi2se3_pbi2_background_peak_fits.bat").read_text(
+        encoding="utf-8"
+    )
+
+    assert "--notebook" in source
+    assert "all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py" in source
+    assert "all_background_peak_fits.ipynb" not in source
+
+
+def test_legacy_comparison_script_delegates_to_canonical_background_diagnostic() -> None:
+    source = COMPARISON_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "runpy.run_path(str(CANONICAL_DIAGNOSTIC), run_name=\"__main__\")" in source
+    assert "all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py" in source
+    assert "label=\"Simulation\"" not in source
+    assert "saved final Qr-rod fit cache" not in source
+    assert "rod_profile_hk0_l_axis_limits = rod_profile_l_axis_limits_for_sample(" not in source
 
 
 def test_parallel_script_routes_pbi2_figures_to_manuscript_pbi2_directory() -> None:
@@ -3978,6 +4176,118 @@ def test_parallel_script_figure_output_override_wins_for_all_samples() -> None:
         )
         == repo_root / "custom" / "figures"
     )
+
+
+def test_final_output_dir_choice_prompts_only_when_interactive_without_overrides() -> None:
+    namespace = _script_functions("final_output_dir_choice_runtime_mode")
+    runtime_mode = namespace["final_output_dir_choice_runtime_mode"]
+
+    assert (
+        runtime_mode(
+            "auto",
+            output_dir_override="",
+            figure_output_dir_override="",
+            backend_name="TkAgg",
+            env={},
+        )
+        == "popup"
+    )
+    assert (
+        runtime_mode(
+            "auto",
+            output_dir_override="custom/out",
+            figure_output_dir_override="",
+            backend_name="TkAgg",
+            env={},
+        )
+        == "skip"
+    )
+    assert (
+        runtime_mode(
+            "auto",
+            output_dir_override="",
+            figure_output_dir_override="custom/figures",
+            backend_name="TkAgg",
+            env={},
+        )
+        == "skip"
+    )
+    assert (
+        runtime_mode(
+            "auto",
+            output_dir_override="",
+            figure_output_dir_override="",
+            backend_name="Agg",
+            env={},
+        )
+        == "skip"
+    )
+    assert (
+        runtime_mode(
+            "popup",
+            output_dir_override="custom/out",
+            figure_output_dir_override="custom/figures",
+            backend_name="Agg",
+            env={},
+        )
+        == "popup"
+    )
+
+
+def test_choose_final_output_dir_destroys_tk_root_when_dialog_raises(
+    monkeypatch,
+) -> None:
+    namespace = _script_functions("choose_final_output_dir")
+    choose_final_output_dir = namespace["choose_final_output_dir"]
+    destroyed: list[bool] = []
+
+    class _FakeRoot:
+        def withdraw(self) -> None:
+            return None
+
+        def destroy(self) -> None:
+            destroyed.append(True)
+
+    fake_tk = ModuleType("tkinter")
+    fake_filedialog = ModuleType("tkinter.filedialog")
+    fake_tk.Tk = lambda: _FakeRoot()  # type: ignore[attr-defined]
+
+    def _raise_dialog_error(**_kwargs) -> str:
+        raise RuntimeError("dialog boom")
+
+    fake_filedialog.askdirectory = _raise_dialog_error  # type: ignore[attr-defined]
+    fake_tk.filedialog = fake_filedialog  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "tkinter", fake_tk)
+    monkeypatch.setitem(sys.modules, "tkinter.filedialog", fake_filedialog)
+
+    with pytest.raises(RuntimeError, match="final output folder chooser unavailable"):
+        choose_final_output_dir(
+            mode="popup",
+            output_dir=Path("out"),
+            figure_output_dir=Path("figures"),
+            backend_name="TkAgg",
+            env={},
+        )
+
+    assert destroyed == [True]
+
+
+def test_parallel_script_save_folder_chooser_updates_all_output_dirs_after_sample_detection() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "SAVE_OUTPUT_DIR_EDIT_MODE_OVERRIDE = \"\"" in source
+    assert "RA_SIM_ALL_BACKGROUND_SAVE_DIR_EDIT_MODE" in source
+
+    refresh_output = source.index("refresh_figure_output_dir()")
+    chooser = source.index("selected_output_dir = choose_final_output_dir(", refresh_output)
+    active_lattice = source.index("ACTIVE_LATTICE = active_lattice_constants_from_state(state)")
+    chooser_block = source[chooser:active_lattice]
+
+    assert refresh_output < chooser < active_lattice
+    assert "OUT_DIR = selected_output_dir" in chooser_block
+    assert "FIGURE_OUT_DIR = selected_output_dir" in chooser_block
+    assert "OUT_DIR.mkdir(parents=True, exist_ok=True)" in chooser_block
+    assert "FIGURE_OUT_DIR.mkdir(parents=True, exist_ok=True)" in chooser_block
 
 
 def test_parallel_script_refreshes_figure_output_after_state_sample_detection() -> None:
@@ -4401,10 +4711,10 @@ def test_final_qr_rod_region_overlays_are_rebuilt_after_gui_editor() -> None:
         window_filter,
     )
     cache_key_call = source.index("qr_rod_peak_edit_cache_key(", accepted_overlay_signature)
-    cache_resolution = source.index("if qr_rod_profile_cache_has_final_fit(", cache_key_call)
+    fitting_disabled = source.index("Qr-rod peak fitting disabled", cache_key_call)
     post_cache_marker_table = source.index(
         "marker_table = marker_table_with_specular_l_markers(marker_table, specular_l_marker_table)",
-        cache_resolution,
+        fitting_disabled,
     )
     final_output_state = source.index(
         "final_qr_rod_output_state = build_final_qr_rod_output_state(",
@@ -4424,22 +4734,22 @@ def test_final_qr_rod_region_overlays_are_rebuilt_after_gui_editor() -> None:
     )
 
     assert nonzero_call < specular_call < window_filter < accepted_overlay_signature
-    assert accepted_overlay_signature < cache_key_call < cache_resolution
-    assert cache_resolution < post_cache_marker_table < final_output_state < final_overlay_rebuild
+    assert accepted_overlay_signature < cache_key_call < fitting_disabled
+    assert fitting_disabled < post_cache_marker_table < final_output_state < final_overlay_rebuild
     assert final_profile_selection < detector_overlay_selection
     rebuild_call = source[final_output_state:final_profile_selection]
     assert "marker_table=marker_table" in rebuild_call
     assert "final_profile_table=rod_profile_table" in rebuild_call
 
 
-def test_final_region_overlays_are_rebuilt_after_final_fit_cache_resolution() -> None:
+def test_final_region_overlays_are_rebuilt_after_final_no_fit_policy() -> None:
     if not PARALLEL_SCRIPT_PATH.exists():
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
-    cache_resolution = source.index("if qr_rod_profile_cache_has_final_fit(")
+    fitting_disabled = source.index("Qr-rod peak fitting disabled")
     post_cache_marker_table = source.index(
         "marker_table = marker_table_with_specular_l_markers(marker_table, specular_l_marker_table)",
-        cache_resolution,
+        fitting_disabled,
     )
     final_output_state = source.index(
         "final_qr_rod_output_state = build_final_qr_rod_output_state(",
@@ -4458,7 +4768,7 @@ def test_final_region_overlays_are_rebuilt_after_final_fit_cache_resolution() ->
         final_overlay_rebuild,
     )
 
-    assert cache_resolution < post_cache_marker_table < final_output_state < final_overlay_rebuild
+    assert fitting_disabled < post_cache_marker_table < final_output_state < final_overlay_rebuild
     assert final_overlay_rebuild < region_specs_save < detector_overlay_selection
 
 
@@ -5247,8 +5557,8 @@ def test_parallel_script_shared_nonzero_rod_profile_y_axis_limits_ignore_hk0() -
     )
 
     assert y_min < y_max
-    assert -0.2 < y_min < 0.0
-    assert 1.0 < y_max < 1.2
+    assert -0.4 < y_min < -0.2
+    assert 4.2 < y_max < 4.4
 
 
 def test_parallel_script_shared_nonzero_rod_profile_y_axis_limits_fallback_without_nonzero_data() -> (
@@ -5295,9 +5605,7 @@ def test_parallel_script_final_rod_profile_axes_use_shared_l_limits_except_hk0()
     helper_def = source.index("def shared_rod_profile_l_axis_limits(")
     nonzero_entries = source.index("nonzero_plot_rod_entries =", helper_def)
     limits_assign = source.index("rod_profile_l_axis_limits = shared_rod_profile_l_axis_limits(")
-    hk0_limits = source.index(
-        "rod_profile_hk0_l_axis_limits = rod_profile_l_axis_limits_for_sample("
-    )
+    hk0_limits = source.index("rod_profile_hk0_l_axis_limits = None")
     figure_loop = source.index("for row, rod in enumerate(plot_rod_entries):", limits_assign)
 
     assert helper_def < nonzero_entries < limits_assign < hk0_limits < figure_loop
@@ -5307,8 +5615,9 @@ def test_parallel_script_final_rod_profile_axes_use_shared_l_limits_except_hk0()
     assert "nonzero_plot_rod_entries" in source[limits_assign:hk0_limits]
     assert "min_l=float(NONZERO_QR_ROD_L_MIN)" in source[limits_assign:hk0_limits]
     assert "max_l=float(NONZERO_QR_ROD_L_MAX)" in source[limits_assign:hk0_limits]
-    assert "(qr_rod_specular_l_min, qr_rod_specular_l_max)" in source[hk0_limits:figure_loop]
-    assert "ax.set_xlim(*rod_profile_hk0_l_axis_limits)" in source[figure_loop:]
+    assert "rod_profile_l_axis_limits_for_sample(" not in source[hk0_limits:figure_loop]
+    assert "ax.set_xlim(*rod_profile_hk0_l_axis_limits)" not in source[figure_loop:]
+    assert "hk0_visible = np.isfinite(x)" in source[figure_loop:]
     assert "rod_profile_nonzero_y_axis_limits = shared_nonzero_rod_profile_y_axis_limits(" in source
     assert "ax.set_ylim(*rod_profile_nonzero_y_axis_limits)" in source[figure_loop:]
     assert source.count("ax.set_xlim(*rod_profile_l_axis_limits)") == 1
@@ -5380,7 +5689,7 @@ def test_parallel_script_specular_exports_are_rebuilt_from_final_markers_before_
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     final_cache_marker_merge = source.index(
         "marker_table = marker_table_with_specular_l_markers(marker_table, specular_l_marker_table)",
-        source.index("saved final Qr-rod fit cache="),
+        source.index("Qr-rod peak fitting disabled"),
     )
     rebuild_call = source.index(
         "specular_l_marker_table = specular_export_marker_table_from_final_markers(",
@@ -5529,11 +5838,18 @@ def test_final_figure_threads_gui_l_axis_coefficients_to_plot_helpers() -> None:
             "final_detector_rod_trace_payloads_by_key"
         )
     ]
+    plot_payload_helper = source[
+        source.index("def final_qr_rod_profile_plot_payload(") : source.index(
+            "\ndef rod_profile_panel_label("
+        )
+    ]
 
     assert "accepted_l_axis_coefficients = merge_l_axis_coefficients(" in final_state
     assert "l_axis_coefficients=accepted_l_axis_coefficients" in final_state
     assert '"accepted_l_axis_coefficients": l_axis_coefficients_signature(' in final_state
-    assert final_plot.count("l_axis_coefficients=accepted_l_axis_coefficients") >= 6
+    assert final_plot.count("l_axis_coefficients=accepted_l_axis_coefficients") >= 3
+    assert "final_qr_rod_profile_plot_payload(" in final_plot
+    assert "l_axis_coefficients=l_axis_coefficients" in plot_payload_helper
 
 
 def test_marker_only_edits_invalidate_editor_profile_cache() -> None:
@@ -5599,7 +5915,7 @@ def test_final_profile_data_column_matches_gui_background_density() -> None:
     assert decision["data_column"] == "background_density"
 
 
-def test_final_hk0_axis_uses_gui_specular_l_bounds() -> None:
+def test_final_hk0_axis_autoscales_from_gui_specular_trace() -> None:
     if not PARALLEL_SCRIPT_PATH.exists():
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
@@ -5608,16 +5924,28 @@ def test_final_hk0_axis_uses_gui_specular_l_bounds() -> None:
             "if np.isfinite(qr_rod_specular_phi_min_deg):"
         )
     ]
-    limits_section = source[
-        source.index("rod_profile_hk0_l_axis_limits = rod_profile_l_axis_limits_for_sample(") : source.index(
-            "last_nonzero_plot_row = max("
+    l_window_section = source[
+        source.index("rod_profile_table = rod_profile_table_for_l_window(") : source.index(
+            "accepted_profile_table = rod_profile_table.copy()"
+        )
+    ]
+    limits_index = source.index("rod_profile_hk0_l_axis_limits = None")
+    limits_section = source[limits_index : source.index("last_nonzero_plot_row = max(")]
+    figure_section = source[
+        source.index("for row, rod in enumerate(plot_rod_entries):", limits_index) : source.index(
+            "\nlegend_handles = [",
+            limits_index,
         )
     ]
 
     assert 'qr_rod_specular_editor_result.get("l_min")' in assignment_section
     assert 'qr_rod_specular_editor_result.get("l_max")' in assignment_section
-    assert "(qr_rod_specular_l_min, qr_rod_specular_l_max)" in limits_section
+    assert "specular_l_min=qr_rod_specular_l_min" not in l_window_section
+    assert "specular_l_max=qr_rod_specular_l_max" not in l_window_section
+    assert "rod_profile_hk0_l_axis_limits = None" in limits_section
     assert "(SPECULAR_QR_ROD_L_MIN, SPECULAR_QR_ROD_L_MAX)" not in limits_section
+    assert "ax.set_xlim(*rod_profile_hk0_l_axis_limits)" not in figure_section
+    assert "hk0_visible = np.isfinite(x)" in figure_section
 
 
 def test_final_gui_vs_final_profile_audit_uses_accepted_profile_rows() -> None:
@@ -5706,11 +6034,9 @@ def test_final_profile_audit_call_receives_accepted_gui_rows() -> None:
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     accepted_profile_snapshot = source.index("accepted_profile_table = rod_profile_table.copy()")
-    cache_resolution = source.index("if qr_rod_profile_cache_has_final_fit(")
+    final_output_state_call = source.index("final_qr_rod_output_state = build_final_qr_rod_output_state(")
     final_output_state = source[
-        source.index("final_qr_rod_output_state = build_final_qr_rod_output_state(") : source.index(
-            "profile_audit_csv ="
-        )
+        final_output_state_call : source.index("profile_audit_csv =")
     ]
     output_state_helper = source[
         source.index("def build_final_qr_rod_output_state(") : source.index(
@@ -5718,7 +6044,7 @@ def test_final_profile_audit_call_receives_accepted_gui_rows() -> None:
         )
     ]
 
-    assert accepted_profile_snapshot < cache_resolution
+    assert accepted_profile_snapshot < final_output_state_call
     assert "accepted_profile_table=accepted_profile_table" in final_output_state
     assert "gui_profile_table=accepted_profile" in output_state_helper
 
@@ -6434,7 +6760,7 @@ def test_parallel_script_nonzero_rod_profile_grid_removes_inner_spacing() -> Non
     assert "hspace=0.0" in final_profile_source
 
 
-def test_parallel_script_qr_rod_peak_editor_is_wired_before_joint_fit_cache() -> None:
+def test_parallel_script_qr_rod_peak_editor_is_wired_before_final_no_fit_policy() -> None:
     if not PARALLEL_SCRIPT_PATH.exists():
         pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
@@ -6453,7 +6779,7 @@ def test_parallel_script_qr_rod_peak_editor_is_wired_before_joint_fit_cache() ->
     )
     editor_call = source.index("edit_qr_rod_region_editor(", marker_table_index)
     cache_key_call = source.index("qr_rod_peak_edit_cache_key(", marker_table_index)
-    final_fit_call = source.index("add_joint_qz_fit_columns(", marker_table_index)
+    fitting_disabled = source.index("Qr-rod peak fitting disabled", marker_table_index)
 
     assert (
         specular_call
@@ -6461,7 +6787,7 @@ def test_parallel_script_qr_rod_peak_editor_is_wired_before_joint_fit_cache() ->
         < specular_merge
         < editor_call
         < cache_key_call
-        < final_fit_call
+        < fitting_disabled
     )
     assert "RA_SIM_QR_ROD_PEAK_EDIT_MODE" in source
     assert '"QR_ROD_PEAK_EDIT_MODE_OVERRIDE", "RA_SIM_QR_ROD_PEAK_EDIT_MODE", "auto"' in source
@@ -6481,14 +6807,15 @@ def test_parallel_script_uses_unified_qr_rod_region_editor_before_final_fit() ->
     )
     editor_call = source.index("edit_qr_rod_region_editor(", marker_table_index)
     cache_key_call = source.index("qr_rod_peak_edit_cache_key(", marker_table_index)
-    final_fit_call = source.index("add_joint_qz_fit_columns(", marker_table_index)
+    fitting_disabled = source.index("Qr-rod peak fitting disabled", marker_table_index)
 
-    assert editor_call < cache_key_call < final_fit_call
+    assert editor_call < cache_key_call < fitting_disabled
     assert "show_qr_rod_peak_marker_popup(" in source
     assert "detector_label_entries" in source
     assert "delta_qr" in source
     assert "l_min" in source
     assert "l_max" in source
+    assert "add_joint_qz_fit_columns(" not in source[marker_table_index:fitting_disabled]
 
 
 def test_parallel_script_unified_editor_restores_late_detector_label_popup() -> None:
@@ -6529,6 +6856,10 @@ def test_parallel_script_unified_editor_has_region_controls() -> None:
         "delta_qr_slider = Slider(",
         "delta_qr_ax,",
         '"Delta Qr (+/- A^-1)"',
+        "smoothing_slider = Slider(",
+        '"Smooth"',
+        "set_profile_smoothing_sigma",
+        'region_control_state["smoothing_sigma_bins"]',
         "l_min_box = TextBox(",
         "l_min_ax,",
         '"L Min"',
@@ -6551,6 +6882,15 @@ def test_parallel_script_unified_editor_has_region_controls() -> None:
     assert "region_state=region_control_state" in wrapper_source
     assert "profile_update_callback=profile_update_callback" in wrapper_source
     assert "theta_initial_deg" in wrapper_source
+    assert "smoothing_sigma_bins" in wrapper_source
+    smoothing_setter_source = function_source[
+        function_source.index("def set_profile_smoothing_sigma(") : function_source.index(
+            "\n    def set_region_roi_bound("
+        )
+    ]
+    for forbidden in ("mark_region_profile_refresh_pending", "mark_detector_preview_refresh_pending"):
+        if forbidden in smoothing_setter_source:
+            pytest.fail(f"smoothing slider unexpectedly triggers {forbidden}")
 
 
 def test_parallel_script_qr_rod_peak_editor_draws_companion_figures_before_show(
@@ -7743,10 +8083,13 @@ def test_parallel_script_hk0_roi_editor_has_no_delta_qr_slider(
 
     def fake_show(*_args, **_kwargs) -> None:
         fig = plt.gcf()
-        assert not any(
-            type(widget).__name__ == "Slider"
+        slider_labels = [
+            getattr(getattr(widget, "label", None), "get_text", lambda: "")()
             for widget in list(getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets"))
-        )
+            if type(widget).__name__ == "Slider"
+        ]
+        assert not any("Delta Qr" in label for label in slider_labels)
+        assert "Smooth" in slider_labels
         assert update_calls == [(0.01, 1.5, 3.0, "specular")]
         assert preview_calls == [(0.01, 1.5, 3.0, "specular")]
         plt.close(fig)
@@ -7882,10 +8225,13 @@ def test_parallel_script_hk0_roi_textboxes_update_specular_state(
             for widget in list(getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets"))
             if type(widget).__name__ == "TextBox"
         }
-        assert not any(
-            type(widget).__name__ == "Slider"
+        slider_labels = [
+            getattr(getattr(widget, "label", None), "get_text", lambda: "")()
             for widget in list(getattr(fig, "_ra_sim_qr_rod_peak_edit_widgets"))
-        )
+            if type(widget).__name__ == "Slider"
+        ]
+        assert not any("Delta Qr" in label for label in slider_labels)
+        assert "Smooth" in slider_labels
         assert "Theta i" not in boxes
         for label in ("L Min", "L Max"):
             assert label not in boxes
@@ -8326,6 +8672,7 @@ def test_parallel_script_qr_rod_peak_editor_import_applies_nonzero_parameters(
                         "l_min": 0.6,
                         "l_max": 4.2,
                         "theta_initial_deg": 12.5,
+                        "smoothing_sigma_bins": 2.25,
                     }
                 },
             }
@@ -8333,7 +8680,13 @@ def test_parallel_script_qr_rod_peak_editor_import_applies_nonzero_parameters(
         encoding="utf-8",
     )
     monkeypatch.setattr(filedialog, "askopenfilename", lambda **_kwargs: str(import_path))
-    region_state = {"delta_qr": 0.01, "l_min": 0.0, "l_max": 3.0, "theta_initial_deg": 6.0}
+    region_state = {
+        "delta_qr": 0.01,
+        "l_min": 0.0,
+        "l_max": 3.0,
+        "theta_initial_deg": 6.0,
+        "smoothing_sigma_bins": 0.5,
+    }
     preview_calls: list[tuple[float, float, float, float, pd.DataFrame]] = []
     update_calls: list[tuple[float, float, float, float, pd.DataFrame]] = []
 
@@ -8434,7 +8787,16 @@ def test_parallel_script_qr_rod_peak_editor_import_applies_nonzero_parameters(
         "l_min": region_state["l_min"],
         "l_max": region_state["l_max"],
         "theta_initial_deg": region_state["theta_initial_deg"],
-    } == pytest.approx({"delta_qr": 0.04, "l_min": 0.6, "l_max": 4.2, "theta_initial_deg": 12.5})
+        "smoothing_sigma_bins": region_state["smoothing_sigma_bins"],
+    } == pytest.approx(
+        {
+            "delta_qr": 0.04,
+            "l_min": 0.6,
+            "l_max": 4.2,
+            "theta_initial_deg": 12.5,
+            "smoothing_sigma_bins": 2.25,
+        }
+    )
     assert [(call[0], call[1], call[2], call[3]) for call in preview_calls] == pytest.approx(
         [(0.04, 0.6, 4.2, 12.5)]
     )
@@ -8482,10 +8844,11 @@ def test_parallel_script_qr_rod_peak_editor_import_applies_hk0_parameters(
                 "parameters": {
                     "specular": {
                         "phi_min": -4.5,
-                        "phi_max": 6.5,
-                        "two_theta_min": 8.5,
-                        "two_theta_max": 18.5,
-                    }
+                            "phi_max": 6.5,
+                            "two_theta_min": 8.5,
+                            "two_theta_max": 18.5,
+                            "smoothing_sigma_bins": 3.25,
+                        }
                 },
             }
         ),
@@ -8500,6 +8863,7 @@ def test_parallel_script_qr_rod_peak_editor_import_applies_hk0_parameters(
         "phi_max": 2.0,
         "two_theta_min": 7.0,
         "two_theta_max": 12.0,
+        "smoothing_sigma_bins": 0.5,
     }
     preview_calls: list[tuple[float, float, float, float, pd.DataFrame]] = []
     update_calls: list[tuple[float, float, float, float, pd.DataFrame]] = []
@@ -8619,8 +8983,15 @@ def test_parallel_script_qr_rod_peak_editor_import_applies_hk0_parameters(
         "phi_max": region_state["phi_max"],
         "two_theta_min": region_state["two_theta_min"],
         "two_theta_max": region_state["two_theta_max"],
+        "smoothing_sigma_bins": region_state["smoothing_sigma_bins"],
     } == pytest.approx(
-        {"phi_min": -4.5, "phi_max": 6.5, "two_theta_min": 8.5, "two_theta_max": 18.5}
+        {
+            "phi_min": -4.5,
+            "phi_max": 6.5,
+            "two_theta_min": 8.5,
+            "two_theta_max": 18.5,
+            "smoothing_sigma_bins": 3.25,
+        }
     )
     assert (
         preview_calls[-1][0],
@@ -8727,7 +9098,13 @@ def test_parallel_script_qr_rod_region_editor_edit_path_applies_hk0_parameters(
         {"delta_qr": 0.04, "l_min": 0.2, "l_max": 4.2, "theta_initial_deg": 1.25}
     )
     assert saved_payload["parameters"]["specular"] == pytest.approx(
-        {"phi_min": -4.5, "phi_max": 6.5, "two_theta_min": 8.5, "two_theta_max": 18.5}
+        {
+            "phi_min": -4.5,
+            "phi_max": 6.5,
+            "two_theta_min": 8.5,
+            "two_theta_max": 18.5,
+            "smoothing_sigma_bins": 1.0,
+        }
     )
 
 
@@ -8807,12 +9184,24 @@ def test_parallel_script_qr_rod_peak_editor_export_writes_phase_parameters(
                 {"m": 1, "branch": "-", "qz_center": 1.4, "background_density": 1.0},
             ]
         ),
-        region_state={"delta_qr": 0.04, "l_min": 0.6, "l_max": 4.2, "theta_initial_deg": 12.5},
+        region_state={
+            "delta_qr": 0.04,
+            "l_min": 0.6,
+            "l_max": 4.2,
+            "theta_initial_deg": 12.5,
+            "smoothing_sigma_bins": 2.5,
+        },
         editor_phase="nonzero",
         export_name="nonzero_export.json",
     )
     assert nonzero_payload["parameters"]["nonzero"] == pytest.approx(
-        {"delta_qr": 0.04, "l_min": 0.6, "l_max": 4.2, "theta_initial_deg": 12.5}
+        {
+            "delta_qr": 0.04,
+            "l_min": 0.6,
+            "l_max": 4.2,
+            "theta_initial_deg": 12.5,
+            "smoothing_sigma_bins": 2.5,
+        }
     )
     assert "specular" not in nonzero_payload["parameters"]
 
@@ -8837,12 +9226,19 @@ def test_parallel_script_qr_rod_peak_editor_export_writes_phase_parameters(
             "phi_max": 6.5,
             "two_theta_min": 8.5,
             "two_theta_max": 18.5,
+            "smoothing_sigma_bins": 3.0,
         },
         editor_phase="specular",
         export_name="hk0_export.json",
     )
     assert hk0_payload["parameters"]["specular"] == pytest.approx(
-        {"phi_min": -4.5, "phi_max": 6.5, "two_theta_min": 8.5, "two_theta_max": 18.5}
+        {
+            "phi_min": -4.5,
+            "phi_max": 6.5,
+            "two_theta_min": 8.5,
+            "two_theta_max": 18.5,
+            "smoothing_sigma_bins": 3.0,
+        }
     )
     assert "nonzero" not in hk0_payload["parameters"]
 
@@ -9098,8 +9494,8 @@ def test_parallel_script_unified_editor_result_updates_final_profile_table() -> 
     specular_call = source.index("qr_rod_specular_editor_result = edit_qr_rod_region_editor(")
     combined_result = source.index("qr_rod_region_editor_result = {", specular_call)
     cache_key_call = source.index("qr_rod_peak_edit_cache_key(", combined_result)
-    final_fit_call = source.index("add_joint_qz_fit_columns(", combined_result)
-    section = source[nonzero_call:final_fit_call]
+    fitting_disabled = source.index("Qr-rod peak fitting disabled", combined_result)
+    section = source[nonzero_call:fitting_disabled]
 
     assert "def recompute_qr_rod_region_profiles(" in source
     assert "profile_update_callback=recompute_qr_rod_region_profiles" in section
@@ -9118,7 +9514,8 @@ def test_parallel_script_unified_editor_result_updates_final_profile_table() -> 
         "qr_rod_editor_theta_initial_deg)"
     ) in source
     assert "delta_qr_override=delta_qr_value" in source
-    assert nonzero_call < specular_call < combined_result < cache_key_call < final_fit_call
+    assert nonzero_call < specular_call < combined_result < cache_key_call < fitting_disabled
+    assert "add_joint_qz_fit_columns(" not in source[combined_result:fitting_disabled]
 
 
 def test_parallel_script_specular_phase_reuses_pre_editor_hk0_profiles() -> None:
@@ -9399,7 +9796,7 @@ def test_parallel_script_qr_rod_peak_editor_shows_hk0_in_log_view() -> None:
     assert 'ax.set_ylabel("Intensity (log)" if editor_log_y else "Intensity", fontsize=8)' in (
         function_source
     )
-    assert "if editor_log_y:\n                apply_positive_log_y_axis(ax, y, y_markers)" in (
+    assert "if editor_log_y:\n                apply_positive_log_y_axis(ax, y, y_smoothed, y_markers)" in (
         function_source
     )
     assert 'ax.set_yscale("linear")' in function_source
