@@ -3142,6 +3142,99 @@ def _geometry_fit_audit_caked_delta_norm(
     return float(math.hypot(float(delta[0]), float(delta[1])))
 
 
+def _geometry_fit_audit_trace_sim_native(
+    entry: Mapping[str, object],
+) -> tuple[float, float] | None:
+    for key in (
+        "sim_visual_detector_native_px",
+        "fit_prediction_detector_native_px",
+        "sim_refined_detector_native_px",
+        "sim_native",
+    ):
+        point = _geometry_fit_audit_point_from_tuple_key((entry,), key)
+        if point is not None:
+            return point
+    return _geometry_fit_audit_point_from_key_pairs(
+        (entry,),
+        (
+            ("refined_sim_native_x", "refined_sim_native_y"),
+            ("sim_col_raw", "sim_row_raw"),
+            ("sim_col", "sim_row"),
+        ),
+    )
+
+
+def _geometry_fit_audit_trace_sim_caked(
+    entry: Mapping[str, object],
+) -> tuple[float, float] | None:
+    for key in (
+        "sim_caked_deg",
+        "sim_visual_caked_deg",
+        "sim_refined_caked_deg",
+        "sim_caked",
+    ):
+        point = _geometry_fit_audit_point_from_tuple_key((entry,), key)
+        if point is not None:
+            return point
+    return _geometry_fit_audit_point_from_key_pairs(
+        (entry,),
+        (
+            ("refined_sim_caked_x", "refined_sim_caked_y"),
+            ("sim_refined_caked_x", "sim_refined_caked_y"),
+            ("sim_caked_x", "sim_caked_y"),
+            ("sim_visual_caked_x", "sim_visual_caked_y"),
+        ),
+    )
+
+
+def _locked_qr_caked_projection_frame_diagnostic(
+    *,
+    trace_native: tuple[float, float] | None,
+    trace_caked: tuple[float, float] | None,
+    fit_prediction_native: tuple[float, float] | None,
+    fit_prediction_caked: tuple[float, float] | None,
+    native_tolerance_px: float = 1.0,
+    caked_tolerance_deg: float = 1.0,
+) -> dict[str, object]:
+    native_delta = _geometry_fit_audit_point_delta(trace_native, fit_prediction_native)
+    caked_delta = _geometry_fit_audit_caked_delta_pair(trace_caked, fit_prediction_caked)
+    caked_delta_norm = _qr_residual_norm(caked_delta)
+    if trace_native is None:
+        status = "not_comparable"
+        reason = "manual_trace_sim_detector_native_px_missing"
+    elif trace_caked is None:
+        status = "not_comparable"
+        reason = "manual_trace_sim_caked_deg_missing"
+    elif fit_prediction_native is None:
+        status = "not_comparable"
+        reason = "fit_prediction_detector_native_px_missing"
+    elif fit_prediction_caked is None:
+        status = "not_comparable"
+        reason = "fit_prediction_caked_deg_missing"
+    elif native_delta is None or not np.isfinite(float(native_delta)):
+        status = "not_comparable"
+        reason = "native_delta_unavailable"
+    elif float(native_delta) > float(native_tolerance_px):
+        status = "not_comparable"
+        reason = "manual_trace_native_point_differs"
+    elif caked_delta is None or caked_delta_norm is None:
+        status = "not_comparable"
+        reason = "caked_delta_unavailable"
+    elif float(caked_delta_norm) > float(caked_tolerance_deg):
+        status = "mismatch"
+        reason = "locked_qr_caked_projection_frame_mismatch"
+    else:
+        status = "match"
+        reason = None
+    return {
+        "manual_trace_to_fit_prediction_detector_native_delta_px": native_delta,
+        "manual_trace_to_fit_prediction_caked_delta_deg": caked_delta,
+        "manual_trace_to_fit_prediction_caked_delta_norm_deg": caked_delta_norm,
+        "locked_qr_caked_projection_frame_status": status,
+        "locked_qr_caked_projection_frame_reason": reason,
+    }
+
+
 def _geometry_fit_audit_project_native_to_caked(
     native_point: tuple[float, float] | None,
     *,
@@ -3499,14 +3592,43 @@ def build_geometry_fit_qr_handoff_audit_rows(
         ):
             continue
         source_trace_entry = {}
+        source_table_index_norm = _geometry_fit_coerce_nonnegative_index(source_table_index)
+        source_row_index_norm = _geometry_fit_coerce_nonnegative_index(source_row_index)
         for trace_row in trace_rows:
+            trace_q_group_key = _geometry_fit_audit_q_group_key(
+                _geometry_fit_audit_first_identity(
+                    (trace_row,),
+                    "q_group_key",
+                    "source_q_group_key",
+                )
+            )
+            trace_hkl = _geometry_fit_audit_hkl(
+                _geometry_fit_audit_first_identity((trace_row,), "hkl", "normalized_hkl")
+            )
+            trace_branch_idx = _geometry_fit_coerce_nonnegative_index(
+                _geometry_fit_audit_first_identity(
+                    (trace_row,),
+                    "source_branch_index",
+                    "source_peak_index",
+                    "resolved_peak_index",
+                )
+            )
+            trace_table_index = _geometry_fit_coerce_nonnegative_index(
+                _geometry_fit_audit_first_identity(
+                    (trace_row,),
+                    "source_table_index",
+                    "source_reflection_index",
+                )
+            )
+            trace_source_row_index = _geometry_fit_coerce_nonnegative_index(
+                _geometry_fit_audit_first_identity((trace_row,), "source_row_index")
+            )
             if (
-                _geometry_fit_audit_q_group_key(trace_row.get("q_group_key")) == q_group_key
-                and _geometry_fit_audit_hkl(trace_row.get("hkl")) == hkl
-                and _geometry_fit_coerce_nonnegative_index(trace_row.get("source_branch_index"))
-                == branch_idx
-                and trace_row.get("source_table_index") == source_table_index
-                and trace_row.get("source_row_index") == source_row_index
+                trace_q_group_key == q_group_key
+                and trace_hkl == hkl
+                and trace_branch_idx == branch_idx
+                and trace_table_index == source_table_index_norm
+                and trace_source_row_index == source_row_index_norm
             ):
                 source_trace_entry = dict(trace_row)
                 break
@@ -3770,6 +3892,23 @@ def build_geometry_fit_qr_handoff_audit_rows(
         if fit_prediction_caked_authority is None and fit_prediction_caked is not None:
             fit_prediction_caked_authority = "unknown"
 
+        manual_trace_sim_native = (
+            _geometry_fit_audit_trace_sim_native(source_trace_entry)
+            if isinstance(source_trace_entry, Mapping) and source_trace_entry
+            else None
+        )
+        manual_trace_sim_caked = (
+            _geometry_fit_audit_trace_sim_caked(source_trace_entry)
+            if isinstance(source_trace_entry, Mapping) and source_trace_entry
+            else None
+        )
+        projection_frame_diagnostic = _locked_qr_caked_projection_frame_diagnostic(
+            trace_native=manual_trace_sim_native,
+            trace_caked=manual_trace_sim_caked,
+            fit_prediction_native=fit_prediction_native,
+            fit_prediction_caked=fit_prediction_caked,
+        )
+
         observed_native_delta = _geometry_fit_audit_point_delta(
             fit_observed_native,
             observed_refined_native,
@@ -3953,6 +4092,8 @@ def build_geometry_fit_qr_handoff_audit_rows(
                 if fit_prediction_projection_theta_initial is not None
                 else None
             ),
+            "manual_trace_sim_detector_native_px": manual_trace_sim_native,
+            "manual_trace_sim_caked_deg": manual_trace_sim_caked,
             "observed_source": "background/manual",
             "predicted_source": "simulation",
             "observed_detector_native_px": fit_observed_native,
@@ -3994,6 +4135,7 @@ def build_geometry_fit_qr_handoff_audit_rows(
             ),
             "first_divergence_field": first_divergence or "none",
         }
+        row.update(projection_frame_diagnostic)
         row.update(sim_caked_meta)
         authority_diagnostic = _locked_qr_prediction_caked_authority_mismatch(row)
         row["locked_qr_prediction_caked_authority_diagnostic"] = authority_diagnostic
@@ -4070,6 +4212,13 @@ def build_geometry_fit_qr_handoff_audit_lines(
         "fit_prediction_detector_display_px",
         "fit_prediction_detector_native_px",
         "fit_prediction_caked_deg",
+        "manual_trace_sim_detector_native_px",
+        "manual_trace_sim_caked_deg",
+        "manual_trace_to_fit_prediction_detector_native_delta_px",
+        "manual_trace_to_fit_prediction_caked_delta_deg",
+        "manual_trace_to_fit_prediction_caked_delta_norm_deg",
+        "locked_qr_caked_projection_frame_status",
+        "locked_qr_caked_projection_frame_reason",
         "observed_source",
         "predicted_source",
         "observed_detector_native_px",
@@ -17648,6 +17797,18 @@ def prepare_geometry_fit_run(
                 joint_background_mode=joint_background_mode,
                 geometry_runtime_cfg=geometry_runtime_cfg,
             )
+        projection_frame_error = locked_qr_caked_projection_frame_preflight_error(
+            dataset_infos
+        )
+        if projection_frame_error:
+            return _failure_result(
+                projection_frame_error,
+                dataset_infos=dataset_infos,
+                current_dataset=current_dataset,
+                selected_background_indices=selected_background_indices,
+                joint_background_mode=joint_background_mode,
+                geometry_runtime_cfg=geometry_runtime_cfg,
+            )
     else:
         geometry_runtime_cfg = apply_manual_point_geometry_fit_runtime_overrides(
             base_runtime_cfg,
@@ -18071,6 +18232,43 @@ def manual_caked_geometry_fit_projector_preflight_error(
         "caked fit-space projector for every selected background. Rebuild the "
         "caked/source cache and rerun the fit. exact caked projector unavailable "
         "for caked-origin background pair: " + ", ".join(missing_labels) + "."
+    )
+
+
+def locked_qr_caked_projection_frame_preflight_error(
+    dataset_infos: Sequence[Mapping[str, object]] | None,
+) -> str | None:
+    """Fail closed when handoff and source trace project one native point differently."""
+
+    mismatch_labels: list[str] = []
+    for idx, dataset in enumerate(dataset_infos or ()):
+        if not isinstance(dataset, Mapping):
+            continue
+        label = str(dataset.get("label", f"dataset {idx + 1}"))
+        for row in dataset.get("fit_handoff_audit_rows", ()) or ():
+            if not isinstance(row, Mapping):
+                continue
+            if str(row.get("locked_qr_caked_projection_frame_status") or "") != "mismatch":
+                continue
+            hkl = row.get("hkl")
+            branch = row.get("source_branch_index")
+            delta_norm = row.get("manual_trace_to_fit_prediction_caked_delta_norm_deg")
+            mismatch_labels.append(
+                (
+                    f"{label} hkl={hkl} branch={branch} "
+                    f"delta={_geometry_fit_audit_value_text(delta_norm)} deg"
+                )
+            )
+    if not mismatch_labels:
+        return None
+    return (
+        "Geometry fit blocked before optimization. "
+        "locked_qr_caked_projection_frame_mismatch: the same locked Qr/Qz "
+        "simulated detector point projects to different caked coordinates in "
+        "the source trace and fit handoff. Rebuild the caked/source cache and "
+        "rerun the fit. Mismatched rows: "
+        + ", ".join(mismatch_labels)
+        + "."
     )
 
 

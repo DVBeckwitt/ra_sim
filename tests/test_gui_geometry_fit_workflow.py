@@ -375,6 +375,100 @@ def test_locked_qr_prediction_caked_prefers_exact_projection_over_nominal_handof
     assert ("simulated", prediction_native[0], prediction_native[1]) in projector_calls
 
 
+def test_locked_qr_caked_projection_frame_mismatch_blocks_preflight() -> None:
+    q_group_key = ("q_group", "primary", 1, 5)
+    hkl = (-1, 0, 5)
+    identity = {
+        "q_group_key": q_group_key,
+        "hkl": hkl,
+        "normalized_hkl": hkl,
+        "source_branch_index": 0,
+        "source_peak_index": 0,
+        "source_table_index": 92,
+        "source_reflection_index": 92,
+        "source_row_index": 11,
+        "source_label": "primary",
+    }
+    observed_caked = (37.0, 40.0)
+    prediction_native = (1095.0, 1160.0)
+    manual_trace_caked = (40.139, -37.750)
+    fit_projected_caked = (36.928, 39.250)
+
+    def projector(cols, rows, *, local_params, anchor_kind, input_frame):
+        del local_params, rows, input_frame
+        caked = observed_caked if str(anchor_kind) == "measured" else fit_projected_caked
+        return {
+            "two_theta_deg": np.asarray([caked[0]], dtype=np.float64),
+            "phi_deg": np.asarray([caked[1]], dtype=np.float64),
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "valid": True,
+            "native_cols": np.asarray(cols, dtype=np.float64),
+        }
+
+    trace_identity = dict(identity)
+    trace_identity.pop("source_table_index")
+
+    dataset = {
+        "label": "bg0",
+        "provider_pairs": [
+            {
+                **identity,
+                "provider_selected_source_identity_canonical": dict(identity),
+                "fit_source_resolution_kind": "provider_fixed_source_local",
+                "optimizer_request_has_fixed_source": True,
+            }
+        ],
+        "manual_point_pairs": [{**identity}],
+        "measured_display": [{**identity, "x": 1100.0, "y": 1366.0}],
+        "measured_for_fit": [
+            {
+                **identity,
+                "background_detector_x": 1100.0,
+                "background_detector_y": 1366.0,
+                "background_two_theta_deg": observed_caked[0],
+                "background_phi_deg": observed_caked[1],
+            }
+        ],
+        "initial_pairs_display": [
+            {
+                **identity,
+                "sim_native": prediction_native,
+                "simulated_two_theta_deg": 28.381,
+                "simulated_phi_deg": 57.881,
+            }
+        ],
+        "source_rows_for_trace": [
+            {
+                **trace_identity,
+                "sim_visual_detector_native_px": prediction_native,
+                "sim_visual_caked_deg": manual_trace_caked,
+            }
+        ],
+        "spec": {
+            "label": "bg0",
+            "fit_space_projector": projector,
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "_manual_caked_fit_space_required": True,
+            "solver_requested_objective_space": "caked_deg",
+        },
+    }
+
+    rows = geometry_fit.build_geometry_fit_qr_handoff_audit_rows(dataset)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["fit_prediction_detector_native_px"] == pytest.approx(prediction_native)
+    assert row["fit_prediction_caked_deg"] == pytest.approx(fit_projected_caked)
+    assert row["manual_trace_sim_caked_deg"] == pytest.approx(manual_trace_caked)
+    assert row["locked_qr_caked_projection_frame_status"] == "mismatch"
+    error = geometry_fit.locked_qr_caked_projection_frame_preflight_error(
+        [{**dataset, "fit_handoff_audit_rows": rows}]
+    )
+    assert error is not None
+    assert "locked_qr_caked_projection_frame_mismatch" in error
+    assert "bg0" in error
+
+
 def test_qr_handoff_audit_includes_all_locked_qr_groups() -> None:
     groups = [
         (("q_group", "primary", 1, 5), (-1, 0, 5)),

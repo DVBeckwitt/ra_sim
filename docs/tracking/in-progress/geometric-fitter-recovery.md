@@ -9,6 +9,25 @@ Last updated: 2026-05-22
 
 ## Summary
 
+2026-05-22 locked Qr/Qz projection-frame contract slice: locked-Qr handoff
+audit rows now compare source-trace simulated caked coordinates against the
+exact fit-space projection for the same simulated native detector point. If the
+same native point maps to different caked `(2theta, phi)` coordinates across
+manual/source trace and fit handoff, preflight fails before optimization with
+`locked_qr_caked_projection_frame_mismatch` instead of allowing the dynamic
+objective to solve across mixed projection frames. Trace matching accepts
+`source_reflection_index` and `source_table_index` identity shapes so projected
+live rows are not skipped because of equivalent source-index naming. Bug/error
+status: fixed for the projection-frame mismatch rung; accepted caked fits now
+require coherent source-trace and handoff projection authority before solve.
+CI status: focused locked-Qr GUI workflow, live-row handoff, geometry-fitting
+tests, and `python -m ra_sim.dev check` pass. Migration/deprecation status: no
+saved-state, CLI, config, dependency, public API, or artifact-schema migration
+is required; this is a fail-closed validation and diagnostic change to the
+existing locked-Qr route. Shipping status: normal git revert is the rollback
+path, and logs should show the preflight block rather than a later
+`locked_qr_dynamic_authority_mismatch` when frames disagree.
+
 2026-05-22 locked Qr/Qz canonical-payload guard: detector-origin locked Qr/Qz
 preflight now treats selected-row exact caked projections as the mandatory
 artifact for fitting. Readiness validation uses `projected_rows` only, records
