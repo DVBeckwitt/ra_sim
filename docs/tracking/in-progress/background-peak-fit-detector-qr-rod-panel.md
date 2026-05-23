@@ -1046,6 +1046,32 @@ Passing checks:
   saved-state schema, config, or artifact-schema migration is required.
   Shipping status: ready for local use; rollback is a normal git revert of this
   commit because no data/schema migration is involved.
+- 2026-05-22 final m-visibility picker slice: the combined Qr-rod region
+  editor now has compact final-figure `m` checkboxes. The selected hidden-m
+  list is saved in the existing peak-edit parameter payload under
+  `final_figure.hidden_m_values`, defaults to the old PbI2 `m=7` visibility
+  policy, and can be set to an empty list to re-enable all m panels. The
+  final Qr-rod profile figure and support diagnostics use that accepted list
+  only at plot-selection time; marker tables, integrated profile rows, region
+  specs, detector overlays, and cache inputs keep all accepted rods so a
+  default-hidden rod can be re-enabled without rerunning a different data path.
+  The pre-editor cache signature was advanced to reject old caches that had
+  already removed PbI2 hidden rods before artifacts. The follow-up
+  simplification pass removed the obsolete hidden-rod artifact filters and
+  collapsed the final-visibility widget callback state without changing
+  behavior. Focused validation passed with scoped compileall and
+  `python -m pytest tests/test_background_peak_fits_notebook.py -k "pbi2_hidden_rods_are_final_visibility_only or final_plot_uses_gui_m_visibility_state or final_m_visibility" -ra`
+  (`8 passed, 273 deselected`). Final validation also passed with
+  `python -m pytest tests/test_background_peak_fits_notebook.py -ra`
+  (`273 passed, 8 skipped`), `git diff --check`, and
+  `python -m ra_sim.dev check` (`294 passed`, Ruff clean, mypy clean).
+  Feature status: complete for final profile panel visibility selection.
+  Bug/error status: fixed for hardcoded PbI2 m-panel hiding that could not be
+  changed from the GUI. Migration/deprecation status: no dependency, CI
+  workflow, CLI, config, version, or saved-state schema migration is required;
+  old edit files without `final_figure.hidden_m_values` keep the sample
+  default. Shipping status: ready for local use; rollback is a normal git
+  revert of this commit because no data/schema migration is involved.
 
 Known validation limits:
 

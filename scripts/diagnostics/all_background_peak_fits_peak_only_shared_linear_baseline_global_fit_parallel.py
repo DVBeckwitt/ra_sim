@@ -136,7 +136,7 @@ PRE_EDITOR_CACHE_SCHEMA = "ra_sim.background_pre_editor_cache.v1"
 PRE_EDITOR_CACHE_SIGNATURE = "pre_qr_rod_marker_editor_inputs_v1"
 PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE = "background_peak_fit_results_v5_caked_phi_m90_90_plane"
 PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE = "profile_fit_cache_v1"
-PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_roi_v17_caked_phi_m90_90_plane"
+PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_roi_v18_caked_phi_m90_90_plane"
 QR_ROD_PROFILE_SMOOTHING_SIGMA_DEFAULT = 1.0
 QR_ROD_PROFILE_SMOOTHING_SIGMA_MAX = 8.0
 
@@ -830,42 +830,63 @@ def qr_rod_hidden_hk_values_for_sample(
     return values
 
 
-def filter_hidden_qr_rod_entries(
-    rod_entries: object,
+def normalize_qr_rod_m_values(values: object) -> set[int]:
+    if values is None:
+        return set()
+    if isinstance(values, (str, bytes)):
+        raw_values = [values]
+    else:
+        try:
+            raw_values = list(values)
+        except TypeError:
+            raw_values = [values]
+    normalized: set[int] = set()
+    for raw_value in raw_values:
+        try:
+            normalized.add(int(raw_value))
+        except Exception:
+            continue
+    return normalized
+
+
+def final_qr_rod_hidden_m_values(
     sample_stem: object,
     *,
-    hidden_hk: object = None,
-) -> list[dict[str, object]]:
-    hidden_values = qr_rod_hidden_hk_values_for_sample(sample_stem, hidden_hk=hidden_hk)
-    rows = [dict(row) for row in rod_entries or [] if isinstance(row, dict)]
+    gui_hidden_m_values: object = None,
+    default_hidden_m_values: object = None,
+) -> set[int]:
+    if gui_hidden_m_values is not None:
+        return normalize_qr_rod_m_values(gui_hidden_m_values)
+    hidden_values = (
+        globals().get("QR_ROD_HIDDEN_PLOT_HK", ())
+        if default_hidden_m_values is None
+        else default_hidden_m_values
+    )
+    return qr_rod_hidden_hk_values_for_sample(sample_stem, hidden_hk=hidden_values)
+
+
+def filter_final_qr_rod_plot_entries(
+    plot_entries: object,
+    *,
+    hidden_m_values: object = None,
+) -> tuple[list[dict[str, object]], list[int]]:
+    hidden_values = normalize_qr_rod_m_values(hidden_m_values)
+    rows = [dict(row) for row in plot_entries or [] if isinstance(row, dict)]
     if not hidden_values:
-        return rows
+        return rows, []
     filtered: list[dict[str, object]] = []
+    skipped_values: set[int] = set()
     for row in rows:
         try:
             m_value = int(row["m"])
         except Exception:
             filtered.append(row)
             continue
-        if m_value not in hidden_values:
-            filtered.append(row)
-    return filtered
-
-
-def filter_hidden_qr_rod_table(
-    table: object,
-    sample_stem: object,
-    *,
-    hidden_hk: object = None,
-    m_column: str = "m",
-) -> pd.DataFrame:
-    data = pd.DataFrame(table).copy()
-    hidden_values = qr_rod_hidden_hk_values_for_sample(sample_stem, hidden_hk=hidden_hk)
-    if data.empty or not hidden_values or str(m_column) not in data:
-        return data
-    m_values = pd.to_numeric(data[str(m_column)], errors="coerce").to_numpy(dtype=np.float64)
-    keep = ~np.isin(m_values, np.asarray(sorted(hidden_values), dtype=np.float64))
-    return data.loc[keep].copy().reset_index(drop=True)
+        if m_value in hidden_values:
+            skipped_values.add(m_value)
+            continue
+        filtered.append(row)
+    return filtered, sorted(skipped_values)
 
 
 def qr_rod_peak_edit_cache_key(
@@ -1660,7 +1681,7 @@ def show_qr_rod_peak_marker_popup(
     if qr_rod_peak_edit_runtime_mode("auto", backend_name=backend, env={}) != "popup":
         raise RuntimeError(f"Matplotlib backend {backend!r} is not interactive")
     try:
-        from matplotlib.widgets import Button, Slider, TextBox
+        from matplotlib.widgets import Button, CheckButtons, Slider, TextBox
     except Exception as exc:
         raise RuntimeError(f"Matplotlib editor widgets are unavailable: {exc}") from exc
 
@@ -1719,13 +1740,10 @@ def show_qr_rod_peak_marker_popup(
         return edited, False
 
     groups: list[tuple[int, str]] = []
-    hidden_editor_hk = set(int(value) for value in globals().get("QR_ROD_HIDDEN_PLOT_HK", ()))
     for row in profiles[["m", "branch"]].drop_duplicates().to_dict("records"):
         try:
             group = (int(row["m"]), str(row["branch"]))
         except Exception:
-            continue
-        if group[0] in hidden_editor_hk:
             continue
         if not qr_rod_editor_phase_matches(group[0], editor_phase):
             continue
@@ -1784,6 +1802,9 @@ def show_qr_rod_peak_marker_popup(
         if np.isfinite(current_theta_initial_deg):
             region_control_state["theta_initial_deg"] = float(current_theta_initial_deg)
         region_control_state["smoothing_sigma_bins"] = float(current_smoothing_sigma_bins)
+        region_control_state["final_hidden_m_values"] = sorted(
+            normalize_qr_rod_m_values(region_control_state.get("final_hidden_m_values", []))
+        )
         region_control_state["rod_profile_table"] = profiles.copy()
 
     cols = min(3, max(1, len(groups)))
@@ -1825,6 +1846,8 @@ def show_qr_rod_peak_marker_popup(
     title_box_state: dict[str, object] = {"box": None, "syncing": False}
     text_input_widgets: list[object] = []
     region_parameter_widgets: dict[str, object] = {}
+    final_visibility_widget = None
+    final_visibility_labels: list[str] = []
     marker_scatter_by_group: dict[tuple[int, str], object | None] = {}
     marker_annotations_by_group: dict[tuple[int, str], list[object]] = {}
     group_plot_cache: dict[
@@ -2041,6 +2064,41 @@ def show_qr_rod_peak_marker_popup(
             if key in region_control_state:
                 set_region_widget_value(key, region_control_state[key])
 
+    def available_final_visibility_m_values() -> list[int]:
+        return sorted({int(group[0]) for group in groups})
+
+    def current_final_hidden_m_values() -> list[int]:
+        return sorted(
+            normalize_qr_rod_m_values(region_control_state.get("final_hidden_m_values", []))
+        )
+
+    def sync_final_visibility_widget() -> None:
+        if final_visibility_widget is None or not final_visibility_labels:
+            return
+        hidden_values = set(current_final_hidden_m_values())
+        eventson = getattr(final_visibility_widget, "eventson", None)
+        if eventson is not None:
+            final_visibility_widget.eventson = False
+        try:
+            statuses = list(final_visibility_widget.get_status())
+            for index, label in enumerate(final_visibility_labels):
+                m_value = int(str(label).split("=", 1)[-1])
+                desired = m_value not in hidden_values
+                if index < len(statuses) and bool(statuses[index]) != bool(desired):
+                    final_visibility_widget.set_active(index)
+        finally:
+            if eventson is not None:
+                final_visibility_widget.eventson = eventson
+
+    def sync_final_visibility_from_widget(_label: object = None) -> None:
+        if final_visibility_widget is None or not final_visibility_labels:
+            return
+        hidden_values: list[int] = []
+        for label, active in zip(final_visibility_labels, final_visibility_widget.get_status()):
+            if not bool(active):
+                hidden_values.append(int(str(label).split("=", 1)[-1]))
+        region_control_state["final_hidden_m_values"] = sorted(hidden_values)
+
     def current_phase_parameter_groups() -> list[tuple[str, tuple[str, ...]]]:
         groups: list[tuple[str, tuple[str, ...]]] = []
         if nonzero_theta_i_controls_enabled():
@@ -2075,8 +2133,6 @@ def show_qr_rod_peak_marker_popup(
         if not region_controls_enabled or not isinstance(parameters, dict):
             return False
         phase_groups = current_phase_parameter_groups()
-        if not phase_groups:
-            return False
         applied_keys: list[str] = []
         changed = False
         profile_changed = False
@@ -2099,9 +2155,19 @@ def show_qr_rod_peak_marker_popup(
                         profile_changed = True
                 region_control_state[key] = float(value)
                 applied_keys.append(key)
+        final_parameters = parameters.get("final_figure", {})
+        if isinstance(final_parameters, dict) and "hidden_m_values" in final_parameters:
+            hidden_values = sorted(
+                normalize_qr_rod_m_values(final_parameters.get("hidden_m_values"))
+            )
+            if hidden_values != current_final_hidden_m_values():
+                changed = True
+            region_control_state["final_hidden_m_values"] = hidden_values
+            applied_keys.append("final_hidden_m_values")
         if not applied_keys:
             return False
         sync_region_parameter_widgets(*applied_keys)
+        sync_final_visibility_widget()
         if changed:
             clear_group_plot_cache()
             if profile_changed:
@@ -2135,6 +2201,7 @@ def show_qr_rod_peak_marker_popup(
                     "two_theta_max": float(theta_max),
                     "smoothing_sigma_bins": float(current_smoothing_sigma_bins()),
                 }
+        payload["final_figure"] = {"hidden_m_values": current_final_hidden_m_values()}
         return payload
 
     def editor_l_bounds_for_group(m_value: int) -> tuple[float, float] | None:
@@ -3375,6 +3442,22 @@ def show_qr_rod_peak_marker_popup(
     title_box.on_submit(set_selected_marker_title)
     title_box_state["box"] = title_box
     text_input_widgets.append(title_box)
+    final_visibility_labels = [f"m={m_value}" for m_value in available_final_visibility_m_values()]
+    if region_controls_enabled and final_visibility_labels:
+        final_visibility_hidden = set(current_final_hidden_m_values())
+        final_visibility_ax = fig.add_axes(
+            [0.91, 0.105, 0.065, min(0.145, 0.032 * len(final_visibility_labels) + 0.018)]
+        )
+        final_visibility_widget = CheckButtons(
+            final_visibility_ax,
+            final_visibility_labels,
+            [
+                int(label.split("=", 1)[-1]) not in final_visibility_hidden
+                for label in final_visibility_labels
+            ],
+        )
+        final_visibility_ax.set_title("Final", fontsize=8)
+        final_visibility_widget.on_clicked(sync_final_visibility_from_widget)
     buttons = [
         Button(button_axes[0], "Snap"),
         Button(button_axes[1], "Import"),
@@ -3387,7 +3470,12 @@ def show_qr_rod_peak_marker_popup(
     buttons[2].on_clicked(export_peak_edits)
     buttons[3].on_clicked(cancel)
     buttons[4].on_clicked(accept)
-    fig._ra_sim_qr_rod_peak_edit_widgets = [title_box, *region_widgets, *buttons]
+    fig._ra_sim_qr_rod_peak_edit_widgets = [
+        title_box,
+        *region_widgets,
+        *([final_visibility_widget] if final_visibility_widget is not None else []),
+        *buttons,
+    ]
     fig.canvas.mpl_connect("button_press_event", on_press)
     fig.canvas.mpl_connect("motion_notify_event", on_motion)
     fig.canvas.mpl_connect("button_release_event", on_release)
@@ -3423,6 +3511,7 @@ def edit_qr_rod_region_editor(
     phi_max: object = None,
     two_theta_min: object = None,
     two_theta_max: object = None,
+    final_hidden_m_values: object = None,
     profile_update_callback: object | None = None,
     region_preview_update_callback: object | None = None,
     required_marker_table: pd.DataFrame | None = None,
@@ -3516,13 +3605,26 @@ def edit_qr_rod_region_editor(
                     current_smoothing_sigma_bins,
                 ),
             )
+    final_figure_parameters = imported_peak_edit_parameters.get("final_figure", {})
+    imported_hidden_m_values = None
+    if isinstance(final_figure_parameters, dict) and "hidden_m_values" in final_figure_parameters:
+        imported_hidden_m_values = final_figure_parameters.get("hidden_m_values")
+    if final_hidden_m_values is not None:
+        imported_hidden_m_values = final_hidden_m_values
+    current_final_hidden_m_values = sorted(
+        final_qr_rod_hidden_m_values(
+            globals().get("SAMPLE_STEM", ""),
+            gui_hidden_m_values=imported_hidden_m_values,
+            default_hidden_m_values=globals().get("QR_ROD_HIDDEN_PLOT_HK", ()),
+        )
+    )
     runtime_mode = qr_rod_peak_edit_runtime_mode(mode, backend_name=backend_name, env=env)
 
     def active_peak_edit_parameters(
         values: dict[str, object] | None = None,
-    ) -> dict[str, dict[str, float]]:
+    ) -> dict[str, dict[str, object]]:
         values = values or {}
-        parameters: dict[str, dict[str, float]] = {}
+        parameters: dict[str, dict[str, object]] = {}
         if imports_nonzero_parameters:
             parameters["nonzero"] = {
                 "delta_qr": float(values.get("delta_qr", current_delta_qr)),
@@ -3545,6 +3647,13 @@ def edit_qr_rod_region_editor(
                     values.get("smoothing_sigma_bins", current_smoothing_sigma_bins)
                 ),
             }
+        parameters["final_figure"] = {
+            "hidden_m_values": sorted(
+                normalize_qr_rod_m_values(
+                    values.get("final_hidden_m_values", current_final_hidden_m_values)
+                )
+            )
+        }
         return parameters
 
     def fallback_result(source: str) -> dict[str, object]:
@@ -3562,6 +3671,7 @@ def edit_qr_rod_region_editor(
             "two_theta_max": float(current_two_theta_max),
             "smoothing_sigma_bins": float(current_smoothing_sigma_bins),
             "l_axis_coefficients": {},
+            "final_hidden_m_values": list(current_final_hidden_m_values),
             "peak_edit_parameters": active_peak_edit_parameters(),
             "accepted": False,
             "source": source,
@@ -3587,6 +3697,7 @@ def edit_qr_rod_region_editor(
         "two_theta_min": float(current_two_theta_min),
         "two_theta_max": float(current_two_theta_max),
         "smoothing_sigma_bins": float(current_smoothing_sigma_bins),
+        "final_hidden_m_values": list(current_final_hidden_m_values),
     }
     try:
         edited_markers, accepted = show_qr_rod_peak_marker_popup(
@@ -3628,6 +3739,11 @@ def edit_qr_rod_region_editor(
         ),
         "l_axis_coefficients": normalized_l_axis_coefficients_payload(
             region_control_state.get("l_axis_coefficients", {})
+        ),
+        "final_hidden_m_values": sorted(
+            normalize_qr_rod_m_values(
+                region_control_state.get("final_hidden_m_values", current_final_hidden_m_values)
+            )
         ),
         "peak_edit_parameters": active_peak_edit_parameters(region_control_state),
         "accepted": bool(accepted),
@@ -14577,34 +14693,6 @@ else:
             raise RuntimeError("all non-specular Qr rods rejected by mixed target Qr spread")
     apply_rod_qspace_calibration([profile_bg], rod_qspace_calibration)
 
-if PBI2_HIDDEN_QR_ROD_HK:
-    hidden_reference_hk = set(int(value) for value in PBI2_HIDDEN_QR_ROD_HK)
-    hidden_rod_entries: list[int] = []
-    for rod in rod_entries:
-        if not isinstance(rod, dict):
-            continue
-        try:
-            m_value = int(rod["m"])
-        except Exception:
-            continue
-        if m_value in hidden_reference_hk:
-            hidden_rod_entries.append(m_value)
-    rod_entries = filter_hidden_qr_rod_entries(
-        rod_entries, SAMPLE_STEM, hidden_hk=PBI2_HIDDEN_QR_ROD_HK
-    )
-    rod_candidate_m_values = [
-        int(m_value)
-        for m_value in rod_candidate_m_values
-        if int(m_value) not in hidden_reference_hk
-    ]
-    if hidden_rod_entries:
-        print(
-            "excluded PbI2 configured-hidden Qr rods before artifacts: "
-            + ", ".join(f"HK={value}" for value in sorted(set(hidden_rod_entries)))
-        )
-    if not rod_entries:
-        raise RuntimeError("all non-specular Qr rods excluded by PbI2 hidden-rod policy")
-
 rod_reference_summary = rod_reference_source_summary(
     rod_entries,
     candidate_m_values=rod_candidate_m_values,
@@ -15268,19 +15356,9 @@ profile_failures = []
 if qr_rod_pre_editor_cache_hit:
     rod_profile_table_cached = pd.DataFrame(qr_rod_pre_editor_stage["rod_profile_table"]).copy()
     marker_table_cached = pd.DataFrame(qr_rod_pre_editor_stage["marker_table"]).copy()
-    rod_profile_table_cached = filter_hidden_qr_rod_table(
-        rod_profile_table_cached, SAMPLE_STEM, hidden_hk=PBI2_HIDDEN_QR_ROD_HK
-    )
-    marker_table_cached = filter_hidden_qr_rod_table(
-        marker_table_cached, SAMPLE_STEM, hidden_hk=PBI2_HIDDEN_QR_ROD_HK
-    )
     profile_rows = [rod_profile_table_cached]
     marker_rows = marker_table_cached.to_dict("records")
-    region_overlays = filter_hidden_qr_rod_entries(
-        qr_rod_pre_editor_stage.get("region_overlays", []),
-        SAMPLE_STEM,
-        hidden_hk=PBI2_HIDDEN_QR_ROD_HK,
-    )
+    region_overlays = [dict(row) for row in qr_rod_pre_editor_stage.get("region_overlays", [])]
     profile_failures = list(qr_rod_pre_editor_stage.get("profile_failures", []) or [])
     specular_l_marker_table = pd.DataFrame(
         qr_rod_pre_editor_stage.get("specular_l_marker_table", pd.DataFrame())
@@ -17007,6 +17085,24 @@ if isinstance(qr_rod_imported_specular_parameters, dict):
             qr_rod_profile_smoothing_sigma,
         ),
     )
+qr_rod_imported_final_figure_parameters = qr_rod_imported_peak_edit_parameters.get(
+    "final_figure", {}
+)
+qr_rod_imported_hidden_m_values = None
+if (
+    isinstance(qr_rod_imported_final_figure_parameters, dict)
+    and "hidden_m_values" in qr_rod_imported_final_figure_parameters
+):
+    qr_rod_imported_hidden_m_values = qr_rod_imported_final_figure_parameters.get(
+        "hidden_m_values"
+    )
+qr_rod_initial_hidden_m_values = sorted(
+    final_qr_rod_hidden_m_values(
+        SAMPLE_STEM,
+        gui_hidden_m_values=qr_rod_imported_hidden_m_values,
+        default_hidden_m_values=QR_ROD_HIDDEN_PLOT_HK,
+    )
+)
 qr_rod_region_editor_result = edit_qr_rod_region_editor(
     marker_table,
     rod_profile_table,
@@ -17021,6 +17117,7 @@ qr_rod_region_editor_result = edit_qr_rod_region_editor(
     phi_max=specular_phi_max_deg,
     two_theta_min=specular_theta_min_deg,
     two_theta_max=specular_theta_max_deg,
+    final_hidden_m_values=qr_rod_initial_hidden_m_values,
     smoothing_sigma_bins=qr_rod_profile_smoothing_sigma,
     profile_update_callback=recompute_qr_rod_region_profiles,
     region_preview_update_callback=qr_rod_detector_region_preview_update_callback,
@@ -17123,12 +17220,12 @@ rod_profile_table = merge_qr_rod_editor_phase_table(
     qr_rod_region_editor_result.get("rod_profile_table", rod_profile_table),
     editor_phase="specular",
 )
-marker_table = filter_hidden_qr_rod_table(
-    marker_table, SAMPLE_STEM, hidden_hk=PBI2_HIDDEN_QR_ROD_HK
+qr_rod_final_hidden_m_values = final_qr_rod_hidden_m_values(
+    SAMPLE_STEM,
+    gui_hidden_m_values=qr_rod_region_editor_result.get("final_hidden_m_values"),
+    default_hidden_m_values=QR_ROD_HIDDEN_PLOT_HK,
 )
-rod_profile_table = filter_hidden_qr_rod_table(
-    rod_profile_table, SAMPLE_STEM, hidden_hk=PBI2_HIDDEN_QR_ROD_HK
-)
+qr_rod_final_hidden_m_values = sorted(qr_rod_final_hidden_m_values)
 qr_rod_peak_edit_parameters = {
     "nonzero": {
         "delta_qr": float(qr_rod_delta_qr),
@@ -17144,6 +17241,7 @@ qr_rod_peak_edit_parameters = {
         "two_theta_max": float(specular_theta_max_deg),
         "smoothing_sigma_bins": float(qr_rod_profile_smoothing_sigma),
     },
+    "final_figure": {"hidden_m_values": list(qr_rod_final_hidden_m_values)},
 }
 accepted_l_axis_coefficients = merge_l_axis_coefficients(qr_rod_region_editor_result)
 final_nonzero_profile_table = recompute_qr_rod_region_profiles(
@@ -17191,6 +17289,7 @@ qr_rod_region_editor_result = {
     "peak_edit_parameters": qr_rod_peak_edit_parameters,
     "specular_roi": dict(SPECULAR_ROI_SIGNATURE),
     "l_axis_coefficients": accepted_l_axis_coefficients,
+    "final_hidden_m_values": list(qr_rod_final_hidden_m_values),
     "smoothing_sigma_bins": float(qr_rod_profile_smoothing_sigma),
     "accepted": bool(qr_rod_region_editor_result.get("accepted", False)),
     "source": qr_rod_peak_edit_source,
@@ -17244,21 +17343,13 @@ qr_rod_peak_edit_key = qr_rod_peak_edit_cache_key(
         "editor_theta_initial_deg": float(qr_rod_editor_theta_initial_deg),
         "accepted_l_axis_coefficients": l_axis_coefficients_signature(accepted_l_axis_coefficients),
         "accepted_region_overlay_signature": accepted_region_overlay_signature,
+        "final_hidden_m_values": list(qr_rod_final_hidden_m_values),
         "profile_smoothing_sigma_bins": float(qr_rod_profile_smoothing_sigma),
     },
 )
 rod_component_table = pd.DataFrame()
 rod_profile_table.attrs["joint_fit_component_table"] = rod_component_table
 print("Qr-rod peak fitting disabled: final profiles use GUI-integrated data only")
-rod_profile_table = filter_hidden_qr_rod_table(
-    rod_profile_table, SAMPLE_STEM, hidden_hk=PBI2_HIDDEN_QR_ROD_HK
-)
-marker_table = filter_hidden_qr_rod_table(
-    marker_table, SAMPLE_STEM, hidden_hk=PBI2_HIDDEN_QR_ROD_HK
-)
-rod_component_table = filter_hidden_qr_rod_table(
-    rod_component_table, SAMPLE_STEM, hidden_hk=PBI2_HIDDEN_QR_ROD_HK
-)
 marker_table = marker_table_with_specular_l_markers(marker_table, specular_l_marker_table)
 specular_l_marker_table = specular_export_marker_table_from_final_markers(
     marker_table,
@@ -17603,7 +17694,7 @@ def shared_nonzero_rod_profile_y_axis_limits(
 
 
 support_diagnostic_stem = f"{ROD_PROFILE_STEM}_support_diagnostics"
-support_hidden_hk = set(int(value) for value in QR_ROD_HIDDEN_PLOT_HK)
+support_hidden_hk = set(qr_rod_final_hidden_m_values)
 fig, support_axes = plt.subplots(
     2, 2, figsize=(JOURNAL_FULL_WIDTH_IN, 4.8), constrained_layout=True
 )
@@ -17684,7 +17775,7 @@ rod_note_lines = [
     "Subplot labels show `m = H^2 + H*K + K^2`.",
     "Nonzero-m masks still use detector-space Qr/Qz internally and extend to the projected sign endpoint.",
     "The detector-region figure labels the specular rod as `m = 0`; the displayed support is the same phi/2theta ROI arc used for profile extraction.",
-    f"Hidden Qr-rod subplot HK values: `{', '.join(str(int(value)) for value in QR_ROD_HIDDEN_PLOT_HK) or 'none'}`.",
+    f"Hidden Qr-rod subplot HK values: `{', '.join(str(int(value)) for value in qr_rod_final_hidden_m_values) or 'none'}`.",
     "",
     "## Rods",
     "",
@@ -17768,25 +17859,23 @@ def plot_tail_component_distributions(
         )
 
 
-hidden_plot_hk = set(int(value) for value in QR_ROD_HIDDEN_PLOT_HK)
+hidden_plot_hk = set(qr_rod_final_hidden_m_values)
 drawable_profile_keys = drawable_rod_profile_keys(rod_profile_table, plot_marker_table)
 detector_plot_rod_entries = detector_complete_branch_rod_entries(
     rod_entries,
     final_region_overlays,
 )
 detector_plot_rod_entries_all = list(detector_plot_rod_entries)
-detector_plot_rod_entries = [
-    rod for rod in detector_plot_rod_entries_all if int(rod["m"]) not in hidden_plot_hk
-]
+detector_plot_rod_entries, skipped_hidden_plot_hk = filter_final_qr_rod_plot_entries(
+    detector_plot_rod_entries_all,
+    hidden_m_values=hidden_plot_hk,
+)
 plot_rod_entries = [
     rod
     for rod in detector_plot_rod_entries
     if any((int(rod["m"]), branch_name) in drawable_profile_keys for branch_name, *_ in phi_windows)
 ]
 detector_plot_rod_keys_all = {rod_identity_key(rod) for rod in detector_plot_rod_entries_all}
-skipped_hidden_plot_hk = [
-    int(rod["m"]) for rod in detector_plot_rod_entries_all if int(rod["m"]) in hidden_plot_hk
-]
 skipped_incomplete_detector_hk = [
     int(rod["m"])
     for rod in rod_entries
@@ -17802,8 +17891,10 @@ skipped_empty_plot_hk = [
         (int(rod["m"]), branch_name) in drawable_profile_keys for branch_name, *_ in phi_windows
     )
 ]
-if (0, "qz") in drawable_profile_keys:
+if 0 not in hidden_plot_hk and (0, "qz") in drawable_profile_keys:
     plot_rod_entries.append(specular_rod_entry)
+elif 0 in hidden_plot_hk and (0, "qz") in drawable_profile_keys:
+    skipped_hidden_plot_hk = sorted({*skipped_hidden_plot_hk, 0})
 else:
     final_hk0_marker_count = hk0_qz_marker_count(marker_table)
     if final_hk0_marker_count > 0:

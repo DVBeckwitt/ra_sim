@@ -44,6 +44,7 @@
   - Pointed the background peak-fit batch runner and Bi2Te3/Bi2Se3/PbI2 batch file at the maintained Python diagnostic by default instead of the removed notebook path.
   - Linked the Qr-rod marker editor and detector-preview windows so closing either window also closes the other.
   - Merged the background peak-fit Qr-rod region picker into one combined nonzero/HK=0 editor and added a startup state-file chooser when the batch runner is using its default GUI state path.
+  - Added final-figure `m` visibility checkboxes to the combined Qr-rod region editor; the final Qr-rod profile panels now use the GUI-accepted visibility list while integration tables and saved region specs retain all accepted rods.
   - Fixed theta_i GUI updates so simulation source rows and geometry Qr/Qz picker content signatures refresh selected Qr sets instead of reusing stale row snapshots, and selected Qr-set integration overlays refresh even when geometry overlays are hidden.
   - Fixed saved Qr/Qz ghost-representative placements so changing simulation parameters refreshes their simulated marker positions from current source rows or current simulated-peak rows even when the saved placed row no longer carries ghost provenance, rejects stale warm-cache simulated pixels when the current ghost is missing, and preserves measured background clicks.
   - Fixed settled geometry-overlay redraw so view-bound Qr/Qz initial square markers are rebuilt from the current simulation instead of replayed from stale remembered display coordinates.
