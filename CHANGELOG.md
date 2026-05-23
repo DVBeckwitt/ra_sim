@@ -39,6 +39,7 @@
   - Fixed final Qr-rod profile figures so accepted GUI marker L-axis coefficients, profile rows, `background_density` data, HK=0 axis bounds, and detector overlays remain the final Figure 7 source of truth after final-fit cache resolution, with a saved GUI-vs-final profile audit CSV.
   - Added final Qr-rod output-state diagnostics so Figure 7 region specs, detector overlays, marker plotting inputs, and GUI-vs-final audits are built from one post-cache accepted state and reject stale pre-editor overlay drift.
   - Changed final Qr-rod profile figures to skip joint peak fitting and plot the accepted GUI-integrated `background_density` traces plus a slider-controlled smoothed copy.
+  - Added curvature-adaptive Qr-rod smoothing so the GUI and final profile figure can smooth low-curvature trace regions more strongly while preserving sharper peak curvature; the default strength is zero for existing behavior.
   - Fixed saved HK=0 Qr-rod profile figures so the final plot no longer applies hidden L-window clipping or a PbI2 x-axis cap; it autoscale-matches the accepted GUI ROI trace.
   - Replaced the stale `scripts/diagnostics/comparison.py` generated duplicate with a compatibility wrapper around the maintained background peak-fit diagnostic so old entry points cannot overwrite Qr-rod figures with obsolete `Simulation` overlays.
   - Pointed the background peak-fit batch runner and Bi2Te3/Bi2Se3/PbI2 batch file at the maintained Python diagnostic by default instead of the removed notebook path.

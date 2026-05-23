@@ -4,7 +4,7 @@ Type: bug/feature
 Owner: -
 Issue: none
 Priority: p1
-Last updated: 2026-05-22
+Last updated: 2026-05-23
 Status: implemented locally, Qr-rod editor startup and L-bound callback crash
 fixed, detector label editing/import/export restored through a responsive Tk
 canvas popup, detector companion preview/deferred Delta Qr validation passing,
@@ -26,7 +26,8 @@ Delta Qr preview refreshes and caches per-panel plot inputs for smoother marker
 dragging; nonzero plus/minus branches now share an L grid and common finite
 support, HK=0/specular no longer exposes or applies L min/max controls, and
 final Qr-rod profile figures now skip peak fitting and draw only the
-GUI-integrated trace plus a slider-controlled smoothed copy
+GUI-integrated trace plus a slider-controlled smoothed copy with optional
+curvature-adaptive extra smoothing
 
 ## Problem
 
@@ -223,8 +224,11 @@ to make the Qr rod detector and integration figures source-consistent:
 - Final Qr-rod profile figures no longer run or draw the joint Qz peak fit.
   The final panels use the same accepted `background_density` traces shown in
   the GUI and overlay a second dashed trace smoothed by the GUI `Smooth` slider.
-  The smoothing amount is stored in Qr-rod edit JSON with the nonzero/HK=0
-  region parameters and participates in final cache/policy identity.
+  The smoothing amount and optional `Adapt` curvature-smoothing strength are
+  stored in Qr-rod edit JSON with the nonzero/HK=0 region parameters and
+  participate in final cache/policy identity. `Adapt=0` preserves the old fixed
+  smoothing behavior; higher values blend in stronger smoothing where local
+  curvature is small.
 - Saved HK=0 Qr-rod profile figures now match the GUI's no-L-window behavior:
   the accepted phi/2theta ROI trace is not clipped by stale specular L bounds,
   and the final HK=0 x-axis is left to autoscale from the plotted ROI data.
@@ -1072,6 +1076,21 @@ Passing checks:
   old edit files without `final_figure.hidden_m_values` keep the sample
   default. Shipping status: ready for local use; rollback is a normal git
   revert of this commit because no data/schema migration is involved.
+- 2026-05-23 adaptive smoothing slice: the Qr-rod editor now exposes an `Adapt`
+  slider next to `Smooth`. The accepted value is saved in the existing peak-edit
+  parameter payload as `smoothing_curvature_adaptivity`, imported/exported for
+  nonzero and HK=0 phases, included in final cache identity, and used by the
+  GUI overlay, final plot payload, y-limit calculation, and exported
+  `smoothed_background_density` column. `Adapt=0` keeps the previous fixed
+  Gaussian smoothing behavior. Validation passed with scoped compileall,
+  `python -m pytest tests/test_background_peak_fits_notebook.py -ra`
+  (`276 passed, 8 skipped`), `python -m ra_sim.dev check` (`294 passed`, Ruff
+  clean, mypy clean), and `git diff --check`. Feature status: complete for
+  curvature-aware smoothing control. Migration/deprecation status: no
+  dependency, CLI, config, version, or saved-state schema migration is required;
+  old edit files without the new field default to zero. Shipping status: ready
+  for local use; rollback is a normal git revert because no data/schema
+  migration is involved.
 
 Known validation limits:
 

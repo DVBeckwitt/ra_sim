@@ -154,6 +154,7 @@ def _script_functions(*names: str) -> dict[str, object]:
         wanted.add("smooth_qr_rod_profile_density")
     if "smooth_qr_rod_profile_density" in wanted:
         wanted.add("as_float")
+        wanted.add("_finite_abs_percentile")
     if "choose_gui_state_file" in wanted:
         wanted.add("gui_state_file_choice_runtime_mode")
     if "choose_final_output_dir" in wanted:
@@ -2212,6 +2213,54 @@ def test_parallel_script_qr_rod_profile_smoothing_reduces_spike() -> None:
     assert np.nanmax(smoothed[:10]) < smoothed[20]
 
 
+def test_parallel_script_qr_rod_profile_adaptive_smoothing_zero_matches_existing() -> None:
+    namespace = _script_functions("smooth_qr_rod_profile_density")
+    smooth_profile = namespace["smooth_qr_rod_profile_density"]
+
+    values = np.asarray([0.0, 0.8, np.nan, 2.0, 12.0, 2.2, 1.1, 0.2], dtype=np.float64)
+    fixed = smooth_profile(values, sigma_bins=1.4)
+    adaptive_zero = smooth_profile(values, sigma_bins=1.4, curvature_adaptivity=0.0)
+
+    np.testing.assert_allclose(adaptive_zero, fixed, equal_nan=True)
+
+
+def test_parallel_script_qr_rod_profile_adaptive_smoothing_prefers_flat_regions() -> None:
+    namespace = _script_functions("smooth_qr_rod_profile_density")
+    smooth_profile = namespace["smooth_qr_rod_profile_density"]
+
+    x = np.linspace(-1.0, 1.0, 121)
+    values = (
+        0.25 * x
+        + 0.7 * np.exp(-((x + 0.45) / 0.28) ** 2)
+        + 5.0 * np.exp(-(x / 0.035) ** 2)
+    )
+    base = smooth_profile(values, sigma_bins=1.0)
+    strong = smooth_profile(values, sigma_bins=4.0)
+    adaptive = smooth_profile(values, sigma_bins=1.0, curvature_adaptivity=3.0)
+
+    curvature = np.zeros(values.shape, dtype=np.float64)
+    curvature[1:-1] = np.abs(values[:-2] - 2.0 * values[1:-1] + values[2:])
+    peak_index = int(np.nanargmax(values))
+    candidate = np.ones(values.shape, dtype=bool)
+    candidate[max(0, peak_index - 8) : min(values.size, peak_index + 9)] = False
+    candidate &= curvature <= float(np.nanpercentile(curvature, 25.0))
+    candidate &= np.abs(strong - base) > 1.0e-5
+    low_curvature_indices = np.flatnonzero(candidate)
+    assert low_curvature_indices.size > 0
+    low_curvature_index = int(
+        low_curvature_indices[
+            np.nanargmax(np.abs(strong[low_curvature_indices] - base[low_curvature_indices]))
+        ]
+    )
+
+    assert abs(adaptive[low_curvature_index] - strong[low_curvature_index]) < abs(
+        base[low_curvature_index] - strong[low_curvature_index]
+    )
+    assert abs(adaptive[peak_index] - base[peak_index]) < abs(
+        strong[peak_index] - base[peak_index]
+    )
+
+
 def test_final_qr_rod_profile_plot_payload_matches_headless_gui_selection() -> None:
     namespace = _script_functions("final_qr_rod_profile_plot_payload")
     plot_payload = namespace["final_qr_rod_profile_plot_payload"]
@@ -2329,6 +2378,44 @@ def test_final_qr_rod_profile_plot_payload_applies_smoothing_to_gui_trace() -> N
     assert float(np.nanmax(payload["smoothed_y"])) < float(np.nanmax(payload["data_y"]))
 
 
+def test_final_qr_rod_profile_plot_payload_applies_adaptive_smoothing_to_gui_trace() -> None:
+    namespace = _script_functions(
+        "final_qr_rod_profile_plot_payload",
+        "smooth_qr_rod_profile_density",
+    )
+    plot_payload = namespace["final_qr_rod_profile_plot_payload"]
+    smooth_profile = namespace["smooth_qr_rod_profile_density"]
+    profile_table = pd.DataFrame(
+        {
+            "m": [1] * 9,
+            "branch": ["-"] * 9,
+            "qz_center": np.arange(9, dtype=np.float64),
+            "background_density": [0.0, 0.5, 1.0, 1.4, 6.0, 1.5, 1.1, 0.7, 0.3],
+            "pixel_count": [4] * 9,
+        }
+    )
+
+    payload = plot_payload(
+        rod_profile_table=profile_table,
+        marker_table=pd.DataFrame(),
+        plot_marker_table=pd.DataFrame(),
+        plot_rod_entries=[{"m": 1}],
+        branch_windows=[("-", -90.0, 0.0, "-")],
+        l_axis_coefficients={"1::-": {"m": 1, "branch": "-", "slope": 1.0, "intercept": 1.0}},
+        smoothing_sigma_bins=1.0,
+        smoothing_curvature_adaptivity=2.0,
+    )[0]
+
+    np.testing.assert_allclose(
+        payload["smoothed_y"],
+        smooth_profile(
+            payload["data_y"],
+            sigma_bins=1.0,
+            curvature_adaptivity=2.0,
+        ),
+    )
+
+
 def test_parallel_script_final_profile_plot_uses_gui_data_and_smoothed_copy() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
     plot_payload_source = source[
@@ -2348,6 +2435,7 @@ def test_parallel_script_final_profile_plot_uses_gui_data_and_smoothed_copy() ->
     assert "rod_profile_normalized_payload_for_plot_decision(" not in final_profile_source
     assert 'sub["background_density"]' in plot_payload_source
     assert "smooth_qr_rod_profile_density(" in plot_payload_source
+    assert "smoothing_curvature_adaptivity" in plot_payload_source
     assert "final_profile_plot_payload_by_key" in final_profile_source
     assert 'payload["data_y"]' in final_profile_source
     assert 'payload["smoothed_y"]' in final_profile_source
@@ -5088,6 +5176,8 @@ def test_final_qr_rod_region_overlays_are_rebuilt_after_gui_editor() -> None:
     assert accepted_overlay_signature < cache_key_call < fitting_disabled
     assert fitting_disabled < post_cache_marker_table < final_output_state < final_overlay_rebuild
     assert final_profile_selection < detector_overlay_selection
+    cache_key_section = source[cache_key_call:fitting_disabled]
+    assert '"profile_smoothing_curvature_adaptivity":' in cache_key_section
     rebuild_call = source[final_output_state:final_profile_selection]
     assert "marker_table=marker_table" in rebuild_call
     assert "final_profile_table=rod_profile_table" in rebuild_call
@@ -7206,8 +7296,12 @@ def test_parallel_script_unified_editor_has_region_controls() -> None:
         '"Delta Qr (+/- A^-1)"',
         "smoothing_slider = Slider(",
         '"Smooth"',
+        "adaptivity_slider = Slider(",
+        '"Adapt"',
         "set_profile_smoothing_sigma",
+        "set_profile_smoothing_curvature_adaptivity",
         'region_control_state["smoothing_sigma_bins"]',
+        'region_control_state["smoothing_curvature_adaptivity"]',
         "l_min_box = TextBox(",
         "l_min_ax,",
         '"L Min"',
@@ -7232,6 +7326,7 @@ def test_parallel_script_unified_editor_has_region_controls() -> None:
     assert "profile_update_callback=profile_update_callback" in wrapper_source
     assert "theta_initial_deg" in wrapper_source
     assert "smoothing_sigma_bins" in wrapper_source
+    assert "smoothing_curvature_adaptivity" in wrapper_source
     smoothing_setter_source = function_source[
         function_source.index("def set_profile_smoothing_sigma(") : function_source.index(
             "\n    def set_region_roi_bound("
@@ -9025,6 +9120,7 @@ def test_parallel_script_qr_rod_peak_editor_import_applies_nonzero_parameters(
                         "l_max": 4.2,
                         "theta_initial_deg": 12.5,
                         "smoothing_sigma_bins": 2.25,
+                        "smoothing_curvature_adaptivity": 1.75,
                     }
                 },
             }
@@ -9038,6 +9134,7 @@ def test_parallel_script_qr_rod_peak_editor_import_applies_nonzero_parameters(
         "l_max": 3.0,
         "theta_initial_deg": 6.0,
         "smoothing_sigma_bins": 0.5,
+        "smoothing_curvature_adaptivity": 0.25,
     }
     preview_calls: list[tuple[float, float, float, float, pd.DataFrame]] = []
     update_calls: list[tuple[float, float, float, float, pd.DataFrame]] = []
@@ -9140,6 +9237,7 @@ def test_parallel_script_qr_rod_peak_editor_import_applies_nonzero_parameters(
         "l_max": region_state["l_max"],
         "theta_initial_deg": region_state["theta_initial_deg"],
         "smoothing_sigma_bins": region_state["smoothing_sigma_bins"],
+        "smoothing_curvature_adaptivity": region_state["smoothing_curvature_adaptivity"],
     } == pytest.approx(
         {
             "delta_qr": 0.04,
@@ -9147,6 +9245,7 @@ def test_parallel_script_qr_rod_peak_editor_import_applies_nonzero_parameters(
             "l_max": 4.2,
             "theta_initial_deg": 12.5,
             "smoothing_sigma_bins": 2.25,
+            "smoothing_curvature_adaptivity": 1.75,
         }
     )
     assert [(call[0], call[1], call[2], call[3]) for call in preview_calls] == pytest.approx(
@@ -9200,6 +9299,7 @@ def test_parallel_script_qr_rod_peak_editor_import_applies_hk0_parameters(
                         "two_theta_min": 8.5,
                         "two_theta_max": 18.5,
                         "smoothing_sigma_bins": 3.25,
+                        "smoothing_curvature_adaptivity": 2.0,
                     }
                 },
             }
@@ -9216,6 +9316,7 @@ def test_parallel_script_qr_rod_peak_editor_import_applies_hk0_parameters(
         "two_theta_min": 7.0,
         "two_theta_max": 12.0,
         "smoothing_sigma_bins": 0.5,
+        "smoothing_curvature_adaptivity": 0.1,
     }
     preview_calls: list[tuple[float, float, float, float, pd.DataFrame]] = []
     update_calls: list[tuple[float, float, float, float, pd.DataFrame]] = []
@@ -9336,6 +9437,7 @@ def test_parallel_script_qr_rod_peak_editor_import_applies_hk0_parameters(
         "two_theta_min": region_state["two_theta_min"],
         "two_theta_max": region_state["two_theta_max"],
         "smoothing_sigma_bins": region_state["smoothing_sigma_bins"],
+        "smoothing_curvature_adaptivity": region_state["smoothing_curvature_adaptivity"],
     } == pytest.approx(
         {
             "phi_min": -4.5,
@@ -9343,6 +9445,7 @@ def test_parallel_script_qr_rod_peak_editor_import_applies_hk0_parameters(
             "two_theta_min": 8.5,
             "two_theta_max": 18.5,
             "smoothing_sigma_bins": 3.25,
+            "smoothing_curvature_adaptivity": 2.0,
         }
     )
     assert (
@@ -9456,6 +9559,7 @@ def test_parallel_script_qr_rod_region_editor_edit_path_applies_hk0_parameters(
             "two_theta_min": 8.5,
             "two_theta_max": 18.5,
             "smoothing_sigma_bins": 1.0,
+            "smoothing_curvature_adaptivity": 0.0,
         }
     )
 
@@ -9542,6 +9646,7 @@ def test_parallel_script_qr_rod_peak_editor_export_writes_phase_parameters(
             "l_max": 4.2,
             "theta_initial_deg": 12.5,
             "smoothing_sigma_bins": 2.5,
+            "smoothing_curvature_adaptivity": 1.5,
         },
         editor_phase="nonzero",
         export_name="nonzero_export.json",
@@ -9553,6 +9658,7 @@ def test_parallel_script_qr_rod_peak_editor_export_writes_phase_parameters(
             "l_max": 4.2,
             "theta_initial_deg": 12.5,
             "smoothing_sigma_bins": 2.5,
+            "smoothing_curvature_adaptivity": 1.5,
         }
     )
     assert "specular" not in nonzero_payload["parameters"]
@@ -9579,6 +9685,7 @@ def test_parallel_script_qr_rod_peak_editor_export_writes_phase_parameters(
             "two_theta_min": 8.5,
             "two_theta_max": 18.5,
             "smoothing_sigma_bins": 3.0,
+            "smoothing_curvature_adaptivity": 2.25,
         },
         editor_phase="specular",
         export_name="hk0_export.json",
@@ -9590,6 +9697,7 @@ def test_parallel_script_qr_rod_peak_editor_export_writes_phase_parameters(
             "two_theta_min": 8.5,
             "two_theta_max": 18.5,
             "smoothing_sigma_bins": 3.0,
+            "smoothing_curvature_adaptivity": 2.25,
         }
     )
     assert "nonzero" not in hk0_payload["parameters"]

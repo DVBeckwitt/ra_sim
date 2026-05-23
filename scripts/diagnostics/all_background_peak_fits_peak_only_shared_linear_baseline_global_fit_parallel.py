@@ -139,6 +139,8 @@ PRE_EDITOR_PROFILE_FIT_STAGE_SIGNATURE = "profile_fit_cache_v1"
 PRE_EDITOR_QR_ROD_STAGE_SIGNATURE = "qr_rod_pre_marker_profiles_hk0_roi_v18_caked_phi_m90_90_plane"
 QR_ROD_PROFILE_SMOOTHING_SIGMA_DEFAULT = 1.0
 QR_ROD_PROFILE_SMOOTHING_SIGMA_MAX = 8.0
+QR_ROD_PROFILE_SMOOTHING_CURVATURE_ADAPTIVITY_DEFAULT = 0.0
+QR_ROD_PROFILE_SMOOTHING_CURVATURE_ADAPTIVITY_MAX = 4.0
 
 
 def _cache_normalize_value(value: object) -> object:
@@ -1788,6 +1790,13 @@ def show_qr_rod_peak_marker_popup(
                 globals().get("QR_ROD_PROFILE_SMOOTHING_SIGMA_DEFAULT", 1.0),
             ),
         )
+        current_smoothing_curvature_adaptivity = max(
+            0.0,
+            as_float(
+                region_control_state.get("smoothing_curvature_adaptivity"),
+                globals().get("QR_ROD_PROFILE_SMOOTHING_CURVATURE_ADAPTIVITY_DEFAULT", 0.0),
+            ),
+        )
         region_control_state["delta_qr"] = float(current_delta_qr)
         region_control_state["l_min"] = float(current_l_min)
         region_control_state["l_max"] = float(current_l_max)
@@ -1802,6 +1811,9 @@ def show_qr_rod_peak_marker_popup(
         if np.isfinite(current_theta_initial_deg):
             region_control_state["theta_initial_deg"] = float(current_theta_initial_deg)
         region_control_state["smoothing_sigma_bins"] = float(current_smoothing_sigma_bins)
+        region_control_state["smoothing_curvature_adaptivity"] = float(
+            current_smoothing_curvature_adaptivity
+        )
         region_control_state["final_hidden_m_values"] = sorted(
             normalize_qr_rod_m_values(region_control_state.get("final_hidden_m_values", []))
         )
@@ -2008,6 +2020,27 @@ def show_qr_rod_peak_marker_popup(
             ),
         )
 
+    def current_smoothing_curvature_adaptivity() -> float:
+        value = as_float(
+            region_control_state.get("smoothing_curvature_adaptivity"),
+            globals().get("QR_ROD_PROFILE_SMOOTHING_CURVATURE_ADAPTIVITY_DEFAULT", 0.0),
+        )
+        if not np.isfinite(value):
+            value = as_float(
+                globals().get("QR_ROD_PROFILE_SMOOTHING_CURVATURE_ADAPTIVITY_DEFAULT", 0.0),
+                0.0,
+            )
+        return max(
+            0.0,
+            min(
+                float(value),
+                as_float(
+                    globals().get("QR_ROD_PROFILE_SMOOTHING_CURVATURE_ADAPTIVITY_MAX", 4.0),
+                    4.0,
+                ),
+            ),
+        )
+
     def current_hk0_roi_bounds() -> tuple[float, float, float, float]:
         defaults = (
             globals().get("specular_phi_min_deg", -10.0),
@@ -2051,7 +2084,11 @@ def show_qr_rod_peak_marker_popup(
         if eventson is not None:
             widget.eventson = False
         try:
-            if str(key) in {"delta_qr", "smoothing_sigma_bins"}:
+            if str(key) in {
+                "delta_qr",
+                "smoothing_sigma_bins",
+                "smoothing_curvature_adaptivity",
+            }:
                 widget.set_val(float(value))
             else:
                 widget.set_val(f"{float(value):.6g}")
@@ -2111,6 +2148,7 @@ def show_qr_rod_peak_marker_popup(
                         "l_max",
                         "theta_initial_deg",
                         "smoothing_sigma_bins",
+                        "smoothing_curvature_adaptivity",
                     ),
                 )
             )
@@ -2124,6 +2162,7 @@ def show_qr_rod_peak_marker_popup(
                         "two_theta_min",
                         "two_theta_max",
                         "smoothing_sigma_bins",
+                        "smoothing_curvature_adaptivity",
                     ),
                 )
             )
@@ -2148,10 +2187,12 @@ def show_qr_rod_peak_marker_popup(
                     value = max(1.0e-9, float(value))
                 if key == "smoothing_sigma_bins":
                     value = max(0.0, float(value))
+                if key == "smoothing_curvature_adaptivity":
+                    value = max(0.0, float(value))
                 old_value = as_float(region_control_state.get(key), np.nan)
                 if not np.isfinite(old_value) or not np.isclose(float(old_value), float(value)):
                     changed = True
-                    if key != "smoothing_sigma_bins":
+                    if key not in {"smoothing_sigma_bins", "smoothing_curvature_adaptivity"}:
                         profile_changed = True
                 region_control_state[key] = float(value)
                 applied_keys.append(key)
@@ -2191,6 +2232,9 @@ def show_qr_rod_peak_marker_popup(
                     "l_max": float(l_bounds[1]),
                     "theta_initial_deg": float(current_theta_initial_deg()),
                     "smoothing_sigma_bins": float(current_smoothing_sigma_bins()),
+                    "smoothing_curvature_adaptivity": float(
+                        current_smoothing_curvature_adaptivity()
+                    ),
                 }
             elif phase_name == "specular":
                 phi_min, phi_max, theta_min, theta_max = current_hk0_roi_bounds()
@@ -2200,6 +2244,9 @@ def show_qr_rod_peak_marker_popup(
                     "two_theta_min": float(theta_min),
                     "two_theta_max": float(theta_max),
                     "smoothing_sigma_bins": float(current_smoothing_sigma_bins()),
+                    "smoothing_curvature_adaptivity": float(
+                        current_smoothing_curvature_adaptivity()
+                    ),
                 }
         payload["final_figure"] = {"hidden_m_values": current_final_hidden_m_values()}
         return payload
@@ -2861,6 +2908,7 @@ def show_qr_rod_peak_marker_popup(
             y_smoothed = smooth_qr_rod_profile_density(
                 y,
                 sigma_bins=current_smoothing_sigma_bins(),
+                curvature_adaptivity=current_smoothing_curvature_adaptivity(),
             )
             y_smoothed_plot = positive_log_plot_values(y_smoothed) if editor_log_y else y_smoothed
             finite_profile = np.isfinite(x_l) & np.isfinite(y)
@@ -3017,6 +3065,16 @@ def show_qr_rod_peak_marker_popup(
         if not np.isfinite(sigma):
             return
         region_control_state["smoothing_sigma_bins"] = max(0.0, float(sigma))
+        clear_group_plot_cache()
+        redraw(preserve_limits=True)
+
+    def set_profile_smoothing_curvature_adaptivity(value: object) -> None:
+        if not region_controls_enabled:
+            return
+        adaptivity = as_float(value, current_smoothing_curvature_adaptivity())
+        if not np.isfinite(adaptivity):
+            return
+        region_control_state["smoothing_curvature_adaptivity"] = max(0.0, float(adaptivity))
         clear_group_plot_cache()
         redraw(preserve_limits=True)
 
@@ -3337,6 +3395,7 @@ def show_qr_rod_peak_marker_popup(
     if region_controls_enabled:
         delta_qr_slider = None
         smoothing_slider = None
+        adaptivity_slider = None
         theta_i_box = None
         l_min_box = None
         l_max_box = None
@@ -3354,6 +3413,19 @@ def show_qr_rod_peak_marker_popup(
         )
         region_parameter_widgets["smoothing_sigma_bins"] = smoothing_slider
         smoothing_slider.on_changed(set_profile_smoothing_sigma)
+        adaptivity_ax = fig.add_axes([0.46, smoothing_y, 0.30, 0.035])
+        adaptivity_slider = Slider(
+            adaptivity_ax,
+            "Adapt",
+            0.0,
+            as_float(
+                globals().get("QR_ROD_PROFILE_SMOOTHING_CURVATURE_ADAPTIVITY_MAX", 4.0),
+                4.0,
+            ),
+            valinit=current_smoothing_curvature_adaptivity(),
+        )
+        region_parameter_widgets["smoothing_curvature_adaptivity"] = adaptivity_slider
+        adaptivity_slider.on_changed(set_profile_smoothing_curvature_adaptivity)
         if nonzero_controls_active:
             delta_qr_ax = fig.add_axes([0.08, nonzero_y, 0.30, 0.045])
             l_min_ax = fig.add_axes([0.46, nonzero_y, 0.10, 0.045])
@@ -3400,6 +3472,8 @@ def show_qr_rod_peak_marker_popup(
             text_input_widgets.append(theta_i_box)
         if smoothing_slider is not None:
             region_widgets.append(smoothing_slider)
+        if adaptivity_slider is not None:
+            region_widgets.append(adaptivity_slider)
         if roi_controls_active:
             phi_min_value, phi_max_value, theta_min_value, theta_max_value = (
                 current_hk0_roi_bounds()
@@ -3507,6 +3581,7 @@ def edit_qr_rod_region_editor(
     l_max: object = None,
     theta_initial_deg: object = None,
     smoothing_sigma_bins: object = None,
+    smoothing_curvature_adaptivity: object = None,
     phi_min: object = None,
     phi_max: object = None,
     two_theta_min: object = None,
@@ -3554,6 +3629,13 @@ def edit_qr_rod_region_editor(
             globals().get("QR_ROD_PROFILE_SMOOTHING_SIGMA_DEFAULT", 1.0),
         ),
     )
+    current_smoothing_curvature_adaptivity = max(
+        0.0,
+        as_float(
+            smoothing_curvature_adaptivity,
+            globals().get("QR_ROD_PROFILE_SMOOTHING_CURVATURE_ADAPTIVITY_DEFAULT", 0.0),
+        ),
+    )
     current_phi_min = as_float(phi_min, globals().get("specular_phi_min_deg", -10.0))
     current_phi_max = as_float(phi_max, globals().get("specular_phi_max_deg", 10.0))
     current_two_theta_min = as_float(two_theta_min, globals().get("specular_theta_min_deg", 5.0))
@@ -3587,6 +3669,13 @@ def edit_qr_rod_region_editor(
                     current_smoothing_sigma_bins,
                 ),
             )
+            current_smoothing_curvature_adaptivity = max(
+                0.0,
+                as_float(
+                    nonzero_parameters.get("smoothing_curvature_adaptivity"),
+                    current_smoothing_curvature_adaptivity,
+                ),
+            )
     if imports_specular_parameters:
         specular_parameters = imported_peak_edit_parameters.get("specular", {})
         if isinstance(specular_parameters, dict):
@@ -3603,6 +3692,13 @@ def edit_qr_rod_region_editor(
                 as_float(
                     specular_parameters.get("smoothing_sigma_bins"),
                     current_smoothing_sigma_bins,
+                ),
+            )
+            current_smoothing_curvature_adaptivity = max(
+                0.0,
+                as_float(
+                    specular_parameters.get("smoothing_curvature_adaptivity"),
+                    current_smoothing_curvature_adaptivity,
                 ),
             )
     final_figure_parameters = imported_peak_edit_parameters.get("final_figure", {})
@@ -3636,6 +3732,12 @@ def edit_qr_rod_region_editor(
                 "smoothing_sigma_bins": float(
                     values.get("smoothing_sigma_bins", current_smoothing_sigma_bins)
                 ),
+                "smoothing_curvature_adaptivity": float(
+                    values.get(
+                        "smoothing_curvature_adaptivity",
+                        current_smoothing_curvature_adaptivity,
+                    )
+                ),
             }
         if imports_specular_parameters:
             parameters["specular"] = {
@@ -3645,6 +3747,12 @@ def edit_qr_rod_region_editor(
                 "two_theta_max": float(values.get("two_theta_max", current_two_theta_max)),
                 "smoothing_sigma_bins": float(
                     values.get("smoothing_sigma_bins", current_smoothing_sigma_bins)
+                ),
+                "smoothing_curvature_adaptivity": float(
+                    values.get(
+                        "smoothing_curvature_adaptivity",
+                        current_smoothing_curvature_adaptivity,
+                    )
                 ),
             }
         parameters["final_figure"] = {
@@ -3670,6 +3778,7 @@ def edit_qr_rod_region_editor(
             "two_theta_min": float(current_two_theta_min),
             "two_theta_max": float(current_two_theta_max),
             "smoothing_sigma_bins": float(current_smoothing_sigma_bins),
+            "smoothing_curvature_adaptivity": float(current_smoothing_curvature_adaptivity),
             "l_axis_coefficients": {},
             "final_hidden_m_values": list(current_final_hidden_m_values),
             "peak_edit_parameters": active_peak_edit_parameters(),
@@ -3697,6 +3806,7 @@ def edit_qr_rod_region_editor(
         "two_theta_min": float(current_two_theta_min),
         "two_theta_max": float(current_two_theta_max),
         "smoothing_sigma_bins": float(current_smoothing_sigma_bins),
+        "smoothing_curvature_adaptivity": float(current_smoothing_curvature_adaptivity),
         "final_hidden_m_values": list(current_final_hidden_m_values),
     }
     try:
@@ -3736,6 +3846,12 @@ def edit_qr_rod_region_editor(
         "two_theta_max": float(region_control_state.get("two_theta_max", np.nan)),
         "smoothing_sigma_bins": float(
             region_control_state.get("smoothing_sigma_bins", current_smoothing_sigma_bins)
+        ),
+        "smoothing_curvature_adaptivity": float(
+            region_control_state.get(
+                "smoothing_curvature_adaptivity",
+                current_smoothing_curvature_adaptivity,
+            )
         ),
         "l_axis_coefficients": normalized_l_axis_coefficients_payload(
             region_control_state.get("l_axis_coefficients", {})
@@ -11994,7 +12110,11 @@ def normalized_data_simulation_payload(
     return {"data": data / scale, "simulation": simulation / scale, "scale": float(scale)}
 
 
-def smooth_qr_rod_profile_density(values: object, sigma_bins: object = 1.0) -> np.ndarray:
+def smooth_qr_rod_profile_density(
+    values: object,
+    sigma_bins: object = 1.0,
+    curvature_adaptivity: object = 0.0,
+) -> np.ndarray:
     data = np.asarray(values, dtype=np.float64).reshape(-1)
     sigma = as_float(sigma_bins, 0.0)
     if not np.isfinite(sigma) or float(sigma) <= 0.0 or data.size < 3:
@@ -12006,18 +12126,52 @@ def smooth_qr_rod_profile_density(values: object, sigma_bins: object = 1.0) -> n
     finite = np.isfinite(data)
     if not np.any(finite):
         return data.copy()
-    filled = np.where(finite, data, 0.0)
-    weights = finite.astype(np.float64)
-    smoothed_sum = gaussian_filter1d(filled, sigma=sigma, mode="nearest")
-    smoothed_weight = gaussian_filter1d(weights, sigma=sigma, mode="nearest")
-    smoothed = np.divide(
-        smoothed_sum,
-        smoothed_weight,
-        out=np.full(data.shape, np.nan, dtype=np.float64),
-        where=smoothed_weight > 0.0,
+
+    def smooth_with_sigma(sigma_value: float) -> np.ndarray:
+        filled = np.where(finite, data, 0.0)
+        weights = finite.astype(np.float64)
+        smoothed_sum = gaussian_filter1d(filled, sigma=float(sigma_value), mode="nearest")
+        smoothed_weight = gaussian_filter1d(weights, sigma=float(sigma_value), mode="nearest")
+        result = np.divide(
+            smoothed_sum,
+            smoothed_weight,
+            out=np.full(data.shape, np.nan, dtype=np.float64),
+            where=smoothed_weight > 0.0,
+        )
+        result[~finite] = np.nan
+        return result
+
+    smoothed = smooth_with_sigma(float(sigma))
+    adaptivity = as_float(curvature_adaptivity, 0.0)
+    if not np.isfinite(adaptivity) or float(adaptivity) <= 0.0:
+        return smoothed
+    adaptivity = min(
+        float(adaptivity),
+        as_float(globals().get("QR_ROD_PROFILE_SMOOTHING_CURVATURE_ADAPTIVITY_MAX", 4.0), 4.0),
     )
-    smoothed[~finite] = np.nan
-    return smoothed
+    strong_sigma = min(
+        float(sigma) * (1.0 + float(adaptivity)),
+        float(globals().get("QR_ROD_PROFILE_SMOOTHING_SIGMA_MAX", 8.0)),
+    )
+    if not np.isfinite(strong_sigma) or strong_sigma <= float(sigma) + 1.0e-12:
+        return smoothed
+    strongly_smoothed = smooth_with_sigma(float(strong_sigma))
+    curvature_source = np.where(np.isfinite(smoothed), smoothed, data)
+    curvature = np.full(data.shape, np.nan, dtype=np.float64)
+    curvature[1:-1] = np.abs(
+        curvature_source[:-2] - 2.0 * curvature_source[1:-1] + curvature_source[2:]
+    )
+    curvature[~finite] = np.nan
+    curvature_scale = _finite_abs_percentile(curvature, 90.0)
+    if not np.isfinite(curvature_scale) or curvature_scale <= 0.0:
+        blend = np.where(finite, 1.0, np.nan)
+    else:
+        normalized_curvature = np.clip(curvature / float(curvature_scale), 0.0, 1.0)
+        blend = 1.0 - normalized_curvature
+        blend[~np.isfinite(blend) & finite] = 1.0
+    adaptive = smoothed * (1.0 - blend) + strongly_smoothed * blend
+    adaptive[~finite] = np.nan
+    return adaptive
 
 
 def _finite_abs_percentile(values: object, percentile: float = 90.0) -> float:
@@ -16998,6 +17152,9 @@ qr_rod_profile_smoothing_sigma = max(
         QR_ROD_PROFILE_SMOOTHING_SIGMA_DEFAULT,
     ),
 )
+qr_rod_profile_smoothing_curvature_adaptivity = float(
+    QR_ROD_PROFILE_SMOOTHING_CURVATURE_ADAPTIVITY_DEFAULT
+)
 qr_rod_editor_initial_l_min = float(NONZERO_QR_ROD_L_MIN)
 qr_rod_editor_initial_l_max = float(NONZERO_QR_ROD_L_MAX)
 qr_rod_editor_initial_theta_initial_deg = as_float(
@@ -17064,6 +17221,13 @@ if isinstance(qr_rod_imported_nonzero_parameters, dict):
             qr_rod_profile_smoothing_sigma,
         ),
     )
+    qr_rod_profile_smoothing_curvature_adaptivity = max(
+        0.0,
+        as_float(
+            qr_rod_imported_nonzero_parameters.get("smoothing_curvature_adaptivity"),
+            qr_rod_profile_smoothing_curvature_adaptivity,
+        ),
+    )
 qr_rod_imported_specular_parameters = qr_rod_imported_peak_edit_parameters.get("specular", {})
 if isinstance(qr_rod_imported_specular_parameters, dict):
     specular_phi_min_deg = as_float(
@@ -17083,6 +17247,13 @@ if isinstance(qr_rod_imported_specular_parameters, dict):
         as_float(
             qr_rod_imported_specular_parameters.get("smoothing_sigma_bins"),
             qr_rod_profile_smoothing_sigma,
+        ),
+    )
+    qr_rod_profile_smoothing_curvature_adaptivity = max(
+        0.0,
+        as_float(
+            qr_rod_imported_specular_parameters.get("smoothing_curvature_adaptivity"),
+            qr_rod_profile_smoothing_curvature_adaptivity,
         ),
     )
 qr_rod_imported_final_figure_parameters = qr_rod_imported_peak_edit_parameters.get(
@@ -17119,6 +17290,7 @@ qr_rod_region_editor_result = edit_qr_rod_region_editor(
     two_theta_max=specular_theta_max_deg,
     final_hidden_m_values=qr_rod_initial_hidden_m_values,
     smoothing_sigma_bins=qr_rod_profile_smoothing_sigma,
+    smoothing_curvature_adaptivity=qr_rod_profile_smoothing_curvature_adaptivity,
     profile_update_callback=recompute_qr_rod_region_profiles,
     region_preview_update_callback=qr_rod_detector_region_preview_update_callback,
     required_marker_table=specular_l_marker_table,
@@ -17148,6 +17320,13 @@ qr_rod_profile_smoothing_sigma = max(
     as_float(
         qr_rod_region_editor_result.get("smoothing_sigma_bins"),
         qr_rod_profile_smoothing_sigma,
+    ),
+)
+qr_rod_profile_smoothing_curvature_adaptivity = max(
+    0.0,
+    as_float(
+        qr_rod_region_editor_result.get("smoothing_curvature_adaptivity"),
+        qr_rod_profile_smoothing_curvature_adaptivity,
     ),
 )
 rod_profile_table = pd.DataFrame(
@@ -17233,6 +17412,7 @@ qr_rod_peak_edit_parameters = {
         "l_max": float(qr_rod_editor_l_max),
         "theta_initial_deg": float(qr_rod_editor_theta_initial_deg),
         "smoothing_sigma_bins": float(qr_rod_profile_smoothing_sigma),
+        "smoothing_curvature_adaptivity": float(qr_rod_profile_smoothing_curvature_adaptivity),
     },
     "specular": {
         "phi_min": float(specular_phi_min_deg),
@@ -17240,6 +17420,7 @@ qr_rod_peak_edit_parameters = {
         "two_theta_min": float(specular_theta_min_deg),
         "two_theta_max": float(specular_theta_max_deg),
         "smoothing_sigma_bins": float(qr_rod_profile_smoothing_sigma),
+        "smoothing_curvature_adaptivity": float(qr_rod_profile_smoothing_curvature_adaptivity),
     },
     "final_figure": {"hidden_m_values": list(qr_rod_final_hidden_m_values)},
 }
@@ -17291,6 +17472,7 @@ qr_rod_region_editor_result = {
     "l_axis_coefficients": accepted_l_axis_coefficients,
     "final_hidden_m_values": list(qr_rod_final_hidden_m_values),
     "smoothing_sigma_bins": float(qr_rod_profile_smoothing_sigma),
+    "smoothing_curvature_adaptivity": float(qr_rod_profile_smoothing_curvature_adaptivity),
     "accepted": bool(qr_rod_region_editor_result.get("accepted", False)),
     "source": qr_rod_peak_edit_source,
 }
@@ -17345,6 +17527,9 @@ qr_rod_peak_edit_key = qr_rod_peak_edit_cache_key(
         "accepted_region_overlay_signature": accepted_region_overlay_signature,
         "final_hidden_m_values": list(qr_rod_final_hidden_m_values),
         "profile_smoothing_sigma_bins": float(qr_rod_profile_smoothing_sigma),
+        "profile_smoothing_curvature_adaptivity": float(
+            qr_rod_profile_smoothing_curvature_adaptivity
+        ),
     },
 )
 rod_component_table = pd.DataFrame()
@@ -17382,7 +17567,9 @@ region_specs_table = final_qr_rod_output_state["region_specs_table"]
 plot_marker_table = final_qr_rod_output_state["plot_marker_table"]
 profile_audit_table = final_qr_rod_output_state["profile_audit_table"]
 print(
-    f"rod-profile GUI traces: groups={int(rod_profile_table.groupby(['m', 'branch']).ngroups) if not rod_profile_table.empty else 0} smoothing_sigma_bins={float(qr_rod_profile_smoothing_sigma):.6g}"
+    f"rod-profile GUI traces: groups={int(rod_profile_table.groupby(['m', 'branch']).ngroups) if not rod_profile_table.empty else 0} "
+    f"smoothing_sigma_bins={float(qr_rod_profile_smoothing_sigma):.6g} "
+    f"smoothing_curvature_adaptivity={float(qr_rod_profile_smoothing_curvature_adaptivity):.6g}"
 )
 if "background_density" in rod_profile_table:
     rod_profile_table["smoothed_background_density"] = np.nan
@@ -17398,6 +17585,7 @@ if "background_density" in rod_profile_table:
                 smooth_qr_rod_profile_density(
                     ordered_density,
                     sigma_bins=qr_rod_profile_smoothing_sigma,
+                    curvature_adaptivity=qr_rod_profile_smoothing_curvature_adaptivity,
                 )
             )
 rod_profile_csv = OUT_DIR / f"{ROD_PROFILE_STEM}.csv"
@@ -17486,6 +17674,7 @@ def final_qr_rod_profile_plot_payload(
     plot_marker_table: pd.DataFrame | None = None,
     l_axis_coefficients: object = None,
     smoothing_sigma_bins: object = 0.0,
+    smoothing_curvature_adaptivity: object = 0.0,
 ) -> list[dict[str, object]]:
     table = pd.DataFrame(rod_profile_table).copy()
     if table.empty or not {"m", "branch", "qz_center", "background_density"}.issubset(
@@ -17549,6 +17738,7 @@ def final_qr_rod_profile_plot_payload(
             smoothed_sorted = smooth_qr_rod_profile_density(
                 data_sorted,
                 sigma_bins=smoothing_sigma_bins,
+                curvature_adaptivity=smoothing_curvature_adaptivity,
             )
             payloads.append(
                 {
@@ -17640,6 +17830,7 @@ def shared_nonzero_rod_profile_y_axis_limits(
     margin_fraction: float = 0.08,
     l_axis_coefficients: object = None,
     smoothing_sigma_bins: object = 0.0,
+    smoothing_curvature_adaptivity: object = 0.0,
 ) -> tuple[float, float]:
     table = pd.DataFrame(profile_table).copy()
     markers = pd.DataFrame(marker_source).copy()
@@ -17676,6 +17867,7 @@ def shared_nonzero_rod_profile_y_axis_limits(
                 smooth_qr_rod_profile_density(
                     data_values,
                     sigma_bins=smoothing_sigma_bins,
+                    curvature_adaptivity=smoothing_curvature_adaptivity,
                 )
             )
     if not y_values:
@@ -17953,6 +18145,7 @@ rod_note_lines.extend(
         "Peak fitting and marker placement overlays are disabled for the final Qr-rod profile figure.",
         "Each panel plots the GUI-integrated `background_density` trace plus the same trace after Gaussian smoothing.",
         f"Gaussian smoothing sigma: `{float(qr_rod_profile_smoothing_sigma):.6g}` bins.",
+        f"Curvature-adaptive smoothing strength: `{float(qr_rod_profile_smoothing_curvature_adaptivity):.6g}`.",
     ]
 )
 rod_profile_note.write_text("\n".join(rod_note_lines) + "\n", encoding="utf-8")
@@ -17973,6 +18166,7 @@ rod_profile_nonzero_y_axis_limits = shared_nonzero_rod_profile_y_axis_limits(
     phi_windows,
     l_axis_coefficients=accepted_l_axis_coefficients,
     smoothing_sigma_bins=qr_rod_profile_smoothing_sigma,
+    smoothing_curvature_adaptivity=qr_rod_profile_smoothing_curvature_adaptivity,
 )
 rod_profile_hk0_l_axis_limits = None
 last_nonzero_plot_row = max(
@@ -18016,6 +18210,7 @@ final_profile_plot_payloads = final_qr_rod_profile_plot_payload(
     branch_windows=phi_windows,
     l_axis_coefficients=accepted_l_axis_coefficients,
     smoothing_sigma_bins=qr_rod_profile_smoothing_sigma,
+    smoothing_curvature_adaptivity=qr_rod_profile_smoothing_curvature_adaptivity,
 )
 final_profile_plot_payload_by_key = {
     (int(payload["m"]), str(payload["branch"])): payload for payload in final_profile_plot_payloads
