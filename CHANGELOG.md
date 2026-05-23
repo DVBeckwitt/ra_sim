@@ -67,6 +67,7 @@
     - `build_hbn_geometry_debug_trace`
     - `format_hbn_geometry_debug_trace`
   - Updated `load_tilt_hint` to return converted simulation-space tilt/center/distance hints.
+  - Removed stale, unexported `ra_sim/hbn_fitter/fitter_old.py`; the maintained hBN fitter implementation remains `ra_sim/hbn_fitter/fitter.py`.
 
 - **Fitting and optimization**
   - Fixed locked Qr/Qz dynamic-angle fitting so handoff-native prediction

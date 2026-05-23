@@ -44,6 +44,11 @@ python -m ra_sim hbn-fit
 
 Status: documented.
 
+Maintenance status: the active implementation is
+[`ra_sim/hbn_fitter/fitter.py`](../ra_sim/hbn_fitter/fitter.py). The stale,
+unexported `ra_sim/hbn_fitter/fitter_old.py` duplicate was removed; future hBN
+fitter work should modify the active implementation only.
+
 Type: documentation feature.
 
 What changed:
@@ -56,11 +61,15 @@ What changed:
   NPZ bundle export contracts.
 - Linked the guide from the docs index, GUI workflow guide, architecture map,
   and canonical simulation/fitting reference.
+- Recorded that the obsolete `fitter_old.py` copy was deleted as repository
+  maintenance. No replacement module or compatibility shim was added.
 
 Bug/error status:
 
 - No runtime bug was fixed by this documentation patch.
 - No code path was changed.
+- The cleanup removed an unreferenced duplicate file only; the active hBN
+  fitter behavior is intended to stay unchanged.
 - The documented risk is future regression risk: point scaling, click snapping,
   tilt sign export, and legacy NPZ bundle compatibility should not drift.
 
@@ -68,7 +77,14 @@ Validation status:
 
 - Documentation link/path sanity checks passed.
 - `git diff --check` passed for the touched existing docs.
-- No Python tests were run because this patch is documentation-only.
+- The dead-file cleanup was validated with reference searches, compileall, and
+  targeted HBN import/export/path tests.
+- Current cleanup validation passed with:
+  `python -m compileall -q ra_sim tests scripts` and
+  `python -m pytest -q tests/test_hbn_fitter_bundle_export.py tests/test_hbn_geometry_import_safe.py tests/test_hbn_geometry_mapping.py tests/test_hbn_path_resolution.py`.
+- Full-suite pytest failures/crashes were observed before and after the
+  deletion in unrelated geometry/manual-fit coverage, so they are not treated
+  as caused by this hBN cleanup.
 
 ## Operator Workflow
 
