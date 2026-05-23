@@ -9,6 +9,20 @@ Last updated: 2026-05-22
 
 ## Summary
 
+2026-05-22 settled Qr/Qz square redraw status: settled GUI overlay refresh now
+replays durable fitted overlay records only and forces view-bound
+`initial_pairs_display` Qr/Qz square markers through the current manual-pair
+renderer. This closes the bug where changing simulation parameters moved the
+central/ghost beam but the blue Qr-set square stayed at remembered display
+coordinates. Bug/error status: fixed with a Matplotlib artist-level regression
+that proves the drawn square uses the current simulated ghost coordinate rather
+than the stale remembered pixel. Migration/deprecation status: none required;
+no saved-state, CLI, config, public API, dependency, or artifact schema changed.
+CI/shipping status: focused settled-overlay and ghost-refresh regressions plus
+`python -m ra_sim.dev check` pass. Rollback is a normal git revert of the
+runtime redraw filter, regression test, changelog/debug-doc entry, and this
+tracking note.
+
 2026-05-22 post-review shipping status: reviewed the Qr/Qz ghost refresh,
 Advanced/Debug physics-toggle handoff, and Qr-rod editor payload
 simplification for correctness, code size, security, performance,
