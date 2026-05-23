@@ -20876,8 +20876,12 @@ def _refresh_settled_overlays() -> None:
     else:
         gui_controllers.clear_geometry_preview_skip_once(geometry_preview_state)
         _clear_geometry_preview_artists()
+    overlay_state = _geometry_fit_last_overlay_state()
+    if isinstance(overlay_state, Mapping):
+        overlay_state = dict(overlay_state)
+        overlay_state["initial_pairs_display"] = []
     if not gui_geometry_fit.redraw_runtime_geometry_fit_overlay_state(
-        _geometry_fit_last_overlay_state(),
+        overlay_state,
         draw_overlay_records=_draw_runtime_geometry_fit_overlay_records,
         draw_initial_pairs_overlay=_draw_runtime_geometry_fit_initial_pairs_overlay,
     ):

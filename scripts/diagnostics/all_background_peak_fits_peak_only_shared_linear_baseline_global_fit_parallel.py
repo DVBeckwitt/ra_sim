@@ -1142,6 +1142,14 @@ def final_output_dir_choice_runtime_mode(
         return "popup"
     if str(output_dir_override or "").strip() or str(figure_output_dir_override or "").strip():
         return "skip"
+    env_map = os.environ if env is None else env
+    if str(env_map.get("RA_SIM_ALL_BACKGROUND_PROCESS_GUARD", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return "skip"
     return qr_rod_peak_edit_runtime_mode("auto", backend_name=backend_name, env=env)
 
 
@@ -1171,6 +1179,7 @@ def choose_final_output_dir(
 
         root = tk.Tk()
         root.withdraw()
+        print("waiting for final output folder chooser...", flush=True)
         selected = filedialog.askdirectory(
             title="Choose final output folder",
             initialdir=str(Path(output_dir).expanduser()),
@@ -6604,6 +6613,7 @@ def background_peak_entries_from_state(
     return peak_record_entries, "none"
 
 
+print(f"loading state={STATE_PATH}", flush=True)
 state_doc = json.loads(STATE_PATH.read_text(encoding="utf-8"))
 state = state_doc.get("state", state_doc)
 files = state.get("files", {})
@@ -6612,6 +6622,7 @@ flags = state.get("flags", {}) if isinstance(state.get("flags"), dict) else {}
 background_files = [str(path) for path in files.get("background_files", [])]
 if not background_files:
     raise ValueError("all.json has no background files")
+print(f"background_files={len(background_files)}", flush=True)
 BACKGROUND_TILT_DEG = build_background_tilt_map(background_files)
 EXCLUDED_PEAKS_BY_TILT_NORMALIZED = {
     (angle_key(tilt), label) for tilt, label in EXCLUDED_PEAKS_BY_TILT

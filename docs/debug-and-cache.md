@@ -435,6 +435,10 @@ The runner accepts either a notebook or a `.py` diagnostic through the existing
 `--notebook` compatibility flag and sets the internal process guard for the
 duration of the run. Use `BACKGROUND_FIT_BACKEND=thread` or
 `BACKGROUND_FIT_BACKEND=serial` to skip the relaunch for debugging. A
+guarded child run skips the final save-folder chooser in default `auto` mode
+so a hidden Tk dialog cannot stall before figure output; explicit
+`RA_SIM_ALL_BACKGROUND_SAVE_DIR_EDIT_MODE=popup` still opens the chooser and
+prints a waiting message first. A
 2026-05-07 Bi2Se3 guarded run reported
 `backend=process_pool`, `pids=28`, and `global peak fitting elapsed=22.83s`,
 compared with the direct Windows thread-path report of `backend=thread_pool`,
@@ -607,7 +611,9 @@ providers, the marker is reported unresolved instead of drawing the old saved
 simulated pixel or falling back to saved refined simulated coordinates as
 current truth. Full-simulation invalidation also clears remembered geometry-fit
 overlay records so stale fit markers cannot preempt the saved-pair redraw path
-after the new source rows apply.
+after the new source rows apply. Settled overlay refreshes replay durable fitted
+overlay records only; an `initial_pairs_display`-only remembered state is
+treated as view-bound and rebuilt through the current manual-pair renderer.
 Validation for this path should inspect the actual Matplotlib overlay artists:
 the simulated Qr/Qz square must be drawn at the current ghost row coordinates,
 not just returned in the intermediate display payload.

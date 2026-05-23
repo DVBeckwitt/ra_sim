@@ -4228,6 +4228,26 @@ def test_final_output_dir_choice_prompts_only_when_interactive_without_overrides
             "auto",
             output_dir_override="",
             figure_output_dir_override="",
+            backend_name="TkAgg",
+            env={"RA_SIM_ALL_BACKGROUND_PROCESS_GUARD": "1"},
+        )
+        == "skip"
+    )
+    assert (
+        runtime_mode(
+            "popup",
+            output_dir_override="",
+            figure_output_dir_override="",
+            backend_name="TkAgg",
+            env={"RA_SIM_ALL_BACKGROUND_PROCESS_GUARD": "1"},
+        )
+        == "popup"
+    )
+    assert (
+        runtime_mode(
+            "auto",
+            output_dir_override="",
+            figure_output_dir_override="",
             backend_name="Agg",
             env={},
         )
@@ -4339,6 +4359,7 @@ def test_choose_gui_state_file_uses_current_state_folder_and_destroys_root(
 
 def test_choose_final_output_dir_destroys_tk_root_when_dialog_raises(
     monkeypatch,
+    capsys,
 ) -> None:
     namespace = _script_functions("choose_final_output_dir")
     choose_final_output_dir = namespace["choose_final_output_dir"]
@@ -4373,6 +4394,7 @@ def test_choose_final_output_dir_destroys_tk_root_when_dialog_raises(
         )
 
     assert destroyed == [True]
+    assert "waiting for final output folder chooser" in capsys.readouterr().out
 
 
 def test_parallel_script_save_folder_chooser_updates_all_output_dirs_after_sample_detection() -> (
@@ -4404,6 +4426,17 @@ def test_parallel_script_refreshes_figure_output_after_state_sample_detection() 
     active_lattice = source.index("ACTIVE_LATTICE = active_lattice_constants_from_state(state)")
 
     assert refresh_stems < refresh_output < active_lattice
+
+
+def test_parallel_script_prints_state_load_progress_before_output_chooser() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    loading_print = source.index('print(f"loading state={STATE_PATH}", flush=True)')
+    state_load = source.index('state_doc = json.loads(STATE_PATH.read_text(encoding="utf-8"))')
+    background_count_print = source.index('print(f"background_files={len(background_files)}"')
+    chooser = source.index("selected_output_dir = choose_final_output_dir(")
+
+    assert loading_print < state_load < background_count_print < chooser
 
 
 def test_background_peak_fits_runner_reads_python_diagnostic_source(tmp_path: Path) -> None:

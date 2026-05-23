@@ -13644,6 +13644,138 @@ def test_refresh_settled_overlays_updates_integration_when_geometry_hidden(
     ]
 
 
+def test_refresh_settled_overlays_rebuilds_view_bound_initial_pairs(
+    monkeypatch,
+) -> None:
+    from matplotlib.figure import Figure
+
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+
+    stale_pair = {
+        "hkl": (1, 0, 0),
+        "source_row_index": 12,
+        "sim_display": (10.0, 20.0),
+        "bg_display": (30.0, 40.0),
+    }
+    current_pair = {
+        **stale_pair,
+        "sim_display": (125.0, 140.0),
+        "bg_display": (30.0, 40.0),
+    }
+    calls: list[object] = []
+    figure = Figure()
+    axes = figure.add_subplot(111)
+    pick_artists: list[object] = []
+
+    def _render_current_pairs(**kwargs: object) -> bool:
+        calls.append(("render_current", kwargs))
+        runtime_session.gui_overlays.draw_initial_geometry_pairs_overlay(
+            axes,
+            [current_pair],
+            geometry_pick_artists=pick_artists,
+            clear_geometry_pick_artists=lambda **_kwargs: pick_artists.clear(),
+            draw_idle=lambda: calls.append("draw_idle"),
+            max_display_markers=1,
+            show_pair_connectors=False,
+        )
+        return True
+
+    monkeypatch.setattr(
+        runtime_session,
+        "_resolved_primary_analysis_display_mode",
+        lambda: "detector",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_current_geometry_fit_caked_roi_preview_enabled",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "_geometry_overlays_enabled", lambda: True)
+    monkeypatch.setattr(
+        runtime_session,
+        "refresh_integration_region_visuals",
+        lambda: calls.append("refresh_integration"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "qr_cylinder_overlay_runtime_refresh",
+        lambda **kwargs: calls.append(("refresh_qr", kwargs)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_live_geometry_preview_enabled",
+        lambda: False,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_controllers,
+        "clear_geometry_preview_skip_once",
+        lambda _state: calls.append("clear_preview_skip"),
+    )
+    monkeypatch.setattr(runtime_session, "geometry_preview_state", object(), raising=False)
+    monkeypatch.setattr(
+        runtime_session,
+        "_clear_geometry_preview_artists",
+        lambda **kwargs: calls.append(("clear_preview", kwargs)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_geometry_fit_last_overlay_state",
+        lambda: {
+            "overlay_records": [],
+            "initial_pairs_display": [stale_pair],
+            "max_display_markers": 1,
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_draw_runtime_geometry_fit_overlay_records",
+        lambda records, limit: calls.append(("draw_records", records, limit)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_draw_runtime_geometry_fit_initial_pairs_overlay",
+        lambda pairs, limit: calls.append(("draw_initial", pairs, limit)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_render_current_geometry_manual_pairs",
+        _render_current_pairs,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_flush_pending_geometry_fit_holistic_residual",
+        lambda: calls.append("flush_residual"),
+        raising=False,
+    )
+
+    runtime_session._refresh_settled_overlays()
+
+    assert not any(isinstance(call, tuple) and call[0] == "draw_initial" for call in calls)
+    assert ("render_current", {"update_status": False}) in calls
+    sim_artists = [
+        artist for artist in pick_artists if getattr(artist, "get_marker", lambda: None)() == "s"
+    ]
+    assert len(sim_artists) == 1
+    np.testing.assert_allclose(
+        [float(sim_artists[0].get_xdata()[0]), float(sim_artists[0].get_ydata()[0])],
+        [125.0, 140.0],
+    )
+    assert (
+        float(sim_artists[0].get_xdata()[0]),
+        float(sim_artists[0].get_ydata()[0]),
+    ) != stale_pair["sim_display"]
+
+
 def test_full_simulation_invalidation_clears_geometry_fit_overlay_state(
     monkeypatch,
 ) -> None:

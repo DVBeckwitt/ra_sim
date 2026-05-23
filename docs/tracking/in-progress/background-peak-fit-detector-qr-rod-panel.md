@@ -1022,6 +1022,30 @@ Passing checks:
   Feature status: complete for interactive output-directory selection.
   Migration/deprecation status: no schema, dependency, CLI, or CI workflow
   migration required.
+- 2026-05-22 guarded-runner and settled-overlay closeout: direct Windows
+  guarded background peak-fit reruns now skip the final save-folder chooser in
+  default `auto` mode, preventing a hidden Tk folder dialog from stalling the
+  child process after startup logging. Explicit
+  `RA_SIM_ALL_BACKGROUND_SAVE_DIR_EDIT_MODE=popup` still forces the chooser and
+  prints a waiting message first. Startup logging now reports the selected
+  state path and background-file count before output-directory selection, so a
+  future stall identifies its phase. Settled geometry-overlay redraws also
+  discard view-bound `initial_pairs_display` coordinates and rebuild current
+  manual-pair markers while preserving durable fitted overlay records.
+  Validation passed with scoped compileall,
+  `python -m pytest tests/test_background_peak_fits_notebook.py -ra`
+  (`266 passed, 8 skipped`),
+  `python -m pytest tests/test_gui_runtime_import_safe.py -k "refresh_settled_overlays or apply_main_caked_view_toggle" -ra`
+  (`6 passed, 463 deselected`), `git diff --check`, and
+  `python -m ra_sim.dev check` (`295 passed`, Ruff clean, mypy clean).
+  Bug/error status: fixed for guarded child-process apparent hangs caused by
+  default save-folder dialogs and for stale view-bound geometry-fit initial
+  markers after simulation changes. Feature status: no new operator control;
+  existing explicit popup/output override behavior is preserved. Migration and
+  deprecation status: no dependency, CI workflow, version, public API,
+  saved-state schema, config, or artifact-schema migration is required.
+  Shipping status: ready for local use; rollback is a normal git revert of this
+  commit because no data/schema migration is involved.
 
 Known validation limits:
 
