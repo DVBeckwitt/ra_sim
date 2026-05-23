@@ -1142,26 +1142,33 @@ def test_exact_cake_safe_numba_warmup_latches_failure_and_clears_thread(
     monkeypatch,
     capsys,
 ) -> None:
+    reported_error = "'Loc' object does not support the context manager protocol"
+
+    def _raise_reported_error() -> None:
+        raise RuntimeError(reported_error)
+
     monkeypatch.setattr(exact_cake, "_EXACT_CAKE_NUMBA_WARMED", False)
     monkeypatch.setattr(exact_cake, "_EXACT_CAKE_NUMBA_WARMUP_FAILED", False)
     monkeypatch.setattr(exact_cake, "_EXACT_CAKE_NUMBA_WARMUP_THREAD", threading.Thread())
-    monkeypatch.setattr(
-        exact_cake,
-        "warmup_exact_cake_numba",
-        lambda: (_ for _ in ()).throw(RuntimeError("boom")),
-    )
+    monkeypatch.setattr(exact_cake, "warmup_exact_cake_numba", _raise_reported_error)
 
     exact_cake._safe_warmup_exact_cake_numba()
 
     assert exact_cake._EXACT_CAKE_NUMBA_WARMUP_FAILED is True
     assert exact_cake._EXACT_CAKE_NUMBA_WARMUP_THREAD is None
-    assert "Numba warmup disabled after compiler failure: boom" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "Optional Numba warmup failed" in output
+    assert "Python fallback" in output
+    assert reported_error in output
 
 
 def test_exact_cake_safe_numba_warmup_does_not_disable_exact_numba_on_lut_failure(
     monkeypatch,
     capsys,
 ) -> None:
+    def _raise_lut_error(*_args, **_kwargs) -> None:
+        raise RuntimeError("lut boom")
+
     monkeypatch.setattr(exact_cake, "_HAS_NUMBA", True)
     monkeypatch.setattr(exact_cake, "_HAS_SCIPY", True)
     monkeypatch.setattr(exact_cake, "_EXACT_CAKE_NUMBA_WARMED", False)
@@ -1179,11 +1186,7 @@ def test_exact_cake_safe_numba_warmup_does_not_disable_exact_numba_on_lut_failur
             count=np.ones((2, 2), dtype=np.float64),
         ),
     )
-    monkeypatch.setattr(
-        exact_cake,
-        "build_detector_to_cake_lut",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("lut boom")),
-    )
+    monkeypatch.setattr(exact_cake, "build_detector_to_cake_lut", _raise_lut_error)
 
     exact_cake._safe_warmup_exact_cake_numba()
 

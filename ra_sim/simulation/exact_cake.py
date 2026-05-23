@@ -1562,7 +1562,10 @@ def _safe_warmup_exact_cake_numba() -> None:
     except Exception as exc:
         _EXACT_CAKE_NUMBA_WARMUP_FAILED = True
         try:
-            print(f"[exact-cake] Numba warmup disabled after compiler failure: {exc}")
+            print(
+                "[exact-cake] Optional Numba warmup failed; "
+                f"exact-cake will use Python fallback: {exc}"
+            )
         except Exception:
             pass
     finally:

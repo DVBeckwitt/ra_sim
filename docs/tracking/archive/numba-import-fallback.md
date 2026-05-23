@@ -5,7 +5,7 @@ Type: bug
 Owner: -
 Issue: none
 Priority: p2
-Last updated: 2026-05-04
+Last updated: 2026-05-23
 
 ## Summary
 
@@ -58,6 +58,17 @@ Disabled-JIT cleanup in `ra_sim/simulation/exact_cake.py`:
   JIT is disabled;
 - import failures and disabled-JIT cases report distinct errors.
 
+Startup exact-cake warmup diagnostic follow-up:
+
+- the optional background exact-cake Numba warmup now reports failures as
+  fallback diagnostics instead of implying startup or simulation failure;
+- the reported compiler signature
+  `'Loc' object does not support the context manager protocol` is covered by a
+  regression test;
+- `engine="auto"` fallback, explicit `engine="numba"` strictness, public
+  CLI/config/saved-state/artifact interfaces, and Numba fast paths are
+  unchanged.
+
 ## Status
 
 - Bug status: fixed.
@@ -67,12 +78,16 @@ Disabled-JIT cleanup in `ra_sim/simulation/exact_cake.py`:
   internal compatibility module only.
 - Performance status: real Numba fast paths are preserved when Numba imports
   successfully.
+- Startup warmup status: fixed. Optional exact-cake Numba warmup failures are
+  latched once per process and logged as Python-fallback diagnostics.
 - Disabled-JIT status: fixed. Decorated diffraction functions keep `.py_func`
   when `NUMBA_DISABLE_JIT=1`, and exact-cake no longer selects the Numba engine
   automatically when compilation is disabled.
 - Compatibility status: no dependency pins, algorithms, simulation parameters,
   weighted-event memory policy, fitting objective, or Qr resolver behavior were
   changed.
+- Migration/deprecation status: no migration, deprecation, feature flag, CI
+  workflow, or release version change was required.
 
 ## Validation
 
@@ -122,3 +137,19 @@ Results:
   conflicts in tests that directly require Numba LUT/`engine="numba"` while the
   current contract requires strict `"numba"` requests to fail when JIT is
   disabled.
+
+2026-05-23 startup warmup diagnostic validation:
+
+```powershell
+python -m pytest tests/test_exact_cake_portable.py -k "safe_numba_warmup" -ra
+python -m pytest tests/test_exact_cake_portable.py -ra
+python -m ra_sim.dev check
+git diff --check
+```
+
+Results:
+
+- exact-cake safe warmup slice: 2 passed.
+- `tests/test_exact_cake_portable.py`: 44 passed.
+- `python -m ra_sim.dev check`: formatting, ruff, fast tests, and mypy passed
+  with 294 fast tests.

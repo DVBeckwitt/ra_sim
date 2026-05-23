@@ -7,6 +7,7 @@
 
 - **Simulation performance**
   - Added a Numba compatibility layer so simulation modules can import with Python fallbacks when Numba itself is unavailable or fails during import.
+  - Clarified optional exact-cake Numba warmup failures so startup logs explain that exact-cake will use the Python fallback, including the reported `'Loc' object does not support the context manager protocol` compiler signature.
   - Hardened Q-debug truncation plumbing so threaded weighted-event chunks use distinct truncation counters and legacy diffraction debug exposes bounded-buffer truncation stats without changing return tuples.
   - Fixed parallel weighted-event candidate reuse so the configured candidate-buffer memory cap applies to total worker-local buffers instead of one worker's buffer.
   - Bounded `save_flag=1` Q-debug buffers with a configurable per-peak cap and truncation diagnostics to avoid multi-GB upfront allocations.
