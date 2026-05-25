@@ -8536,13 +8536,13 @@ def rebuild_geometry_fit_source_rows(
 
     rebuild_attempts.append("fresh_simulation")
     fresh_started_at = perf_counter()
-    fresh_stage_name = (
-        "source_cache_targeted_fresh_simulation_start"
+    fresh_stage_prefix = (
+        "source_cache_targeted_fresh_simulation"
         if targeted_preflight_enabled
-        else "source_cache_fresh_simulation_start"
+        else "source_cache_fresh_simulation"
     )
     _emit_rebuild_stage(
-        fresh_stage_name,
+        f"{fresh_stage_prefix}_start",
         cache_source="fresh_simulation",
         preflight_mode=normalized_preflight_mode,
     )
@@ -8561,25 +8561,15 @@ def rebuild_geometry_fit_source_rows(
         if fresh_timeout_fired.is_set():
             return
         fresh_timeout_fired.set()
-        timeout_stage_name = (
-            "source_cache_targeted_fresh_simulation_timeout"
-            if targeted_preflight_enabled
-            else "source_cache_fresh_simulation_timeout"
-        )
-        late_stage_name = (
-            "source_cache_targeted_fresh_simulation_still_running_late"
-            if targeted_preflight_enabled
-            else "source_cache_fresh_simulation_still_running_late"
-        )
         _emit_rebuild_stage(
-            timeout_stage_name,
+            f"{fresh_stage_prefix}_timeout",
             cache_source="fresh_simulation",
             preflight_mode=normalized_preflight_mode,
             status="timeout",
             timeout_s=float(timeout_s),
         )
         _emit_rebuild_stage(
-            late_stage_name,
+            f"{fresh_stage_prefix}_still_running_late",
             cache_source="fresh_simulation",
             preflight_mode=normalized_preflight_mode,
             status="still_running_late",
@@ -8760,15 +8750,7 @@ def rebuild_geometry_fit_source_rows(
             }
         )
     _emit_rebuild_stage(
-        (
-            "source_cache_targeted_fresh_simulation_failed"
-            if targeted_preflight_enabled and fresh_simulation_exception is not None
-            else "source_cache_targeted_fresh_simulation_ready"
-            if targeted_preflight_enabled
-            else "source_cache_fresh_simulation_failed"
-            if fresh_simulation_exception is not None
-            else "source_cache_fresh_simulation_ready"
-        ),
+        f"{fresh_stage_prefix}_{'failed' if fresh_simulation_exception is not None else 'ready'}",
         stage_started_at=fresh_started_at,
         cache_source="fresh_simulation",
         hit_table_count=int(len(fresh_hit_tables or ())),
