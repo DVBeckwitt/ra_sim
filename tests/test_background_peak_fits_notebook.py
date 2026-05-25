@@ -155,6 +155,8 @@ def _script_functions(*names: str) -> dict[str, object]:
     if "smooth_qr_rod_profile_density" in wanted:
         wanted.add("as_float")
         wanted.add("_finite_abs_percentile")
+    if "profile_output_dir_for_state" in wanted:
+        wanted.add("_safe_run_name")
     if "choose_gui_state_file" in wanted:
         wanted.add("gui_state_file_choice_runtime_mode")
     if "choose_final_output_dir" in wanted:
@@ -11204,3 +11206,75 @@ def test_background_peak_fits_runner_separates_batch_outputs(tmp_path: Path) -> 
         )
         == repo_root / base / "new4_state"
     )
+
+
+def test_parallel_script_profile_output_dir_uses_state_filename(tmp_path: Path) -> None:
+    namespace = _script_functions("profile_output_dir_for_state")
+    profile_output_dir_for_state = namespace["profile_output_dir_for_state"]
+
+    shared_output = tmp_path / "shared"
+    state_path = tmp_path / "states" / "New 4 fitted.json"
+
+    assert profile_output_dir_for_state(shared_output, state_path) == (
+        shared_output / "New_4_fitted_state" / "profiles"
+    )
+    assert profile_output_dir_for_state(
+        shared_output / "New_4_fitted_state", state_path
+    ) == (shared_output / "New_4_fitted_state" / "profiles")
+    assert profile_output_dir_for_state(shared_output, tmp_path / "!!!.json") == (
+        shared_output / "state_state" / "profiles"
+    )
+
+
+def test_parallel_script_routes_profile_tables_to_profile_output_dir() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    for token in (
+        'phi_profile_fit_csv = PROFILE_OUT_DIR / f"{FIGURE7C_PHI_PROFILE_FIT_STEM}.csv"',
+        (
+            'phi_profile_fit_summary_csv = PROFILE_OUT_DIR / '
+            'f"{FIGURE7C_PHI_PROFILE_FIT_STEM}_summary.csv"'
+        ),
+        'phi_profile_fit_note = PROFILE_OUT_DIR / f"{FIGURE7C_PHI_PROFILE_FIT_STEM}.md"',
+        'profile_fit_quality_csv = PROFILE_OUT_DIR / f"{FIGURE7C_PROFILE_QUALITY_STEM}.csv"',
+        'rod_profile_csv = PROFILE_OUT_DIR / f"{ROD_PROFILE_STEM}.csv"',
+        'marker_csv = PROFILE_OUT_DIR / f"{ROD_PROFILE_MARKER_STEM}.csv"',
+        'component_csv = PROFILE_OUT_DIR / f"{ROD_PROFILE_STEM}_tail_components.csv"',
+        'region_specs_csv = PROFILE_OUT_DIR / f"{region_specs_stem}.csv"',
+        'region_specs_json = PROFILE_OUT_DIR / f"{region_specs_stem}.json"',
+        (
+            'profile_audit_csv = PROFILE_OUT_DIR / '
+            'f"figure7_{SAMPLE_STEM}_gui_vs_final_profile_audit.csv"'
+        ),
+        'rod_profile_note = PROFILE_OUT_DIR / f"{ROD_PROFILE_STEM}.md"',
+    ):
+        assert token in source
+
+    assert 'fit_table_path = OUT_DIR / "all_background_peak_fit_table.csv"' in source
+    assert 'np.save(OUT_DIR / f"background_{bg_idx:02d}_caked_peak_fit_model.npy"' in source
+
+
+def test_parallel_script_routes_profile_figures_to_profile_output_dir() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "def save_manuscript_figure(fig, stem: str, *, output_dir: Path | None = None)" in source
+    assert "base_dir = FIGURE_OUT_DIR if output_dir is None else Path(output_dir)" in source
+    for call_start, next_token in (
+        ("fig7c_png, fig7c_pdf = save_manuscript_figure(", "ROD_PROFILE_MARKER_STEM ="),
+        ("support_png, support_pdf = save_manuscript_figure(", "rod_profile_note ="),
+        (
+            "rod_profile_png, rod_profile_pdf = save_manuscript_figure(",
+            "display(Image(filename=str(rod_profile_png)))",
+        ),
+    ):
+        assert call_start in source
+        assert "output_dir=PROFILE_OUT_DIR" in source[
+            source.index(call_start) : source.index(next_token)
+        ]
+
+    detector_region_call = source[
+        source.index("detector_region_png, detector_region_pdf = save_manuscript_figure(") : source.index(
+            "detector_region_scale_png, detector_region_scale_pdf ="
+        )
+    ]
+    assert "output_dir=PROFILE_OUT_DIR" not in detector_region_call

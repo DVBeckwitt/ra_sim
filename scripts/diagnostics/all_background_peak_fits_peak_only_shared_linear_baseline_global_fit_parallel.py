@@ -128,6 +128,14 @@ def _safe_run_name(value: object) -> str:
     return text or "state"
 
 
+def profile_output_dir_for_state(output_dir: Path | str, state_path: Path | str) -> Path:
+    state_dir_name = f"{_safe_run_name(state_path)}_state"
+    base_dir = Path(output_dir).expanduser()
+    if base_dir.name == state_dir_name:
+        return base_dir / "profiles"
+    return base_dir / state_dir_name / "profiles"
+
+
 QR_ROD_PROFILE_CACHE_SCHEMA = "ra_sim.qr_rod_profile_cache.v1"
 QR_ROD_FINAL_FIT_CACHE_SIGNATURE = (
     "joint_qz_labeled_marker_fit_specular_roi_v18_caked_phi_m90_90_plane"
@@ -4096,6 +4104,8 @@ OUT_DIR = Path(
 if not OUT_DIR.is_absolute():
     OUT_DIR = ROOT / OUT_DIR
 OUT_DIR.mkdir(parents=True, exist_ok=True)
+PROFILE_OUT_DIR = profile_output_dir_for_state(OUT_DIR, STATE_PATH)
+PROFILE_OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 SAMPLE_NAME_OVERRIDE_TEXT = _setting_text(
     "SAMPLE_NAME_OVERRIDE", "RA_SIM_ALL_BACKGROUND_SAMPLE_NAME", ""
@@ -4138,6 +4148,13 @@ def refresh_figure_output_dir() -> None:
         override=FIGURE_OUTPUT_DIR_OVERRIDE_TEXT,
     )
     FIGURE_OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def refresh_profile_output_dir() -> None:
+    global PROFILE_OUT_DIR
+
+    PROFILE_OUT_DIR = profile_output_dir_for_state(OUT_DIR, STATE_PATH)
+    PROFILE_OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 FALLBACK_TILT_BY_BACKGROUND = {0: 5.0, 1: 10.0, 2: 15.0}
@@ -4464,6 +4481,7 @@ mpl.rcParams.update(
 print(f"state={STATE_PATH}")
 print(f"run_name={STATE_RUN_NAME}")
 print(f"out={OUT_DIR}")
+print(f"profiles={PROFILE_OUT_DIR}")
 print(
     f"cpu_count={CPU_COUNT} fit_workers={FIT_WORKERS} numba={NUMBA_AVAILABLE} numba_threads={get_num_threads()}"
 )
@@ -6893,7 +6911,9 @@ if selected_output_dir is not None:
     FIGURE_OUT_DIR = selected_output_dir
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     FIGURE_OUT_DIR.mkdir(parents=True, exist_ok=True)
+    refresh_profile_output_dir()
 print(f"figures={FIGURE_OUT_DIR}")
+print(f"profiles={PROFILE_OUT_DIR}")
 ACTIVE_LATTICE = active_lattice_constants_from_state(state)
 ACTIVE_LATTICE_A = float(ACTIVE_LATTICE["a"])
 ACTIVE_LATTICE_C = float(ACTIVE_LATTICE["c"])
@@ -8909,11 +8929,12 @@ def finish_axes(ax, *, grid: bool = False) -> None:
         spine.set_linewidth(0.65)
 
 
-def save_manuscript_figure(fig, stem: str) -> tuple[Path, Path]:
+def save_manuscript_figure(fig, stem: str, *, output_dir: Path | None = None) -> tuple[Path, Path]:
     """Save a high-DPI PNG, with optional vector PDF/SVG for faster development runs."""
-    png_path = FIGURE_OUT_DIR / f"{stem}.png"
-    pdf_path = FIGURE_OUT_DIR / f"{stem}.pdf"
-    svg_path = FIGURE_OUT_DIR / f"{stem}.svg"
+    base_dir = FIGURE_OUT_DIR if output_dir is None else Path(output_dir)
+    png_path = base_dir / f"{stem}.png"
+    pdf_path = base_dir / f"{stem}.pdf"
+    svg_path = base_dir / f"{stem}.svg"
     fig.savefig(png_path, dpi=MANUSCRIPT_DPI, bbox_inches="tight", pad_inches=0.018)
     if bool(SAVE_VECTOR_FIGURES):
         fig.savefig(pdf_path, bbox_inches="tight", pad_inches=0.018)
@@ -10238,10 +10259,10 @@ maybe_suptitle(fig, f"{SAMPLE_LABEL} accepted local line-profile fits", y=1.04)
 
 phi_profile_fit_table = pd.DataFrame(phi_profile_fit_rows)
 profile_fit_quality_table = pd.DataFrame(profile_fit_quality_rows)
-phi_profile_fit_csv = OUT_DIR / f"{FIGURE7C_PHI_PROFILE_FIT_STEM}.csv"
-phi_profile_fit_summary_csv = OUT_DIR / f"{FIGURE7C_PHI_PROFILE_FIT_STEM}_summary.csv"
-phi_profile_fit_note = OUT_DIR / f"{FIGURE7C_PHI_PROFILE_FIT_STEM}.md"
-profile_fit_quality_csv = OUT_DIR / f"{FIGURE7C_PROFILE_QUALITY_STEM}.csv"
+phi_profile_fit_csv = PROFILE_OUT_DIR / f"{FIGURE7C_PHI_PROFILE_FIT_STEM}.csv"
+phi_profile_fit_summary_csv = PROFILE_OUT_DIR / f"{FIGURE7C_PHI_PROFILE_FIT_STEM}_summary.csv"
+phi_profile_fit_note = PROFILE_OUT_DIR / f"{FIGURE7C_PHI_PROFILE_FIT_STEM}.md"
+profile_fit_quality_csv = PROFILE_OUT_DIR / f"{FIGURE7C_PROFILE_QUALITY_STEM}.csv"
 phi_profile_fit_table.to_csv(phi_profile_fit_csv, index=False)
 profile_fit_quality_table.to_csv(profile_fit_quality_csv, index=False)
 
@@ -10321,7 +10342,9 @@ if profile_fit_failures:
             f"  tilt={failure[0]} label={failure[1]} branch={failure[2]} axis={failure[3]} reason={failure[4]}"
         )
 
-fig7c_png, fig7c_pdf = save_manuscript_figure(fig, FIGURE7C_STEM)
+fig7c_png, fig7c_pdf = save_manuscript_figure(
+    fig, FIGURE7C_STEM, output_dir=PROFILE_OUT_DIR
+)
 plt.close(fig)
 print(f"saved={fig7c_png}")
 print(f"saved={fig7c_pdf}")
@@ -17588,15 +17611,15 @@ if "background_density" in rod_profile_table:
                     curvature_adaptivity=qr_rod_profile_smoothing_curvature_adaptivity,
                 )
             )
-rod_profile_csv = OUT_DIR / f"{ROD_PROFILE_STEM}.csv"
+rod_profile_csv = PROFILE_OUT_DIR / f"{ROD_PROFILE_STEM}.csv"
 rod_profile_table.to_csv(rod_profile_csv, index=False)
-marker_csv = OUT_DIR / f"{ROD_PROFILE_MARKER_STEM}.csv"
+marker_csv = PROFILE_OUT_DIR / f"{ROD_PROFILE_MARKER_STEM}.csv"
 marker_table.to_csv(marker_csv, index=False)
-component_csv = OUT_DIR / f"{ROD_PROFILE_STEM}_tail_components.csv"
+component_csv = PROFILE_OUT_DIR / f"{ROD_PROFILE_STEM}_tail_components.csv"
 rod_component_table.to_csv(component_csv, index=False)
 region_specs_stem = f"figure7_{SAMPLE_STEM}_qr_rod_region_specs"
-region_specs_csv = OUT_DIR / f"{region_specs_stem}.csv"
-region_specs_json = OUT_DIR / f"{region_specs_stem}.json"
+region_specs_csv = PROFILE_OUT_DIR / f"{region_specs_stem}.csv"
+region_specs_json = PROFILE_OUT_DIR / f"{region_specs_stem}.json"
 region_specs_table.to_csv(region_specs_csv, index=False)
 region_specs_records = json.loads(
     region_specs_table.to_json(orient="records", double_precision=12, default_handler=str)
@@ -17611,7 +17634,7 @@ print(f"saved={component_csv}")
 print(f"saved={region_specs_csv}")
 print(f"saved={region_specs_json}")
 
-profile_audit_csv = OUT_DIR / f"figure7_{SAMPLE_STEM}_gui_vs_final_profile_audit.csv"
+profile_audit_csv = PROFILE_OUT_DIR / f"figure7_{SAMPLE_STEM}_gui_vs_final_profile_audit.csv"
 profile_audit_table.to_csv(profile_audit_csv, index=False)
 print(f"saved={profile_audit_csv}")
 
@@ -17918,12 +17941,14 @@ for ax, metric, ylabel in zip(
     finish_axes(ax)
 support_axes[0, 0].legend(loc="best", fontsize=5.2, frameon=False, ncol=2)
 maybe_suptitle(fig, "Rod-profile support diagnostics over L", y=1.02)
-support_png, support_pdf = save_manuscript_figure(fig, support_diagnostic_stem)
+support_png, support_pdf = save_manuscript_figure(
+    fig, support_diagnostic_stem, output_dir=PROFILE_OUT_DIR
+)
 plt.close(fig)
 print(f"saved={support_png}")
 print(f"saved={support_pdf}")
 
-rod_profile_note = OUT_DIR / f"{ROD_PROFILE_STEM}.md"
+rod_profile_note = PROFILE_OUT_DIR / f"{ROD_PROFILE_STEM}.md"
 rod_note_lines = [
     f"# {SAMPLE_NAME} {ROD_PROFILE_TILT_LABEL}° HK-rod L profiles",
     "",
@@ -18358,7 +18383,9 @@ legend_ax.legend(
     borderaxespad=0.25,
 )
 maybe_suptitle(fig, rf"{SAMPLE_LABEL}: $Q_r$ rod $L$ profiles", y=1.02)
-rod_profile_png, rod_profile_pdf = save_manuscript_figure(fig, ROD_PROFILE_STEM)
+rod_profile_png, rod_profile_pdf = save_manuscript_figure(
+    fig, ROD_PROFILE_STEM, output_dir=PROFILE_OUT_DIR
+)
 plt.close(fig)
 print(f"saved={rod_profile_png}")
 print(f"saved={rod_profile_pdf}")

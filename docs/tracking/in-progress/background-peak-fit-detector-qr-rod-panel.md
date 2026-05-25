@@ -1091,6 +1091,24 @@ Passing checks:
   old edit files without the new field default to zero. Shipping status: ready
   for local use; rollback is a normal git revert because no data/schema
   migration is involved.
+- 2026-05-25 per-state saved-profile folders: profile CSV/JSON/MD artifacts and
+  profile-specific figures now write under a `profiles/` folder scoped by the
+  imported GUI-state filename. If the selected output folder is already
+  `<state>_state`, profiles go to `<state>_state/profiles`; otherwise they go
+  to `<output>/<state>_state/profiles`. General peak-fit arrays, caches,
+  detector-region figures, and non-profile diagnostics keep their existing
+  locations. Validation passed with focused profile-routing tests, scoped
+  compileall, `git diff --check`, full
+  `python -m pytest tests/test_background_peak_fits_notebook.py -ra`
+  (`279 passed, 8 skipped`), and `python -m ra_sim.dev check` (`294 passed`,
+  Ruff clean, mypy clean). Feature status: complete for path-only diagnostic
+  profile artifact isolation. Bug/error status: fixes shared-output overwrites
+  for multiple imported GUI states; no fitting, cache identity, or numerical
+  behavior was changed. Migration/deprecation status: no dependency, CLI,
+  config, version, or saved-state schema migration is required; operators
+  should use the printed `profiles=` path for profile artifacts. Shipping
+  status: ready for local diagnostic use; rollback is a normal git revert
+  because no data/schema migration is involved.
 
 Known validation limits:
 
