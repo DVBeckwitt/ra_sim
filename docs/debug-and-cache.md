@@ -620,6 +620,16 @@ not just returned in the intermediate display payload.
 The selected Qr-set integration overlay is refreshed as an integration overlay
 even when the separate geometry overlay visibility toggle is off.
 
+Status as of 2026-05-25: fixed the visible selected-Qr blue-square bug where
+changing `theta_initial` refreshed the live source row but the simulated marker
+could still replay saved `refined_sim_x/y` detector pixels. Detector-view
+initial-pair redraw now lets a same-source live row with changed theta move the
+simulated square while preserving the measured background marker and saved
+refined fallback for non-theta replay. Public GUI-state, CLI, config, and
+artifact schemas are unchanged; no migration or deprecation is required.
+Validation covers both the display-payload builder and the Matplotlib overlay
+artist coordinates.
+
 Generated disordered-phase Qr/Qz groups are structural rows, not live display
 artifacts. When `Include generated disordered-phase Qr refs` is enabled and a
 nonzero disordered stacking component is active, the runtime generates the
@@ -884,8 +894,15 @@ projection signature, source IDs, q-group keys, branch IDs, and fixed-pair
 count. `last_intersection_cache` remains memory/logged-cache-only and must not
 be rewrapped as current-hit metadata. If current live rows or signature-matched
 current hit tables are usable, fresh simulation must not start. If the slow
-fresh-simulation fallback does run, timeout now emits a visible
-late/still-running status before the eventual ready or failed terminal event.
+fresh-simulation fallback does run, targeted and plain rebuilds both emit a
+visible timeout plus late/still-running status before the eventual ready or
+failed terminal event.
+
+Status as of 2026-05-25: fixed the plain fresh-simulation timeout path so
+geometry-fit preflight fails before optimizer preparation when a non-targeted
+source-cache rebuild stalls. This matches targeted preflight timeout handling,
+keeps timeout events in the existing source-cache stage stream, and does not add
+new cache formats, migration steps, feature flags, or CI workflow changes.
 
 Validation status: runtime-level regressions cover the observed miss sequence
 (`projection_payload_ready`, targeted projected miss, memory miss, logged miss)
@@ -893,6 +910,10 @@ and prove trusted current hit tables are consumed before `simulate_hit_tables`.
 Forged `intersection_cache`/`last_intersection_cache` current-hit payloads are
 rejected before source-row build. A background-index regression covers manual
 pairs on UI background 2 building internal index 1 and not background 1. The
+2026-05-25 timeout regression covers the plain fresh-simulation preflight block
+and the existing targeted timeout workflow regression covers the targeted stage
+names. The 2026-05-25 selected-Qr regression covers the data-builder and overlay
+artist paths for theta-updated simulated markers. The
 current Bi quality baseline ran the
 same direct fixed-manual path as the smokes: Bi2Se3 accepted with 82/82 fixed
 pairs matched, 0 missing, 0 branch mismatches, and direct RMS 34.5307 -> 31.078112;
