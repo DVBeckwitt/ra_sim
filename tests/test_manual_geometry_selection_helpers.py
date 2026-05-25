@@ -11062,6 +11062,66 @@ def test_build_geometry_manual_initial_pairs_display_prefers_live_detector_candi
     assert display_pair["source_branch_index"] == 1
 
 
+def test_build_geometry_manual_initial_pairs_display_moves_sim_marker_with_live_theta_source() -> (
+    None
+):
+    saved_pair = {
+        "label": "-1,0,5",
+        "hkl": (-1, 0, 5),
+        "q_group_key": ("q_group", "primary", 1, 5),
+        "x": 182.0,
+        "y": 138.0,
+        "refined_sim_x": 30.25,
+        "refined_sim_y": -57.5,
+        "theta_initial": 5.0,
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+    }
+    live_theta_candidate = {
+        "source_table_index": 9,
+        "source_row_index": 0,
+        "source_reflection_index": 203,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+        "theta_initial": 7.5,
+        "sim_col": 190.0,
+        "sim_row": 96.0,
+    }
+
+    measured_display, initial_pairs_display = mg.build_geometry_manual_initial_pairs_display(
+        0,
+        current_background_index=0,
+        prefer_cache=True,
+        use_caked_display=False,
+        pairs_for_index=lambda _idx: [dict(saved_pair)],
+        current_geometry_fit_params=lambda: {"theta_initial": 7.5},
+        get_cache_data=lambda **_kwargs: {
+            "simulated_lookup": {
+                _source_key(live_theta_candidate): dict(live_theta_candidate),
+            }
+        },
+        simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+        build_simulated_lookup=lambda _entries: {},
+        entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+    )
+
+    assert measured_display[0]["x"] == 182.0
+    assert measured_display[0]["y"] == 138.0
+    assert len(initial_pairs_display) == 1
+    display_pair = initial_pairs_display[0]
+    assert display_pair["bg_display"] == (182.0, 138.0)
+    assert display_pair["sim_display"] == (190.0, 96.0)
+    assert display_pair["source_reflection_index"] == 203
+    assert display_pair["source_branch_index"] == 1
+
+
 def test_build_geometry_manual_initial_pairs_display_matches_legacy_branch_entry_to_current_lookup() -> (
     None
 ):

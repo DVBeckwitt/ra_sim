@@ -554,6 +554,80 @@ def test_draw_initial_geometry_pairs_overlay_ignores_stale_detector_sim_aliases(
         plt.close(fig)
 
 
+def test_draw_initial_geometry_pairs_overlay_moves_sim_marker_with_live_theta_source() -> None:
+    fig, ax = plt.subplots()
+    try:
+        geometry_pick_artists: list[object] = []
+
+        def _clear(*, redraw: bool = True) -> None:
+            overlays.clear_artists(geometry_pick_artists, redraw=redraw)
+
+        live_theta_candidate = {
+            "source_table_index": 9,
+            "source_row_index": 0,
+            "source_reflection_index": 203,
+            "source_branch_index": 1,
+            "source_peak_index": 1,
+            "theta_initial": 7.5,
+            "sim_col": 190.0,
+            "sim_row": 96.0,
+        }
+
+        _measured, initial_pairs = manual_geometry.build_geometry_manual_initial_pairs_display(
+            0,
+            param_set={"theta_initial": 7.5},
+            current_background_index=0,
+            prefer_cache=True,
+            use_caked_display=False,
+            pairs_for_index=lambda _idx: [
+                {
+                    "q_group_key": ("q_group", "primary", 1, 5),
+                    "source_table_index": 9,
+                    "source_row_index": 0,
+                    "source_reflection_index": 203,
+                    "source_branch_index": 1,
+                    "source_peak_index": 1,
+                    "hkl": (-1, 0, 5),
+                    "x": 182.0,
+                    "y": 138.0,
+                    "refined_sim_x": 30.25,
+                    "refined_sim_y": -57.5,
+                    "theta_initial": 5.0,
+                }
+            ],
+            get_cache_data=lambda **_kwargs: {
+                "simulated_lookup": {
+                    manual_geometry.geometry_manual_candidate_source_key(
+                        live_theta_candidate,
+                    ): dict(live_theta_candidate),
+                }
+            },
+            simulated_peaks_for_params=lambda _params, *, prefer_cache: [],
+            build_simulated_lookup=lambda _rows: {},
+            entry_display_coords=lambda entry: (float(entry["x"]), float(entry["y"])),
+        )
+
+        overlays.draw_initial_geometry_pairs_overlay(
+            ax,
+            initial_pairs,
+            geometry_pick_artists=geometry_pick_artists,
+            clear_geometry_pick_artists=_clear,
+            draw_idle=lambda: None,
+        )
+
+        marker_points = {
+            (float(line.get_xdata()[0]), float(line.get_ydata()[0]))
+            for line in ax.lines
+            if len(line.get_xdata()) == 1
+        }
+
+        assert (190.0, 96.0) in marker_points
+        assert (182.0, 138.0) in marker_points
+        assert (30.25, -57.5) not in marker_points
+    finally:
+        plt.close(fig)
+
+
 def test_draw_initial_geometry_pairs_overlay_prefers_saved_refined_native_detector_coords() -> None:
     fig, ax = plt.subplots()
     try:

@@ -13810,6 +13810,34 @@ def build_geometry_manual_initial_pairs_display(
             candidate_key = geometry_manual_candidate_source_key(dict(candidate))
             return bool(saved_key is not None and saved_key == candidate_key)
 
+        def _finite_theta_value(
+            candidate: Mapping[str, object] | None,
+        ) -> float | None:
+            if not isinstance(candidate, Mapping):
+                return None
+            for key in ("theta_initial", "theta_initial_deg", "theta_i"):
+                try:
+                    value = float(candidate.get(key, np.nan))
+                except Exception:
+                    continue
+                if np.isfinite(value):
+                    return float(value)
+            return None
+
+        def _candidate_has_live_theta_update(
+            candidate: Mapping[str, object] | None,
+        ) -> bool:
+            candidate_theta = _finite_theta_value(candidate)
+            if candidate_theta is None:
+                return False
+            saved_theta = _finite_theta_value(saved_entry)
+            return saved_theta is None or not np.isclose(
+                float(candidate_theta),
+                float(saved_theta),
+                rtol=0.0,
+                atol=1.0e-9,
+            )
+
         def _source_matched_live_caked_point(
             candidate: Mapping[str, object] | None,
         ) -> tuple[float, float] | None:
@@ -14004,6 +14032,13 @@ def build_geometry_manual_initial_pairs_display(
             return None
 
         if saved_refined_detector_point is not None:
+            resolved_detector_point = _live_detector_display_point(resolved_sim_entry)
+            if (
+                resolved_detector_point is not None
+                and _candidate_matches_saved_sim_source(resolved_sim_entry)
+                and _candidate_has_live_theta_update(resolved_sim_entry)
+            ):
+                return resolved_detector_point
             projected_detector_point = _live_detector_display_point(projected_sim_entry)
             if projected_detector_point is not None:
                 return projected_detector_point
