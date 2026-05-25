@@ -45823,6 +45823,20 @@ def _run_async_geometry_fit_worker_job(
         return projected_rows
 
     def _prebuild_required_background_caches() -> None:
+        def _manual_fit_space_kind_for_background(background_index: int) -> str:
+            stored_spaces = job_data.get("manual_fit_space_by_background")
+            if isinstance(stored_spaces, Mapping):
+                raw_kind = stored_spaces.get(
+                    int(background_index),
+                    stored_spaces.get(str(int(background_index))),
+                )
+                kind = str(raw_kind or "").strip().lower()
+                if kind in {"caked", "mixed"}:
+                    return kind
+            if bool(job_data.get("pick_uses_caked_space", False)):
+                return "caked"
+            return "detector"
+
         required_indices = [int(idx) for idx in (job_data.get("required_indices", ()) or ())]
         for background_idx in required_indices:
             prebuild_started_at = perf_counter()
@@ -45915,6 +45929,7 @@ def _run_async_geometry_fit_worker_job(
                 "elapsed_s": float(max(0.0, perf_counter() - prebuild_started_at)),
                 "stage_elapsed_s": float(max(0.0, perf_counter() - bundle_started_at)),
             }
+            manual_fit_space_kind = _manual_fit_space_kind_for_background(int(background_idx))
             locked_qr_readiness = dict(
                 gui_geometry_fit._locked_qr_fit_space_projection_readiness(
                     bundle.projected_rows,
@@ -45930,6 +45945,69 @@ def _run_async_geometry_fit_worker_job(
                     "stored_rows_len": int(stored_rows_len),
                 }
             )
+            locked_qr_expected_rows = int(
+                locked_qr_readiness.get("expected_locked_qr_rows", 0) or 0
+            )
+            locked_qr_projection_ready = bool(
+                locked_qr_readiness.get("fit_space_projection_ready", False)
+            )
+
+            def _readiness_projection_payload_available() -> bool:
+                payload_map = job_data.get("projection_payload_by_background")
+                caked_view_map = job_data.get("caked_views_by_background")
+                return bool(
+                    (isinstance(payload_map, Mapping) and int(background_idx) in payload_map)
+                    or (
+                        isinstance(caked_view_map, Mapping)
+                        and int(background_idx) in caked_view_map
+                    )
+                )
+
+            def _refresh_locked_qr_readiness_from_caked_projection() -> None:
+                nonlocal locked_qr_readiness
+                nonlocal locked_qr_expected_rows
+                nonlocal locked_qr_projection_ready
+                if (
+                    manual_fit_space_kind == "caked"
+                    or locked_qr_expected_rows <= 0
+                    or locked_qr_projection_ready
+                    or stored_rows_len <= 0
+                    or not _readiness_projection_payload_available()
+                ):
+                    return
+                readiness_rows = _geometry_fit_rows_for_background(
+                    int(background_idx),
+                    _project_source_rows_for_background(
+                        int(background_idx),
+                        bundle.stored_rows,
+                        mode_override="caked",
+                        strict_caked_projection=False,
+                    ),
+                )
+                if not readiness_rows:
+                    return
+                readiness_candidate = dict(
+                    gui_geometry_fit._locked_qr_fit_space_projection_readiness(
+                        readiness_rows,
+                        required_pairs=required_pairs,
+                    )
+                )
+                if int(readiness_candidate.get("expected_locked_qr_rows", 0) or 0) <= 0:
+                    return
+                readiness_candidate.update(
+                    {
+                        "readiness_input_source": "readiness_caked_projection",
+                        "projected_rows_len": int(len(readiness_rows)),
+                        "stored_rows_len": int(stored_rows_len),
+                    }
+                )
+                locked_qr_readiness = readiness_candidate
+                locked_qr_expected_rows = int(
+                    locked_qr_readiness.get("expected_locked_qr_rows", 0) or 0
+                )
+                locked_qr_projection_ready = bool(
+                    locked_qr_readiness.get("fit_space_projection_ready", False)
+                )
 
             def _locked_qr_projection_error_text(readiness: Mapping[str, object]) -> str:
                 expected_rows = int(readiness.get("expected_locked_qr_rows", 0) or 0)
@@ -46053,28 +46131,6 @@ def _run_async_geometry_fit_worker_job(
             caked_required = _worker_manual_caked_fit_space_required_for_background(
                 int(background_idx)
             )
-            locked_qr_expected_rows = int(
-                locked_qr_readiness.get("expected_locked_qr_rows", 0) or 0
-            )
-            locked_qr_projection_ready = bool(
-                locked_qr_readiness.get("fit_space_projection_ready", False)
-            )
-
-            def _manual_fit_space_kind_for_background(background_index: int) -> str:
-                stored_spaces = job_data.get("manual_fit_space_by_background")
-                if isinstance(stored_spaces, Mapping):
-                    raw_kind = stored_spaces.get(
-                        int(background_index),
-                        stored_spaces.get(str(int(background_index))),
-                    )
-                    kind = str(raw_kind or "").strip().lower()
-                    if kind in {"caked", "mixed"}:
-                        return kind
-                if bool(job_data.get("pick_uses_caked_space", False)):
-                    return "caked"
-                return "detector"
-
-            manual_fit_space_kind = _manual_fit_space_kind_for_background(int(background_idx))
             locked_qr_projection_gate_required = (
                 locked_qr_expected_rows > 0 and manual_fit_space_kind != "caked"
             )
@@ -46112,6 +46168,8 @@ def _run_async_geometry_fit_worker_job(
             ) -> bool:
                 resolved_outcome = dict(outcome)
                 caked_stored = bool(resolved_outcome.get("caked_view_stored", False))
+                if caked_stored or _readiness_projection_payload_available():
+                    _refresh_locked_qr_readiness_from_caked_projection()
                 _emit_source_cache_caked_view_event(
                     "source_cache_caked_view_ready"
                     if caked_stored
@@ -46164,6 +46222,7 @@ def _run_async_geometry_fit_worker_job(
                     payload={"status": "timeout"},
                 )
                 announce_caked_timeout()
+                _refresh_locked_qr_readiness_from_caked_projection()
                 locked_qr_projection_missing = _locked_qr_projection_missing()
                 _emit_locked_qr_projection_readiness(
                     storage_status=(

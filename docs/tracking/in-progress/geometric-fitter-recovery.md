@@ -9,6 +9,19 @@ Last updated: 2026-05-25
 
 ## Summary
 
+2026-05-25 detector-mode locked Qr/Qz readiness projection fix: the live
+`8f68fe5c` trace no longer froze, but the worker still failed after caked
+storage with `expected_rows=2 projected_rows=0` because the locked-Qr readiness
+gate was validating detector projected rows instead of the exact-caked
+selected-row projection that had just become available. The worker now refreshes
+locked-Qr readiness from stored selected detector rows projected through the
+exact caked payload once that payload exists, without changing detector
+fit-space, caked-objective flags, GUI-thread handoff behavior, public job keys,
+or user controls. Bug/error status: fixed in source and automated regression
+tests for the reported post-freeze preflight failure; the gate still fails
+closed before dataset build when exact caked projection rows are unavailable or
+nonfinite.
+
 2026-05-25 detector-origin locked Qr/Qz GUI-thread handoff fix: the live
 `7491a20c` trace showed Fit Geometry still froze before any worker
 `source_cache_*` event, after job-build preflight had synchronously requested

@@ -18118,6 +18118,7 @@ def _run_locked_qr_projection_missing_worker_case(
     manual_caked_required: bool = True,
     force_stored_caked_rows_only: bool = False,
     project_stored_rows: bool = False,
+    project_readiness_rows: bool = False,
     projected_inputs: list[dict[str, object]] | None = None,
 ) -> tuple[object, list[int], list[dict[str, object]]]:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
@@ -18128,7 +18129,7 @@ def _run_locked_qr_projection_missing_worker_case(
         _geometry_fit_worker_required_pair(),
         background_index=0,
     )
-    if project_stored_rows:
+    if project_stored_rows or project_readiness_rows:
         locked_pair["manual_background_input_origin"] = "detector"
     if include_optimizer_flags:
         locked_pair.update(
@@ -18161,6 +18162,7 @@ def _run_locked_qr_projection_missing_worker_case(
             "projection_payload_digest": "projection-digest",
         }
         job["projection_view_signature_by_background"] = {0: dict(job["projection_view_signature"])}
+    if project_stored_rows or project_readiness_rows:
         job["projection_payload_by_background"] = {
             0: _geometry_fit_worker_caked_payload(
                 runtime_session,
@@ -18201,14 +18203,25 @@ def _run_locked_qr_projection_missing_worker_case(
         "temporary_numba_thread_limit",
         lambda *_args, **_kwargs: contextlib.nullcontext(),
     )
-    if project_stored_rows:
+    if project_stored_rows or project_readiness_rows:
         projected_input_rows = projected_inputs if projected_inputs is not None else []
 
         class _ProjectionCallbacks:
+            def __init__(self, caked_view_enabled):
+                self._caked_view_enabled = caked_view_enabled
+
             def project_peaks_to_current_view(self, rows):
                 projected = []
+                caked_enabled = (
+                    bool(self._caked_view_enabled())
+                    if callable(self._caked_view_enabled)
+                    else bool(self._caked_view_enabled)
+                )
                 for row in rows or ():
                     if not isinstance(row, Mapping):
+                        continue
+                    if not caked_enabled:
+                        projected.append(dict(row))
                         continue
                     projected_input_rows.append(dict(row))
                     projected.append(
@@ -18225,7 +18238,7 @@ def _run_locked_qr_projection_missing_worker_case(
         monkeypatch.setattr(
             runtime_session.gui_manual_geometry,
             "make_runtime_geometry_manual_projection_callbacks",
-            lambda **_kwargs: _ProjectionCallbacks(),
+            lambda **kwargs: _ProjectionCallbacks(kwargs.get("caked_view_enabled")),
         )
         monkeypatch.setattr(
             runtime_session.gui_geometry_fit,
@@ -18269,7 +18282,7 @@ def _run_locked_qr_projection_missing_worker_case(
         "caking",
         (
             (lambda *_args, **_kwargs: {"status": "ready"})
-            if project_stored_rows
+            if project_stored_rows or project_readiness_rows
             else (lambda *_args, **_kwargs: threading.Event().wait(1.0) or object())
         ),
     )
@@ -18405,6 +18418,36 @@ def test_detector_origin_locked_qr_preflight_generates_selected_projected_rows(
     assert readiness_events[-1]["projected_locked_qr_rows"] == 1
     assert readiness_events[-1]["finite_locked_qr_rows"] == 1
     assert readiness_events[-1]["fit_space_projection_ready"] is True
+
+
+def test_detector_mode_locked_qr_readiness_projects_selected_rows_without_caked_objective(
+    monkeypatch,
+) -> None:
+    projected_inputs: list[dict[str, object]] = []
+    (
+        action_result,
+        dataset_calls,
+        readiness_events,
+    ) = _run_locked_qr_projection_missing_worker_case(
+        monkeypatch,
+        manual_fit_space="detector",
+        include_optimizer_flags=False,
+        manual_caked_required=False,
+        project_readiness_rows=True,
+        projected_inputs=projected_inputs,
+    )
+
+    assert action_result.error_text is None
+    assert dataset_calls == [0]
+    assert projected_inputs == [dict(_geometry_fit_worker_live_row(), background_index=0)]
+    assert readiness_events
+    assert readiness_events[-1]["readiness_input_source"] == "readiness_caked_projection"
+    assert readiness_events[-1]["projected_rows_len"] == 1
+    assert readiness_events[-1]["expected_locked_qr_rows"] == 1
+    assert readiness_events[-1]["projected_locked_qr_rows"] == 1
+    assert readiness_events[-1]["finite_locked_qr_rows"] == 1
+    assert readiness_events[-1]["fit_space_projection_ready"] is True
+    assert readiness_events[-1]["storage_timeout_fatal"] is False
 
 
 def test_runtime_session_caked_origin_locked_qr_projection_missing_does_not_gate_dataset_build(
