@@ -8555,19 +8555,31 @@ def rebuild_geometry_fit_source_rows(
     fresh_timeout_fired = threading.Event()
     timeout_s = float(GEOMETRY_FIT_TARGETED_FRESH_SIMULATION_TIMEOUT_S)
 
-    def _emit_targeted_fresh_timeout() -> None:
+    fresh_timeout_enabled = bool(targeted_preflight_enabled or callable(stage_callback))
+
+    def _emit_fresh_timeout() -> None:
         if fresh_timeout_fired.is_set():
             return
         fresh_timeout_fired.set()
+        timeout_stage_name = (
+            "source_cache_targeted_fresh_simulation_timeout"
+            if targeted_preflight_enabled
+            else "source_cache_fresh_simulation_timeout"
+        )
+        late_stage_name = (
+            "source_cache_targeted_fresh_simulation_still_running_late"
+            if targeted_preflight_enabled
+            else "source_cache_fresh_simulation_still_running_late"
+        )
         _emit_rebuild_stage(
-            "source_cache_targeted_fresh_simulation_timeout",
+            timeout_stage_name,
             cache_source="fresh_simulation",
             preflight_mode=normalized_preflight_mode,
             status="timeout",
             timeout_s=float(timeout_s),
         )
         _emit_rebuild_stage(
-            "source_cache_targeted_fresh_simulation_still_running_late",
+            late_stage_name,
             cache_source="fresh_simulation",
             preflight_mode=normalized_preflight_mode,
             status="still_running_late",
@@ -8575,7 +8587,7 @@ def rebuild_geometry_fit_source_rows(
         )
 
     def _call_fresh_simulation(call: Callable[[], Sequence[object]]) -> Sequence[object]:
-        if not targeted_preflight_enabled:
+        if not fresh_timeout_enabled:
             return call()
         result_box: dict[str, object] = {}
         done = threading.Event()
@@ -8591,9 +8603,10 @@ def rebuild_geometry_fit_source_rows(
         worker = threading.Thread(target=_run, daemon=True)
         worker.start()
         if not done.wait(timeout_s):
-            _emit_targeted_fresh_timeout()
+            _emit_fresh_timeout()
+            label = "Targeted fresh simulation" if targeted_preflight_enabled else "Fresh simulation"
             raise TimeoutError(
-                "Targeted fresh simulation exceeded "
+                f"{label} exceeded "
                 f"{float(timeout_s):.1f}s while rebuilding source cache for "
                 f"{resolved_background_label}. Refresh the caked/source cache or reduce "
                 "the fit simulation grid before rerunning geometry fit."
@@ -8720,11 +8733,17 @@ def rebuild_geometry_fit_source_rows(
             fresh_simulation_exception = exc
             fresh_hit_tables = []
     runtime_simulation_diagnostics = _resolve_runtime_simulation_diagnostics()
-    if targeted_preflight_enabled and fresh_timeout_fired.is_set():
+    if fresh_timeout_fired.is_set():
         runtime_simulation_diagnostics = dict(runtime_simulation_diagnostics or {})
-        runtime_simulation_diagnostics["status"] = "targeted_fresh_simulation_timeout"
+        runtime_simulation_diagnostics["status"] = (
+            "targeted_fresh_simulation_timeout"
+            if targeted_preflight_enabled
+            else "fresh_simulation_timeout"
+        )
         runtime_simulation_diagnostics["timeout_s"] = float(timeout_s)
-        runtime_simulation_diagnostics["targeted_simulation_timeout"] = True
+        runtime_simulation_diagnostics["fresh_simulation_timeout"] = True
+        if targeted_preflight_enabled:
+            runtime_simulation_diagnostics["targeted_simulation_timeout"] = True
     if targeted_preflight_enabled and isinstance(runtime_simulation_diagnostics, Mapping):
         _update_targeted_runtime_flags(
             **{

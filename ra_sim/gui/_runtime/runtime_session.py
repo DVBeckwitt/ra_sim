@@ -45905,7 +45905,10 @@ def _run_async_geometry_fit_worker_job(
                         ),
                     },
                 )
-                if failure_status == "targeted_fresh_simulation_timeout":
+                if failure_status in {
+                    "targeted_fresh_simulation_timeout",
+                    "fresh_simulation_timeout",
+                }:
                     raise RuntimeError(
                         "Geometry fit preflight timed out while rebuilding source cache "
                         f"for background {int(background_idx) + 1}. Refresh the "

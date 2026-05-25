@@ -19829,6 +19829,114 @@ def test_worker_prebuild_uses_job_local_live_rows_for_noncurrent_background(
     assert "source_cache_targeted_fresh_simulation_start" not in kinds
 
 
+def test_worker_prebuild_times_out_plain_fresh_simulation_before_prepare(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    job = _make_geometry_fit_worker_job(runtime_session)
+    required_pair = {
+        "pair_id": "detector-free-pick",
+        "background_index": 0,
+        "x": 11.0,
+        "y": 20.0,
+        "manual_fit_space": "detector_px",
+    }
+    entered = threading.Event()
+    release = threading.Event()
+
+    job["required_indices"] = [0]
+    job["selected_background_indices"] = [0]
+    job["current_background_index"] = 0
+    job["requested_signatures"] = {0: ("sig", 0)}
+    job["requested_signature_summaries"] = {0: "sig-summary"}
+    job["background_labels"] = {0: "bg0.osc"}
+    job["manual_pairs_by_background"] = {0: [required_pair]}
+    job["manual_fit_space_by_background"] = {0: "detector_px"}
+    job["background_images"] = {
+        0: {
+            "native": np.ones((4, 4), dtype=np.float64),
+            "display": np.ones((4, 4), dtype=np.float64),
+        }
+    }
+    job["live_rows_by_background"] = {0: []}
+    job["live_rows_cache_metadata_by_background"] = {}
+    job["source_snapshots"] = {}
+    job["source_snapshot_diagnostics"] = {}
+    job["memory_intersection_cache"] = []
+    job["memory_intersection_cache_signature"] = ("stale",)
+    job["current_hit_table_cache_by_background"] = {}
+    job["projection_payload_by_background"] = {}
+    job["projection_view_mode"] = "detector"
+    job["osc_files"] = ["bg0.osc"]
+    job["log_path"] = tmp_path / "geometry-fit-preflight.log"
+
+    def _blocking_simulate(*_args, **_kwargs):
+        entered.set()
+        release.wait(timeout=2.0)
+        return []
+
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "GEOMETRY_FIT_TARGETED_FRESH_SIMULATION_TIMEOUT_S",
+        0.05,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "load_most_recent_logged_intersection_cache_metadata",
+        lambda: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "load_most_recent_logged_intersection_cache",
+        lambda: pytest.fail("plain fresh simulation timeout should not load logged cache"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session,
+        "_simulate_hit_tables_for_fit",
+        _blocking_simulate,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_session.gui_geometry_fit,
+        "prepare_geometry_fit_run",
+        lambda **_kwargs: pytest.fail(
+            "plain fresh simulation timeout should fail preflight before prepare"
+        ),
+    )
+
+    result_box: dict[str, object] = {}
+
+    def _run_worker() -> None:
+        try:
+            result_box["result"] = runtime_session._run_async_geometry_fit_worker_job(job)
+        except BaseException as exc:  # pragma: no cover - assertion reports the captured error
+            result_box["exception"] = exc
+
+    worker = threading.Thread(target=_run_worker, daemon=True)
+    try:
+        worker.start()
+        assert entered.wait(timeout=1.0)
+        worker.join(timeout=0.5)
+        assert not worker.is_alive()
+        assert "exception" not in result_box
+        action_result = result_box["result"]
+        assert isinstance(action_result, runtime_session.gui_geometry_fit.GeometryFitRuntimeActionResult)
+        assert action_result.error_text is not None
+        assert "timed out" in str(action_result.error_text)
+        events = _drain_geometry_fit_worker_events(job["event_queue"])
+        kinds = [str(event.get("kind")) for event in events]
+        assert "source_cache_fresh_simulation_start" in kinds
+        assert "source_cache_fresh_simulation_timeout" in kinds
+        assert "source_cache_bundle_failed" in kinds
+        assert "preflight_failure" in kinds
+    finally:
+        release.set()
+        worker.join(timeout=1.0)
+
+
 def test_worker_dataset_binding_does_not_use_gui_refresh_callback(monkeypatch) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     job = _make_geometry_fit_worker_job(runtime_session)
