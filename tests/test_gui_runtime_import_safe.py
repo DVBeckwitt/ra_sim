@@ -19760,6 +19760,9 @@ def test_worker_prebuild_uses_job_local_live_rows_for_noncurrent_background(
     job = _make_geometry_fit_worker_job(runtime_session)
     live_row = dict(_geometry_fit_worker_live_row(), background_index=0)
     required_pair = dict(_geometry_fit_worker_required_pair(), background_index=0)
+    # Keep this fixture focused on job-local cache handoff; locked Qr projection
+    # has dedicated preflight coverage below.
+    required_pair.pop("source_row_index", None)
 
     job["current_background_index"] = 2
     job["required_indices"] = [0]
