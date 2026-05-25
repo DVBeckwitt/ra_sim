@@ -902,7 +902,10 @@ Status as of 2026-05-25: fixed the plain fresh-simulation timeout path so
 geometry-fit preflight fails before optimizer preparation when a non-targeted
 source-cache rebuild stalls. This matches targeted preflight timeout handling,
 keeps timeout events in the existing source-cache stage stream, and does not add
-new cache formats, migration steps, feature flags, or CI workflow changes.
+new cache formats, migration steps, feature flags, or CI workflow changes. A
+follow-up refactor only centralizes the derived fresh-simulation stage labels
+and timeout status; emitted event names, diagnostics, and exception text remain
+unchanged.
 
 Validation status: runtime-level regressions cover the observed miss sequence
 (`projection_payload_ready`, targeted projected miss, memory miss, logged miss)

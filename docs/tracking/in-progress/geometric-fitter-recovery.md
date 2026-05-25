@@ -5,9 +5,28 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-05-22
+Last updated: 2026-05-25
 
 ## Summary
+
+2026-05-25 geometry-fit preflight timeout closeout: plain fresh-simulation
+source-cache rebuilds now share the bounded timeout behavior used by targeted
+manual-geometry preflight. When the non-targeted fallback stalls, the async
+worker emits the existing source-cache timeout/late/failed stage sequence and
+returns a preflight failure before optimizer preparation instead of leaving the
+Fit Geometry action running indefinitely after `Computing simulation in
+background...`. Follow-up cleanup centralized the derived fresh-simulation
+stage label and timeout status without changing emitted event names,
+diagnostics, exception text, or public interfaces. Bug/error status: fixed for
+the user-reported freeze signature. Feature status: no new GUI control, CLI
+flag, config key, saved-state schema, artifact schema, dependency, public API,
+or CI workflow. Migration/deprecation status: none required. CI/shipping
+status: focused plain/targeted timeout regressions, locked-Qr projection
+regressions, `python -m compileall ra_sim tests`, and `python -m ra_sim.dev
+check` pass. Remaining manual shipping smoke is the existing operator check:
+restart the GUI, import a Bi saved state, generate once, click Fit Geometry, and
+confirm no first-fit timeout or exact-caked projector error. Rollback is a
+normal git revert of the timeout/refactor/tests/docs commits.
 
 2026-05-22 settled Qr/Qz square redraw status: settled GUI overlay refresh now
 replays durable fitted overlay records only and forces view-bound
