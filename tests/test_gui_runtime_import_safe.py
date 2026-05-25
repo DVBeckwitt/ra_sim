@@ -16364,16 +16364,17 @@ def test_async_geometry_fit_job_preserves_caked_runtime_fields(monkeypatch, tmp_
         locked_context.setattr(
             runtime_session,
             "_geometry_fit_caked_view_for_index",
-            lambda _idx: dict(caked_payload),
+            lambda _idx: pytest.fail("locked detector manual fit must not load caked payload"),
             raising=False,
         )
         locked_detector_job = runtime_session._build_geometry_fit_async_job(bindings)
 
-    assert ensure_calls == ["ensure"]
+    assert ensure_calls == []
     assert locked_detector_job["manual_fit_space_by_background"] == {0: "detector"}
-    assert locked_detector_job["manual_caked_fit_space_required_by_background"] == {0: True}
-    assert locked_detector_job["projection_view_mode"] == "caked"
-    assert locked_detector_job["caked_views_by_background"][0]["detector_shape"] == (4, 4)
+    assert locked_detector_job["manual_caked_fit_space_required_by_background"] == {0: False}
+    assert locked_detector_job["pick_uses_caked_space"] is False
+    assert locked_detector_job["projection_view_mode"] == "detector"
+    assert locked_detector_job["caked_views_by_background"] == {}
 
     manual_pairs[:] = [
         {
@@ -17863,6 +17864,9 @@ def test_runtime_session_source_cache_caked_timeout_does_not_hide_row_cache_succ
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     dataset_calls: list[int] = []
     job = _make_geometry_fit_worker_job(runtime_session)
+    required_pair = dict(_geometry_fit_worker_required_pair())
+    required_pair.pop("source_row_index", None)
+    job["manual_pairs_by_background"] = {0: [required_pair]}
     perf_lock = threading.Lock()
     perf_state = {"value": 0.0}
 
@@ -18545,6 +18549,9 @@ def test_runtime_session_explicit_caked_requirement_overrides_detector_provenanc
     job["pick_uses_caked_space"] = False
     job["manual_fit_space_by_background"] = {0: "detector"}
     job["manual_caked_fit_space_required_by_background"] = {0: True}
+    required_pair = dict(_geometry_fit_worker_required_pair())
+    required_pair.pop("source_row_index", None)
+    job["manual_pairs_by_background"] = {0: [required_pair]}
 
     monkeypatch.setattr(
         runtime_session,
@@ -18614,6 +18621,9 @@ def test_runtime_session_explicit_caked_requirement_overrides_mixed_provenance(
     job["pick_uses_caked_space"] = False
     job["manual_fit_space_by_background"] = {0: "mixed"}
     job["manual_caked_fit_space_required_by_background"] = {0: True}
+    required_pair = dict(_geometry_fit_worker_required_pair())
+    required_pair.pop("source_row_index", None)
+    job["manual_pairs_by_background"] = {0: [required_pair]}
 
     monkeypatch.setattr(
         runtime_session,
@@ -19414,6 +19424,9 @@ def test_runtime_session_logged_cache_params_mismatch_rejects_before_heavy_hit_t
     _patch_runtime_targeted_rebuild_env(monkeypatch, runtime_session)
     job = _make_geometry_fit_worker_job(runtime_session)
     job["live_rows_by_background"] = {0: []}
+    required_pair = dict(_geometry_fit_worker_required_pair())
+    required_pair.pop("source_row_index", None)
+    job["manual_pairs_by_background"] = {0: [required_pair]}
     dataset_calls: list[int] = []
 
     monkeypatch.setattr(
@@ -20253,6 +20266,7 @@ def test_worker_trial_source_rows_reuse_prebuilt_cache_with_trial_params(
     job = _make_geometry_fit_worker_job(runtime_session)
     live_row = dict(_geometry_fit_worker_live_row(), background_index=0)
     required_pair = dict(_geometry_fit_worker_required_pair(), background_index=0)
+    required_pair.pop("source_row_index", None)
     observed_trial_rows: list[dict[str, object]] = []
     rebuild_consumers: list[str] = []
 

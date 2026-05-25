@@ -292,7 +292,7 @@ def test_detector_origin_pair_does_not_call_ensure_caked_view() -> None:
     assert result.prepared_run.geometry_runtime_cfg.get("projection_view_mode") != "caked"
 
 
-def test_locked_detector_origin_qr_pairs_force_manual_caked_runtime() -> None:
+def test_locked_detector_origin_qr_pairs_stay_detector_runtime() -> None:
     calls: list[str] = []
     build_calls: list[tuple[int, bool]] = []
     pairs = [
@@ -365,23 +365,22 @@ def test_locked_detector_origin_qr_pairs_force_manual_caked_runtime() -> None:
         build_runtime_config=lambda _params: {"solver": {"dynamic_point_geometry_fit": False}},
     )
 
-    assert calls == ["ensure"]
-    assert build_calls == [(0, True)]
+    assert calls == []
+    assert build_calls == [(0, False)]
     assert result.error_text is None
     assert result.prepared_run is not None
     cfg = result.prepared_run.geometry_runtime_cfg
     solver = cfg["solver"]
-    assert result.prepared_run.dataset_specs[0]["_manual_caked_fit_space_required"] is True
-    assert cfg["projection_view_mode"] == "caked"
-    assert solver["dynamic_point_geometry_fit"] is True
+    assert result.prepared_run.dataset_specs[0].get("_manual_caked_fit_space_required") is not True
+    assert cfg.get("projection_view_mode") != "caked"
+    assert solver.get("dynamic_point_geometry_fit") is not True
     assert solver["manual_point_fit_mode"] is True
-    assert (
-        result.prepared_run.current_dataset["measured_for_fit"][0]["background_two_theta_deg"]
-        == 30.0
-    )
+    assert "background_two_theta_deg" not in result.prepared_run.current_dataset[
+        "measured_for_fit"
+    ][0]
 
 
-def test_locked_detector_origin_qr_pair_nested_identity_forces_manual_caked_runtime() -> None:
+def test_locked_detector_origin_qr_pair_nested_identity_stays_detector_runtime() -> None:
     pair = _detector_origin_pair()
     pair.update(
         {
@@ -424,13 +423,13 @@ def test_locked_detector_origin_qr_pair_nested_identity_forces_manual_caked_runt
         },
     )
 
-    assert calls == ["ensure"]
+    assert calls == []
     assert result.error_text is None
     assert result.prepared_run is not None
     cfg = result.prepared_run.geometry_runtime_cfg
-    assert result.prepared_run.dataset_specs[0]["_manual_caked_fit_space_required"] is True
-    assert cfg["projection_view_mode"] == "caked"
-    assert cfg["solver"]["dynamic_point_geometry_fit"] is True
+    assert result.prepared_run.dataset_specs[0].get("_manual_caked_fit_space_required") is not True
+    assert cfg.get("projection_view_mode") != "caked"
+    assert cfg["solver"].get("dynamic_point_geometry_fit") is not True
 
 
 def test_detector_origin_two_tilt_fit_uses_detector_manual_point_runtime() -> None:

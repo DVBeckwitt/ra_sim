@@ -17655,21 +17655,6 @@ def prepare_geometry_fit_run(
             if bool(explicit_caked_required_by_background.get(int(idx), False))
         }
     )
-    locked_qr_required_indices = sorted(
-        {
-            int(idx)
-            for idx in selected_background_indices
-            if geometry_fit_fixed_manual_caked_qr_row_count(
-                manual_pair_rows=enabled_pairs_by_background.get(int(idx), ()),
-                require_explicit_branch=True,
-            )
-            > 0
-        }
-    )
-    if locked_qr_required_indices:
-        selected_caked_required_indices = sorted(
-            set(selected_caked_required_indices) | set(locked_qr_required_indices)
-        )
     fit_space_error = None
     if not selected_caked_required_indices:
         fit_space_error = manual_geometry_fit_space_preflight_error(
@@ -17802,16 +17787,9 @@ def prepare_geometry_fit_run(
         )
 
     dataset_specs = build_geometry_fit_dataset_specs(dataset_infos)
-    locked_qr_row_count = geometry_fit_fixed_manual_caked_qr_row_count(
-        current_dataset=current_dataset,
-        dataset_infos=dataset_infos,
-        require_explicit_branch=True,
-    )
-    locked_qr_requires_caked_metric = int(locked_qr_row_count) > 0
     manual_fit_uses_caked_space = bool(
         manual_pairs_use_caked_space
         or geometry_fit_datasets_use_caked_fit_space(dataset_infos)
-        or locked_qr_requires_caked_metric
     )
     if manual_fit_uses_caked_space:
         for spec in dataset_specs:
@@ -17820,17 +17798,8 @@ def prepare_geometry_fit_run(
                 spec_idx = int(spec.get("dataset_index"))
             except Exception:
                 spec_idx = None
-            spec_has_locked_qr = any(
-                isinstance(entry, Mapping)
-                and geometry_fit_entry_has_fixed_manual_caked_qr(
-                    entry,
-                    require_explicit_branch=True,
-                )
-                for entry in (spec.get("measured_peaks", ()) or ())
-            )
             if (
                 bool(manual_pairs_use_caked_space)
-                or bool(spec_has_locked_qr)
                 or (spec_idx is not None and int(spec_idx) in required_caked_background_set)
             ):
                 spec["_manual_caked_fit_space_required"] = True

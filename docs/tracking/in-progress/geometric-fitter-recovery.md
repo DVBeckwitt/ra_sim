@@ -9,16 +9,34 @@ Last updated: 2026-05-25
 
 ## Summary
 
+2026-05-25 detector-origin locked Qr/Qz GUI-thread handoff fix: the live
+`7491a20c` trace showed Fit Geometry still froze before any worker
+`source_cache_*` event, after job-build preflight had synchronously requested
+caked-view preparation for detector-origin locked Qr/Qz picks. The runtime now
+keeps locked source identity as projection-readiness provenance only: detector
+manual fit-space stays detector during async job build, no GUI-thread
+`ensure_geometry_fit_caked_view()` or caked payload load runs for detector
+locked rows, and the async worker still owns the selected-row locked-Qr
+projection readiness gate before dataset build. Bug/error status: fixed for
+the reported unresponsive `preflight: collecting geometry-fit datasets` /
+`Computing simulation in background...` handoff signature. Feature status: no
+new GUI control, CLI flag, config key, saved-state schema, artifact schema,
+dependency, public API, CI workflow, deprecation, or migration. Validation:
+focused job-build regression, full runtime import-safe suite, manual fit-space
+classification suite, `python -m compileall ra_sim tests`, `git diff --check`,
+and `python -m ra_sim.dev check` pass.
+
 2026-05-25 geometry-fit preflight timeout closeout: plain fresh-simulation
 source-cache rebuilds now share the bounded timeout behavior used by targeted
 manual-geometry preflight. When the non-targeted fallback stalls, the async
 worker emits the existing source-cache timeout/late/failed stage sequence and
 returns a preflight failure before optimizer preparation instead of leaving the
-Fit Geometry action running indefinitely after `Computing simulation in
-background...`. Follow-up cleanup centralized the derived fresh-simulation
-stage label and timeout status without changing emitted event names,
-diagnostics, exception text, or public interfaces. Bug/error status: fixed for
-the user-reported freeze signature. Feature status: no new GUI control, CLI
+Fit Geometry worker running indefinitely after source-cache rebuild starts.
+Follow-up cleanup centralized the derived fresh-simulation stage label and
+timeout status without changing emitted event names, diagnostics, exception
+text, or public interfaces. Bug/error status: fixed for downstream worker
+source-cache rebuild stalls, but not sufficient for the later-discovered
+GUI-thread caked-handoff freeze fixed above. Feature status: no new GUI control, CLI
 flag, config key, saved-state schema, artifact schema, dependency, public API,
 or CI workflow. Migration/deprecation status: none required. CI/shipping
 status: focused plain/targeted timeout regressions, locked-Qr projection

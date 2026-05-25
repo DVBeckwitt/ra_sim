@@ -42542,20 +42542,9 @@ def _build_geometry_fit_async_job(
     manual_fit_uses_caked_space = any(
         str(kind) == "caked" for kind in manual_fit_space_by_background.values()
     )
-    locked_qr_projection_required_by_background = (
-        gui_geometry_fit.geometry_manual_locked_qr_projection_required_by_background(
-            required_indices,
-            manual_pairs_by_background,
-        )
-    )
-    locked_qr_projection_required = any(
-        bool(value) for value in locked_qr_projection_required_by_background.values()
-    )
     targeted_projection_view_mode = _geometry_fit_targeted_projection_view_mode()
     initial_projection_view_mode = (
-        "caked"
-        if manual_fit_uses_caked_space or locked_qr_projection_required
-        else targeted_projection_view_mode
+        "caked" if manual_fit_uses_caked_space else targeted_projection_view_mode
     )
     manual_caked_fit_space_required_by_background = (
         gui_geometry_fit.geometry_manual_caked_fit_space_required_by_background(
@@ -42563,9 +42552,6 @@ def _build_geometry_fit_async_job(
             requested_projection_view_mode=initial_projection_view_mode,
         )
     )
-    for idx, required in locked_qr_projection_required_by_background.items():
-        if bool(required):
-            manual_caked_fit_space_required_by_background[int(idx)] = True
     manual_fit_requires_caked_space = any(
         bool(value) for value in manual_caked_fit_space_required_by_background.values()
     )
@@ -46230,14 +46216,6 @@ def _run_async_geometry_fit_worker_job(
 
     def _worker_manual_caked_fit_space_required_for_background(background_index: int) -> bool:
         background_idx = int(background_index)
-        locked_required = (
-            gui_geometry_fit.geometry_manual_locked_qr_projection_required_by_background(
-                [background_idx],
-                {background_idx: _worker_manual_pairs_for_background(background_idx)},
-            )
-        )
-        if bool(locked_required.get(background_idx, False)):
-            return True
         required_by_background = job_data.get("manual_caked_fit_space_required_by_background")
         if isinstance(required_by_background, Mapping):
             raw_value = required_by_background.get(

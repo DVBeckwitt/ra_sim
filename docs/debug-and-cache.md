@@ -807,6 +807,16 @@ Source-less or legacy projection tokens are not correctness keys for warm-cache
 reuse. Do not mutate simulation or caked image arrays in place without also
 bumping the corresponding simulation or projection signature.
 
+Status as of 2026-05-25: detector-origin locked Qr/Qz source identity is no
+longer a caked-objective trigger during Fit Geometry job build. Detector picks
+with locked source rows stay in detector fit-space unless the requested
+objective or selected manual fit-space is explicitly caked, so the GUI thread
+does not call `ensure_geometry_fit_caked_view()` or load caked payloads before
+submitting the async worker. The locked-Qr selected-row projection readiness
+gate still runs in the worker and still fails before dataset build when required
+projected rows are missing or nonfinite. This separates provenance from
+fit-space selection while preserving fail-closed locked-Qr validation.
+
 Status as of 2026-05-21: `objective_space=caked_deg` is now the fit-space
 requirement source of truth for manual Qr/Qz geometry fits, even when the manual
 pick provenance remains detector-origin. If every manual pair has finite
