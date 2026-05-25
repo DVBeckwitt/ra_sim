@@ -8541,6 +8541,14 @@ def rebuild_geometry_fit_source_rows(
         if targeted_preflight_enabled
         else "source_cache_fresh_simulation"
     )
+    fresh_stage_label = (
+        "Targeted fresh simulation" if targeted_preflight_enabled else "Fresh simulation"
+    )
+    fresh_timeout_status = (
+        "targeted_fresh_simulation_timeout"
+        if targeted_preflight_enabled
+        else "fresh_simulation_timeout"
+    )
     _emit_rebuild_stage(
         f"{fresh_stage_prefix}_start",
         cache_source="fresh_simulation",
@@ -8555,26 +8563,23 @@ def rebuild_geometry_fit_source_rows(
     fresh_timeout_fired = threading.Event()
     timeout_s = float(GEOMETRY_FIT_TARGETED_FRESH_SIMULATION_TIMEOUT_S)
 
-    fresh_timeout_enabled = bool(targeted_preflight_enabled or callable(stage_callback))
+    fresh_timeout_enabled = targeted_preflight_enabled or callable(stage_callback)
 
     def _emit_fresh_timeout() -> None:
         if fresh_timeout_fired.is_set():
             return
         fresh_timeout_fired.set()
-        _emit_rebuild_stage(
-            f"{fresh_stage_prefix}_timeout",
-            cache_source="fresh_simulation",
-            preflight_mode=normalized_preflight_mode,
-            status="timeout",
-            timeout_s=float(timeout_s),
-        )
-        _emit_rebuild_stage(
-            f"{fresh_stage_prefix}_still_running_late",
-            cache_source="fresh_simulation",
-            preflight_mode=normalized_preflight_mode,
-            status="still_running_late",
-            timeout_s=float(timeout_s),
-        )
+        for suffix, status in (
+            ("timeout", "timeout"),
+            ("still_running_late", "still_running_late"),
+        ):
+            _emit_rebuild_stage(
+                f"{fresh_stage_prefix}_{suffix}",
+                cache_source="fresh_simulation",
+                preflight_mode=normalized_preflight_mode,
+                status=status,
+                timeout_s=float(timeout_s),
+            )
 
     def _call_fresh_simulation(call: Callable[[], Sequence[object]]) -> Sequence[object]:
         if not fresh_timeout_enabled:
@@ -8594,9 +8599,8 @@ def rebuild_geometry_fit_source_rows(
         worker.start()
         if not done.wait(timeout_s):
             _emit_fresh_timeout()
-            label = "Targeted fresh simulation" if targeted_preflight_enabled else "Fresh simulation"
             raise TimeoutError(
-                f"{label} exceeded "
+                f"{fresh_stage_label} exceeded "
                 f"{float(timeout_s):.1f}s while rebuilding source cache for "
                 f"{resolved_background_label}. Refresh the caked/source cache or reduce "
                 "the fit simulation grid before rerunning geometry fit."
@@ -8725,11 +8729,7 @@ def rebuild_geometry_fit_source_rows(
     runtime_simulation_diagnostics = _resolve_runtime_simulation_diagnostics()
     if fresh_timeout_fired.is_set():
         runtime_simulation_diagnostics = dict(runtime_simulation_diagnostics or {})
-        runtime_simulation_diagnostics["status"] = (
-            "targeted_fresh_simulation_timeout"
-            if targeted_preflight_enabled
-            else "fresh_simulation_timeout"
-        )
+        runtime_simulation_diagnostics["status"] = fresh_timeout_status
         runtime_simulation_diagnostics["timeout_s"] = float(timeout_s)
         runtime_simulation_diagnostics["fresh_simulation_timeout"] = True
         if targeted_preflight_enabled:
@@ -8749,8 +8749,9 @@ def rebuild_geometry_fit_source_rows(
                 if key in runtime_simulation_diagnostics
             }
         )
+    fresh_result_stage = "failed" if fresh_simulation_exception is not None else "ready"
     _emit_rebuild_stage(
-        f"{fresh_stage_prefix}_{'failed' if fresh_simulation_exception is not None else 'ready'}",
+        f"{fresh_stage_prefix}_{fresh_result_stage}",
         stage_started_at=fresh_started_at,
         cache_source="fresh_simulation",
         hit_table_count=int(len(fresh_hit_tables or ())),
