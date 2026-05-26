@@ -19,6 +19,7 @@ from ra_sim.debug_controls import (
 
 EXIT_PROJECTION_INTERNAL = 0
 EXIT_PROJECTION_REFRACTED = 1
+EXIT_PROJECTION_EXTERNAL = EXIT_PROJECTION_REFRACTED
 
 PROJECTION_DEBUG_COUNTER_NAMES = (
     "n_total",
@@ -67,22 +68,24 @@ def projection_debug_logging_enabled() -> bool:
 
 
 def resolve_exit_projection_mode_flag(value: str | int | None) -> int:
-    if value == EXIT_PROJECTION_INTERNAL or value is None:
+    if value is None:
+        return EXIT_PROJECTION_EXTERNAL
+    if value == EXIT_PROJECTION_INTERNAL:
         return EXIT_PROJECTION_INTERNAL
     if value == EXIT_PROJECTION_REFRACTED:
-        return EXIT_PROJECTION_REFRACTED
+        return EXIT_PROJECTION_EXTERNAL
     mode = str(value).strip().lower()
     if mode == "internal":
         return EXIT_PROJECTION_INTERNAL
-    if mode == "refracted":
-        return EXIT_PROJECTION_REFRACTED
+    if mode in {"external", "refracted"}:
+        return EXIT_PROJECTION_EXTERNAL
     raise ValueError(f"Unsupported exit_projection_mode: {value!r}")
 
 
 def exit_projection_mode_label(value: str | int | None) -> str:
     return (
-        "refracted"
-        if resolve_exit_projection_mode_flag(value) == EXIT_PROJECTION_REFRACTED
+        "external"
+        if resolve_exit_projection_mode_flag(value) == EXIT_PROJECTION_EXTERNAL
         else "internal"
     )
 

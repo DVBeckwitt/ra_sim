@@ -4,6 +4,7 @@ import numpy as np
 
 from ra_sim.gui import geometry_fit
 from ra_sim.gui import geometry_q_group_manager
+from ra_sim.simulation import diffraction
 
 
 def _geometry_fit_param_set() -> dict[str, object]:
@@ -25,7 +26,7 @@ def _geometry_fit_param_set() -> dict[str, object]:
         "center": (11.0, 12.0),
         "theta_initial": 8.0,
         "cor_angle": 9.0,
-        "optics_mode": 2,
+        "optics_mode": diffraction.OPTICS_MODE_EXACT,
         "mosaic_params": {
             "beam_x_array": np.asarray([1.0], dtype=float),
             "beam_y_array": np.asarray([2.0], dtype=float),

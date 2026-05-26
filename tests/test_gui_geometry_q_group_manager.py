@@ -566,7 +566,7 @@ def test_geometry_q_group_manager_simulate_geometry_fit_helpers() -> None:
         "center": (11.0, 12.0),
         "theta_initial": 8.0,
         "cor_angle": 9.0,
-        "optics_mode": 2,
+        "optics_mode": diffraction.OPTICS_MODE_EXACT,
     }
     miller_array = np.asarray([[1.0, 0.0, 0.0]], dtype=float)
     intensity_array = np.asarray([5.0], dtype=float)
@@ -588,7 +588,7 @@ def test_geometry_q_group_manager_simulate_geometry_fit_helpers() -> None:
     np.testing.assert_allclose(captured["args"][16], [1.0, 2.0])
     np.testing.assert_allclose(captured["args"][23], [1.54, 1.54])
     assert captured["args"][15] == "n2"
-    assert captured["kwargs"]["optics_mode"] == 2
+    assert captured["kwargs"]["optics_mode"] == diffraction.OPTICS_MODE_EXACT
     assert captured["kwargs"]["solve_q_steps"] == 123
     assert captured["kwargs"]["solve_q_mode"] == 1
     np.testing.assert_array_equal(
@@ -697,7 +697,7 @@ def test_simulate_geometry_fit_hit_tables_drops_wrong_length_n2_override() -> No
             "center": (11.0, 12.0),
             "theta_initial": 8.0,
             "cor_angle": 9.0,
-            "optics_mode": 2,
+            "optics_mode": diffraction.OPTICS_MODE_EXACT,
         },
         build_geometry_fit_central_mosaic_params=_build_mosaic,
         process_peaks_parallel=_process_peaks_parallel,
@@ -761,7 +761,7 @@ def test_simulate_geometry_fit_hit_tables_drops_malformed_n2_override() -> None:
             "center": (11.0, 12.0),
             "theta_initial": 8.0,
             "cor_angle": 9.0,
-            "optics_mode": 2,
+            "optics_mode": diffraction.OPTICS_MODE_EXACT,
         },
         build_geometry_fit_central_mosaic_params=_build_mosaic,
         process_peaks_parallel=_process_peaks_parallel,
@@ -814,7 +814,7 @@ def test_simulate_geometry_fit_hit_tables_records_diagnostics_for_missing_beam_x
                 "center": (11.0, 12.0),
                 "theta_initial": 8.0,
                 "cor_angle": 9.0,
-                "optics_mode": 2,
+                "optics_mode": diffraction.OPTICS_MODE_EXACT,
             },
             build_geometry_fit_central_mosaic_params=_build_mosaic,
             process_peaks_parallel=_process_peaks_parallel,
@@ -880,7 +880,7 @@ def test_simulate_geometry_fit_hit_tables_marks_empty_target_filter_unused() -> 
             "center": (11.0, 12.0),
             "theta_initial": 8.0,
             "cor_angle": 9.0,
-            "optics_mode": 2,
+            "optics_mode": diffraction.OPTICS_MODE_EXACT,
         },
         build_geometry_fit_central_mosaic_params=_build_mosaic,
         process_peaks_parallel=_process_peaks_parallel,
@@ -947,7 +947,7 @@ def test_simulate_geometry_fit_preview_style_peaks_respects_lattice_and_provenan
             "center": (11.0, 12.0),
             "theta_initial": 8.0,
             "cor_angle": 9.0,
-            "optics_mode": 2,
+            "optics_mode": diffraction.OPTICS_MODE_EXACT,
         },
         build_geometry_fit_central_mosaic_params=_build_mosaic,
         process_peaks_parallel=_process_peaks_parallel,
@@ -1170,7 +1170,7 @@ def test_geometry_q_group_manager_runtime_simulation_callback_bundle_captures_di
         "center": (11.0, 12.0),
         "theta_initial": 8.0,
         "cor_angle": 9.0,
-        "optics_mode": 2,
+        "optics_mode": diffraction.OPTICS_MODE_EXACT,
     }
 
     bundle.simulate_hit_tables(miller_array, intensity_array, 32, param_set)
@@ -1182,7 +1182,7 @@ def test_geometry_q_group_manager_runtime_simulation_callback_bundle_captures_di
     assert diagnostics["intensity_count"] == 2
     assert diagnostics["image_size"] == 32
     assert diagnostics["parameter_summary"] == diagnostics["param_summary"]
-    assert diagnostics["param_summary"]["optics_mode"] == 2
+    assert diagnostics["param_summary"]["optics_mode"] == diffraction.OPTICS_MODE_EXACT
     assert diagnostics["mosaic_array_sizes"] == {
         "beam_x_array": 2,
         "beam_y_array": 2,
@@ -1261,7 +1261,7 @@ def test_geometry_q_group_manager_runtime_simulation_callback_bundle_captures_ex
         "center": (11.0, 12.0),
         "theta_initial": 8.0,
         "cor_angle": 9.0,
-        "optics_mode": 2,
+        "optics_mode": diffraction.OPTICS_MODE_EXACT,
     }
 
     with pytest.raises(RuntimeError, match="boom"):

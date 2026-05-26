@@ -8914,6 +8914,15 @@ def save_manuscript_figure(fig, stem: str, *, output_dir: Path | None = None) ->
     return png_path, pdf_path
 
 
+def require_saved_figure(path: Path | str, *, label: str) -> Path:
+    figure_path = Path(path)
+    if not figure_path.is_file():
+        raise RuntimeError(f"{label} was not written: {figure_path}")
+    if figure_path.stat().st_size <= 0:
+        raise RuntimeError(f"{label} save failed: {figure_path} is empty")
+    return figure_path
+
+
 def fit_lookup_by_key() -> dict[tuple[int, str, str], dict[str, object]]:
     lookup = {}
     for item in all_fit_results:
@@ -18099,8 +18108,10 @@ detector_plot_rod_entries, skipped_hidden_plot_hk = filter_final_qr_rod_plot_ent
 )
 plot_rod_entries = [
     rod
-    for rod in detector_plot_rod_entries
-    if any((int(rod["m"]), branch_name) in drawable_profile_keys for branch_name, *_ in phi_windows)
+    for rod in rod_entries
+    if int(rod["m"]) not in hidden_plot_hk
+    and int(rod["m"]) != 0
+    and any((int(rod["m"]), branch_name) in drawable_profile_keys for branch_name, *_ in phi_windows)
 ]
 detector_plot_rod_keys_all = {rod_identity_key(rod) for rod in detector_plot_rod_entries_all}
 skipped_incomplete_detector_hk = [
@@ -18113,11 +18124,27 @@ skipped_incomplete_detector_hk = [
 ]
 skipped_empty_plot_hk = [
     int(rod["m"])
-    for rod in detector_plot_rod_entries
+    for rod in rod_entries
     if not any(
         (int(rod["m"]), branch_name) in drawable_profile_keys for branch_name, *_ in phi_windows
     )
+    and int(rod["m"]) not in hidden_plot_hk
+    and int(rod["m"]) != 0
 ]
+skipped_hidden_plot_hk = sorted(
+    {
+        *skipped_hidden_plot_hk,
+        *(
+            int(rod["m"])
+            for rod in rod_entries
+            if int(rod["m"]) in hidden_plot_hk
+            and any(
+                (int(rod["m"]), branch_name) in drawable_profile_keys
+                for branch_name, *_ in phi_windows
+            )
+        ),
+    }
+)
 if 0 not in hidden_plot_hk and (0, "qz") in drawable_profile_keys:
     plot_rod_entries.append(specular_rod_entry)
 elif 0 in hidden_plot_hk and (0, "qz") in drawable_profile_keys:
@@ -18172,6 +18199,20 @@ if skipped_empty_plot_hk:
 if not plot_rod_entries:
     raise RuntimeError("no drawable Qr-rod profile rows are available for the final figure")
 nonzero_plot_rod_entries = [rod for rod in plot_rod_entries if int(rod["m"]) != 0]
+drawable_nonzero_profile_hk = sorted(
+    {
+        int(m_value)
+        for m_value, branch_name in drawable_profile_keys
+        if int(m_value) not in hidden_plot_hk
+        and int(m_value) != 0
+        and any(branch_name == phi_branch_name for phi_branch_name, *_ in phi_windows)
+    }
+)
+if drawable_nonzero_profile_hk and not nonzero_plot_rod_entries:
+    raise RuntimeError(
+        "drawable nonzero Qr-rod profile rows were omitted from the final figure: "
+        + ", ".join(f"HK={value}" for value in drawable_nonzero_profile_hk)
+    )
 rod_note_lines.extend(
     [
         "",
@@ -18393,13 +18434,29 @@ legend_ax.legend(
     borderaxespad=0.25,
 )
 maybe_suptitle(fig, rf"{SAMPLE_LABEL}: $Q_r$ rod $L$ profiles", y=1.02)
-rod_profile_png, rod_profile_pdf = save_manuscript_figure(
-    fig, ROD_PROFILE_STEM, output_dir=PROFILE_OUT_DIR
-)
-plt.close(fig)
+try:
+    rod_profile_png, rod_profile_pdf = save_manuscript_figure(
+        fig, ROD_PROFILE_STEM, output_dir=PROFILE_OUT_DIR
+    )
+    rod_profile_png = require_saved_figure(rod_profile_png, label="final Qr-rod profile PNG")
+    published_rod_profile_png = rod_profile_png
+    published_rod_profile_pdf = rod_profile_pdf
+    if Path(FIGURE_OUT_DIR) != Path(PROFILE_OUT_DIR):
+        published_rod_profile_png, published_rod_profile_pdf = save_manuscript_figure(
+            fig, ROD_PROFILE_STEM
+        )
+        published_rod_profile_png = require_saved_figure(
+            published_rod_profile_png,
+            label="published final Qr-rod profile PNG",
+        )
+finally:
+    plt.close(fig)
 print(f"saved={rod_profile_png}")
 print(f"saved={rod_profile_pdf}")
-display(Image(filename=str(rod_profile_png)))
+if Path(published_rod_profile_png) != Path(rod_profile_png):
+    print(f"saved={published_rod_profile_png}")
+    print(f"saved={published_rod_profile_pdf}")
+display(Image(filename=str(published_rod_profile_png)))
 
 detector_region_display_mask = detector_phi_display_mask(profile_detector_phi_map)
 qr_map, qz_map, valid_q_map = detector_q_maps_for_theta_initial(qr_rod_editor_theta_initial_deg)

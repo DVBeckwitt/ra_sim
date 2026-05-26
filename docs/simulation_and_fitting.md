@@ -789,9 +789,9 @@ Kernel-side hard limits from [`ra_sim/simulation/diffraction.py`](../ra_sim/simu
 | `save_flag` | int | `0` | [`ra_sim/simulation/engine.py`](../ra_sim/simulation/engine.py) | Legacy flag propagated into the kernel. |
 | `record_status` | bool | `False` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Enables per-sample status diagnostics. |
 | `thickness` | m | `0.0` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | If positive, overrides evanescent decay lengths with a fixed slab thickness. |
-| `optics_mode` | enum or `None` | `None` | [`ra_sim/simulation/engine.py`](../ra_sim/simulation/engine.py) | `None` resolves to the exact complex-`k` slab optics default (`OPTICS_MODE_EXACT`); explicit fast values still force `OPTICS_MODE_FAST`. |
+| `optics_mode` | enum or `None` | `None` | [`ra_sim/simulation/engine.py`](../ra_sim/simulation/engine.py) | Exact-only. `None` and exact values resolve to `OPTICS_MODE_EXACT`; fast optics values are rejected. |
 | `collect_hit_tables` | bool | `True` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Enables per-reflection subpixel hit tables. |
-| `exit_projection_mode` | enum string | `"internal"` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Chooses whether detector geometry uses the normalized solved outgoing direction (`"internal"`, default) or the legacy refracted-angle reconstruction (`"refracted"`). The internal default avoids the near-critical dead band that produced the horizontal empty stripe. |
+| `exit_projection_mode` | enum string | `"external"` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Detector geometry uses the outgoing air wavevector by default (`"external"`). `"refracted"` is accepted as a compatibility alias; `"internal"` remains available only as an explicit legacy/debug mode. |
 | `single_sample_indices` | integer array or `None` | `None` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Forces selected beam samples per reflection. |
 | `best_sample_indices_out` | integer array or `None` | `None` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Optional output buffer for best-sample tracking. |
 
@@ -867,42 +867,32 @@ The live forward path is `simulate(...)` or `simulate_qr_rods(...)` through [`ra
 
 The simulation is deterministic once the beam arrays are fixed. There is no Monte Carlo scattering inside the kernel itself; even the beam sampling is low-discrepancy and can be clustered into deterministic weighted representatives.
 
-## Pedagogical view of the optics modes
+## Exact-only optics model
 
-Why this choice: RA-SIM keeps two optics branches because there is no single
-transport model that is best for every use case the project cares about. The
-fast branch is best when the dominant constraint is throughput inside fitting
-loops, while the exact slab branch is best when near-critical-angle transport
-and complex attenuation materially affect intensities. Both branches
-deliberately reuse the same reflection list, `solve_q(...)` machinery, and
-default detector projection so that changing optics does not silently change the
-rest of the physics. In implementation terms, the mode switch changes entry and
-exit transport quantities, not the reciprocal-space search itself.
+Why this choice: RA-SIM now runs only exact complex-`k` slab optics. The old
+fast Fresnel/CTR damping approximation is disabled at compute entry points so
+scripts that explicitly request it fail loudly instead of silently changing
+physics. GUI saved states that still contain `optics_mode = "fast"` are migrated
+to exact before simulation.
 
-New simulations default to the exact slab branch. Choose the fast branch
-explicitly when throughput is more important than near-critical-angle optics.
-Status as of 2026-05-26: this is a feature/workflow default change for new GUI,
-CLI, headless, and legacy simulation entry points. It is not a bug migration:
-saved states and config schemas are unchanged, and explicit fast selections
-remain supported for compatibility and performance comparisons.
+The compatibility constants remain distinct:
 
-The code has two optics branches:
+- `FRESNEL_CTR_DAMPING = 0`
+- `COMPLEX_K_DWBA_SLAB = 1`
+- `OPTICS_MODE_FAST = FRESNEL_CTR_DAMPING`
+- `OPTICS_MODE_EXACT = COMPLEX_K_DWBA_SLAB`
 
-- `OPTICS_MODE_FAST`, labeled in the GUI as `Original Fast Approx (Fresnel + Beer-Lambert)`
-- `OPTICS_MODE_EXACT`, labeled in the GUI as `Complex-k DWBA slab optics (Precise)`
+`optics_mode` is exact-only. `None` and exact values resolve to
+`OPTICS_MODE_EXACT`. Fast optics values are rejected. The old Fresnel/CTR damping
+approximation is disabled.
 
-Pedagogically, both modes do the same three-stage calculation:
+The active optics calculation has three stages:
 
 1. Build an in-sample incoming wave from the incident beam.
 2. Scatter that wave through the same reciprocal-space `solve_q(...)` machinery.
 3. Build an outgoing wave, transmit it back out of the sample, and project it to the detector.
 
-The difference is therefore not in the reflection list, the `solve_q(...)`
-geometry, or the structure-factor model. In the default
-`exit_projection_mode = "internal"` path, both optics modes also use the same
-solved outgoing direction for detector geometry. The difference is in how the
-code computes the entry and exit transport through the sample and therefore the
-intensity weights attached to each hit.
+Scripts that explicitly request fast mode now fail. This is intentional.
 
 ### Shared intensity skeleton
 
@@ -911,8 +901,8 @@ deposited intensity is built from a reflection amplitude, a beam-sample weight,
 a reciprocal-space weight, an optics transport factor, and phenomenological
 broadening terms.
 
-For any accepted reciprocal-space solution `Q = (Q_x, Q_y, Q_z)`, both modes
-ultimately use the same detector intensity structure:
+For any accepted reciprocal-space solution `Q = (Q_x, Q_y, Q_z)`, the detector
+intensity structure is:
 
 \[
 I_{\mathrm{hit}}
@@ -933,7 +923,7 @@ with
 \cdot \exp(-2\,\Im(k_{z,\mathrm{out}})\,L_{\mathrm{out}}).
 \]
 
-So the optics mode only changes the four quantities
+The exact slab optics branch computes
 
 \[
 T_i^2,\quad T_f^2,\quad k_{z,\mathrm{in}},\quad k_{z,\mathrm{out}},
@@ -941,75 +931,7 @@ T_i^2,\quad T_f^2,\quad k_{z,\mathrm{in}},\quad k_{z,\mathrm{out}},
 
 and the corresponding in-sample and outgoing wavevectors built from them.
 
-### Fast mode: refracted-angle plus exponential attenuation
-
-The fast branch treats the sample optics as a transmitted grazing-angle problem
-plus exponential damping through an absorbing medium.
-
-For entry, let `k_0 = 2\pi/\lambda` and let `\theta_i'` be the local grazing
-angle on the sample. The code first computes an approximate transmitted angle
-
-\[
-\theta_t' = \mathrm{transmit\_angle\_grazing}(\theta_i', n_2),
-\]
-
-then sets an in-sample wavevector magnitude
-
-\[
-k_{\mathrm{scat}} = k_0 \sqrt{\max(\Re(\epsilon_2), 0)}.
-\]
-
-Using the local in-plane azimuth `\phi_i'`, the in-sample incoming components are
-
-\[
-k_{x,\mathrm{scat}} = k_{\mathrm{scat}}\cos\theta_t' \sin\phi_i',
-\qquad
-k_{y,\mathrm{scat}} = k_{\mathrm{scat}}\cos\theta_t' \cos\phi_i'.
-\]
-
-The normal component is taken from the helper
-
-\[
-(\Re(k_z), \Im(k_z)) = \mathrm{ktz\_components}(k_0, n_2, \theta_t'),
-\]
-
-with the implementation flipping the real part so the wave points into the
-sample:
-
-\[
-\Re(k_z) \leftarrow -\Re(k_z).
-\]
-
-The entry transmission factor is an approximate polarization average:
-
-\[
-T_i^2 \approx \frac{|t_s|^2 + |t_p|^2}{2},
-\]
-
-where `t_s` and `t_p` come from `fresnel_transmission(...)`.
-
-For exit, the code takes the absolute in-sample exit angle derived from the
-candidate outgoing wavevector,
-
-\[
-|2\theta_t'| = \left|\operatorname{atan}\left(\frac{k_{tz}'}{k_r}\right)\right|,
-\]
-
-and looks up four precomputed quantities as a function of that angle:
-
-- `T_f^2`
-- `\Im(k_{z,\mathrm{out}})`
-- `L_{\mathrm{out}}`
-- the absolute external exit angle
-
-So the fast mode is best thought of as:
-
-- use a refracted transmitted angle to define the in-sample ray,
-- approximate Fresnel transmission with squared amplitudes,
-- attenuate with exponential damping,
-- and reuse a lookup table for the exit optics so the inner loop stays cheap.
-
-### Exact mode: complex-`k_z` slab transport
+### Exact complex-`k_z` slab transport
 
 The exact branch keeps the same scattering geometry but replaces the helper
 angle model with a complex wavevector construction that enforces the slab
@@ -1255,42 +1177,16 @@ The in-slab incoming path length is
 \[
 L_{\mathrm{in}} =
 \begin{cases}
-\mathrm{thickness}, & \mathrm{thickness} > 0 \\
+\mathrm{thickness_m}\times 10^{10}, & \mathrm{thickness_m} > 0 \\
 \frac{1}{2\,\Im(k_z)}, & \text{otherwise.}
 \end{cases}
 \]
 
-### Fast entry optics branch
+### Obsolete fast entry optics branch
 
-When `optics_mode == OPTICS_MODE_FAST`, the code uses the grazing-angle transmitted angle
-
-\[
-\theta_t' = \mathrm{transmit\_angle\_grazing}(\theta_i', n_2)
-\]
-
-and sets
-
-\[
-k_{\mathrm{scat}} = k_0 \sqrt{\max(\Re(\epsilon_2), 0)}.
-\]
-
-The in-sample wavevector is
-
-\[
-k_{x,\mathrm{scat}} = k_{\mathrm{scat}}\cos\theta_t' \sin\phi_i',
-\qquad
-k_{y,\mathrm{scat}} = k_{\mathrm{scat}}\cos\theta_t' \cos\phi_i'.
-\]
-
-The z component comes from `ktz_components(k0, n2_samp, th_t)` and is then sign-flipped:
-
-\[
-(\Re(k_z), \Im(k_z)) = \mathrm{ktz\_components}(k_0, n_2, \theta_t'),
-\qquad
-\Re(k_z) \leftarrow -\Re(k_z).
-\]
-
-The code computes the approximate polarization-average Fresnel power transmission from the complex amplitudes `fresnel_transmission(..., s)` and `fresnel_transmission(..., p)`, then uses the same `L_in` rule as the exact path.
+The old `OPTICS_MODE_FAST` entry branch is disabled. Runtime calls are resolved
+through `require_exact_optics_mode(...)`, so no simulation entry point may select
+the grazing-angle Fresnel/CTR damping approximation.
 
 ### What is stored per sample
 
@@ -1617,7 +1513,7 @@ and
 \qquad
 L_{\mathrm{out}} =
 \begin{cases}
-\mathrm{thickness}, & \mathrm{thickness} > 0 \\
+\mathrm{thickness_m}\times 10^{10}, & \mathrm{thickness_m} > 0 \\
 \frac{1}{2\,\Im(k_{z,f})}, & \text{otherwise.}
 \end{cases}
 \]
@@ -1630,38 +1526,20 @@ The exact branch also constructs a refracted-angle representation
 |k_f| = k_0.
 \]
 
-Those quantities are still available for diagnostics and for the legacy
-`exit_projection_mode = "refracted"` path, but they are not the default
-detector-projection inputs.
+Those quantities are used for the default `exit_projection_mode = "external"`
+detector projection. The older `"refracted"` label is accepted as a compatibility
+alias for `"external"`.
 
-### Fast exit optics
+### Obsolete fast exit optics
 
-In `OPTICS_MODE_FAST`, the code lazily builds one lookup table per beam sample. The table stores
-
-- `Tf2`
-- `im_k_z_f`
-- `L_out`
-- absolute exit angle
-
-as a function of the absolute in-sample exit angle. The lookup uses a quadratic parameterization in angle index, then linearly interpolates the stored values.
-
-The downstream formulas are
-
-\[
-2\theta_t = |2\theta_t|_{\mathrm{lut}}\operatorname{sign}(2\theta_t'),
-\qquad
-|k_f| = k_{\mathrm{scat}}.
-\]
-
-In older fast-mode detector projection, that remapped `2\theta_t` was used to
-build the outgoing detector ray. The current default keeps the LUT-derived
-`T_f^2`, `\Im(k_{z,f})`, and `L_{\mathrm{out}}` for intensity, but it does not
-use the remapped angle to place the hit on the detector.
+The fast optics lookup table is disabled and no runtime code builds or queries
+it. Dead helper definitions may remain temporarily for compatibility cleanup,
+but the active simulation path always computes exact exit Fresnel transport.
 
 ### Why the detector projection default changed
 
 Older saved states could project the detector ray from the refracted-angle
-reconstruction, especially in `OPTICS_MODE_FAST`. That path first solved the
+reconstruction, especially in disabled fast-optics runs. That path first solved the
 outgoing in-sample direction
 
 \[
@@ -1695,8 +1573,8 @@ line that moves as the sample plane rotates with `\theta_i`.
 
 The detector intersection code itself was not the problem. The problem was that
 the old path intersected the wrong outgoing vector. The current default keeps
-the optics factors for intensity but projects the detector geometry from the
-solved internal direction.
+the exact optics factors for intensity and projects detector geometry from the
+outgoing air wavevector.
 
 ### Propagation factor and intensity
 
@@ -1739,8 +1617,20 @@ The outgoing in-sample azimuth is
 \phi_f = \operatorname{atan2}(k_{tx}', k_{ty}').
 \]
 
-By default, `exit_projection_mode = "internal"` and the detector direction is
-the normalized solved outgoing vector
+By default, `exit_projection_mode = "external"` and the detector direction is
+rebuilt from the outgoing air wavevector:
+
+\[
+k_{f,\mathrm{proj}} =
+\begin{bmatrix}
+|k_f|\cos(2\theta_t)\sin\phi_f \\
+|k_f|\cos(2\theta_t)\cos\phi_f \\
+|k_f|\sin(2\theta_t)
+\end{bmatrix}.
+\]
+
+If the explicit legacy/debug `exit_projection_mode = "internal"` path is
+requested, the code instead uses the normalized solved internal outgoing vector:
 
 \[
 \hat{k}_{f,\mathrm{proj}} =
@@ -1749,19 +1639,6 @@ the normalized solved outgoing vector
 k_{tx}' \\
 k_{ty}' \\
 k_{tz}'
-\end{bmatrix}.
-\]
-
-If the legacy `exit_projection_mode = "refracted"` path is requested, the code
-instead rebuilds the outgoing direction from the refracted-angle
-representation:
-
-\[
-k_{f,\mathrm{proj}} =
-\begin{bmatrix}
-|k_f|\cos(2\theta_t)\sin\phi_f \\
-|k_f|\cos(2\theta_t)\cos\phi_f \\
-|k_f|\sin(2\theta_t)
 \end{bmatrix}.
 \]
 

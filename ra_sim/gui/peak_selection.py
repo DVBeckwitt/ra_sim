@@ -12,7 +12,7 @@ from ra_sim.simulation.intersection_cache_schema import (
     extract_cache_row_provenance,
     extract_cached_caked_angles,
 )
-from ra_sim.simulation.diffraction import get_process_peaks_runtime_kwargs
+from ra_sim.simulation.diffraction import OPTICS_MODE_EXACT, get_process_peaks_runtime_kwargs
 from ra_sim.debug_controls import retain_optional_cache
 from ra_sim.utils.calculations import (
     _n2_wavelength_snapshot_from_angstrom,
@@ -591,7 +591,7 @@ def build_runtime_selected_peak_ideal_center_probe_config(
         detector_center=_runtime_float_pair(detector_center),
         theta_initial_deg=_runtime_float(theta_initial_deg, float("nan")),
         cor_angle_deg=_runtime_float(cor_angle_deg, float("nan")),
-        optics_mode=_runtime_int(optics_mode, 0),
+        optics_mode=_runtime_int(optics_mode, OPTICS_MODE_EXACT),
         solve_q_steps=solve_q_steps,
         solve_q_rel_tol=solve_q_rel_tol,
         solve_q_mode=solve_q_mode,

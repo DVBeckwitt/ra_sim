@@ -218,7 +218,6 @@ from ra_sim.simulation.diffraction import (
     load_most_recent_logged_intersection_cache,
     load_most_recent_logged_intersection_cache_metadata,
     OPTICS_MODE_EXACT,
-    OPTICS_MODE_FAST,
     process_peaks_parallel,
     process_peaks_parallel_safe,
     process_qr_rods_parallel,
@@ -4240,62 +4239,13 @@ def build_mosaic_params(*, sample_count=None, solve_q_steps=None, rng_seed=None)
 
 
 def _normalize_optics_mode_label(value) -> str:
-    """Normalize optics mode to UI labels: ``'fast'`` or ``'exact'``."""
+    """Migrate all GUI optics labels to exact-only mode."""
 
-    if value is None:
-        return "exact"
-    if isinstance(value, (int, np.integer)):
-        return "exact" if int(value) == OPTICS_MODE_EXACT else "fast"
-    if isinstance(value, (float, np.floating)):
-        return "exact" if int(round(float(value))) == OPTICS_MODE_EXACT else "fast"
-
-    text = str(value).strip().lower()
-    text = text.replace("–", "-").replace("—", "-")
-    text = " ".join(text.split())
-
-    if text in {
-        "1",
-        "true",
-        "yes",
-        "on",
-        "exact",
-        "precise",
-        "slow",
-        "complex_k_dwba_slab",
-        "complex-k dwba slab optics",
-        "phase-matched complex-k multilayer dwba",
-    }:
-        return "exact"
-    if text in {
-        "0",
-        "false",
-        "no",
-        "off",
-        "fast",
-        "approx",
-        "fresnel_ctr_damping",
-        "fresnel-weighted kinematic ctr absorption correction",
-        "uncoupled fresnel + ctr damping (ufd)",
-        "fast dwba-lite (fresnel + depth-sum attenuation)",
-        "ufd",
-        "dwba-lite",
-    }:
-        return "fast"
-
-    if "complex-k dwba" in text or "complex_k_dwba" in text:
-        return "exact"
-    if "fresnel" in text and "ctr" in text:
-        return "fast"
-    return "fast"
+    return "exact"
 
 
 def _current_optics_mode_flag() -> int:
-    mode_var = globals().get("optics_mode_var")
-    mode_value = mode_var.get() if mode_var is not None else None
-    mode_label = _normalize_optics_mode_label(mode_value)
-    if mode_label == "exact":
-        return OPTICS_MODE_EXACT
-    return OPTICS_MODE_FAST
+    return OPTICS_MODE_EXACT
 
 
 def _initialize_runtime_plot_block_04() -> None:
@@ -21403,7 +21353,7 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             "is_preview": bool(job.get("is_preview", False)),
             "theta_i_deg": float(job["theta_initial_deg"]),
             "optics_mode": int(job["optics_mode"]),
-            "exit_projection_mode": str(job.get("exit_projection_mode", "internal")),
+            "exit_projection_mode": str(job.get("exit_projection_mode", "external")),
         },
         source="simulation_generation_job",
     )
@@ -21493,7 +21443,7 @@ def _run_simulation_generation_job(job: dict[str, object]) -> dict[str, object]:
             collect_hit_tables=bool(collect_hit_tables),
             build_intersection_cache=bool(build_intersection_cache),
             accumulate_image=bool(accumulate_image),
-            exit_projection_mode=str(job.get("exit_projection_mode", "internal")),
+            exit_projection_mode=str(job.get("exit_projection_mode", "external")),
         )
 
     def copy_best_sample_indices(buffer) -> np.ndarray:
@@ -42416,8 +42366,24 @@ def _build_geometry_fit_async_job(
     background_labels: dict[int, str] = {}
     theta_base_by_background: dict[int, float] = {}
     theta_initial_by_background: dict[int, float] = {}
+
+    def _manual_dataset_background_label(idx: int) -> str:
+        try:
+            osc_path = manual_dataset_bindings.osc_files[int(idx)]
+        except Exception:
+            osc_path = None
+        if osc_path is not None:
+            try:
+                name = Path(str(osc_path)).name
+            except Exception:
+                name = ""
+            if str(name).strip():
+                return str(name)
+        return _geometry_fit_background_label(int(idx))
+
     skipped_manual_pair_backgrounds: dict[int, str] = {
-        int(idx): _geometry_fit_background_label(int(idx)) for idx in sorted(skipped_empty_indices)
+        int(idx): _manual_dataset_background_label(int(idx))
+        for idx in sorted(skipped_empty_indices)
     }
 
     def _theta_base_for_index(dataset_index: int) -> float:
@@ -42458,7 +42424,7 @@ def _build_geometry_fit_async_job(
         source_snapshots[int(idx)] = copy.deepcopy(
             simulation_runtime_state.source_row_snapshots.get(int(idx)) or {}
         )
-        background_labels[int(idx)] = _geometry_fit_background_label(int(idx))
+        background_labels[int(idx)] = _manual_dataset_background_label(int(idx))
         _record_background_fit_inputs(int(idx))
 
     try:

@@ -442,10 +442,10 @@ def _install_streaming_fast_outer_backend(
         all_q = np.asarray(args[0], dtype=np.float64)
         peak_idx = int(args[1])
         sample_idx = int(args[2])
-        save_flag = int(args[27])
-        q_data = args[28]
-        q_count = args[29]
-        q_debug_truncated_count = args[30]
+        save_flag = int(args[25])
+        q_data = args[26]
+        q_count = args[27]
+        q_debug_truncated_count = args[28]
         candidate_mass = args[-6]
         candidate_row = args[-5]
         candidate_col = args[-4]
@@ -942,12 +942,10 @@ def test_weighted_event_pass2_does_not_tail_fill_inside_qset(monkeypatch):
         sample_n2_array,
         sample_eps2_array,
         0.0,
-        diffraction.OPTICS_MODE_FAST,
+        diffraction.OPTICS_MODE_EXACT,
         1.0,
         64,
         diffraction.EXIT_PROJECTION_INTERNAL,
-        0,
-        np.zeros((diffraction._FAST_OPTICS_LUT_SIZE, diffraction._FAST_OPTICS_LUT_COLS)),
         np.array([0.5, 1.5, 2.5], dtype=np.float64),
         0,
         0.0,

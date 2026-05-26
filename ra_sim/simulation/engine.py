@@ -28,6 +28,7 @@ from .diffraction import (
     normalize_events_per_beam_phase_backend,
     process_peaks_parallel_safe,
     process_qr_rods_parallel_safe,
+    require_exact_optics_mode,
 )
 from .types import (
     BeamSamples,
@@ -314,9 +315,7 @@ def _run_simulation_request(
     )
     if projection_debug_active:
         peak_kwargs.update(projection_debug_buffers)
-    peak_kwargs["optics_mode"] = (
-        request.optics_mode if request.optics_mode is not None else OPTICS_MODE_EXACT
-    )
+    peak_kwargs["optics_mode"] = require_exact_optics_mode(request.optics_mode)
     if request.beam.sample_weights is not None:
         peak_kwargs["sample_weights"] = request.beam.sample_weights
     peak_kwargs["n2_sample_array_override"] = beam_n2_sample_array
@@ -512,10 +511,10 @@ def _build_forward_simulation_numba_warmup_request_with_overrides(
         save_flag=0,
         record_status=False,
         thickness=0.0,
-        optics_mode=0,
+        optics_mode=OPTICS_MODE_EXACT,
         collect_hit_tables=True,
         accumulate_image=True,
-        exit_projection_mode="internal",
+        exit_projection_mode="external",
     )
 
 
@@ -820,9 +819,7 @@ def simulate_qr_rods(
     )
     if projection_debug_active:
         rod_kwargs.update(projection_debug_buffers)
-    rod_kwargs["optics_mode"] = (
-        request.optics_mode if request.optics_mode is not None else OPTICS_MODE_EXACT
-    )
+    rod_kwargs["optics_mode"] = require_exact_optics_mode(request.optics_mode)
     if request.beam.sample_weights is not None:
         rod_kwargs["sample_weights"] = request.beam.sample_weights
     rod_kwargs["n2_sample_array_override"] = beam_n2_sample_array

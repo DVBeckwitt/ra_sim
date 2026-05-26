@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from ra_sim.simulation import diffraction
 from tests.helpers.gui_fakes import RuntimeVar as _RuntimeVar
 
 
@@ -6454,7 +6455,7 @@ def _make_runtime_simulation_generation_job(
         "sample_depth_m": 1.0,
         "debye_x": 0.0,
         "debye_y": 0.0,
-        "optics_mode": 0,
+        "optics_mode": 1,
         "collect_hit_tables": bool(collect_hit_tables),
         "collect_primary_hit_tables": bool(collect_primary_hit_tables),
         "collect_secondary_hit_tables": bool(collect_secondary_hit_tables),
@@ -16790,7 +16791,7 @@ def test_headless_hydrated_caked_payload_projects_rows_per_background(
             "solve_q_steps": 100,
             "solve_q_rel_tol": 1.0e-3,
             "solve_q_mode": 0,
-            "optics_mode": "fast",
+            "optics_mode": "exact",
             "p0": 0.5,
             "p1": 0.5,
             "p2": 0.5,
@@ -17404,6 +17405,8 @@ def test_cli_hydrated_caked_payload_projects_rows_per_background(
         lambda: SimpleNamespace(
             diffraction=SimpleNamespace(
                 OPTICS_MODE_FAST=0,
+                FastOpticsDisabledError=diffraction.FastOpticsDisabledError,
+                require_exact_optics_mode=diffraction.require_exact_optics_mode,
                 OPTICS_MODE_EXACT=1,
                 hit_tables_to_max_positions=lambda *args, **kwargs: [],
                 process_peaks_parallel=lambda *args, **kwargs: [],
@@ -17634,7 +17637,7 @@ def test_manual_caked_objective_stays_in_fit_space_and_improves(monkeypatch) -> 
         "psi_z": 0.0,
         "debye_x": 0.0,
         "debye_y": 0.0,
-        "optics_mode": 0,
+        "optics_mode": 1,
         "mosaic_params": {
             "beam_x_array": np.zeros(1, dtype=np.float64),
             "beam_y_array": np.zeros(1, dtype=np.float64),

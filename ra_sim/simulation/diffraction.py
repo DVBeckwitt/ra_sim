@@ -42,7 +42,6 @@ from ra_sim.utils.calculations import (
     IndexofRefraction,
     SOURCE_BRANCH_PHI_ZERO_DEADBAND_DEG,
     complex_sqrt,
-    fresnel_transmission,
 )
 from ra_sim.utils.parallel import resolve_weighted_event_worker_count
 from ra_sim.utils.numba_compat import (
@@ -57,7 +56,7 @@ from ra_sim.utils.numba_compat import (
 
 # Optical transport modes
 # Canonical names:
-#   - FRESNEL_CTR_DAMPING: fast Fresnel-weighted CTR damping path
+#   - FRESNEL_CTR_DAMPING: disabled compatibility value
 #   - COMPLEX_K_DWBA_SLAB: precise complex-k slab optics path
 FRESNEL_CTR_DAMPING = 0
 COMPLEX_K_DWBA_SLAB = 1
@@ -65,6 +64,79 @@ COMPLEX_K_DWBA_SLAB = 1
 # Backward-compatible aliases used throughout the existing codebase.
 OPTICS_MODE_FAST = FRESNEL_CTR_DAMPING
 OPTICS_MODE_EXACT = COMPLEX_K_DWBA_SLAB
+
+
+class FastOpticsDisabledError(ValueError):
+    pass
+
+
+FAST_OPTICS_DISABLED_MESSAGE = (
+    "Fast optics mode is disabled. "
+    "Use exact complex-k slab optics only."
+)
+
+_EXACT_OPTICS_MODE_LABELS = {
+    "1",
+    "true",
+    "yes",
+    "on",
+    "exact",
+    "precise",
+    "slow",
+    "complex_k_dwba_slab",
+    "complex-k dwba slab optics",
+    "phase-matched complex-k multilayer dwba",
+}
+
+_FAST_OPTICS_MODE_LABELS = {
+    "0",
+    "false",
+    "no",
+    "off",
+    "fast",
+    "approx",
+    "fresnel_ctr_damping",
+    "fresnel-weighted kinematic ctr absorption correction",
+    "uncoupled fresnel + ctr damping (ufd)",
+    "fast dwba-lite (fresnel + depth-sum attenuation)",
+    "ufd",
+    "dwba-lite",
+}
+
+
+def require_exact_optics_mode(value: object) -> int:
+    if value is None:
+        return OPTICS_MODE_EXACT
+
+    if isinstance(value, (int, np.integer)):
+        if int(value) == OPTICS_MODE_EXACT:
+            return OPTICS_MODE_EXACT
+        if int(value) == OPTICS_MODE_FAST:
+            raise FastOpticsDisabledError(FAST_OPTICS_DISABLED_MESSAGE)
+        raise ValueError(f"Unsupported optics_mode: {value!r}")
+
+    if isinstance(value, (float, np.floating)):
+        numeric_value = float(value)
+        if not np.isfinite(numeric_value) or not numeric_value.is_integer():
+            raise ValueError(f"Unsupported optics_mode: {value!r}")
+        return require_exact_optics_mode(int(numeric_value))
+
+    text = str(value).strip().lower()
+    text = text.replace("–", "-").replace("—", "-")
+    text = " ".join(text.split())
+
+    if (
+        text in _EXACT_OPTICS_MODE_LABELS
+        or "complex-k dwba" in text
+        or "complex_k_dwba" in text
+    ):
+        return OPTICS_MODE_EXACT
+
+    if text in _FAST_OPTICS_MODE_LABELS or ("fresnel" in text and "ctr" in text):
+        raise FastOpticsDisabledError(FAST_OPTICS_DISABLED_MESSAGE)
+
+    raise ValueError(f"Unsupported optics_mode: {value!r}")
+
 
 # solve_q hot-loop constants
 DEFAULT_SOLVE_Q_STEPS = 1000
@@ -115,14 +187,6 @@ _LOCAL_PIXEL_CACHE_MAX_CAPACITY = 32768
 _LOCAL_PIXEL_CACHE_SCALE = 32
 _LOCAL_PIXEL_CACHE_LOAD_NUM = 1
 _LOCAL_PIXEL_CACHE_LOAD_DEN = 2
-_FAST_OPTICS_LUT_SIZE = 96
-_FAST_OPTICS_LUT_COLS = 4
-_FAST_OPTICS_COL_TF2 = 0
-_FAST_OPTICS_COL_IM_KZ = 1
-_FAST_OPTICS_COL_L_OUT = 2
-_FAST_OPTICS_COL_OUT_ANGLE = 3
-_FAST_OPTICS_MAX_ANGLE = 0.5 * np.pi
-
 # Per-sample precompute table columns (reflection-invariant terms).
 _SAMPLE_COL_VALID = 0
 _SAMPLE_COL_I_PLANE_X = 1
@@ -143,6 +207,7 @@ _SAMPLE_COLS = 15
 
 EXIT_PROJECTION_INTERNAL = 0
 EXIT_PROJECTION_REFRACTED = 1
+EXIT_PROJECTION_EXTERNAL = EXIT_PROJECTION_REFRACTED
 
 _PROJECTION_DEBUG_COUNTER_TOTAL = 0
 _PROJECTION_DEBUG_COUNTER_INVALID_DET = 1
@@ -328,7 +393,7 @@ _PROCESS_PEAKS_PARALLEL_DEFAULTS = {
     "n2_sample_array_override": None,
     "accumulate_image": True,
     "sample_qr_ring_once": True,
-    "exit_projection_mode": EXIT_PROJECTION_INTERNAL,
+    "exit_projection_mode": EXIT_PROJECTION_EXTERNAL,
     "projection_debug_counters": None,
     "projection_debug_reject_counts": None,
     "projection_debug_reject_records": None,
@@ -1294,14 +1359,10 @@ def _sanitize_transmission_power(power):
 
 @njit(cache=True)
 def _thickness_to_angstrom(depth):
-    """Interpret sub-mm values as meters and convert to angstrom."""
+    """Convert positive sample depth from meters to angstrom."""
     if depth <= 0.0:
         return 0.0
-    # Existing defaults pass thickness in meters (e.g., 50e-9).
-    if depth < 1e-3:
-        return depth * 1.0e10
-    # Larger values are assumed to already be in angstrom.
-    return depth
+    return depth * 1.0e10
 
 
 @njit(cache=True)
@@ -1625,86 +1686,6 @@ def _accumulate_bilinear_cached(
                 return True, True, entry_count
             new_count += added
     return True, False, new_count
-
-
-@njit(cache=True, nogil=True)
-def _build_fast_optics_lut_row(lut_row, k0, n2_samp, n2_real, thickness):
-    lut_size = lut_row.shape[0]
-    if lut_size <= 0:
-        return
-    denom = float(max(lut_size - 1, 1))
-    for i in range(lut_size):
-        u = float(i) / denom
-        theta = _FAST_OPTICS_MAX_ANGLE * u * u
-        Tf_s = fresnel_transmission(theta, n2_samp, True, False)
-        Tf_p = fresnel_transmission(theta, n2_samp, False, False)
-        Tf2 = 0.5 * (
-            (np.real(Tf_s) * np.real(Tf_s) + np.imag(Tf_s) * np.imag(Tf_s))
-            + (np.real(Tf_p) * np.real(Tf_p) + np.imag(Tf_p) * np.imag(Tf_p))
-        )
-        Tf2 = _sanitize_transmission_power(Tf2)
-
-        _, im_k_z_f = ktz_components(k0, n2_samp, theta)
-        if thickness > 0.0:
-            L_out = thickness
-        else:
-            L_out = 1.0 / np.maximum(2.0 * im_k_z_f, 1e-30)
-
-        out_angle = acos(_clamp(cos(theta) * n2_real, -1.0, 1.0))
-
-        lut_row[i, _FAST_OPTICS_COL_TF2] = Tf2
-        lut_row[i, _FAST_OPTICS_COL_IM_KZ] = im_k_z_f
-        lut_row[i, _FAST_OPTICS_COL_L_OUT] = L_out
-        lut_row[i, _FAST_OPTICS_COL_OUT_ANGLE] = out_angle
-
-
-@njit(cache=True)
-def _lookup_fast_optics_lut_row(lut_row, theta):
-    lut_size = lut_row.shape[0]
-    if lut_size <= 1:
-        return (
-            lut_row[0, _FAST_OPTICS_COL_TF2],
-            lut_row[0, _FAST_OPTICS_COL_IM_KZ],
-            lut_row[0, _FAST_OPTICS_COL_L_OUT],
-            lut_row[0, _FAST_OPTICS_COL_OUT_ANGLE],
-        )
-
-    theta_eff = theta
-    if theta_eff < 0.0:
-        theta_eff = 0.0
-    elif theta_eff > _FAST_OPTICS_MAX_ANGLE:
-        theta_eff = _FAST_OPTICS_MAX_ANGLE
-
-    if theta_eff <= 0.0:
-        idx0 = 0
-        frac = 0.0
-    else:
-        u = sqrt(theta_eff / _FAST_OPTICS_MAX_ANGLE) * float(lut_size - 1)
-        idx0 = int(u)
-        if idx0 >= lut_size - 1:
-            idx0 = lut_size - 2
-            frac = 1.0
-        else:
-            frac = u - float(idx0)
-    idx1 = idx0 + 1
-
-    tf2 = (
-        lut_row[idx0, _FAST_OPTICS_COL_TF2] * (1.0 - frac)
-        + lut_row[idx1, _FAST_OPTICS_COL_TF2] * frac
-    )
-    im_k_z_f = (
-        lut_row[idx0, _FAST_OPTICS_COL_IM_KZ] * (1.0 - frac)
-        + lut_row[idx1, _FAST_OPTICS_COL_IM_KZ] * frac
-    )
-    L_out = (
-        lut_row[idx0, _FAST_OPTICS_COL_L_OUT] * (1.0 - frac)
-        + lut_row[idx1, _FAST_OPTICS_COL_L_OUT] * frac
-    )
-    out_angle = (
-        lut_row[idx0, _FAST_OPTICS_COL_OUT_ANGLE] * (1.0 - frac)
-        + lut_row[idx1, _FAST_OPTICS_COL_OUT_ANGLE] * frac
-    )
-    return tf2, im_k_z_f, L_out, out_angle
 
 
 # =============================================================================
@@ -2882,6 +2863,39 @@ def _normalize_bound_process_peaks_parallel_call(args, kwargs):
     return normalized_args, normalized_kwargs
 
 
+def _normalize_exact_optics_arg(
+    args,
+    kwargs,
+    param_names,
+    *,
+    default=OPTICS_MODE_EXACT,
+):
+    kwargs = dict(kwargs)
+    optics_mode_index = param_names.index("optics_mode")
+    if len(args) > optics_mode_index:
+        normalized_args = list(args)
+        normalized_args[optics_mode_index] = require_exact_optics_mode(
+            normalized_args[optics_mode_index]
+        )
+        return tuple(normalized_args), kwargs
+
+    kwargs["optics_mode"] = require_exact_optics_mode(
+        kwargs.get("optics_mode", default)
+    )
+    return args, kwargs
+
+
+def _require_exact_process_peaks_call(args, kwargs):
+    """Normalize ``optics_mode`` for bound process-peaks calls."""
+
+    return _normalize_exact_optics_arg(
+        args,
+        kwargs,
+        _PROCESS_PEAKS_PARALLEL_PARAM_NAMES,
+        default=_PROCESS_PEAKS_PARALLEL_DEFAULTS["optics_mode"],
+    )
+
+
 def _get_phase_entry_n_samp(phase_entry, fallback_n_samp):
     if isinstance(phase_entry, dict):
         n_samp = phase_entry.get("n_samp", fallback_n_samp)
@@ -3314,6 +3328,7 @@ def _precompute_sample_terms(
     sample_terms[:, _SAMPLE_COL_SOLVE_Q_NEXT] = -1.0
     n2_samp_out = np.empty(n_samp, dtype=np.complex128)
     eps2_out = np.empty(n_samp, dtype=np.complex128)
+    thickness_angstrom = _thickness_to_angstrom(thickness)
 
     R_sample, n_surf, P0_rot = _build_sample_rotation(
         theta_initial_deg,
@@ -3373,7 +3388,6 @@ def _precompute_sample_terms(
         e1_temp /= e1_norm
     e2_temp = np.cross(n_surf, e1_temp)
 
-    use_exact_optics = optics_mode == OPTICS_MODE_EXACT
     eps1 = 1.0 + 0.0j
 
     for i_samp in range(n_samp):
@@ -3384,7 +3398,6 @@ def _precompute_sample_terms(
         if i_samp < n2_array.size:
             n2_samp = n2_array[i_samp]
         eps2 = n2_samp * n2_samp
-        n2_sq_real = np.real(eps2)
 
         n2_samp_out[i_samp] = n2_samp
         eps2_out[i_samp] = eps2
@@ -3460,53 +3473,31 @@ def _precompute_sample_terms(
         )
         phi_i_prime = (pi / 2.0) - np.arctan2(p2, p1)
 
-        if use_exact_optics:
-            k0_sq = k0 * k0
-            k_par_i = k0 * np.abs(np.cos(th_i_prime))
-            k_par_i_sq = k_par_i * k_par_i
+        k0_sq = k0 * k0
+        k_par_i = k0 * np.abs(np.cos(th_i_prime))
+        k_par_i_sq = k_par_i * k_par_i
 
-            kz1_i = _kz_branch_decay((k0_sq - k_par_i_sq) + 0.0j)
-            kz2_i = _kz_branch_decay((eps2 * k0_sq) - k_par_i_sq)
+        kz1_i = _kz_branch_decay((k0_sq - k_par_i_sq) + 0.0j)
+        kz2_i = _kz_branch_decay((eps2 * k0_sq) - k_par_i_sq)
 
-            k_x_scat = k_par_i * np.sin(phi_i_prime)
-            k_y_scat = k_par_i * np.cos(phi_i_prime)
-            re_k_z = -np.abs(kz2_i.real)
-            im_k_z = np.abs(kz2_i.imag)
-            k_scat = np.sqrt(np.maximum(k_par_i_sq + kz2_i.real * kz2_i.real, 0.0))
+        k_x_scat = k_par_i * np.sin(phi_i_prime)
+        k_y_scat = k_par_i * np.cos(phi_i_prime)
+        re_k_z = -np.abs(kz2_i.real)
+        im_k_z = np.abs(kz2_i.imag)
+        k_scat = np.sqrt(np.maximum(k_par_i_sq + kz2_i.real * kz2_i.real, 0.0))
 
-            Ti_s = _fresnel_t_exact(kz1_i, kz2_i, eps1, eps2, True)
-            Ti_p = _fresnel_t_exact(kz1_i, kz2_i, eps1, eps2, False)
-            Ti2 = 0.5 * (
-                _fresnel_power_t_exact(Ti_s, kz1_i, kz2_i, eps1, eps2, True)
-                + _fresnel_power_t_exact(Ti_p, kz1_i, kz2_i, eps1, eps2, False)
-            )
-            Ti2 = _sanitize_transmission_power(Ti2)
+        Ti_s = _fresnel_t_exact(kz1_i, kz2_i, eps1, eps2, True)
+        Ti_p = _fresnel_t_exact(kz1_i, kz2_i, eps1, eps2, False)
+        Ti2 = 0.5 * (
+            _fresnel_power_t_exact(Ti_s, kz1_i, kz2_i, eps1, eps2, True)
+            + _fresnel_power_t_exact(Ti_p, kz1_i, kz2_i, eps1, eps2, False)
+        )
+        Ti2 = _sanitize_transmission_power(Ti2)
 
-            if thickness > 0.0:
-                L_in = thickness
-            else:
-                L_in = 1.0 / np.maximum(2.0 * im_k_z, 1e-30)
+        if thickness_angstrom > 0.0:
+            L_in = thickness_angstrom
         else:
-            th_t = transmit_angle_grazing(th_i_prime, n2_samp)
-            k_scat = k0 * np.sqrt(np.maximum(n2_sq_real, 0.0))
-            k_x_scat = k_scat * np.cos(th_t) * np.sin(phi_i_prime)
-            k_y_scat = k_scat * np.cos(th_t) * np.cos(phi_i_prime)
-
-            re_k_z, im_k_z = ktz_components(k0, n2_samp, th_t)
-            re_k_z = -re_k_z
-
-            Ti_s = fresnel_transmission(th_i_prime, n2_samp, True, True)
-            Ti_p = fresnel_transmission(th_i_prime, n2_samp, False, True)
-            Ti2 = 0.5 * (
-                (np.real(Ti_s) * np.real(Ti_s) + np.imag(Ti_s) * np.imag(Ti_s))
-                + (np.real(Ti_p) * np.real(Ti_p) + np.imag(Ti_p) * np.imag(Ti_p))
-            )
-            Ti2 = _sanitize_transmission_power(Ti2)
-
-            if thickness > 0.0:
-                L_in = thickness
-            else:
-                L_in = 1.0 / np.maximum(2.0 * im_k_z, 1e-30)
+            L_in = 1.0 / np.maximum(2.0 * im_k_z, 1e-30)
 
         sample_terms[i_samp, _SAMPLE_COL_KX_SCAT] = k_x_scat
         sample_terms[i_samp, _SAMPLE_COL_KY_SCAT] = k_y_scat
@@ -3742,23 +3733,6 @@ def _store_weighted_event_q_debug_row(
         q_debug_truncated_count[0] += 1
 
 
-def _lookup_fast_optics(k0, n2_samp, n2_real, thickness, theta):
-    Tf_s = fresnel_transmission(theta, n2_samp, True, False)
-    Tf_p = fresnel_transmission(theta, n2_samp, False, False)
-    Tf2 = 0.5 * (
-        (np.real(Tf_s) * np.real(Tf_s) + np.imag(Tf_s) * np.imag(Tf_s))
-        + (np.real(Tf_p) * np.real(Tf_p) + np.imag(Tf_p) * np.imag(Tf_p))
-    )
-    Tf2 = _sanitize_transmission_power(Tf2)
-    _, im_k_z_f = ktz_components(k0, n2_samp, theta)
-    if thickness > 0.0:
-        L_out = thickness
-    else:
-        L_out = 1.0 / np.maximum(2.0 * im_k_z_f, 1.0e-30)
-    out_angle = acos(_clamp(cos(theta) * n2_real, -1.0, 1.0))
-    return float(Tf2), float(im_k_z_f), float(L_out), float(out_angle)
-
-
 def _project_weighted_candidate(
     *,
     H,
@@ -3807,8 +3781,8 @@ def _project_weighted_candidate(
     if (not np.isfinite(pixel_size_eff)) or pixel_size_eff <= 0.0:
         pixel_size_eff = 100e-6
     pixel_scale = 1.0 / pixel_size_eff
-    use_exact_optics = int(optics_mode) == OPTICS_MODE_EXACT
     eps3 = 1.0 + 0.0j
+    thickness_angstrom = _thickness_to_angstrom(thickness)
 
     k_tx_prime = float(Qx) + float(k_x_scat)
     k_ty_prime = float(Qy) + float(k_y_scat)
@@ -3819,38 +3793,26 @@ def _project_weighted_candidate(
     else:
         twotheta_t_prime = np.arctan(k_tz_prime / kr)
 
-    th_t_out = np.abs(twotheta_t_prime)
-    if use_exact_optics:
-        k0_sq = float(k0) * float(k0)
-        k_par_f = kr
-        k_par_f_sq = k_par_f * k_par_f
-        kz2_f = _kz_branch_decay((eps2 * k0_sq) - k_par_f_sq)
-        kz3_f = _kz_branch_decay((k0_sq - k_par_f_sq) + 0.0j)
-        Tf_s = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, True)
-        Tf_p = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, False)
-        Tf2 = 0.5 * (
-            _fresnel_power_t_exact(Tf_s, kz2_f, kz3_f, eps2, eps3, True)
-            + _fresnel_power_t_exact(Tf_p, kz2_f, kz3_f, eps2, eps3, False)
-        )
-        Tf2 = _sanitize_transmission_power(Tf2)
-        im_k_z_f = np.abs(kz2_f.imag)
-        if thickness > 0.0:
-            L_out = thickness
-        else:
-            L_out = 1.0 / np.maximum(2.0 * im_k_z_f, 1.0e-30)
-        cos_out = _clamp(kr / np.maximum(float(k0), 1.0e-30), -1.0, 1.0)
-        twotheta_t = np.arccos(cos_out) * np.sign(twotheta_t_prime)
-        k_out_mag = float(k0)
+    k0_sq = float(k0) * float(k0)
+    k_par_f = kr
+    k_par_f_sq = k_par_f * k_par_f
+    kz2_f = _kz_branch_decay((eps2 * k0_sq) - k_par_f_sq)
+    kz3_f = _kz_branch_decay((k0_sq - k_par_f_sq) + 0.0j)
+    Tf_s = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, True)
+    Tf_p = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, False)
+    Tf2 = 0.5 * (
+        _fresnel_power_t_exact(Tf_s, kz2_f, kz3_f, eps2, eps3, True)
+        + _fresnel_power_t_exact(Tf_p, kz2_f, kz3_f, eps2, eps3, False)
+    )
+    Tf2 = _sanitize_transmission_power(Tf2)
+    im_k_z_f = np.abs(kz2_f.imag)
+    if thickness_angstrom > 0.0:
+        L_out = thickness_angstrom
     else:
-        Tf2, im_k_z_f, L_out, twotheta_t_abs = _lookup_fast_optics(
-            float(k0),
-            n2_samp,
-            float(n2_real),
-            float(thickness),
-            float(th_t_out),
-        )
-        twotheta_t = twotheta_t_abs * np.sign(twotheta_t_prime)
-        k_out_mag = float(k_scat)
+        L_out = 1.0 / np.maximum(2.0 * im_k_z_f, 1.0e-30)
+    cos_out = _clamp(kr / np.maximum(float(k0), 1.0e-30), -1.0, 1.0)
+    twotheta_t = np.arccos(cos_out) * np.sign(twotheta_t_prime)
+    k_out_mag = float(k0)
 
     if projection_debug_enabled and projection_debug_counters is not None:
         _projection_debug_log_ray(
@@ -4029,15 +3991,12 @@ def _project_weighted_candidate_fast(
     n2_real,
     n2_samp,
     eps2,
-    thickness,
+    thickness_angstrom,
     optics_mode,
     pixel_scale,
     image_size,
     exit_projection_mode,
-    fast_optics_lut_ready,
-    fast_optics_lut_row,
 ):
-    use_exact_optics = optics_mode == OPTICS_MODE_EXACT
     eps3 = 1.0 + 0.0j
 
     k_tx_prime = Qx + k_x_scat
@@ -4049,38 +4008,26 @@ def _project_weighted_candidate_fast(
     else:
         twotheta_t_prime = np.arctan(k_tz_prime / kr)
 
-    th_t_out = np.abs(twotheta_t_prime)
-    if use_exact_optics:
-        k0_sq = k0 * k0
-        k_par_f = kr
-        k_par_f_sq = k_par_f * k_par_f
-        kz2_f = _kz_branch_decay((eps2 * k0_sq) - k_par_f_sq)
-        kz3_f = _kz_branch_decay((k0_sq - k_par_f_sq) + 0.0j)
-        Tf_s = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, True)
-        Tf_p = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, False)
-        Tf2 = 0.5 * (
-            _fresnel_power_t_exact(Tf_s, kz2_f, kz3_f, eps2, eps3, True)
-            + _fresnel_power_t_exact(Tf_p, kz2_f, kz3_f, eps2, eps3, False)
-        )
-        Tf2 = _sanitize_transmission_power(Tf2)
-        im_k_z_f = np.abs(kz2_f.imag)
-        if thickness > 0.0:
-            L_out = thickness
-        else:
-            L_out = 1.0 / np.maximum(2.0 * im_k_z_f, 1.0e-30)
-        cos_out = _clamp(kr / np.maximum(k0, 1.0e-30), -1.0, 1.0)
-        twotheta_t = np.arccos(cos_out) * np.sign(twotheta_t_prime)
-        k_out_mag = k0
+    k0_sq = k0 * k0
+    k_par_f = kr
+    k_par_f_sq = k_par_f * k_par_f
+    kz2_f = _kz_branch_decay((eps2 * k0_sq) - k_par_f_sq)
+    kz3_f = _kz_branch_decay((k0_sq - k_par_f_sq) + 0.0j)
+    Tf_s = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, True)
+    Tf_p = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, False)
+    Tf2 = 0.5 * (
+        _fresnel_power_t_exact(Tf_s, kz2_f, kz3_f, eps2, eps3, True)
+        + _fresnel_power_t_exact(Tf_p, kz2_f, kz3_f, eps2, eps3, False)
+    )
+    Tf2 = _sanitize_transmission_power(Tf2)
+    im_k_z_f = np.abs(kz2_f.imag)
+    if thickness_angstrom > 0.0:
+        L_out = thickness_angstrom
     else:
-        if fast_optics_lut_ready:
-            Tf2, im_k_z_f, L_out, twotheta_t_abs = _lookup_fast_optics_lut_row(
-                fast_optics_lut_row,
-                th_t_out,
-            )
-        else:
-            return False, np.nan, np.nan, np.nan, 0.0
-        twotheta_t = twotheta_t_abs * np.sign(twotheta_t_prime)
-        k_out_mag = k_scat
+        L_out = 1.0 / np.maximum(2.0 * im_k_z_f, 1.0e-30)
+    cos_out = _clamp(kr / np.maximum(k0, 1.0e-30), -1.0, 1.0)
+    twotheta_t = np.arccos(cos_out) * np.sign(twotheta_t_prime)
+    k_out_mag = k0
 
     prop_att = np.exp(-2.0 * im_k_z * L_in) * np.exp(-2.0 * im_k_z_f * L_out)
     if (not np.isfinite(prop_att)) or prop_att <= 0.0:
@@ -4195,8 +4142,6 @@ def _weighted_event_pass1_for_qset(
     pixel_scale,
     image_size,
     exit_projection_mode,
-    fast_optics_lut_ready,
-    fast_optics_lut_row,
     save_flag,
     q_data,
     q_count,
@@ -4220,6 +4165,7 @@ def _weighted_event_pass1_for_qset(
     n2_real = sample_terms[sample_idx, _SAMPLE_COL_N2_REAL]
     n2_samp = sample_n2_array[sample_idx]
     eps2 = sample_eps2_array[sample_idx]
+    thickness_angstrom = _thickness_to_angstrom(thickness)
 
     for q_idx in range(all_q.shape[0]):
         Qx = all_q[q_idx, 0]
@@ -4257,13 +4203,11 @@ def _weighted_event_pass1_for_qset(
             n2_real,
             n2_samp,
             eps2,
-            thickness,
+            thickness_angstrom,
             optics_mode,
             pixel_scale,
             image_size,
             exit_projection_mode,
-            fast_optics_lut_ready,
-            fast_optics_lut_row,
         )
         _store_weighted_event_q_debug_row(
             save_flag,
@@ -4312,8 +4256,6 @@ def _weighted_event_project_store_for_qset(
     pixel_scale,
     image_size,
     exit_projection_mode,
-    fast_optics_lut_ready,
-    fast_optics_lut_row,
     save_flag,
     q_data,
     q_count,
@@ -4343,6 +4285,7 @@ def _weighted_event_project_store_for_qset(
     n2_real = sample_terms[sample_idx, _SAMPLE_COL_N2_REAL]
     n2_samp = sample_n2_array[sample_idx]
     eps2 = sample_eps2_array[sample_idx]
+    thickness_angstrom = _thickness_to_angstrom(thickness)
 
     for q_idx in range(all_q.shape[0]):
         Qx = all_q[q_idx, 0]
@@ -4380,13 +4323,11 @@ def _weighted_event_project_store_for_qset(
             n2_real,
             n2_samp,
             eps2,
-            thickness,
+            thickness_angstrom,
             optics_mode,
             pixel_scale,
             image_size,
             exit_projection_mode,
-            fast_optics_lut_ready,
-            fast_optics_lut_row,
         )
         _store_weighted_event_q_debug_row(
             save_flag,
@@ -4444,8 +4385,6 @@ def _weighted_event_pass2_for_qset(
     pixel_scale,
     image_size,
     exit_projection_mode,
-    fast_optics_lut_ready,
-    fast_optics_lut_row,
     targets,
     target_idx,
     cumulative_mass,
@@ -4488,6 +4427,7 @@ def _weighted_event_pass2_for_qset(
     n2_real = sample_terms[sample_idx, _SAMPLE_COL_N2_REAL]
     n2_samp = sample_n2_array[sample_idx]
     eps2 = sample_eps2_array[sample_idx]
+    thickness_angstrom = _thickness_to_angstrom(thickness)
 
     for q_idx in range(all_q.shape[0]):
         Qx = all_q[q_idx, 0]
@@ -4525,13 +4465,11 @@ def _weighted_event_pass2_for_qset(
             n2_real,
             n2_samp,
             eps2,
-            thickness,
+            thickness_angstrom,
             optics_mode,
             pixel_scale,
             image_size,
             exit_projection_mode,
-            fast_optics_lut_ready,
-            fast_optics_lut_row,
         )
         if not candidate_valid:
             continue
@@ -4832,8 +4770,6 @@ def _weighted_event_sample_chunk_kernel(
     optics_mode,
     pixel_scale,
     exit_projection_mode,
-    fast_optics_ready,
-    fast_optics_lut,
     q_data,
     q_count,
     q_debug_truncated_count_parts,
@@ -4958,8 +4894,6 @@ def _weighted_event_sample_chunk_kernel(
                         pixel_scale,
                         int(image_size),
                         exit_projection_mode,
-                        int(fast_optics_ready[sample_idx]),
-                        fast_optics_lut[sample_idx],
                         0,
                         q_data,
                         q_count,
@@ -4999,8 +4933,6 @@ def _weighted_event_sample_chunk_kernel(
                     pixel_scale,
                     int(image_size),
                     exit_projection_mode,
-                    int(fast_optics_ready[sample_idx]),
-                    fast_optics_lut[sample_idx],
                     0,
                     q_data,
                     q_count,
@@ -5139,8 +5071,6 @@ def _weighted_event_sample_chunk_kernel(
                     pixel_scale,
                     int(image_size),
                     exit_projection_mode,
-                    int(fast_optics_ready[sample_idx]),
-                    fast_optics_lut[sample_idx],
                     targets,
                     int(target_idx),
                     float(cumulative_mass),
@@ -5651,7 +5581,6 @@ def _nominal_reflection_visible(
     best_idx,
     sigma_rad,
     gamma_pv,
-    optics_mode,
     exit_projection_mode,
     projection_debug_enabled,
     projection_debug_counters,
@@ -5685,7 +5614,6 @@ def _nominal_reflection_visible(
     k_x_scat = sample_terms[nominal_idx, _SAMPLE_COL_KX_SCAT]
     k_y_scat = sample_terms[nominal_idx, _SAMPLE_COL_KY_SCAT]
     re_k_z = sample_terms[nominal_idx, _SAMPLE_COL_RE_KZ]
-    k_scat = sample_terms[nominal_idx, _SAMPLE_COL_K_SCAT]
     k0 = sample_terms[nominal_idx, _SAMPLE_COL_K0]
     n2_real = sample_terms[nominal_idx, _SAMPLE_COL_N2_REAL]
 
@@ -5698,19 +5626,9 @@ def _nominal_reflection_visible(
     else:
         twotheta_t_prime = np.arctan(k_tz_prime / kr)
 
-    if optics_mode == OPTICS_MODE_EXACT:
-        cos_out = _clamp(kr / np.maximum(k0, 1.0e-30), -1.0, 1.0)
-        twotheta_t = np.arccos(cos_out) * np.sign(twotheta_t_prime)
-        k_out_mag = k0
-    else:
-        twotheta_t = np.arccos(
-            _clamp(
-                np.cos(twotheta_t_prime) * n2_real,
-                -1.0,
-                1.0,
-            )
-        ) * np.sign(twotheta_t_prime)
-        k_out_mag = k_scat
+    cos_out = _clamp(kr / np.maximum(k0, 1.0e-30), -1.0, 1.0)
+    twotheta_t = np.arccos(cos_out) * np.sign(twotheta_t_prime)
+    k_out_mag = k0
 
     if projection_debug_enabled:
         _projection_debug_log_ray(
@@ -5970,7 +5888,7 @@ def _calculate_phi_from_precomputed(
     pixel_size_m=100e-6,
     sample_qr_ring_once=True,
     sample_weights=None,
-    exit_projection_mode=EXIT_PROJECTION_INTERNAL,
+    exit_projection_mode=EXIT_PROJECTION_EXTERNAL,
     projection_debug_enabled=False,
     projection_debug_counters=None,
     projection_debug_reject_count=None,
@@ -6043,17 +5961,8 @@ def _calculate_phi_from_precomputed(
         cache_entry_count = 0
         cache_flush_limit = 0
 
-    use_exact_optics = optics_mode == OPTICS_MODE_EXACT
     eps3 = 1.0 + 0.0j
-    if use_exact_optics:
-        fast_optics_ready = np.zeros(1, dtype=np.uint8)
-        fast_optics_lut = np.zeros((1, 1, _FAST_OPTICS_LUT_COLS), dtype=np.float64)
-    else:
-        fast_optics_ready = np.zeros(n_samp, dtype=np.uint8)
-        fast_optics_lut = np.empty(
-            (n_samp, _FAST_OPTICS_LUT_SIZE, _FAST_OPTICS_LUT_COLS),
-            dtype=np.float64,
-        )
+    thickness_angstrom = _thickness_to_angstrom(thickness)
 
     nominal_visible, nominal_sample_idx, no_valid_samples = _nominal_reflection_visible(
         H,
@@ -6071,7 +5980,6 @@ def _calculate_phi_from_precomputed(
         best_idx,
         sigma_rad,
         gamma_pv,
-        optics_mode,
         exit_projection_mode,
         projection_debug_enabled,
         projection_debug_counters,
@@ -6243,16 +6151,6 @@ def _calculate_phi_from_precomputed(
             if record_status:
                 statuses[chain_idx] = stat
 
-            if (not use_exact_optics) and All_Q.shape[0] > 0 and fast_optics_ready[chain_idx] == 0:
-                _build_fast_optics_lut_row(
-                    fast_optics_lut[chain_idx],
-                    k0,
-                    n2_samp,
-                    n2_real,
-                    thickness,
-                )
-                fast_optics_ready[chain_idx] = 1
-
             for i_sol in range(All_Q.shape[0]):
                 if sample_qr_ring_once and i_sol != sampled_sol_idx:
                     continue
@@ -6283,41 +6181,30 @@ def _calculate_phi_from_precomputed(
                 else:
                     twotheta_t_prime = np.arctan(k_tz_prime / kr)
 
-                th_t_out = np.abs(twotheta_t_prime)
-                if use_exact_optics:
-                    k0_sq = k0 * k0
-                    k_par_f = kr
-                    k_par_f_sq = k_par_f * k_par_f
+                k0_sq = k0 * k0
+                k_par_f = kr
+                k_par_f_sq = k_par_f * k_par_f
 
-                    kz2_f = _kz_branch_decay((eps2 * k0_sq) - k_par_f_sq)
-                    kz3_f = _kz_branch_decay((k0_sq - k_par_f_sq) + 0.0j)
+                kz2_f = _kz_branch_decay((eps2 * k0_sq) - k_par_f_sq)
+                kz3_f = _kz_branch_decay((k0_sq - k_par_f_sq) + 0.0j)
 
-                    Tf_s = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, True)
-                    Tf_p = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, False)
-                    Tf2 = 0.5 * (
-                        _fresnel_power_t_exact(Tf_s, kz2_f, kz3_f, eps2, eps3, True)
-                        + _fresnel_power_t_exact(Tf_p, kz2_f, kz3_f, eps2, eps3, False)
-                    )
-                    Tf2 = _sanitize_transmission_power(Tf2)
+                Tf_s = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, True)
+                Tf_p = _fresnel_t_exact(kz2_f, kz3_f, eps2, eps3, False)
+                Tf2 = 0.5 * (
+                    _fresnel_power_t_exact(Tf_s, kz2_f, kz3_f, eps2, eps3, True)
+                    + _fresnel_power_t_exact(Tf_p, kz2_f, kz3_f, eps2, eps3, False)
+                )
+                Tf2 = _sanitize_transmission_power(Tf2)
 
-                    im_k_z_f = np.abs(kz2_f.imag)
-                    if thickness > 0.0:
-                        L_out = thickness
-                    else:
-                        L_out = 1.0 / np.maximum(2.0 * im_k_z_f, 1e-30)
+                im_k_z_f = np.abs(kz2_f.imag)
+                if thickness_angstrom > 0.0:
+                    L_out = thickness_angstrom
                 else:
-                    Tf2, im_k_z_f, L_out, twotheta_t_abs = _lookup_fast_optics_lut_row(
-                        fast_optics_lut[chain_idx],
-                        th_t_out,
-                    )
+                    L_out = 1.0 / np.maximum(2.0 * im_k_z_f, 1e-30)
 
-                if use_exact_optics:
-                    cos_out = _clamp(kr / np.maximum(k0, 1e-30), -1.0, 1.0)
-                    twotheta_t = np.arccos(cos_out) * np.sign(twotheta_t_prime)
-                    k_out_mag = k0
-                else:
-                    twotheta_t = twotheta_t_abs * np.sign(twotheta_t_prime)
-                    k_out_mag = k_scat
+                cos_out = _clamp(kr / np.maximum(k0, 1e-30), -1.0, 1.0)
+                twotheta_t = np.arccos(cos_out) * np.sign(twotheta_t_prime)
+                k_out_mag = k0
 
                 if projection_debug_enabled:
                     _projection_debug_log_ray(
@@ -6652,7 +6539,7 @@ def _calculate_phi_from_precomputed(
 
 
 @njit(fastmath=True, cache=True)
-def calculate_phi(
+def _calculate_phi_compiled(
     H,
     K,
     L,
@@ -6794,7 +6681,7 @@ def calculate_phi(
         pixel_size_m,
         sample_qr_ring_once,
         None,
-        EXIT_PROJECTION_INTERNAL,
+        EXIT_PROJECTION_EXTERNAL,
         False,
         projection_debug_counters,
         projection_debug_reject_count,
@@ -6803,6 +6690,34 @@ def calculate_phi(
         projection_debug_row_tthp_sums,
         projection_debug_row_tth_sums,
     )
+
+
+_CALCULATE_PHI_PARAM_NAMES = (
+    _calculate_phi_compiled.py_func.__code__.co_varnames[
+        : _calculate_phi_compiled.py_func.__code__.co_argcount
+    ]
+)
+
+
+def _require_exact_calculate_phi_call(args, kwargs):
+    return _normalize_exact_optics_arg(
+        args,
+        kwargs,
+        _CALCULATE_PHI_PARAM_NAMES,
+    )
+
+
+def _calculate_phi_py_func(*args, **kwargs):
+    args, kwargs = _require_exact_calculate_phi_call(args, kwargs)
+    return _calculate_phi_compiled.py_func(*args, **kwargs)
+
+
+def calculate_phi(*args, **kwargs):
+    args, kwargs = _require_exact_calculate_phi_call(args, kwargs)
+    return _calculate_phi_compiled(*args, **kwargs)
+
+
+calculate_phi.py_func = _calculate_phi_py_func
 
 
 # =============================================================================
@@ -7210,7 +7125,7 @@ def _process_peaks_parallel_weighted_events_fast_serial(
     n2_sample_array_override=None,
     accumulate_image=True,
     sample_qr_ring_once=True,
-    exit_projection_mode=EXIT_PROJECTION_INTERNAL,
+    exit_projection_mode=EXIT_PROJECTION_EXTERNAL,
     projection_debug_counters=None,
     projection_debug_reject_counts=None,
     projection_debug_reject_records=None,
@@ -7227,6 +7142,7 @@ def _process_peaks_parallel_weighted_events_fast_serial(
     reuse_weighted_event_projected_candidates=True,
     weighted_event_candidate_buffer_max_bytes=_WEIGHTED_EVENT_CANDIDATE_DEFAULT_MAX_BYTES,
 ):
+    optics_mode = require_exact_optics_mode(optics_mode)
     del sample_qr_ring_once
     requested_worker_count = _weighted_event_requested_worker_count_for_stats(numba_thread_count)
 
@@ -7498,24 +7414,6 @@ def _process_peaks_parallel_weighted_events_fast_serial(
         phase_weight_sum += float(phase_weight)
         phase_event_count_total += int(phase_event_counts[phase_idx])
     n_exact_solve_q_phase_groups = int(len(solve_q_phase_reps))
-    use_exact_optics = int(optics_mode) == OPTICS_MODE_EXACT
-    fast_optics_ready = np.zeros(n_samp, dtype=np.uint8)
-    fast_optics_lut = np.zeros(
-        (max(n_samp, 1), _FAST_OPTICS_LUT_SIZE, _FAST_OPTICS_LUT_COLS),
-        dtype=np.float64,
-    )
-    if not use_exact_optics:
-        for i_samp in range(n_samp):
-            if sample_terms[i_samp, _SAMPLE_COL_VALID] <= 0.5:
-                continue
-            _build_fast_optics_lut_row(
-                fast_optics_lut[i_samp],
-                sample_terms[i_samp, _SAMPLE_COL_K0],
-                sample_n2_array[i_samp],
-                sample_terms[i_samp, _SAMPLE_COL_N2_REAL],
-                thickness,
-            )
-            fast_optics_ready[i_samp] = 1
     time_precompute += time.perf_counter() - precompute_start
 
     debye_x_sq = float(debye_x) * float(debye_x)
@@ -7794,8 +7692,6 @@ def _process_peaks_parallel_weighted_events_fast_serial(
                 int(optics_mode),
                 float(pixel_scale),
                 int(exit_projection_mode),
-                fast_optics_ready,
-                fast_optics_lut,
                 q_data_chunk,
                 q_count_chunk,
                 q_debug_truncated_count_parts,
@@ -8120,8 +8016,6 @@ def _process_peaks_parallel_weighted_events_fast_serial(
                         pixel_scale,
                         int(image_size),
                         exit_projection_mode,
-                        int(fast_optics_ready[sample_idx]),
-                        fast_optics_lut[sample_idx],
                         int(save_flag),
                         q_data,
                         q_count,
@@ -8161,8 +8055,6 @@ def _process_peaks_parallel_weighted_events_fast_serial(
                     pixel_scale,
                     int(image_size),
                     exit_projection_mode,
-                    int(fast_optics_ready[sample_idx]),
-                    fast_optics_lut[sample_idx],
                     int(save_flag),
                     q_data,
                     q_count,
@@ -8303,8 +8195,6 @@ def _process_peaks_parallel_weighted_events_fast_serial(
                     pixel_scale,
                     int(image_size),
                     exit_projection_mode,
-                    int(fast_optics_ready[sample_idx]),
-                    fast_optics_lut[sample_idx],
                     targets,
                     int(target_idx),
                     float(cumulative_mass),
@@ -8569,7 +8459,7 @@ def _process_peaks_parallel_impl(
     n2_sample_array_override=None,
     accumulate_image=True,
     sample_qr_ring_once=True,
-    exit_projection_mode=EXIT_PROJECTION_INTERNAL,
+    exit_projection_mode=EXIT_PROJECTION_EXTERNAL,
     projection_debug_counters=None,
     projection_debug_reject_counts=None,
     projection_debug_reject_records=None,
@@ -8585,6 +8475,7 @@ def _process_peaks_parallel_impl(
 ):
     """Run weighted-event sampling through compiled helpers when hooks are default."""
 
+    optics_mode = require_exact_optics_mode(optics_mode)
     events_per_beam_phase = normalize_events_per_beam_phase_backend(events_per_beam_phase)
     if not _weighted_event_fast_path_available(
         projection_debug_counters=projection_debug_counters,
@@ -8773,7 +8664,7 @@ def _process_peaks_parallel_weighted_events_python(
     n2_sample_array_override=None,
     accumulate_image=True,
     sample_qr_ring_once=True,
-    exit_projection_mode=EXIT_PROJECTION_INTERNAL,
+    exit_projection_mode=EXIT_PROJECTION_EXTERNAL,
     projection_debug_counters=None,
     projection_debug_reject_counts=None,
     projection_debug_reject_records=None,
@@ -8787,6 +8678,7 @@ def _process_peaks_parallel_weighted_events_python(
     events_per_beam_phase=50,
     q_debug_max_solutions_per_peak=None,
 ):
+    optics_mode = require_exact_optics_mode(optics_mode)
     del sample_qr_ring_once
     requested_worker_count = _weighted_event_requested_worker_count_for_stats(numba_thread_count)
 
@@ -9275,7 +9167,7 @@ def process_peaks_parallel(
     n2_sample_array_override=None,
     accumulate_image=True,
     sample_qr_ring_once=True,
-    exit_projection_mode=EXIT_PROJECTION_INTERNAL,
+    exit_projection_mode=EXIT_PROJECTION_EXTERNAL,
     projection_debug_counters=None,
     projection_debug_reject_counts=None,
     projection_debug_reject_records=None,
@@ -9291,6 +9183,7 @@ def process_peaks_parallel(
 ):
     """Inject runtime defaults before entering cached compiled kernel."""
 
+    optics_mode = require_exact_optics_mode(optics_mode)
     (
         default_solve_q_dtheta,
         default_solve_q_cos,
@@ -9377,6 +9270,7 @@ def process_peaks_parallel(
 
 def _process_peaks_parallel_py_func(*args, **kwargs):
     args, kwargs = _normalize_bound_process_peaks_parallel_call(args, kwargs)
+    args, kwargs = _require_exact_process_peaks_call(args, kwargs)
     bound_result = _bind_process_peaks_parallel_call(args, kwargs)
     if bound_result is None:
         _set_last_process_peaks_weighted_event_stats()
@@ -9476,6 +9370,7 @@ def process_peaks_parallel_safe(*args, **kwargs):
     for name, value in get_process_peaks_runtime_kwargs().items():
         kwargs.setdefault(name, value)
     args, kwargs = _normalize_bound_process_peaks_parallel_call(args, kwargs)
+    args, kwargs = _require_exact_process_peaks_call(args, kwargs)
     _set_last_process_peaks_safe_stats()
     _set_last_process_peaks_representative_hit_tables(None)
     if isinstance(safe_stats_out, dict):
@@ -11069,7 +10964,7 @@ def process_qr_rods_parallel(
     enable_safe_cache=None,
     prefer_python_runner=False,
     _safe_stats_out=None,
-    exit_projection_mode=EXIT_PROJECTION_INTERNAL,
+    exit_projection_mode=EXIT_PROJECTION_EXTERNAL,
     projection_debug_counters=None,
     projection_debug_reject_counts=None,
     projection_debug_reject_records=None,
@@ -11088,6 +10983,7 @@ def process_qr_rods_parallel(
     downstream code can still track how many symmetry-equivalent HK pairs
     contributed to each rod.
     """
+    optics_mode = require_exact_optics_mode(optics_mode)
     from ra_sim.utils.stacking_fault import qr_dict_to_arrays
 
     miller, intensities, degeneracy, _ = qr_dict_to_arrays(qr_dict)
@@ -11155,13 +11051,36 @@ def process_qr_rods_parallel(
     return (*result, degeneracy)
 
 
+_QR_RODS_PARALLEL_PARAM_NAMES = process_qr_rods_parallel.__code__.co_varnames[
+    : process_qr_rods_parallel.__code__.co_argcount
+]
+
+
+def _normalize_qr_rods_parallel_safe_call(args, kwargs):
+    args, kwargs = _normalize_exact_optics_arg(
+        args,
+        kwargs,
+        _QR_RODS_PARALLEL_PARAM_NAMES,
+    )
+    normalized_args = list(args)
+
+    events_index = _QR_RODS_PARALLEL_PARAM_NAMES.index("events_per_beam_phase")
+    if len(normalized_args) > events_index:
+        normalized_args[events_index] = normalize_events_per_beam_phase_backend(
+            normalized_args[events_index]
+        )
+    else:
+        kwargs["events_per_beam_phase"] = normalize_events_per_beam_phase_backend(
+            kwargs.get("events_per_beam_phase", 50)
+        )
+
+    return tuple(normalized_args), kwargs
+
+
 def process_qr_rods_parallel_safe(*args, **kwargs):
     """Run ``process_qr_rods_parallel`` with Python fallback if needed."""
 
-    kwargs = dict(kwargs)
-    kwargs["events_per_beam_phase"] = normalize_events_per_beam_phase_backend(
-        kwargs.get("events_per_beam_phase", 50)
-    )
+    args, kwargs = _normalize_qr_rods_parallel_safe_call(args, kwargs)
     prefer_python_runner = bool(kwargs.get("prefer_python_runner", False))
     py_runner = getattr(process_qr_rods_parallel, "py_func", None)
     runners = []

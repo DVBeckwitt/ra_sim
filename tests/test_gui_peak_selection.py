@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from ra_sim.config import loader
 from ra_sim.gui import peak_selection, state
+from ra_sim.simulation import diffraction
 
 
 class _FakeVar:
@@ -144,7 +145,7 @@ def _ideal_center_probe_config(
         detector_center=(255.5, 256.5),
         theta_initial_deg=8.5,
         cor_angle_deg=9.5,
-        optics_mode=2,
+        optics_mode=diffraction.OPTICS_MODE_EXACT,
         solve_q_steps=321,
         solve_q_rel_tol=1.0e-4,
         solve_q_mode=1,
@@ -220,7 +221,7 @@ def test_peak_selection_config_builders_normalize_values() -> None:
         detector_center=("255.5", 256.5),
         theta_initial_deg=8.5,
         cor_angle_deg=9.5,
-        optics_mode="2",
+        optics_mode=str(diffraction.OPTICS_MODE_EXACT),
         solve_q_steps="321",
         solve_q_rel_tol="1.0e-4",
         solve_q_mode="1",
@@ -345,7 +346,7 @@ def test_peak_selection_runtime_ideal_center_factory_builds_live_probe_config(
         "detector_center": (255.5, 256.5),
         "theta_initial": 8.5,
         "cor_angle": 9.5,
-        "optics_mode": 2,
+        "optics_mode": diffraction.OPTICS_MODE_EXACT,
         "solve_q": SimpleNamespace(steps=321, rel_tol=1.0e-4, mode_flag=1),
     }
     process_peaks = lambda *args, **kwargs: None
@@ -1865,7 +1866,7 @@ def test_peak_selection_ideal_center_helpers_handle_hit_tables_and_profile_fallb
         {
             "lattice_a": 4.5,
             "lattice_c": 6.5,
-            "optics_mode": 2,
+            "optics_mode": diffraction.OPTICS_MODE_EXACT,
             "n2_sample_array_override": None,
         }
     ]

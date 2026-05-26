@@ -525,44 +525,6 @@ def _saved_state_text(
     return str(value) if value is not None else str(fallback)
 
 
-def _normalize_headless_optics_mode_flag(value: object) -> int:
-    """Normalize saved optics-mode values to simulation engine flags."""
-
-    diffraction = _load_simulation_modules().diffraction
-    if value is None:
-        return diffraction.OPTICS_MODE_EXACT
-    if isinstance(value, (int, np.integer)):
-        numeric_value = int(value)
-    elif isinstance(value, (float, np.floating)):
-        numeric_value = int(round(float(value)))
-    else:
-        numeric_value = None
-    if numeric_value is not None:
-        return (
-            diffraction.OPTICS_MODE_EXACT
-            if numeric_value == diffraction.OPTICS_MODE_EXACT
-            else diffraction.OPTICS_MODE_FAST
-        )
-
-    text = str(value).strip().lower()
-    text = text.replace("–", "-").replace("—", "-")
-    text = " ".join(text.split())
-    if text in {
-        "1",
-        "true",
-        "yes",
-        "on",
-        "exact",
-        "precise",
-        "slow",
-        "complex_k_dwba_slab",
-        "complex-k dwba slab optics",
-        "phase-matched complex-k multilayer dwba",
-    }:
-        return diffraction.OPTICS_MODE_EXACT
-    return diffraction.OPTICS_MODE_FAST
-
-
 def _load_cif_snapshot(path: str) -> tuple[object, object]:
     """Load one CIF file and return ``(cf, first_block)``."""
 
@@ -1548,9 +1510,7 @@ def run_headless_geometry_fit(
             current_geometry_theta_offset=_current_geometry_theta_offset,
             background_theta_for_index=_background_theta_for_index,
             build_mosaic_params=lambda: mosaic_params,
-            current_optics_mode_flag=lambda: _normalize_headless_optics_mode_flag(
-                _saved_state_var_value(saved_variables, "optics_mode_var", "exact")
-            ),
+            current_optics_mode_flag=lambda: simulation_diffraction.OPTICS_MODE_EXACT,
             lambda_value=float(lambda_angstrom),
             psi=float(psi_default),
             n2=lambda: n2_value,

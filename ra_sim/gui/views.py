@@ -3282,22 +3282,11 @@ def create_sampling_optics_controls(
     optics_mode_frame.pack(fill=tk.X, pady=(6, 2))
     ttk.Label(optics_mode_frame, text="Optics Transport").pack(anchor=tk.W, padx=5)
 
-    optics_mode_var = tk.StringVar(value=str(optics_mode_text))
-    fast_optics_button = ttk.Radiobutton(
+    optics_mode_var = tk.StringVar(value="exact")
+    ttk.Label(
         optics_mode_frame,
-        text="Original Fast Approx (Fresnel + Beer-Lambert)",
-        variable=optics_mode_var,
-        value="fast",
-    )
-    fast_optics_button.pack(anchor=tk.W, padx=12)
-
-    exact_optics_button = ttk.Radiobutton(
-        optics_mode_frame,
-        text="Complex-k DWBA slab optics (Precise)",
-        variable=optics_mode_var,
-        value="exact",
-    )
-    exact_optics_button.pack(anchor=tk.W, padx=12)
+        text="Complex-k DWBA slab optics only",
+    ).pack(anchor=tk.W, padx=12)
 
     view_state.sampling_method_frame = sampling_method_frame
     view_state.sampling_method_var = sampling_method_var
@@ -3335,8 +3324,8 @@ def create_sampling_optics_controls(
     view_state.ray_warning_label = None
     view_state.optics_mode_frame = optics_mode_frame
     view_state.optics_mode_var = optics_mode_var
-    view_state.fast_optics_button = fast_optics_button
-    view_state.exact_optics_button = exact_optics_button
+    view_state.fast_optics_button = None
+    view_state.exact_optics_button = None
     _set_sampling_events_per_phase_scale_state(view_state, controls_enabled=True)
 
 

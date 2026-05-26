@@ -40,9 +40,11 @@ from ra_sim.fitting import optimization_runtime as _runtime
 from ra_sim.fitting.optimization_runtime import SimulationCache
 from ra_sim.simulation.intersection_cache_schema import extract_hit_row_provenance
 from ra_sim.simulation.diffraction import (
+    OPTICS_MODE_EXACT,
     get_last_process_peaks_safe_stats,
     hit_tables_to_max_positions,
     process_peaks_parallel_safe as _DIFFRACTION_PROCESS_PEAKS_SAFE_WRAPPER,
+    require_exact_optics_mode,
 )
 from ra_sim.utils.calculations import (
     _legacy_kernel_n2_sample_array_from_angstrom,
@@ -8566,7 +8568,7 @@ def fit_mosaic_widths_separable(
     kernel_params_base = dict(params)
     kernel_params_base.update(
         {
-            "optics_mode": params.get("optics_mode", 0),
+            "optics_mode": params.get("optics_mode", OPTICS_MODE_EXACT),
             "sample_depth_m": params.get("sample_depth_m", params.get("thickness", 0.0)),
             "pixel_size_m": params.get("pixel_size_m", params.get("pixel_size", 100e-6)),
             "sample_width_m": params.get("sample_width_m", 0.0),
@@ -12232,7 +12234,9 @@ def _simulation_kernel_kwargs(
         mosaic_params = {}
 
     kwargs: Dict[str, object] = {
-        "optics_mode": int(params.get("optics_mode", 0)),
+        "optics_mode": require_exact_optics_mode(
+            params.get("optics_mode", OPTICS_MODE_EXACT)
+        ),
         "solve_q_steps": int(mosaic_params.get("solve_q_steps", 1000)),
         "solve_q_rel_tol": float(mosaic_params.get("solve_q_rel_tol", 5.0e-4)),
         "solve_q_mode": int(mosaic_params.get("solve_q_mode", 1)),
@@ -23917,7 +23921,7 @@ def compute_peak_position_error_geometry_local(
     debye_y,
     wavelength,
     pixel_tol=np.inf,
-    optics_mode=0,
+    optics_mode=OPTICS_MODE_EXACT,
 ):
     """
     Objective for DE: returns the 1D array of distances for all matched peaks.
@@ -23941,7 +23945,7 @@ def compute_peak_position_error_geometry_local(
         "debye_x": debye_x,
         "debye_y": debye_y,
         "mosaic_params": mosaic_params,
-        "optics_mode": int(optics_mode),
+        "optics_mode": require_exact_optics_mode(optics_mode),
     }
     D, *_ = simulate_and_compare_hkl(
         miller,
@@ -24811,6 +24815,16 @@ def fit_geometry_parameters(
                 status=-12,
                 extra_summary=locked_summary,
             )
+        if manual_caked_fit_space_required and not manual_caked_fit_space_ready:
+            return _manual_caked_preflight_failure_result(
+                reason="manual_caked_fit_space_missing",
+                message=(
+                    "manual caked fit-space requires exact caked anchors/projector; "
+                    "refusing detector-pixel central_point_match fallback"
+                ),
+                status=-10,
+                extra_summary=locked_summary,
+            )
         if not dynamic_point_geometry_fit or not manual_caked_fit_space_ready:
             return _manual_caked_preflight_failure_result(
                 reason="locked_manual_qr_route_invariant_violation",
@@ -25083,7 +25097,7 @@ def fit_geometry_parameters(
             debye_y=local["debye_y"],
             wavelength=local["lambda"],
             pixel_tol=pixel_tol,
-            optics_mode=local.get("optics_mode", 0),
+            optics_mode=local.get("optics_mode", OPTICS_MODE_EXACT),
         )
         return np.asarray(residual, dtype=float)
 
