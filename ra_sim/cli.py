@@ -2450,6 +2450,7 @@ def run_headless_geometry_fit(
             "sample_depth_var": sample_depth_var.get(),
             "debye_x_var": debye_x_var.get(),
             "debye_y_var": debye_y_var.get(),
+            "optics_mode_var": "exact",
             "background_theta_list_var": background_theta_list_var.get(),
             "geometry_theta_offset_var": geometry_theta_offset_var.get(),
             "geometry_fit_background_selection_var": geometry_fit_background_selection_var.get(),

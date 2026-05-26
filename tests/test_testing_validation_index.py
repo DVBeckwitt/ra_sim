@@ -46,7 +46,15 @@ def _tracked_files() -> list[str]:
         text=True,
         cwd=ROOT,
     )
-    return completed.stdout.splitlines()
+    deleted = subprocess.run(
+        ["git", "ls-files", "--deleted"],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    )
+    deleted_paths = set(deleted.stdout.splitlines())
+    return [path for path in completed.stdout.splitlines() if path not in deleted_paths]
 
 
 def _assert_contains_all(doc: str, paths: list[str]) -> None:
@@ -121,6 +129,17 @@ def _table_cells(doc: str) -> list[str]:
     return cells
 
 
+def _first_check_for_change_type(doc: str, change_type: str) -> str:
+    for line in doc.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if len(cells) >= 2 and cells[0] == change_type:
+            return cells[1].strip("`")
+    raise AssertionError(f"Missing validation row for {change_type!r}")
+
+
 def _candidate_path_tokens(doc: str) -> set[str]:
     search_units = [match.group(1) for match in CODE_SPAN_RE.finditer(doc)]
     search_units.extend(_table_cells(doc))
@@ -171,6 +190,21 @@ def test_testing_validation_index_lists_tracked_validation_entrypoints() -> None
     doc = DOC_PATH.read_text(encoding="utf-8")
 
     _assert_contains_all(doc, _expected_index_paths(tracked))
+
+
+def test_optics_mode_first_check_runs_cli_migration_guards_without_global_filter() -> None:
+    doc = DOC_PATH.read_text(encoding="utf-8")
+    command = _first_check_for_change_type(doc, "Optics-mode compatibility or migration")
+
+    assert " -k " not in f" {command} "
+    assert (
+        "tests/test_cli_geometry_fit.py::"
+        "test_headless_geometry_fit_optics_defaults_to_exact_and_rejects_fast"
+    ) in command
+    assert (
+        "tests/test_cli_geometry_fit.py::"
+        "test_cli_saved_gui_optics_mode_migrates_stale_fast_to_exact"
+    ) in command
 
 
 def test_testing_validation_index_path_references_are_tracked_or_allowed() -> None:

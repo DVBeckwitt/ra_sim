@@ -6672,10 +6672,15 @@ def _calculate_phi_py_func(*args, **kwargs):
 
 def calculate_phi(*args, **kwargs):
     args, kwargs = _require_exact_calculate_phi_call(args, kwargs)
-    return _calculate_phi_compiled(*args, **kwargs)
+    result = _calculate_phi_compiled(*args, **kwargs)
+    calculate_phi.signatures = _calculate_phi_compiled.signatures
+    calculate_phi.overloads = _calculate_phi_compiled.overloads
+    return result
 
 
 calculate_phi.py_func = _calculate_phi_py_func
+calculate_phi.signatures = _calculate_phi_compiled.signatures
+calculate_phi.overloads = _calculate_phi_compiled.overloads
 
 
 # =============================================================================

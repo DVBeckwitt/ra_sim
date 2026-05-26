@@ -53,8 +53,12 @@ def test_headless_geometry_fit_optics_defaults_to_exact_and_rejects_fast() -> No
 
 def test_cli_saved_gui_optics_mode_migrates_stale_fast_to_exact() -> None:
     source = inspect.getsource(cli.run_headless_geometry_fit)
-    assert "current_optics_mode_flag=lambda: simulation_diffraction.OPTICS_MODE_EXACT" in source
-    assert "_saved_state_var_value(saved_variables, \"optics_mode_var\"" not in source
+    update_index = source.index("updated_variables.update(")
+    dynamic_lists_index = source.index('updated_state["dynamic_lists"]', update_index)
+    saved_state_update = source[update_index:dynamic_lists_index]
+
+    assert '"optics_mode_var": "exact"' in saved_state_update
+    assert "_saved_state_var_value(saved_variables, \"optics_mode_var\"" not in saved_state_update
 
 
 def test_shared_headless_geometry_fit_backfills_caked_manual_pairs_before_prepare() -> None:

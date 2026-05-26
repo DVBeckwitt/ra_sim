@@ -17,9 +17,13 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 | Mosaic selected-pair profile fitting | `python -m pytest tests/test_mosaic_shape_optimization.py` | CLI/headless mosaic smoke plus stale-cache guards after wiring |
 | Structure-factor intensity fitting | Structure-factor parity tests plus synthetic ROI tests when added | Held-out image and held-out reflection-family regressions |
 | Simulation or diffraction behavior | Targeted simulation tests | Full tests plus benchmark when performance-sensitive |
-| Optics-mode compatibility or migration | `python -m pytest tests/test_fast_optics_disabled.py tests/test_exit_refraction_and_depth_units.py tests/test_cli_geometry_fit.py::test_headless_geometry_fit_optics_defaults_to_exact_and_rejects_fast tests/test_cli_geometry_fit.py::test_cli_saved_gui_optics_mode_migrates_stale_fast_to_exact` | Simulation, engine, GUI, and fitting suites |
+| Optics-mode compatibility or migration | `python -m pytest tests/test_diffraction_constraints.py tests/test_cli_geometry_fit.py::test_headless_geometry_fit_optics_defaults_to_exact_and_rejects_fast tests/test_cli_geometry_fit.py::test_cli_saved_gui_optics_mode_migrates_stale_fast_to_exact` | Simulation, engine, GUI, and fitting suites |
 | Timing or performance behavior | Timing or benchmark script | Compare generated artifact summaries |
 | Docs-only change | Path and link sanity | No full code run required |
+
+## Current patch status
+
+- 2026-05-26: Exact-optics migration cleanup is fixed locally. Headless geometry-fit saved states write `optics_mode_var` as `exact`; `calculate_phi` keeps dispatcher metadata aligned after Numba compilation; optics, exit-projection, and depth-unit coverage now live in `tests/test_diffraction_constraints.py`. Status: verified with `python -m ra_sim.dev check` on this worktree.
 
 ## Dev validation commands
 
