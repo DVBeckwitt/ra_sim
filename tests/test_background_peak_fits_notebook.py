@@ -4510,6 +4510,16 @@ def test_final_output_dir_choice_prompts_only_when_interactive_without_overrides
             backend_name="TkAgg",
             env={"RA_SIM_ALL_BACKGROUND_PROCESS_GUARD": "1"},
         )
+        == "popup"
+    )
+    assert (
+        runtime_mode(
+            "auto",
+            output_dir_override="",
+            figure_output_dir_override="",
+            backend_name="TkAgg",
+            env={"RA_SIM_HEADLESS": "1"},
+        )
         == "skip"
     )
     assert (
@@ -4736,17 +4746,25 @@ def test_parallel_script_save_folder_chooser_updates_figure_dir_at_final_save_bo
     assert "RA_SIM_ALL_BACKGROUND_SAVE_DIR_EDIT_MODE" in source
 
     refresh_output = source.index("refresh_figure_output_dir()")
-    used_peaks = source.index("used_peaks_md, used_peaks_csv = write_used_peaks_note()")
-    chooser = source.index("selected_figure_output_dir = choose_final_output_dir(", used_peaks)
-    figure7a = source.index("# Figure 7a:", chooser)
+    chooser = source.index("selected_figure_output_dir = choose_final_output_dir(")
+    used_peaks = source.index("used_peaks_md, used_peaks_csv = write_used_peaks_note()", chooser)
+    figure7a = source.index("# Figure 7a:", used_peaks)
     active_lattice = source.index("ACTIVE_LATTICE = active_lattice_constants_from_state(state)")
     chooser_block = source[chooser:figure7a]
 
-    assert refresh_output < active_lattice < used_peaks < chooser < figure7a
+    assert refresh_output < active_lattice < chooser < used_peaks < figure7a
     assert re.search(r"^\s*OUT_DIR\s*=\s*selected_figure_output_dir", chooser_block, re.M) is None
     assert re.search(r"^\s*FIGURE_OUT_DIR\s*=\s*selected_figure_output_dir", chooser_block, re.M)
+    assert re.search(
+        r"^\s*PROFILE_OUT_DIR\s*=\s*selected_figure_output_dir\s*/\s*\"profiles\"",
+        chooser_block,
+        re.M,
+    )
     assert re.search(r"^\s*OUT_DIR\.mkdir\(parents=True, exist_ok=True\)", chooser_block, re.M) is None
     assert re.search(r"^\s*FIGURE_OUT_DIR\.mkdir\(parents=True, exist_ok=True\)", chooser_block, re.M)
+    assert re.search(r"^\s*PROFILE_OUT_DIR\.mkdir\(parents=True, exist_ok=True\)", chooser_block, re.M)
+    assert 'csv_path = FIGURE_OUT_DIR / f"{USED_PEAKS_STEM}.csv"' in source
+    assert 'md_path = FIGURE_OUT_DIR / f"{USED_PEAKS_STEM}.md"' in source
 
 
 def test_parallel_script_refreshes_figure_output_after_state_sample_detection() -> None:
@@ -7148,6 +7166,7 @@ def test_parallel_script_used_peaks_note_handles_empty_fit_table(tmp_path: Path)
     namespace.update(
         {
             "OUT_DIR": tmp_path,
+            "FIGURE_OUT_DIR": tmp_path / "figures",
             "USED_PEAKS_STEM": "used_peaks",
             "SAMPLE_LABEL": "PbI2",
             "STATE_PATH": Path("low_disorder.json"),
@@ -7159,6 +7178,8 @@ def test_parallel_script_used_peaks_note_handles_empty_fit_table(tmp_path: Path)
 
     md_path, csv_path = write_used_peaks_note()
 
+    assert md_path == tmp_path / "figures" / "used_peaks.md"
+    assert csv_path == tmp_path / "figures" / "used_peaks.csv"
     used = pd.read_csv(csv_path)
     assert used.empty
     assert list(used.columns) == [
@@ -11372,3 +11393,43 @@ def test_parallel_script_routes_profile_figures_to_profile_output_dir() -> None:
         )
     ]
     assert "output_dir=PROFILE_OUT_DIR" not in detector_region_call
+
+
+def test_save_manuscript_figure_creates_output_dir_and_skips_vector_when_disabled(
+    tmp_path: Path,
+) -> None:
+    namespace = _script_functions("save_manuscript_figure")
+    save_manuscript_figure = namespace["save_manuscript_figure"]
+    namespace["FIGURE_OUT_DIR"] = tmp_path / "figures"
+    namespace["MANUSCRIPT_DPI"] = 72
+    namespace["SAVE_VECTOR_FIGURES"] = False
+
+    fig, ax = plt.subplots()
+    ax.plot([0.0, 1.0], [0.0, 1.0])
+    try:
+        png_path, pdf_path = save_manuscript_figure(fig, "example")
+    finally:
+        plt.close(fig)
+
+    assert png_path == tmp_path / "figures" / "example.png"
+    assert pdf_path == png_path
+    assert png_path.exists()
+    assert not (tmp_path / "figures" / "example.pdf").exists()
+    assert not (tmp_path / "figures" / "example.svg").exists()
+
+
+def test_parallel_script_reports_detector_region_svg_only_when_vector_file_is_written() -> None:
+    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    block = source[
+        source.index("detector_region_png, detector_region_pdf = save_manuscript_figure(") : source.index(
+            "display(Image(filename=str(detector_region_png)))"
+        )
+    ]
+
+    assert 'detector_region_svg = FIGURE_OUT_DIR / f"{ROD_PROFILE_REGION_STEM}.svg"' in block
+    assert 'print(f"saved={FIGURE_OUT_DIR / f\'{ROD_PROFILE_REGION_STEM}.svg\'}")' not in block
+    assert re.search(
+        r"if bool\(SAVE_VECTOR_FIGURES\) and detector_region_svg\.exists\(\):\n"
+        r"\s+print\(f\"saved=\{detector_region_svg\}\"\)",
+        block,
+    )

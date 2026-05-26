@@ -1173,14 +1173,6 @@ def final_output_dir_choice_runtime_mode(
         return "popup"
     if str(output_dir_override or "").strip() or str(figure_output_dir_override or "").strip():
         return "skip"
-    env_map = os.environ if env is None else env
-    if str(env_map.get("RA_SIM_ALL_BACKGROUND_PROCESS_GUARD", "")).strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }:
-        return "skip"
     return qr_rod_peak_edit_runtime_mode("auto", backend_name=backend_name, env=env)
 
 
@@ -8909,6 +8901,7 @@ def finish_axes(ax, *, grid: bool = False) -> None:
 def save_manuscript_figure(fig, stem: str, *, output_dir: Path | None = None) -> tuple[Path, Path]:
     """Save a high-DPI PNG, with optional vector PDF/SVG for faster development runs."""
     base_dir = FIGURE_OUT_DIR if output_dir is None else Path(output_dir)
+    base_dir.mkdir(parents=True, exist_ok=True)
     png_path = base_dir / f"{stem}.png"
     pdf_path = base_dir / f"{stem}.pdf"
     svg_path = base_dir / f"{stem}.svg"
@@ -9009,8 +9002,9 @@ def write_used_peaks_note() -> tuple[Path, Path]:
                 }
             )
     used = pd.DataFrame(rows, columns=used_peak_columns)
-    csv_path = OUT_DIR / f"{USED_PEAKS_STEM}.csv"
-    md_path = OUT_DIR / f"{USED_PEAKS_STEM}.md"
+    FIGURE_OUT_DIR.mkdir(parents=True, exist_ok=True)
+    csv_path = FIGURE_OUT_DIR / f"{USED_PEAKS_STEM}.csv"
+    md_path = FIGURE_OUT_DIR / f"{USED_PEAKS_STEM}.md"
     used.to_csv(csv_path, index=False)
 
     lines = [
@@ -9054,10 +9048,6 @@ def write_used_peaks_note() -> tuple[Path, Path]:
     return md_path, csv_path
 
 
-used_peaks_md, used_peaks_csv = write_used_peaks_note()
-print(f"saved={used_peaks_md}")
-print(f"saved={used_peaks_csv}")
-
 selected_figure_output_dir = choose_final_output_dir(
     mode=_setting_text(
         "SAVE_OUTPUT_DIR_EDIT_MODE_OVERRIDE",
@@ -9073,9 +9063,15 @@ selected_figure_output_dir = choose_final_output_dir(
 )
 if selected_figure_output_dir is not None:
     FIGURE_OUT_DIR = selected_figure_output_dir
+    PROFILE_OUT_DIR = selected_figure_output_dir / "profiles"
     FIGURE_OUT_DIR.mkdir(parents=True, exist_ok=True)
+    PROFILE_OUT_DIR.mkdir(parents=True, exist_ok=True)
 print(f"figures={FIGURE_OUT_DIR}")
 print(f"profiles={PROFILE_OUT_DIR}")
+
+used_peaks_md, used_peaks_csv = write_used_peaks_note()
+print(f"saved={used_peaks_md}")
+print(f"saved={used_peaks_csv}")
 
 # Figure 7a: detector-space measured images with fitted-peak contours and detector-space peak models.
 ordered_backgrounds = sorted(background_results, key=lambda bg: angle_sort_value(bg["tilt_deg"]))
@@ -19808,9 +19804,11 @@ detector_region_scale_png, detector_region_scale_pdf = save_detector_region_inte
     vmax=float(detector_region_vmax),
     stem=f"{ROD_PROFILE_REGION_STEM}_intensity_scale",
 )
+detector_region_svg = FIGURE_OUT_DIR / f"{ROD_PROFILE_REGION_STEM}.svg"
 print(f"saved={detector_region_png}")
 print(f"saved={detector_region_pdf}")
-print(f"saved={FIGURE_OUT_DIR / f'{ROD_PROFILE_REGION_STEM}.svg'}")
+if bool(SAVE_VECTOR_FIGURES) and detector_region_svg.exists():
+    print(f"saved={detector_region_svg}")
 print(f"saved={detector_region_scale_png}")
 print(f"saved={detector_region_scale_pdf}")
 display(Image(filename=str(detector_region_png)))
