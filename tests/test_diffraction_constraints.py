@@ -265,6 +265,56 @@ def test_internal_projection_remains_explicit_legacy_mode():
     )
 
 
+def test_projection_debug_names_include_external_evanescent():
+    assert diffraction._PROJECTION_DEBUG_COUNTER_EXTERNAL_EVANESCENT == 7
+    assert diffraction._PROJECTION_DEBUG_COUNTER_COLS == 8
+    assert projection_debug.PROJECTION_DEBUG_COUNTER_NAMES[-1] == "n_external_evanescent"
+    assert (
+        projection_debug.PROJECTION_DEBUG_REASON_LABELS[
+            diffraction._PROJECTION_DEBUG_REASON_EXTERNAL_EVANESCENT
+        ]
+        == "external_evanescent"
+    )
+
+
+def test_exact_external_air_exit_wavevector_propagating():
+    ok, kx, ky, kz, tth, reason = diffraction._exact_external_air_exit_wavevector.py_func(
+        0.6, 0.0, 0.4, 1.0
+    )
+
+    assert ok
+    assert kx == pytest.approx(0.6)
+    assert ky == pytest.approx(0.0)
+    assert kz == pytest.approx(0.8)
+    assert tth == pytest.approx(np.arctan2(0.8, 0.6))
+    assert reason == diffraction._PROJECTION_DEBUG_REASON_UNKNOWN
+
+
+def test_exact_external_air_exit_wavevector_negative_kz_branch():
+    ok, kx, ky, kz, tth, reason = diffraction._exact_external_air_exit_wavevector.py_func(
+        0.6, 0.0, -0.4, 1.0
+    )
+
+    assert ok
+    assert kx == pytest.approx(0.6)
+    assert ky == pytest.approx(0.0)
+    assert kz == pytest.approx(-0.8)
+    assert tth == pytest.approx(np.arctan2(-0.8, 0.6))
+    assert reason == diffraction._PROJECTION_DEBUG_REASON_UNKNOWN
+
+
+def test_exact_external_air_exit_rejects_evanescent():
+    ok, *_rest, reason = diffraction._exact_external_air_exit_wavevector.py_func(
+        1.1,
+        0.0,
+        0.2,
+        1.0,
+    )
+
+    assert not ok
+    assert reason == diffraction._PROJECTION_DEBUG_REASON_EXTERNAL_EVANESCENT
+
+
 def test_depth_m_is_converted_to_angstrom_before_exact_attenuation_terms():
     precompute_sample_terms = _python_callable(diffraction._precompute_sample_terms)
 
@@ -292,10 +342,69 @@ def test_depth_m_is_converted_to_angstrom_before_exact_attenuation_terms():
     assert sample_terms[0, diffraction._SAMPLE_COL_L_IN] == 500.0
 
 
+def test_zero_thickness_disables_beer_path_attenuation():
+    attenuation_depth_angstrom = _python_callable(diffraction._attenuation_depth_angstrom)
+
+    assert attenuation_depth_angstrom(0.0) == 0.0
+
+
+def test_positive_thickness_depth_is_angstrom():
+    thickness_to_angstrom = _python_callable(diffraction._thickness_to_angstrom)
+    attenuation_depth_angstrom = _python_callable(diffraction._attenuation_depth_angstrom)
+
+    thickness_a = thickness_to_angstrom(50e-9)
+
+    assert thickness_a == pytest.approx(500.0)
+    assert attenuation_depth_angstrom(thickness_a) == pytest.approx(500.0)
+
+
 def test_mm_scale_depth_m_is_still_converted_to_angstrom():
     thickness_to_angstrom = _python_callable(diffraction._thickness_to_angstrom)
 
     assert thickness_to_angstrom(1.0e-3) == 1.0e7
+
+
+def test_external_projection_rejects_evanescent_candidate():
+    project_weighted_candidate_fast = _python_callable(diffraction._project_weighted_candidate_fast)
+
+    valid, row_f, col_f, phi_f, mass = project_weighted_candidate_fast(
+        1.1,
+        0.0,
+        0.2,
+        1.0,
+        1.0,
+        1.0,
+        0.0,
+        0.0,
+        4.0,
+        4.0,
+        np.eye(3, dtype=np.float64),
+        np.array([1.0, 0.0, 0.0], dtype=np.float64),
+        np.array([1.0, 0.0, 0.0], dtype=np.float64),
+        np.array([0.0, 1.0, 0.0], dtype=np.float64),
+        np.array([0.0, 0.0, 1.0], dtype=np.float64),
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        1.0,
+        0.0,
+        1.0 + 0.0j,
+        0.0,
+        1.0,
+        8,
+        diffraction.EXIT_PROJECTION_EXTERNAL,
+    )
+
+    assert not valid
+    assert row_f == pytest.approx(0.0) or np.isnan(row_f)
+    assert col_f == pytest.approx(0.0) or np.isnan(col_f)
+    assert np.isnan(phi_f)
+    assert mass == 0.0
 
 
 def test_legacy_kernel_n2_sample_array_matches_kernel_fallback_rules():

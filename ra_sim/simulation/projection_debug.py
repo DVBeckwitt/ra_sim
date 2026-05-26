@@ -29,6 +29,7 @@ PROJECTION_DEBUG_COUNTER_NAMES = (
     "n_no_valid_sample",
     "n_large_exit_remap",
     "n_near_critical_band",
+    "n_external_evanescent",
 )
 
 PROJECTION_DEBUG_COUNTER_COLS = len(PROJECTION_DEBUG_COUNTER_NAMES)
@@ -45,6 +46,7 @@ PROJECTION_DEBUG_REASON_LABELS = {
     5: "projection_norm",
     6: "invalid_det_coord",
     7: "off_detector",
+    8: "external_evanescent",
 }
 
 
@@ -296,12 +298,8 @@ def projection_debug_request_settings(
             getattr(request, "exit_projection_mode", None)
         ),
         "image_size": int(getattr(geometry, "image_size", 0) or 0),
-        "center_x_px": _round_or_none(
-            geometry.center[0] if geometry is not None else None, 4
-        ),
-        "center_y_px": _round_or_none(
-            geometry.center[1] if geometry is not None else None, 4
-        ),
+        "center_x_px": _round_or_none(geometry.center[0] if geometry is not None else None, 4),
+        "center_y_px": _round_or_none(geometry.center[1] if geometry is not None else None, 4),
         "pixel_size_um": _round_or_none(
             (geometry.pixel_size_m if geometry is not None else None) * 1.0e6
             if geometry is not None
@@ -380,8 +378,7 @@ def build_projection_debug_background(
         if av is not None and idx < len(av):
             av_row = np.asarray(av[idx], dtype=np.float64)
         counter_values = {
-            name: int(counters[idx, col])
-            for col, name in enumerate(PROJECTION_DEBUG_COUNTER_NAMES)
+            name: int(counters[idx, col]) for col, name in enumerate(PROJECTION_DEBUG_COUNTER_NAMES)
         }
         per_reflection.append(
             {

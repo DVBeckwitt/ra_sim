@@ -7,6 +7,7 @@
 
 - **Simulation performance**
   - Made exact complex-`k` slab optics the default for new GUI, CLI, and headless simulation runs while preserving explicit fast-mode selections.
+  - Fixed exact external exit projection so non-propagating air exits are rejected when `k_parallel > k0`, and changed zero sample thickness to disable explicit Beer-path attenuation instead of applying hidden evanescent penetration-depth factors.
   - Added a Numba compatibility layer so simulation modules can import with Python fallbacks when Numba itself is unavailable or fails during import.
   - Clarified optional exact-cake Numba warmup failures so startup logs explain that exact-cake will use the Python fallback, including the reported `'Loc' object does not support the context manager protocol` compiler signature.
   - Hardened Q-debug truncation plumbing so threaded weighted-event chunks use distinct truncation counters and legacy diffraction debug exposes bounded-buffer truncation stats without changing return tuples.

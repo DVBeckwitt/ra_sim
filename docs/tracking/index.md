@@ -398,6 +398,7 @@ still failing. Full fitter validation is not claimed.
 | Cold-start caked manual fit projector | bug | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-05-05 | [cold-start-caked-manual-fit-projector.md](archive/cold-start-caked-manual-fit-projector.md) |
 | Detector Selected-Qr Rod ROI | bug/feature | - | none | p1 | 2026-05-01 | [detector-selected-qr-rod-roi.md](archive/detector-selected-qr-rod-roi.md) |
 | Detector-oracle caked Qr/background picks | bug | - | [#248](https://github.com/DVBeckwitt/ra_sim/issues/248) | p1 | 2026-04-23 | [detector-oracle-caked-background-picks.md](archive/detector-oracle-caked-background-picks.md) |
+| Exact external exit projection and depth | bug | - | none | p1 | 2026-05-26 | [exact-exit-projection-depth.md](archive/exact-exit-projection-depth.md) |
 | Fast primary rasterizer | refactor | - | none | p2 | 2026-04-22 | [fast-primary-rasterizer.md](archive/fast-primary-rasterizer.md) |
 | Full geometry fitter repair and Bi validation | bug/feature | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-05-05 | [full-geometry-fitter-repair-bi-validation.md](archive/full-geometry-fitter-repair-bi-validation.md) |
 | GUI runtime selective update fast paths | optimization | - | none | p2 | 2026-04-28 | [gui-runtime-selective-update-fast-paths.md](archive/gui-runtime-selective-update-fast-paths.md) |

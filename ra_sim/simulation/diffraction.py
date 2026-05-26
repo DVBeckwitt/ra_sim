@@ -70,10 +70,7 @@ class FastOpticsDisabledError(ValueError):
     pass
 
 
-FAST_OPTICS_DISABLED_MESSAGE = (
-    "Fast optics mode is disabled. "
-    "Use exact complex-k slab optics only."
-)
+FAST_OPTICS_DISABLED_MESSAGE = "Fast optics mode is disabled. Use exact complex-k slab optics only."
 
 _EXACT_OPTICS_MODE_LABELS = {
     "1",
@@ -125,11 +122,7 @@ def require_exact_optics_mode(value: object) -> int:
     text = text.replace("–", "-").replace("—", "-")
     text = " ".join(text.split())
 
-    if (
-        text in _EXACT_OPTICS_MODE_LABELS
-        or "complex-k dwba" in text
-        or "complex_k_dwba" in text
-    ):
+    if text in _EXACT_OPTICS_MODE_LABELS or "complex-k dwba" in text or "complex_k_dwba" in text:
         return OPTICS_MODE_EXACT
 
     if text in _FAST_OPTICS_MODE_LABELS or ("fresnel" in text and "ctr" in text):
@@ -216,7 +209,8 @@ _PROJECTION_DEBUG_COUNTER_PROP_FAC_REJECT = 3
 _PROJECTION_DEBUG_COUNTER_NO_VALID_SAMPLE = 4
 _PROJECTION_DEBUG_COUNTER_LARGE_EXIT_REMAP = 5
 _PROJECTION_DEBUG_COUNTER_NEAR_CRITICAL_BAND = 6
-_PROJECTION_DEBUG_COUNTER_COLS = 7
+_PROJECTION_DEBUG_COUNTER_EXTERNAL_EVANESCENT = 7
+_PROJECTION_DEBUG_COUNTER_COLS = 8
 
 _PROJECTION_DEBUG_REASON_UNKNOWN = 0
 _PROJECTION_DEBUG_REASON_NO_VALID_SAMPLE = 1
@@ -226,6 +220,7 @@ _PROJECTION_DEBUG_REASON_PROP_FAC = 4
 _PROJECTION_DEBUG_REASON_PROJECTION_NORM = 5
 _PROJECTION_DEBUG_REASON_INVALID_DET_COORD = 6
 _PROJECTION_DEBUG_REASON_OFF_DETECTOR = 7
+_PROJECTION_DEBUG_REASON_EXTERNAL_EVANESCENT = 8
 _PROJECTION_DEBUG_REJECT_RECORD_COLS = 10
 
 _PROJECTION_DEBUG_LARGE_EXIT_REMAP_RAD = 0.05 * (pi / 180.0)
@@ -1363,6 +1358,81 @@ def _thickness_to_angstrom(depth):
     if depth <= 0.0:
         return 0.0
     return depth * 1.0e10
+
+
+@njit(fastmath=True, cache=True)
+def _attenuation_depth_angstrom(thickness_angstrom):
+    if thickness_angstrom > 0.0:
+        return thickness_angstrom
+    return 0.0
+
+
+@njit(fastmath=True, cache=True)
+def _exact_external_air_exit_wavevector(k_tx_prime, k_ty_prime, k_tz_prime, k0):
+    if (not np.isfinite(k0)) or k0 <= 0.0:
+        return False, 0.0, 0.0, 0.0, np.nan, _PROJECTION_DEBUG_REASON_INVALID_DET
+
+    k0sq = k0 * k0
+    kpar2 = k_tx_prime * k_tx_prime + k_ty_prime * k_ty_prime
+    tol = 1.0e-12 * max(k0sq, 1.0)
+
+    if kpar2 > k0sq + tol:
+        return (
+            False,
+            0.0,
+            0.0,
+            0.0,
+            np.nan,
+            _PROJECTION_DEBUG_REASON_EXTERNAL_EVANESCENT,
+        )
+
+    if kpar2 > k0sq:
+        kpar2 = k0sq
+
+    kr = sqrt(max(kpar2, 0.0))
+    kz_abs = sqrt(max(k0sq - kpar2, 0.0))
+    kz_air = kz_abs
+    if k_tz_prime < 0.0:
+        kz_air = -kz_air
+
+    twotheta_t = np.arctan2(kz_air, kr)
+    return True, k_tx_prime, k_ty_prime, kz_air, twotheta_t, _PROJECTION_DEBUG_REASON_UNKNOWN
+
+
+@njit(fastmath=True, cache=True)
+def _exit_projection_wavevector(k_tx_prime, k_ty_prime, k_tz_prime, k0, exit_projection_mode):
+    if int(exit_projection_mode) != EXIT_PROJECTION_INTERNAL:
+        return _exact_external_air_exit_wavevector(
+            k_tx_prime,
+            k_ty_prime,
+            k_tz_prime,
+            k0,
+        )
+
+    k_norm = sqrt(k_tx_prime * k_tx_prime + k_ty_prime * k_ty_prime + k_tz_prime * k_tz_prime)
+    if k_norm <= 1.0e-30:
+        return (
+            False,
+            0.0,
+            0.0,
+            0.0,
+            np.nan,
+            _PROJECTION_DEBUG_REASON_PROJECTION_NORM,
+        )
+
+    kf_x = k_tx_prime / k_norm
+    kf_y = k_ty_prime / k_norm
+    kf_z = k_tz_prime / k_norm
+    twotheta_t = np.arctan2(kf_z, sqrt(kf_x * kf_x + kf_y * kf_y))
+    return True, kf_x, kf_y, kf_z, twotheta_t, _PROJECTION_DEBUG_REASON_UNKNOWN
+
+
+@njit(cache=True)
+def _projection_debug_count_exit_reject(projection_debug_counters, reason):
+    if reason == _PROJECTION_DEBUG_REASON_EXTERNAL_EVANESCENT:
+        projection_debug_counters[_PROJECTION_DEBUG_COUNTER_EXTERNAL_EVANESCENT] += 1
+    else:
+        projection_debug_counters[_PROJECTION_DEBUG_COUNTER_INVALID_DET] += 1
 
 
 @njit(cache=True)
@@ -2879,9 +2949,7 @@ def _normalize_exact_optics_arg(
         )
         return tuple(normalized_args), kwargs
 
-    kwargs["optics_mode"] = require_exact_optics_mode(
-        kwargs.get("optics_mode", default)
-    )
+    kwargs["optics_mode"] = require_exact_optics_mode(kwargs.get("optics_mode", default))
     return args, kwargs
 
 
@@ -3494,10 +3562,7 @@ def _precompute_sample_terms(
         )
         Ti2 = _sanitize_transmission_power(Ti2)
 
-        if thickness_angstrom > 0.0:
-            L_in = thickness_angstrom
-        else:
-            L_in = 1.0 / np.maximum(2.0 * im_k_z, 1e-30)
+        L_in = _attenuation_depth_angstrom(thickness_angstrom)
 
         sample_terms[i_samp, _SAMPLE_COL_KX_SCAT] = k_x_scat
         sample_terms[i_samp, _SAMPLE_COL_KY_SCAT] = k_y_scat
@@ -3793,6 +3858,36 @@ def _project_weighted_candidate(
     else:
         twotheta_t_prime = np.arctan(k_tz_prime / kr)
 
+    valid_exit, kf_x, kf_y, kf_z, twotheta_t, reason = _exit_projection_wavevector(
+        k_tx_prime,
+        k_ty_prime,
+        k_tz_prime,
+        k0,
+        exit_projection_mode,
+    )
+    if not valid_exit:
+        if projection_debug_enabled and projection_debug_counters is not None:
+            _projection_debug_count_exit_reject(projection_debug_counters, reason)
+            if (
+                projection_debug_reject_count is not None
+                and projection_debug_reject_records is not None
+            ):
+                _projection_debug_record_reject(
+                    projection_debug_reject_count,
+                    projection_debug_reject_records,
+                    H,
+                    K,
+                    L,
+                    twotheta_t_prime,
+                    np.nan,
+                    kr,
+                    k0,
+                    n2_real,
+                    reason,
+                )
+        return False, np.nan, np.nan, np.nan, 0.0
+    kf = np.array([kf_x, kf_y, kf_z], dtype=np.float64)
+
     k0_sq = float(k0) * float(k0)
     k_par_f = kr
     k_par_f_sq = k_par_f * k_par_f
@@ -3806,13 +3901,7 @@ def _project_weighted_candidate(
     )
     Tf2 = _sanitize_transmission_power(Tf2)
     im_k_z_f = np.abs(kz2_f.imag)
-    if thickness_angstrom > 0.0:
-        L_out = thickness_angstrom
-    else:
-        L_out = 1.0 / np.maximum(2.0 * im_k_z_f, 1.0e-30)
-    cos_out = _clamp(kr / np.maximum(float(k0), 1.0e-30), -1.0, 1.0)
-    twotheta_t = np.arccos(cos_out) * np.sign(twotheta_t_prime)
-    k_out_mag = float(k0)
+    L_out = _attenuation_depth_angstrom(thickness_angstrom)
 
     if projection_debug_enabled and projection_debug_counters is not None:
         _projection_debug_log_ray(
@@ -3872,35 +3961,6 @@ def _project_weighted_candidate(
             )
         return False, np.nan, np.nan, np.nan, 0.0
 
-    phi_f = np.arctan2(k_tx_prime, k_ty_prime)
-    if int(exit_projection_mode) == EXIT_PROJECTION_INTERNAL:
-        k_norm = sqrt(k_tx_prime * k_tx_prime + k_ty_prime * k_ty_prime + k_tz_prime * k_tz_prime)
-        if k_norm > 1.0e-30:
-            kf = np.array(
-                [k_tx_prime / k_norm, k_ty_prime / k_norm, k_tz_prime / k_norm],
-                dtype=np.float64,
-            )
-        elif k_out_mag > 1.0e-30:
-            kf = np.array(
-                [
-                    k_out_mag * np.cos(twotheta_t) * np.sin(phi_f),
-                    k_out_mag * np.cos(twotheta_t) * np.cos(phi_f),
-                    k_out_mag * np.sin(twotheta_t),
-                ],
-                dtype=np.float64,
-            )
-        else:
-            return False, np.nan, np.nan, np.nan, 0.0
-    else:
-        kf = np.array(
-            [
-                k_out_mag * np.cos(twotheta_t) * np.sin(phi_f),
-                k_out_mag * np.cos(twotheta_t) * np.cos(phi_f),
-                k_out_mag * np.sin(twotheta_t),
-            ],
-            dtype=np.float64,
-        )
-
     kf_prime = np.asarray(R_sample, dtype=np.float64) @ kf
     dx, dy, dz, valid_det = intersect_line_plane(I_plane, kf_prime, Detector_Pos, n_det_rot)
     if not valid_det:
@@ -3922,6 +3982,7 @@ def _project_weighted_candidate(
     if not _candidate_has_detector_support(int(image_size), float(row_f), float(col_f)):
         return False, row_f, col_f, np.nan, 0.0
 
+    phi_f = np.arctan2(k_tx_prime, k_ty_prime)
     mass = (
         float(reflection_intensity)
         * float(sample_weight)
@@ -4004,6 +4065,16 @@ def _project_weighted_candidate_fast(
     else:
         twotheta_t_prime = np.arctan(k_tz_prime / kr)
 
+    valid_exit, kf_x, kf_y, kf_z, twotheta_t, _reason = _exit_projection_wavevector(
+        k_tx_prime,
+        k_ty_prime,
+        k_tz_prime,
+        k0,
+        exit_projection_mode,
+    )
+    if not valid_exit:
+        return False, np.nan, np.nan, np.nan, 0.0
+
     k0_sq = k0 * k0
     k_par_f = kr
     k_par_f_sq = k_par_f * k_par_f
@@ -4017,13 +4088,7 @@ def _project_weighted_candidate_fast(
     )
     Tf2 = _sanitize_transmission_power(Tf2)
     im_k_z_f = np.abs(kz2_f.imag)
-    if thickness_angstrom > 0.0:
-        L_out = thickness_angstrom
-    else:
-        L_out = 1.0 / np.maximum(2.0 * im_k_z_f, 1.0e-30)
-    cos_out = _clamp(kr / np.maximum(k0, 1.0e-30), -1.0, 1.0)
-    twotheta_t = np.arccos(cos_out) * np.sign(twotheta_t_prime)
-    k_out_mag = k0
+    L_out = _attenuation_depth_angstrom(thickness_angstrom)
 
     prop_att = np.exp(-2.0 * im_k_z * L_in) * np.exp(-2.0 * im_k_z_f * L_out)
     if (not np.isfinite(prop_att)) or prop_att <= 0.0:
@@ -4034,22 +4099,6 @@ def _project_weighted_candidate_fast(
         return False, np.nan, np.nan, np.nan, 0.0
 
     phi_f = np.arctan2(k_tx_prime, k_ty_prime)
-    if exit_projection_mode == EXIT_PROJECTION_INTERNAL:
-        k_norm = sqrt(k_tx_prime * k_tx_prime + k_ty_prime * k_ty_prime + k_tz_prime * k_tz_prime)
-        if k_norm > 1.0e-30:
-            kf_x = k_tx_prime / k_norm
-            kf_y = k_ty_prime / k_norm
-            kf_z = k_tz_prime / k_norm
-        elif k_out_mag > 1.0e-30:
-            kf_x = k_out_mag * np.cos(twotheta_t) * np.sin(phi_f)
-            kf_y = k_out_mag * np.cos(twotheta_t) * np.cos(phi_f)
-            kf_z = k_out_mag * np.sin(twotheta_t)
-        else:
-            return False, np.nan, np.nan, np.nan, 0.0
-    else:
-        kf_x = k_out_mag * np.cos(twotheta_t) * np.sin(phi_f)
-        kf_y = k_out_mag * np.cos(twotheta_t) * np.cos(phi_f)
-        kf_z = k_out_mag * np.sin(twotheta_t)
 
     kf_prime_x = R_sample[0, 0] * kf_x + R_sample[0, 1] * kf_y + R_sample[0, 2] * kf_z
     kf_prime_y = R_sample[1, 0] * kf_x + R_sample[1, 1] * kf_y + R_sample[1, 2] * kf_z
@@ -5587,9 +5636,35 @@ def _nominal_reflection_visible(
     else:
         twotheta_t_prime = np.arctan(k_tz_prime / kr)
 
-    cos_out = _clamp(kr / np.maximum(k0, 1.0e-30), -1.0, 1.0)
-    twotheta_t = np.arccos(cos_out) * np.sign(twotheta_t_prime)
-    k_out_mag = k0
+    kf = np.empty(3, dtype=np.float64)
+    kf_prime = np.empty(3, dtype=np.float64)
+    valid_exit, kf_x, kf_y, kf_z, twotheta_t, reason = _exit_projection_wavevector(
+        k_tx_prime,
+        k_ty_prime,
+        k_tz_prime,
+        k0,
+        exit_projection_mode,
+    )
+    if not valid_exit:
+        if projection_debug_enabled:
+            _projection_debug_count_exit_reject(projection_debug_counters, reason)
+            _projection_debug_record_reject(
+                projection_debug_reject_count,
+                projection_debug_reject_records,
+                H,
+                K,
+                L,
+                twotheta_t_prime,
+                np.nan,
+                kr,
+                k0,
+                n2_real,
+                reason,
+            )
+        return False, nominal_idx, False
+    kf[0] = kf_x
+    kf[1] = kf_y
+    kf[2] = kf_z
 
     if projection_debug_enabled:
         _projection_debug_log_ray(
@@ -5598,41 +5673,6 @@ def _nominal_reflection_visible(
             twotheta_t,
             n2_real,
         )
-
-    kf = np.empty(3, dtype=np.float64)
-    kf_prime = np.empty(3, dtype=np.float64)
-    phi_f = np.arctan2(k_tx_prime, k_ty_prime)
-    if exit_projection_mode == EXIT_PROJECTION_INTERNAL:
-        k_norm = sqrt(k_tx_prime * k_tx_prime + k_ty_prime * k_ty_prime + k_tz_prime * k_tz_prime)
-        if k_norm > 1.0e-30:
-            kf[0] = k_tx_prime / k_norm
-            kf[1] = k_ty_prime / k_norm
-            kf[2] = k_tz_prime / k_norm
-        elif k_out_mag > 1.0e-30:
-            kf[0] = k_out_mag * np.cos(twotheta_t) * np.sin(phi_f)
-            kf[1] = k_out_mag * np.cos(twotheta_t) * np.cos(phi_f)
-            kf[2] = k_out_mag * np.sin(twotheta_t)
-        else:
-            if projection_debug_enabled:
-                projection_debug_counters[_PROJECTION_DEBUG_COUNTER_INVALID_DET] += 1
-                _projection_debug_record_reject(
-                    projection_debug_reject_count,
-                    projection_debug_reject_records,
-                    H,
-                    K,
-                    L,
-                    twotheta_t_prime,
-                    twotheta_t,
-                    kr,
-                    k0,
-                    n2_real,
-                    _PROJECTION_DEBUG_REASON_PROJECTION_NORM,
-                )
-            return False, nominal_idx, False
-    else:
-        kf[0] = k_out_mag * np.cos(twotheta_t) * np.sin(phi_f)
-        kf[1] = k_out_mag * np.cos(twotheta_t) * np.cos(phi_f)
-        kf[2] = k_out_mag * np.sin(twotheta_t)
     kf_prime[0] = R_sample[0, 0] * kf[0] + R_sample[0, 1] * kf[1] + R_sample[0, 2] * kf[2]
     kf_prime[1] = R_sample[1, 0] * kf[0] + R_sample[1, 1] * kf[1] + R_sample[1, 2] * kf[2]
     kf_prime[2] = R_sample[2, 0] * kf[0] + R_sample[2, 1] * kf[1] + R_sample[2, 2] * kf[2]
@@ -6140,6 +6180,34 @@ def _calculate_phi_from_precomputed(
                 else:
                     twotheta_t_prime = np.arctan(k_tz_prime / kr)
 
+                valid_exit, kf_x, kf_y, kf_z, twotheta_t, reason = _exit_projection_wavevector(
+                    k_tx_prime,
+                    k_ty_prime,
+                    k_tz_prime,
+                    k0,
+                    exit_projection_mode,
+                )
+                if not valid_exit:
+                    if projection_debug_enabled:
+                        _projection_debug_count_exit_reject(projection_debug_counters, reason)
+                        _projection_debug_record_reject(
+                            projection_debug_reject_count,
+                            projection_debug_reject_records,
+                            H,
+                            K,
+                            L,
+                            twotheta_t_prime,
+                            np.nan,
+                            kr,
+                            k0,
+                            n2_real,
+                            reason,
+                        )
+                    continue
+                kf[0] = kf_x
+                kf[1] = kf_y
+                kf[2] = kf_z
+
                 k0_sq = k0 * k0
                 k_par_f = kr
                 k_par_f_sq = k_par_f * k_par_f
@@ -6156,14 +6224,7 @@ def _calculate_phi_from_precomputed(
                 Tf2 = _sanitize_transmission_power(Tf2)
 
                 im_k_z_f = np.abs(kz2_f.imag)
-                if thickness_angstrom > 0.0:
-                    L_out = thickness_angstrom
-                else:
-                    L_out = 1.0 / np.maximum(2.0 * im_k_z_f, 1e-30)
-
-                cos_out = _clamp(kr / np.maximum(k0, 1e-30), -1.0, 1.0)
-                twotheta_t = np.arccos(cos_out) * np.sign(twotheta_t_prime)
-                k_out_mag = k0
+                L_out = _attenuation_depth_angstrom(thickness_angstrom)
 
                 if projection_debug_enabled:
                     _projection_debug_log_ray(
@@ -6211,39 +6272,6 @@ def _calculate_phi_from_precomputed(
                     continue
 
                 phi_f = np.arctan2(k_tx_prime, k_ty_prime)
-                if exit_projection_mode == EXIT_PROJECTION_INTERNAL:
-                    k_norm = sqrt(
-                        k_tx_prime * k_tx_prime + k_ty_prime * k_ty_prime + k_tz_prime * k_tz_prime
-                    )
-                    if k_norm > 1.0e-30:
-                        kf[0] = k_tx_prime / k_norm
-                        kf[1] = k_ty_prime / k_norm
-                        kf[2] = k_tz_prime / k_norm
-                    elif k_out_mag > 1.0e-30:
-                        kf[0] = k_out_mag * np.cos(twotheta_t) * np.sin(phi_f)
-                        kf[1] = k_out_mag * np.cos(twotheta_t) * np.cos(phi_f)
-                        kf[2] = k_out_mag * np.sin(twotheta_t)
-                    else:
-                        if projection_debug_enabled:
-                            projection_debug_counters[_PROJECTION_DEBUG_COUNTER_INVALID_DET] += 1
-                            _projection_debug_record_reject(
-                                projection_debug_reject_count,
-                                projection_debug_reject_records,
-                                H,
-                                K,
-                                L,
-                                twotheta_t_prime,
-                                twotheta_t,
-                                kr,
-                                k0,
-                                n2_real,
-                                _PROJECTION_DEBUG_REASON_PROJECTION_NORM,
-                            )
-                        continue
-                else:
-                    kf[0] = k_out_mag * np.cos(twotheta_t) * np.sin(phi_f)
-                    kf[1] = k_out_mag * np.cos(twotheta_t) * np.cos(phi_f)
-                    kf[2] = k_out_mag * np.sin(twotheta_t)
 
                 kf_prime[0] = (
                     R_sample[0, 0] * kf[0] + R_sample[0, 1] * kf[1] + R_sample[0, 2] * kf[2]
@@ -6650,11 +6678,9 @@ def _calculate_phi_compiled(
     )
 
 
-_CALCULATE_PHI_PARAM_NAMES = (
-    _calculate_phi_compiled.py_func.__code__.co_varnames[
-        : _calculate_phi_compiled.py_func.__code__.co_argcount
-    ]
-)
+_CALCULATE_PHI_PARAM_NAMES = _calculate_phi_compiled.py_func.__code__.co_varnames[
+    : _calculate_phi_compiled.py_func.__code__.co_argcount
+]
 
 
 def _require_exact_calculate_phi_call(args, kwargs):

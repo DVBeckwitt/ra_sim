@@ -788,7 +788,7 @@ Kernel-side hard limits from [`ra_sim/simulation/diffraction.py`](../ra_sim/simu
 | `image_buffer` | image array | `None` | [`ra_sim/simulation/engine.py`](../ra_sim/simulation/engine.py) | Optional output buffer; otherwise a zeroed `float64` image is allocated. |
 | `save_flag` | int | `0` | [`ra_sim/simulation/engine.py`](../ra_sim/simulation/engine.py) | Legacy flag propagated into the kernel. |
 | `record_status` | bool | `False` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Enables per-sample status diagnostics. |
-| `thickness` | m | `0.0` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | If positive, overrides evanescent decay lengths with a fixed slab thickness. |
+| `thickness` | m | `0.0` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Supplied in metres and converted to Å inside the diffraction kernel. A positive value is interpreted as an effective normal optical depth. `thickness = 0` disables explicit Beer-path attenuation. |
 | `optics_mode` | enum or `None` | `None` | [`ra_sim/simulation/engine.py`](../ra_sim/simulation/engine.py) | Exact-only. `None` and exact values resolve to `OPTICS_MODE_EXACT`; fast optics values are rejected. |
 | `collect_hit_tables` | bool | `True` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Enables per-reflection subpixel hit tables. |
 | `exit_projection_mode` | enum string | `"external"` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Detector geometry uses the outgoing air wavevector by default (`"external"`). `"refracted"` is accepted as a compatibility alias; `"internal"` remains available only as an explicit legacy/debug mode. |
@@ -813,7 +813,7 @@ The legacy wrapper packs positional arguments into the typed request. Its extra 
 | `pixel_size_m` | m | `100e-6` | [`ra_sim/simulation/simulation.py`](../ra_sim/simulation/simulation.py) | Forwarded into `DetectorGeometry.pixel_size_m`. |
 | `sample_width_m` | m | `0.0` | [`ra_sim/simulation/simulation.py`](../ra_sim/simulation/simulation.py) | Forwarded into finite sample clipping. |
 | `sample_length_m` | m | `0.0` | [`ra_sim/simulation/simulation.py`](../ra_sim/simulation/simulation.py) | Forwarded into finite sample clipping. |
-| `thickness` | m | `0.0` | [`ra_sim/simulation/simulation.py`](../ra_sim/simulation/simulation.py) | Forwarded into slab entry/exit attenuation lengths. |
+| `thickness` | m | `0.0` | [`ra_sim/simulation/simulation.py`](../ra_sim/simulation/simulation.py) | Forwarded as metres, converted to Å inside the diffraction kernel, and used as a positive effective normal optical depth; `0.0` disables explicit Beer-path attenuation. |
 | `n2_sample_array` | complex array | `None` | [`ra_sim/simulation/simulation.py`](../ra_sim/simulation/simulation.py) | Per-sample refractive index override. |
 
 ### Beam-profile generation and clustering
@@ -1178,9 +1178,13 @@ The in-slab incoming path length is
 L_{\mathrm{in}} =
 \begin{cases}
 \mathrm{thickness_m}\times 10^{10}, & \mathrm{thickness_m} > 0 \\
-\frac{1}{2\,\Im(k_z)}, & \text{otherwise.}
+0, & \text{otherwise.}
 \end{cases}
 \]
+
+`thickness` is supplied in metres and converted to Å inside the diffraction
+kernel. A positive value is interpreted as an effective normal optical depth.
+`thickness = 0` disables explicit Beer-path attenuation.
 
 ### Obsolete fast entry optics branch
 
@@ -1514,21 +1518,28 @@ and
 L_{\mathrm{out}} =
 \begin{cases}
 \mathrm{thickness_m}\times 10^{10}, & \mathrm{thickness_m} > 0 \\
-\frac{1}{2\,\Im(k_{z,f})}, & \text{otherwise.}
+0, & \text{otherwise.}
 \end{cases}
 \]
 
-The exact branch also constructs a refracted-angle representation
+The exact branch also constructs the external detector-projection wavevector
 
 \[
-2\theta_t = \arccos\left(\mathrm{clamp}(k_r/k_0, -1, 1)\right)\operatorname{sign}(2\theta_t'),
+k_{x,\mathrm{air}} = k_{tx}',
 \qquad
-|k_f| = k_0.
+k_{y,\mathrm{air}} = k_{ty}',
+\qquad
+k_{z,\mathrm{air}} =
+\operatorname{sign}(k_{tz}')\sqrt{k_0^2 - {k_{tx}'}^2 - {k_{ty}'}^2}.
 \]
 
 Those quantities are used for the default `exit_projection_mode = "external"`
 detector projection. The older `"refracted"` label is accepted as a compatibility
 alias for `"external"`.
+External projection conserves the tangential wavevector at the film-air
+boundary and projects the propagating air wavevector to the detector. If
+`k_parallel > k0`, the exit wave is evanescent in air and the candidate is
+rejected.
 
 ### Obsolete fast exit optics
 
