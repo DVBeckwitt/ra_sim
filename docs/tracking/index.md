@@ -54,7 +54,9 @@ internal weighted-event forwarding of exact-only optics mode and unused sample
 index data. No dependency, CI workflow, artifact schema, or operator debug
 backend migration is required. Shipping status: focused optics, GUI, fitting,
 simulation, and diagnostic figure tests passed locally; rollback is a normal
-git revert.
+git revert. Post-commit quality review found no correctness, security,
+performance, bloat, test-quality, new-file, or abstraction blockers in the
+hot-path cleanup commit.
 
 Q-space viewer fix status note:
 Implemented runtime geometry ownership for Q-space display without backend
