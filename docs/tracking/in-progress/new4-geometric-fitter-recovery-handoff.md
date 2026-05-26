@@ -9,6 +9,35 @@ Last updated: 2026-05-26
 
 ## Current status
 
+- 2026-05-26 caked acceptance metric-source fix completed. The reported manual
+  run shape is now pinned by regression coverage: pair-audit branch residuals
+  of about `1.70 deg` and `0.75 deg` no longer allow stale final caked delta
+  cache values of `104.39 deg` and `75.16 deg` to drive a `90.96 deg` final RMS
+  or the `manual_outliers_or_physical_bad_fit` fallback. The acceptance summary
+  recomputes residuals from finite `observed_caked_deg` and
+  `predicted_caked_deg`, traces supplied-vs-recomputed vectors, marks cache
+  disagreements as `supplied_delta_cache_mismatch`, and classifies the run as
+  `caked_acceptance_metric_inconsistent` with
+  `inspect_acceptance_metric_sources`. The locked manual QR gamma/Gamma path
+  also fails closed with `manual_qr_dynamic_prediction_unavailable` before
+  optimizer start when every available prediction is locked/non-dynamic. GUI
+  rejection text names both statuses as internal source/metric issues and does
+  not recommend repicking. Bug/error status: fixed in source and targeted
+  tests. Feature/API status: no GUI control, CLI flag, config key, saved-state
+  field, artifact schema, dependency, CI workflow, version bump, ADR,
+  deprecation, or migration. Deprecation/migration status: the retired behavior
+  is internal use of stale caked delta cache fields as final acceptance source;
+  no user migration is required. Validation status: focused geometry fitting
+  `acceptance or outlier or dynamic_prediction or caked` tests passed, geometry
+  overlay tests passed, GUI overlay tests passed, `python -m ra_sim.dev check`
+  passed, and `git diff --check` passed with line-ending warnings only.
+  Shipping status: commit-ready as a bug-fix slice with rollback by git revert.
+  Remaining operator proof before closing the investigation: rerun the exact
+  Tk GUI workflow and require either a real dynamic fit,
+  `manual_qr_dynamic_prediction_unavailable`,
+  `caked_acceptance_metric_inconsistent`, or
+  `objective_insensitive_to_active_params`, not a manual-outlier repick
+  recommendation.
 - 2026-05-26 locked Qr/Qz QR-contract rejection classification follow-up
   completed. The latest live dialog showed a caked angular objective with
   finite but very large degree residuals, a failed QR fit surface contract,

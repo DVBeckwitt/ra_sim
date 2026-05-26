@@ -5834,6 +5834,16 @@ def test_dynamic_angular_summary_reports_worst_rows() -> None:
 
 
 def test_dynamic_angular_summary_flags_handoff_acceptance_residual_mismatch() -> None:
+    expected_branch_0 = math.hypot(
+        32.259 - 33.063,
+        opt._wrap_phi_deg(132.250 - 130.754),
+    )
+    expected_branch_1 = math.hypot(
+        38.312 - 37.566,
+        opt._wrap_phi_deg(39.750 - 39.750),
+    )
+    expected_rms = math.sqrt((expected_branch_0**2 + expected_branch_1**2) / 2.0)
+
     summary = opt._summarize_dynamic_angular_residual_rows(
         [
             {
@@ -5843,7 +5853,9 @@ def test_dynamic_angular_summary_flags_handoff_acceptance_residual_mismatch() ->
                 "pair_id": "branch-0",
                 "source_branch_index": 0,
                 "hkl": [-1, 0, 10],
-                "fit_residual_caked_norm_deg": 1.70,
+                "observed_caked_deg": [33.063, 130.754],
+                "predicted_caked_deg": [32.259, 132.250],
+                "fit_residual_caked_norm_deg": expected_branch_0,
                 "delta_two_theta_deg": 104.39,
                 "wrapped_delta_phi_deg": 0.0,
                 "weighted_delta_two_theta_deg": 104.39,
@@ -5856,7 +5868,9 @@ def test_dynamic_angular_summary_flags_handoff_acceptance_residual_mismatch() ->
                 "pair_id": "branch-1",
                 "source_branch_index": 1,
                 "hkl": [-1, 0, 10],
-                "fit_residual_caked_norm_deg": 0.68,
+                "observed_caked_deg": [37.566, 39.750],
+                "predicted_caked_deg": [38.312, 39.750],
+                "fit_residual_caked_norm_deg": expected_branch_1,
                 "delta_two_theta_deg": 75.16,
                 "wrapped_delta_phi_deg": 0.0,
                 "weighted_delta_two_theta_deg": 75.16,
@@ -5865,23 +5879,50 @@ def test_dynamic_angular_summary_flags_handoff_acceptance_residual_mismatch() ->
         ]
     )
 
-    assert summary["raw_angular_rms_deg"] == pytest.approx(math.sqrt((104.39**2 + 75.16**2) / 2.0))
+    assert summary["raw_angular_rms_deg"] == pytest.approx(expected_rms)
+    assert summary["raw_angular_rms_deg"] != pytest.approx(90.958717)
     assert summary["caked_acceptance_metric_consistency_status"] == "inconsistent"
     assert summary["caked_acceptance_metric_inconsistent"] is True
     assert summary["caked_acceptance_metric_inconsistent_count"] == 2
-    assert summary["caked_acceptance_metric_max_delta_norm_deg"] == pytest.approx(102.69)
     classification = opt._classify_dynamic_angular_failure(summary)
     assert classification["dynamic_angular_failure_classification"] == (
         "caked_acceptance_metric_inconsistent"
     )
     assert classification["recommended_next_fix"] == "inspect_acceptance_metric_sources"
+    summary.update(classification)
+    summary["acceptance_metric_space"] = "caked_deg"
+    summary["final_rms_deg"] = float(summary["raw_angular_rms_deg"])
+    summary["final_max_deg"] = float(summary["raw_angular_max_deg"])
+    result = SimpleNamespace(
+        success=False,
+        final_metric_name="dynamic_angular_point_match",
+        final_metric_space="caked_deg",
+        final_metric_units="deg",
+        rms_deg=float(summary["raw_angular_rms_deg"]),
+        max_deg=float(summary["raw_angular_max_deg"]),
+        point_match_summary=summary,
+    )
+    metric = gui_geometry_fit.geometry_fit_result_metric(result)
+    assert metric["value"] == pytest.approx(expected_rms)
+    rejection_text = "\n".join(
+        gui_geometry_fit.build_geometry_fit_rejection_reason_lines(
+            result,
+            rms=float(summary["raw_angular_rms_deg"]),
+        )
+    )
+    assert "internal metric-source inconsistency" in rejection_text
+    assert "inspect_acceptance_metric_sources" in rejection_text
+    assert "manual_outliers_or_physical_bad_fit" not in rejection_text
+    assert "remove_or_repick_manual_outliers" not in rejection_text
     trace_rows = summary["caked_acceptance_metric_trace_rows"]
     assert len(trace_rows) == 2
     assert trace_rows[0]["pair_id"] == "branch-0"
     assert trace_rows[0]["source_branch_index"] == 0
     assert trace_rows[0]["hkl"] == [-1, 0, 10]
-    assert trace_rows[0]["residual_vector_deg"] == pytest.approx([104.39, 0.0])
-    assert trace_rows[0]["residual_norm_deg"] == pytest.approx(104.39)
+    assert trace_rows[0]["observed_caked_deg"] == pytest.approx([33.063, 130.754])
+    assert trace_rows[0]["predicted_caked_deg"] == pytest.approx([32.259, 132.250])
+    assert trace_rows[0]["residual_vector_deg"] == pytest.approx([-0.804, 1.496])
+    assert trace_rows[0]["residual_norm_deg"] == pytest.approx(expected_branch_0)
     assert trace_rows[0]["units"] == "deg"
     assert trace_rows[0]["row_source"] == "pair_audit_and_acceptance_rows"
 
@@ -9469,7 +9510,7 @@ def test_gamma_fit_fails_closed_when_locked_qr_has_no_dynamic_prediction(
                 "manual_point_fit_mode": True,
                 "dynamic_point_geometry_fit": True,
                 "_qr_fit_point_only_projection": True,
-                "fixed_manual_prediction_preflight_guard": True,
+                "fixed_manual_prediction_preflight_guard": False,
                 "restarts": 0,
                 "weighted_matching": False,
                 "use_measurement_uncertainty": False,
@@ -10093,6 +10134,38 @@ def test_manual_caked_route_invariant_rejection_text_names_caked_route_block() -
         "No geometry parameters were changed.",
     ]
     assert "No matched peak pairs were available for the fitted solution." not in rejection_reasons
+
+
+def test_manual_qr_dynamic_unavailable_rejection_text_names_internal_source_block() -> None:
+    from ra_sim.gui import geometry_fit as gui_geometry_fit
+
+    result = SimpleNamespace(
+        success=False,
+        message="manual_qr_dynamic_prediction_unavailable",
+        final_metric_name="manual_qr_dynamic_prediction_unavailable",
+        final_metric_space="caked_deg",
+        final_metric_units="deg",
+        rms_deg=float("nan"),
+        max_deg=float("nan"),
+        point_match_summary={
+            "reason": "manual_qr_dynamic_prediction_unavailable",
+            "metric_name": "manual_qr_dynamic_prediction_unavailable",
+            "metric_unit": "deg",
+            "matched_pair_count": 0,
+            "manual_caked_fit_pair_count": 2,
+        },
+    )
+
+    rejection_reasons = gui_geometry_fit.build_geometry_fit_rejection_reason_lines(
+        result,
+        rms=float("nan"),
+    )
+    rejection_text = "\n".join(rejection_reasons)
+
+    assert "dynamic simulated caked predictions were unavailable" in rejection_text
+    assert "internal prediction-source issue, not a bad manual pick" in rejection_text
+    assert "manual_outliers_or_physical_bad_fit" not in rejection_text
+    assert "remove_or_repick_manual_outliers" not in rejection_text
 
 
 def test_locked_qr_dynamic_authority_rejection_text_names_internal_route_error() -> None:

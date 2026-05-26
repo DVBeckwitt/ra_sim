@@ -533,6 +533,22 @@ def _summarize_dynamic_angular_residual_rows(
                 return float(math.hypot(first, second))
         return float("nan")
 
+    def _finite_caked_pair(value: object) -> tuple[float, float] | None:
+        if not isinstance(value, (list, tuple, np.ndarray)) or len(value) < 2:
+            return None
+        first = _safe_float(value[0], float("nan"))
+        second = _safe_float(value[1], float("nan"))
+        if np.isfinite(first) and np.isfinite(second):
+            return float(first), float(second)
+        return None
+
+    def _max_finite(first: float, second: float) -> float:
+        if not np.isfinite(first):
+            return float(second)
+        if not np.isfinite(second):
+            return float(first)
+        return float(max(first, second))
+
     def _acceptance_row_source(record: Mapping[str, object], audit_norm: float) -> str:
         explicit = str(record.get("caked_acceptance_row_source", "") or "").strip()
         if np.isfinite(audit_norm):
@@ -589,6 +605,15 @@ def _summarize_dynamic_angular_residual_rows(
                 record.get("prediction_source"),
             ),
             "prediction_role": record.get("prediction_role"),
+            "residual_source": record.get("residual_source"),
+            "supplied_residual_vector_deg": _dynamic_reanchor_jsonable(
+                record.get("supplied_residual_vector_deg")
+            ),
+            "recomputed_residual_vector_deg": _dynamic_reanchor_jsonable(
+                record.get("recomputed_residual_vector_deg")
+            ),
+            "delta_cache_consistency_status": record.get("delta_cache_consistency_status"),
+            "delta_cache_mismatch_norm_deg": record.get("delta_cache_mismatch_norm_deg"),
             "residual_vector_deg": [float(delta_two_theta), float(delta_phi)],
             "residual_norm_deg": float(angular_norm),
             "units": "deg",
@@ -599,22 +624,84 @@ def _summarize_dynamic_angular_residual_rows(
             "acceptance_caked_residual_norm_deg": float(angular_norm),
         }
 
+    inconsistent_trace_keys = (
+        "dataset_index",
+        "dataset_label",
+        "pair_index",
+        "pair_id",
+        "source_branch_index",
+        "hkl",
+        "handoff_audit_caked_residual_norm_deg",
+        "acceptance_caked_residual_norm_deg",
+        "supplied_residual_vector_deg",
+        "recomputed_residual_vector_deg",
+        "observed_caked_deg",
+        "predicted_caked_deg",
+        "observed_caked_source_field",
+        "predicted_caked_source_field",
+        "fit_prediction_source",
+        "prediction_role",
+        "fit_prediction_is_dynamic",
+    )
+
     for row in rows or ():
         if not isinstance(row, Mapping):
             continue
-        delta_two_theta = _safe_float(row.get("delta_two_theta_deg"), float("nan"))
-        delta_phi = _safe_float(
+        record = dict(row)
+        supplied_delta_two_theta = _safe_float(row.get("delta_two_theta_deg"), float("nan"))
+        supplied_delta_phi = _safe_float(
             row.get("wrapped_delta_phi_deg", row.get("delta_phi_deg")),
             float("nan"),
         )
+        has_supplied_delta = bool(
+            np.isfinite(supplied_delta_two_theta) and np.isfinite(supplied_delta_phi)
+        )
+        observed_pair = _finite_caked_pair(record.get("observed_caked_deg"))
+        predicted_pair = _finite_caked_pair(record.get("predicted_caked_deg"))
+        residual_source = "supplied_delta_cache"
+        delta_cache_consistency_status = "not_evaluated"
+        delta_cache_mismatch_norm = float("nan")
+        if observed_pair is not None and predicted_pair is not None:
+            delta_two_theta = float(predicted_pair[0] - observed_pair[0])
+            delta_phi = float(_wrap_phi_deg(float(predicted_pair[1] - observed_pair[1])))
+            residual_source = "observed_predicted_caked_deg"
+            record["recomputed_residual_vector_deg"] = [
+                float(delta_two_theta),
+                float(delta_phi),
+            ]
+            if has_supplied_delta:
+                cache_delta_theta = float(supplied_delta_two_theta - delta_two_theta)
+                cache_delta_phi = float(_wrap_phi_deg(supplied_delta_phi - delta_phi))
+                delta_cache_mismatch_norm = float(math.hypot(cache_delta_theta, cache_delta_phi))
+                delta_cache_consistency_status = (
+                    "inconsistent"
+                    if delta_cache_mismatch_norm > CAKED_ACCEPTANCE_CONSISTENCY_TOL_DEG
+                    else "consistent"
+                )
+            else:
+                delta_cache_consistency_status = "missing_supplied_delta_cache"
+        else:
+            delta_two_theta = supplied_delta_two_theta
+            delta_phi = supplied_delta_phi
         if not (np.isfinite(delta_two_theta) and np.isfinite(delta_phi)):
             continue
+        record["residual_source"] = residual_source
+        if has_supplied_delta:
+            record["supplied_residual_vector_deg"] = [
+                float(supplied_delta_two_theta),
+                float(supplied_delta_phi),
+            ]
+        record["delta_cache_consistency_status"] = delta_cache_consistency_status
+        record["delta_cache_mismatch_norm_deg"] = float(delta_cache_mismatch_norm)
         weighted_delta_two_theta = _safe_float(
             row.get("weighted_delta_two_theta_deg"),
             float("nan"),
         )
         weighted_delta_phi = _safe_float(row.get("weighted_delta_phi_deg"), float("nan"))
         weight = _safe_float(row.get("weight"), float("nan"))
+        if residual_source == "observed_predicted_caked_deg" and np.isfinite(weight):
+            weighted_delta_two_theta = float(weight) * float(delta_two_theta)
+            weighted_delta_phi = float(weight) * float(delta_phi)
         if not (np.isfinite(weighted_delta_two_theta) and np.isfinite(weighted_delta_phi)):
             if np.isfinite(weight):
                 weighted_delta_two_theta = float(weight) * float(delta_two_theta)
@@ -625,7 +712,6 @@ def _summarize_dynamic_angular_residual_rows(
             if np.isfinite(weighted_delta_two_theta) and np.isfinite(weighted_delta_phi)
             else float("nan")
         )
-        record = dict(row)
         record["dataset_index"] = _row_int(record.get("dataset_index"))
         record["dataset_label"] = str(record.get("dataset_label", ""))
         record["pair_index"] = _row_int(record.get("pair_index"), len(normalized_rows))
@@ -647,14 +733,10 @@ def _summarize_dynamic_angular_residual_rows(
             delta_phi=float(delta_phi),
             angular_norm=float(angular_norm),
         )
+        row_inconsistency_reasons: List[str] = []
+        row_consistency_delta = float("nan")
         if np.isfinite(audit_norm):
-            consistency_checked_count += 1
             consistency_delta = abs(float(angular_norm) - float(audit_norm))
-            consistency_max_delta = (
-                float(consistency_delta)
-                if not np.isfinite(consistency_max_delta)
-                else float(max(consistency_max_delta, float(consistency_delta)))
-            )
             record["handoff_audit_caked_residual_norm_deg"] = float(audit_norm)
             record["acceptance_caked_residual_norm_deg"] = float(angular_norm)
             record["caked_acceptance_metric_delta_norm_deg"] = float(consistency_delta)
@@ -665,30 +747,34 @@ def _summarize_dynamic_angular_residual_rows(
             )
             record["caked_acceptance_metric_consistency_status"] = consistency_status
             if consistency_status == "inconsistent":
-                inconsistent_rows.append(
-                    {
-                        "dataset_index": trace_row["dataset_index"],
-                        "dataset_label": trace_row["dataset_label"],
-                        "pair_index": trace_row["pair_index"],
-                        "pair_id": trace_row["pair_id"],
-                        "source_branch_index": trace_row["source_branch_index"],
-                        "hkl": trace_row["hkl"],
-                        "handoff_audit_caked_residual_norm_deg": trace_row[
-                            "handoff_audit_caked_residual_norm_deg"
-                        ],
-                        "acceptance_caked_residual_norm_deg": trace_row[
-                            "acceptance_caked_residual_norm_deg"
-                        ],
-                        "caked_acceptance_metric_delta_norm_deg": float(consistency_delta),
-                        "observed_caked_deg": trace_row["observed_caked_deg"],
-                        "predicted_caked_deg": trace_row["predicted_caked_deg"],
-                        "observed_caked_source_field": trace_row["observed_caked_source_field"],
-                        "predicted_caked_source_field": trace_row["predicted_caked_source_field"],
-                        "fit_prediction_source": trace_row["fit_prediction_source"],
-                        "prediction_role": trace_row["prediction_role"],
-                        "fit_prediction_is_dynamic": trace_row["fit_prediction_is_dynamic"],
-                    }
-                )
+                row_inconsistency_reasons.append("handoff_audit_acceptance_residual_mismatch")
+            row_consistency_delta = float(consistency_delta)
+        if delta_cache_consistency_status == "inconsistent":
+            row_inconsistency_reasons.append("supplied_delta_cache_mismatch")
+            row_consistency_delta = _max_finite(
+                row_consistency_delta,
+                float(delta_cache_mismatch_norm),
+            )
+            record["caked_acceptance_metric_delta_norm_deg"] = float(row_consistency_delta)
+            record["caked_acceptance_metric_consistency_status"] = "inconsistent"
+        if np.isfinite(audit_norm) or delta_cache_consistency_status in {
+            "consistent",
+            "inconsistent",
+        }:
+            consistency_checked_count += 1
+            if np.isfinite(row_consistency_delta):
+                consistency_max_delta = _max_finite(consistency_max_delta, row_consistency_delta)
+        if row_inconsistency_reasons:
+            inconsistent_row = {key: trace_row[key] for key in inconsistent_trace_keys}
+            inconsistent_row.update(
+                {
+                    "inconsistency_reasons": list(row_inconsistency_reasons),
+                    "caked_acceptance_metric_delta_norm_deg": float(row_consistency_delta),
+                    "delta_cache_consistency_status": delta_cache_consistency_status,
+                    "delta_cache_mismatch_norm_deg": float(delta_cache_mismatch_norm),
+                }
+            )
+            inconsistent_rows.append(inconsistent_row)
         trace_rows.append(trace_row)
         normalized_rows.append(record)
 
@@ -997,13 +1083,6 @@ def _annotate_worst_dynamic_angular_rows_with_candidates(
 
 
 def _classify_dynamic_angular_failure(summary: Mapping[str, object]) -> Dict[str, object]:
-    if summary.get("raw_angular_summary_matches_array_audit") is False or str(
-        summary.get("raw_angular_summary_mismatch_reject_reason", "") or ""
-    ):
-        return {
-            "dynamic_angular_failure_classification": "summary_mismatch",
-            "recommended_next_fix": "recompute_summary_from_row_records",
-        }
     if (
         bool(summary.get("caked_acceptance_metric_inconsistent", False))
         or str(summary.get("caked_acceptance_metric_consistency_status", "") or "")
@@ -1012,6 +1091,13 @@ def _classify_dynamic_angular_failure(summary: Mapping[str, object]) -> Dict[str
         return {
             "dynamic_angular_failure_classification": CAKED_ACCEPTANCE_METRIC_INCONSISTENT,
             "recommended_next_fix": "inspect_acceptance_metric_sources",
+        }
+    if summary.get("raw_angular_summary_matches_array_audit") is False or str(
+        summary.get("raw_angular_summary_mismatch_reject_reason", "") or ""
+    ):
+        return {
+            "dynamic_angular_failure_classification": "summary_mismatch",
+            "recommended_next_fix": "recompute_summary_from_row_records",
         }
     if _dynamic_angular_objective_already_aligned(summary):
         return {
@@ -28186,13 +28272,21 @@ def fit_geometry_parameters(
             )
         return mismatches
 
+    manual_qr_dynamic_prediction_preflight_required = bool(
+        active_gamma_fit
+        and locked_manual_qr_expected_count > 0
+        and (manual_caked_fit_space_required or manual_caked_fit_space_ready)
+    )
     preflight_guard_enabled = bool(
         point_match_mode
         and dynamic_point_geometry_fit
         and manual_point_fit_mode
-        and _config_bool(
-            solver_cfg.get("fixed_manual_prediction_preflight_guard", True),
-            True,
+        and (
+            manual_qr_dynamic_prediction_preflight_required
+            or _config_bool(
+                solver_cfg.get("fixed_manual_prediction_preflight_guard", True),
+                True,
+            )
         )
     )
     if preflight_guard_enabled:

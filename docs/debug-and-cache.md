@@ -109,6 +109,15 @@ repicking. When active `gamma` or `Gamma` fitting has only locked/non-dynamic
 predictions available, the route fails closed with
 `manual_qr_dynamic_prediction_unavailable` before optimizer solve.
 
+The 2026-05-26 regression fixture pins the manual-run signature where pair
+audit residuals are about `1.70 deg` and `0.75 deg`, but stale cached final
+deltas report `104.39 deg` and `75.16 deg` (`90.96 deg` RMS). When
+`observed_caked_deg` and `predicted_caked_deg` are finite, final acceptance
+recomputes residuals from those endpoints and treats `delta_two_theta_deg` plus
+`wrapped_delta_phi_deg` as cache fields that must agree. A mismatch is retained
+in the trace as `supplied_delta_cache_mismatch`; it is not used as the final
+caked acceptance metric.
+
 For Bi2Se3 headless `gamma,Gamma` recovery runs, `fit-geometry` now writes visual
 approval artifacts into the same output directory as the fitted state and
 progress sidecar. A run such as:

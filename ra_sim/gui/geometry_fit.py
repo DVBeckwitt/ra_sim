@@ -24933,6 +24933,15 @@ def build_geometry_fit_rejection_reason_lines(
             "This is an internal route error, not a bad manual pick.",
             "No geometry parameters were changed.",
         ]
+    if route_failure_reason == "manual_qr_dynamic_prediction_unavailable":
+        return [
+            (
+                "Geometry fit rejected because dynamic simulated caked predictions were "
+                "unavailable for the locked manual Qr/Qz pairs."
+            ),
+            "This is an internal prediction-source issue, not a bad manual pick.",
+            "No geometry parameters were changed.",
+        ]
 
     early_stop_reason = getattr(result, "early_stop_reason", None)
     if not early_stop_reason:
@@ -25103,6 +25112,7 @@ def build_geometry_fit_rejection_reason_lines(
                 point_match_summary.get("dynamic_angular_failure_classification", "") or ""
             ).strip()
             locked_qr_authority_mismatch = failure_class == "locked_qr_dynamic_authority_mismatch"
+            caked_metric_inconsistent = failure_class == "caked_acceptance_metric_inconsistent"
             if locked_qr_authority_mismatch:
                 reasons.append(
                     "Geometry fit rejected because the locked Qr/Qz dynamic-angle path "
@@ -25110,6 +25120,14 @@ def build_geometry_fit_rejection_reason_lines(
                     "internal projection-frame error, not a bad manual pick."
                 )
                 reasons.append("Repair the locked Qr/Qz dynamic caked-route source.")
+            if caked_metric_inconsistent:
+                reasons.append(
+                    "Geometry fit rejected because pair-audit caked residuals and final "
+                    "acceptance residual sources disagree."
+                )
+                reasons.append(
+                    "This is an internal metric-source inconsistency, not a bad manual pick."
+                )
             if failure_class:
                 reasons.append(f"Failure class: {failure_class}")
             recommended_fix = str(point_match_summary.get("recommended_next_fix", "") or "").strip()
