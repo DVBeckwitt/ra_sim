@@ -134,6 +134,49 @@ def test_simulate_forwards_extended_kernel_options() -> None:
     assert np.array_equal(seen["n2_sample_array_override"], request.beam.n2_sample_array)
 
 
+def test_simulate_defaults_to_exact_optics_when_request_omits_mode() -> None:
+    request = _build_request()
+    seen: dict[str, object] = {}
+
+    def fake_runner(*args, **kwargs):
+        seen.update(kwargs)
+        image = np.array(args[6], copy=True)
+        return (
+            image,
+            [],
+            np.array([1.0], dtype=np.float64),
+            np.array([2.0], dtype=np.float64),
+            np.array([3.0], dtype=np.float64),
+            [np.empty((0, 3), dtype=np.float64)],
+        )
+
+    simulate(request, peak_runner=fake_runner)
+
+    assert seen["optics_mode"] == diffraction.OPTICS_MODE_EXACT
+
+
+def test_simulate_preserves_explicit_fast_optics_mode() -> None:
+    request = _build_request()
+    request.optics_mode = diffraction.OPTICS_MODE_FAST
+    seen: dict[str, object] = {}
+
+    def fake_runner(*args, **kwargs):
+        seen.update(kwargs)
+        image = np.array(args[6], copy=True)
+        return (
+            image,
+            [],
+            np.array([1.0], dtype=np.float64),
+            np.array([2.0], dtype=np.float64),
+            np.array([3.0], dtype=np.float64),
+            [np.empty((0, 3), dtype=np.float64)],
+        )
+
+    simulate(request, peak_runner=fake_runner)
+
+    assert seen["optics_mode"] == diffraction.OPTICS_MODE_FAST
+
+
 def test_simulate_populates_and_reuses_beam_n2_sample_array(monkeypatch) -> None:
     request = _build_request()
     request.beam.n2_sample_array = None
@@ -1142,6 +1185,29 @@ def test_simulate_qr_rods_forwards_extended_kernel_options() -> None:
     assert seen["sample_width_m"] == request.geometry.sample_width_m
     assert seen["sample_length_m"] == request.geometry.sample_length_m
     assert np.array_equal(seen["n2_sample_array_override"], request.beam.n2_sample_array)
+
+
+def test_simulate_qr_rods_defaults_to_exact_optics_when_request_omits_mode() -> None:
+    request = _build_request()
+    qr_dict = {1: {"hk": (1, 0), "L": np.array([0.0]), "I": np.array([1.0]), "deg": 1}}
+    seen: dict[str, object] = {}
+
+    def fake_runner(*args, **kwargs):
+        seen.update(kwargs)
+        image = np.array(args[5], copy=True)
+        return (
+            image,
+            [],
+            np.array([1.0], dtype=np.float64),
+            np.array([2.0], dtype=np.float64),
+            np.array([3.0], dtype=np.float64),
+            [np.empty((0, 3), dtype=np.float64)],
+            np.array([1], dtype=np.int32),
+        )
+
+    simulate_qr_rods(qr_dict, request, peak_runner=fake_runner)
+
+    assert seen["optics_mode"] == diffraction.OPTICS_MODE_EXACT
 
 
 def test_simulate_qr_rods_populates_missing_beam_n2_sample_array(monkeypatch) -> None:

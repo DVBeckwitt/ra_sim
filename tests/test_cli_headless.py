@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from ra_sim import cli
+from ra_sim.simulation import diffraction
 from ra_sim.simulation.types import SimulationRequest
 
 
@@ -147,6 +148,7 @@ def test_run_headless_simulation_builds_typed_request(monkeypatch, tmp_path) -> 
     assert isinstance(request, SimulationRequest)
     assert request.collect_hit_tables is False
     assert request.build_intersection_cache is False
+    assert request.optics_mode == diffraction.OPTICS_MODE_EXACT
     assert request.geometry.image_size == 8
     assert request.geometry.distance_m == 0.1
     assert request.geometry.pixel_size_m == 1.0e-4

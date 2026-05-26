@@ -9,6 +9,7 @@ import numpy as np
 from ra_sim.simulation.diffraction import (
     DEFAULT_SOLVE_Q_MODE,
     DEFAULT_SOLVE_Q_REL_TOL,
+    OPTICS_MODE_EXACT,
     OPTICS_MODE_FAST,
     process_peaks_parallel_safe,
 )
@@ -225,7 +226,7 @@ def _build_legacy_request(
         image_buffer=np.zeros((image_size_int, image_size_int), dtype=np.float64),
         save_flag=0,
         thickness=float(thickness),
-        optics_mode=OPTICS_MODE_FAST if optics_mode is None else int(optics_mode),
+        optics_mode=OPTICS_MODE_EXACT if optics_mode is None else int(optics_mode),
         collect_hit_tables=True,
         exit_projection_mode=str(exit_projection_mode).strip().lower(),
     )
@@ -259,7 +260,7 @@ def simulate_diffraction(
     gamma_mosaic_var,
     eta_var,
     bandwidth=0.007,
-    optics_mode=OPTICS_MODE_FAST,
+    optics_mode=OPTICS_MODE_EXACT,
     solve_q_steps=1000,
     solve_q_rel_tol=DEFAULT_SOLVE_Q_REL_TOL,
     solve_q_mode=DEFAULT_SOLVE_Q_MODE,

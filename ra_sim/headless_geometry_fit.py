@@ -892,7 +892,7 @@ def _resolve_solve_q_mode(mode_raw: object) -> int:
 def _normalize_optics_mode_label(value: object) -> str:
     diffraction = _load_simulation_diffraction()
     if value is None:
-        return "fast"
+        return "exact"
     if isinstance(value, (int, np.integer, float, np.floating)):
         return "exact" if int(round(float(value))) == diffraction.OPTICS_MODE_EXACT else "fast"
 
@@ -1105,7 +1105,7 @@ def _build_runtime_defaults(saved_state: dict[str, object]) -> _RuntimeDefaults:
         ),
         "finite_stack": bool(ht_cfg.get("finite_stack", True)),
         "stack_layers": int(max(1, float(ht_cfg.get("stack_layers", 50)))),
-        "optics_mode": "fast",
+        "optics_mode": "exact",
         "weight1": 0.5 if secondary_cif_path else 1.0,
         "weight2": 0.5 if secondary_cif_path else 0.0,
     }

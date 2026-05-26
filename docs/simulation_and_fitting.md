@@ -789,7 +789,7 @@ Kernel-side hard limits from [`ra_sim/simulation/diffraction.py`](../ra_sim/simu
 | `save_flag` | int | `0` | [`ra_sim/simulation/engine.py`](../ra_sim/simulation/engine.py) | Legacy flag propagated into the kernel. |
 | `record_status` | bool | `False` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Enables per-sample status diagnostics. |
 | `thickness` | m | `0.0` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | If positive, overrides evanescent decay lengths with a fixed slab thickness. |
-| `optics_mode` | enum or `None` | `None` | [`ra_sim/simulation/engine.py`](../ra_sim/simulation/engine.py) | `None` means use the kernel default `OPTICS_MODE_FAST`; otherwise force fast or exact optics. |
+| `optics_mode` | enum or `None` | `None` | [`ra_sim/simulation/engine.py`](../ra_sim/simulation/engine.py) | `None` resolves to the exact complex-`k` slab optics default (`OPTICS_MODE_EXACT`); explicit fast values still force `OPTICS_MODE_FAST`. |
 | `collect_hit_tables` | bool | `True` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Enables per-reflection subpixel hit tables. |
 | `exit_projection_mode` | enum string | `"internal"` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Chooses whether detector geometry uses the normalized solved outgoing direction (`"internal"`, default) or the legacy refracted-angle reconstruction (`"refracted"`). The internal default avoids the near-critical dead band that produced the horizontal empty stripe. |
 | `single_sample_indices` | integer array or `None` | `None` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Forces selected beam samples per reflection. |
@@ -878,6 +878,13 @@ deliberately reuse the same reflection list, `solve_q(...)` machinery, and
 default detector projection so that changing optics does not silently change the
 rest of the physics. In implementation terms, the mode switch changes entry and
 exit transport quantities, not the reciprocal-space search itself.
+
+New simulations default to the exact slab branch. Choose the fast branch
+explicitly when throughput is more important than near-critical-angle optics.
+Status as of 2026-05-26: this is a feature/workflow default change for new GUI,
+CLI, headless, and legacy simulation entry points. It is not a bug migration:
+saved states and config schemas are unchanged, and explicit fast selections
+remain supported for compatibility and performance comparisons.
 
 The code has two optics branches:
 

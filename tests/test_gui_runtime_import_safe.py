@@ -175,7 +175,9 @@ def test_simulation_gui_startup_geometry_defaults_force_zero_controls() -> None:
         assert resolved[key] == 0.0
     assert resolved["theta_initial"] == 6.0
     assert resolved["sample_width_m"] == 2.0e-3
+    assert resolved["optics_mode"] == "exact"
     assert raw_defaults["gamma"] == 2.5
+    assert "optics_mode" not in raw_defaults
 
 
 def _stable_geometry_fit_test_lut(seed: float = 1.0) -> np.ndarray:

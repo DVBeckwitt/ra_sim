@@ -1,5 +1,6 @@
 import numpy as np
 
+from ra_sim.simulation import diffraction
 from ra_sim.simulation import simulation as sim_mod
 from ra_sim.utils.calculations import _legacy_kernel_n2_sample_array_from_angstrom
 
@@ -28,6 +29,7 @@ def test_simulate_diffraction_reuses_supplied_profile_samples(monkeypatch):
             kwargs["n2_sample_array_override"],
             dtype=np.complex128,
         ).copy()
+        seen["optics_mode"] = kwargs["optics_mode"]
         image = np.array(args[6], copy=True)
         image += 3.0
         return image, [], np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
@@ -78,6 +80,7 @@ def test_simulate_diffraction_reuses_supplied_profile_samples(monkeypatch):
     )
 
     assert np.allclose(image, 3.0)
+    assert seen["optics_mode"] == diffraction.OPTICS_MODE_EXACT
     for key, expected in profile_samples.items():
         assert np.array_equal(seen[key], expected)
     expected_n2 = _legacy_kernel_n2_sample_array_from_angstrom(
@@ -86,3 +89,50 @@ def test_simulate_diffraction_reuses_supplied_profile_samples(monkeypatch):
         sample_count=2,
     )
     np.testing.assert_allclose(seen["n2_sample_array_override"], expected_n2)
+
+
+def test_simulate_diffraction_preserves_explicit_fast_optics_mode(monkeypatch):
+    seen = {}
+
+    def fake_process_peaks_parallel_safe(*args, **kwargs):
+        seen["optics_mode"] = kwargs["optics_mode"]
+        image = np.array(args[6], copy=True)
+        return image, [], np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+    monkeypatch.setattr(
+        sim_mod,
+        "process_peaks_parallel_safe",
+        fake_process_peaks_parallel_safe,
+    )
+
+    sim_mod.simulate_diffraction(
+        theta_initial=0.0,
+        cor_angle=0.0,
+        gamma=0.0,
+        Gamma=0.0,
+        chi=0.0,
+        psi_z=0.0,
+        zs=0.0,
+        zb=0.0,
+        debye_x_value=0.0,
+        debye_y_value=0.0,
+        corto_detector_value=0.1,
+        miller=np.array([[1.0, 0.0, 0.0]], dtype=np.float64),
+        intensities=np.array([1.0], dtype=np.float64),
+        image_size=8,
+        av=4.0,
+        cv=7.0,
+        lambda_=1.0,
+        psi=0.0,
+        n2=1.0,
+        center=[4.0, 4.0],
+        num_samples=1,
+        divergence_sigma=0.0,
+        bw_sigma=0.0,
+        sigma_mosaic_var=_DummyVar(0.2),
+        gamma_mosaic_var=_DummyVar(0.3),
+        eta_var=_DummyVar(0.05),
+        optics_mode=diffraction.OPTICS_MODE_FAST,
+    )
+
+    assert seen["optics_mode"] == diffraction.OPTICS_MODE_FAST

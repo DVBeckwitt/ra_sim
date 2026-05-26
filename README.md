@@ -420,12 +420,13 @@ RA-SIM currently exposes two optics transport models in the GUI and headless pat
   - uses a grazing-angle transmitted-angle approximation
   - uses Fresnel transmission factors and exponential depth attenuation
   - caches exit optics in a lookup table
-  - is the default throughput-oriented mode for interactive fitting
+  - remains available as the explicit throughput-oriented mode for interactive fitting
 - `Complex-k DWBA slab optics (Precise)`
   - keeps the same reflection list, `solve_q` search, structure factors, and detector projection
   - replaces entry and exit transport with a complex-`k_z` slab treatment
   - computes in-sample and exit wavevectors from the slab dispersion relation
   - uses exact Fresnel power transmission at the air/sample interfaces
+  - is the default for new GUI, CLI, and headless simulation runs
 
 The practical difference is mostly how the beam is refracted, transmitted, and
 attenuated on the way into and out of the sample. It is not a separate detector

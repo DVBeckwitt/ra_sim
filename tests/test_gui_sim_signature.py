@@ -64,6 +64,7 @@ def _restore_runtime_session_globals():
         "_debug_refraction_effects_disabled",
         "debug_integer_bragg_toggle_label_var",
         "debug_refraction_toggle_label_var",
+        "optics_mode_var",
         "progress_label",
     )
     missing = object()
@@ -160,6 +161,20 @@ def test_geometry_source_signature_includes_refraction_disable_mode():
     )
 
     assert normal_sig != vacuum_sig
+
+
+def test_current_optics_mode_defaults_to_exact_and_preserves_fast():
+    try:
+        delattr(runtime_session, "optics_mode_var")
+    except AttributeError:
+        pass
+
+    assert runtime_session._normalize_optics_mode_label(None) == "exact"
+    assert runtime_session._current_optics_mode_flag() == runtime_session.OPTICS_MODE_EXACT
+
+    runtime_session.optics_mode_var = _FakeVar("fast")
+
+    assert runtime_session._current_optics_mode_flag() == runtime_session.OPTICS_MODE_FAST
 
 
 def test_current_sample_n2_payload_uses_vacuum_when_refraction_disabled(monkeypatch):

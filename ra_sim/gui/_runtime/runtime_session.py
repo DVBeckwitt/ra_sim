@@ -79,6 +79,7 @@ def _simulation_gui_startup_defaults(values: Mapping[str, object]) -> dict[str, 
     resolved = dict(values)
     for name in _SIMULATION_GUI_STARTUP_ZERO_GEOMETRY_DEFAULT_NAMES:
         resolved[name] = 0.0
+    resolved.setdefault("optics_mode", "exact")
     return resolved
 
 
@@ -1900,7 +1901,7 @@ def _initialize_runtime_state_block_05() -> None:
             "solve_q_mode": solve_q_mode_default,
             "finite_stack": finite_stack_default,
             "stack_layers": stack_layers_default,
-            "optics_mode": "fast",
+            "optics_mode": "exact",
             "ordered_structure_scale": 1.0,
         }
     )
@@ -4239,7 +4240,7 @@ def _normalize_optics_mode_label(value) -> str:
     """Normalize optics mode to UI labels: ``'fast'`` or ``'exact'``."""
 
     if value is None:
-        return "fast"
+        return "exact"
     if isinstance(value, (int, np.integer)):
         return "exact" if int(value) == OPTICS_MODE_EXACT else "fast"
     if isinstance(value, (float, np.floating)):
@@ -4287,7 +4288,8 @@ def _normalize_optics_mode_label(value) -> str:
 
 def _current_optics_mode_flag() -> int:
     mode_var = globals().get("optics_mode_var")
-    mode_label = _normalize_optics_mode_label(mode_var.get() if mode_var is not None else "fast")
+    mode_value = mode_var.get() if mode_var is not None else None
+    mode_label = _normalize_optics_mode_label(mode_value)
     if mode_label == "exact":
         return OPTICS_MODE_EXACT
     return OPTICS_MODE_FAST
@@ -20294,7 +20296,7 @@ def _refresh_run_status_bar() -> None:
     try:
         optics_summary = _normalize_optics_mode_label(optics_mode_var.get())
     except Exception:
-        optics_summary = "fast"
+        optics_summary = _normalize_optics_mode_label(None)
 
     view_summary = (
         "Caked"
@@ -27589,7 +27591,7 @@ def reset_to_defaults():
         uniform_flag=SOLVE_Q_MODE_UNIFORM,
         adaptive_flag=SOLVE_Q_MODE_ADAPTIVE,
     )
-    optics_mode_var.set(_normalize_optics_mode_label(defaults.get("optics_mode", "fast")))
+    optics_mode_var.set(_normalize_optics_mode_label(defaults.get("optics_mode", "exact")))
     gui_structure_factor_pruning.apply_runtime_structure_factor_pruning_defaults(
         structure_factor_pruning_controls_view_state,
         pruning_defaults,
@@ -40730,7 +40732,7 @@ def _refresh_resolution_display():
     try:
         optics_summary = _normalize_optics_mode_label(optics_mode_var.get())
     except Exception:
-        optics_summary = _normalize_optics_mode_label(defaults.get("optics_mode", "fast"))
+        optics_summary = _normalize_optics_mode_label(defaults.get("optics_mode", "exact"))
     solve_q_mode_summary = ""
     solve_q_mode_var = getattr(
         structure_factor_pruning_controls_view_state,
@@ -41002,7 +41004,7 @@ def _initialize_runtime_controls_block_46() -> None:
             two_theta_max=two_theta_range[1],
             lambda_angstrom=lambda_,
         ),
-        optics_mode_text=_normalize_optics_mode_label(defaults.get("optics_mode", "fast")),
+        optics_mode_text=_normalize_optics_mode_label(defaults.get("optics_mode", "exact")),
         on_sample_count_slide=_preview_random_sample_count,
         on_commit_sample_count=lambda _event: _apply_random_sample_count(trigger_update=True),
         on_events_per_phase_slide=_preview_events_per_beam_phase,

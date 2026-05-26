@@ -19,6 +19,7 @@ from ra_sim.utils.parallel import (
 )
 
 from .diffraction import (
+    OPTICS_MODE_EXACT,
     _set_last_process_peaks_representative_hit_tables,
     build_branch_representative_intersection_cache,
     get_process_peaks_runtime_kwargs,
@@ -313,8 +314,9 @@ def _run_simulation_request(
     )
     if projection_debug_active:
         peak_kwargs.update(projection_debug_buffers)
-    if request.optics_mode is not None:
-        peak_kwargs["optics_mode"] = request.optics_mode
+    peak_kwargs["optics_mode"] = (
+        request.optics_mode if request.optics_mode is not None else OPTICS_MODE_EXACT
+    )
     if request.beam.sample_weights is not None:
         peak_kwargs["sample_weights"] = request.beam.sample_weights
     peak_kwargs["n2_sample_array_override"] = beam_n2_sample_array
@@ -818,8 +820,9 @@ def simulate_qr_rods(
     )
     if projection_debug_active:
         rod_kwargs.update(projection_debug_buffers)
-    if request.optics_mode is not None:
-        rod_kwargs["optics_mode"] = request.optics_mode
+    rod_kwargs["optics_mode"] = (
+        request.optics_mode if request.optics_mode is not None else OPTICS_MODE_EXACT
+    )
     if request.beam.sample_weights is not None:
         rod_kwargs["sample_weights"] = request.beam.sample_weights
     rod_kwargs["n2_sample_array_override"] = beam_n2_sample_array

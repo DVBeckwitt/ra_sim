@@ -529,16 +529,18 @@ def _normalize_headless_optics_mode_flag(value: object) -> int:
     """Normalize saved optics-mode values to simulation engine flags."""
 
     diffraction = _load_simulation_modules().diffraction
+    if value is None:
+        return diffraction.OPTICS_MODE_EXACT
     if isinstance(value, (int, np.integer)):
+        numeric_value = int(value)
+    elif isinstance(value, (float, np.floating)):
+        numeric_value = int(round(float(value)))
+    else:
+        numeric_value = None
+    if numeric_value is not None:
         return (
             diffraction.OPTICS_MODE_EXACT
-            if int(value) == diffraction.OPTICS_MODE_EXACT
-            else diffraction.OPTICS_MODE_FAST
-        )
-    if isinstance(value, (float, np.floating)):
-        return (
-            diffraction.OPTICS_MODE_EXACT
-            if int(round(float(value))) == diffraction.OPTICS_MODE_EXACT
+            if numeric_value == diffraction.OPTICS_MODE_EXACT
             else diffraction.OPTICS_MODE_FAST
         )
 
@@ -1547,7 +1549,7 @@ def run_headless_geometry_fit(
             background_theta_for_index=_background_theta_for_index,
             build_mosaic_params=lambda: mosaic_params,
             current_optics_mode_flag=lambda: _normalize_headless_optics_mode_flag(
-                _saved_state_var_value(saved_variables, "optics_mode_var", "fast")
+                _saved_state_var_value(saved_variables, "optics_mode_var", "exact")
             ),
             lambda_value=float(lambda_angstrom),
             psi=float(psi_default),
@@ -2871,7 +2873,9 @@ def build_headless_simulation_request(
 ) -> SimulationRequest:
     """Build the typed simulation request consumed by the engine."""
 
-    SimulationRequest = _load_simulation_modules().types.SimulationRequest
+    simulation_modules = _load_simulation_modules()
+    SimulationRequest = simulation_modules.types.SimulationRequest
+    diffraction = simulation_modules.diffraction
     beam = build_headless_beam_samples(defaults) if beam_samples is None else beam_samples
     n2 = resolve_index_of_refraction(
         defaults.geometry.lambda_angstrom * 1.0e-10,
@@ -2892,6 +2896,7 @@ def build_headless_simulation_request(
         save_flag=0,
         record_status=False,
         thickness=defaults.sample_depth_m,
+        optics_mode=diffraction.OPTICS_MODE_EXACT,
         collect_hit_tables=False,
         build_intersection_cache=False,
     )
