@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 import os
 import shutil
 import sys
@@ -63,6 +64,10 @@ from ra_sim.utils.calculations import (
 from ra_sim.utils.notifications import play_completion_chime
 
 GeometryFitStageCallback = Callable[[str, Mapping[str, object]], None]
+
+LOGGER = logging.getLogger(__name__)
+
+GEOMETRY_WRITE_DIAGNOSTICS_ENV = "RA_SIM_GEOM_WRITE_DIAGNOSTICS"
 
 
 GEOMETRY_FIT_PARAM_ORDER = [
@@ -1370,6 +1375,9 @@ class GeometryFitRuntimeManualDatasetBindings:
         Callable[[Mapping[str, object] | None], dict[str, object] | None] | None
     ) = None
     geometry_manual_caked_projection_for_index: Callable[[int], object] | None = None
+    simulation_native_detector_coords_to_caked_display_coords: (
+        Callable[[float, float], object] | None
+    ) = None
 
 
 @dataclass(frozen=True)
@@ -2618,6 +2626,117 @@ def _geometry_fit_points_match(
     )
 
 
+def _geometry_fit_sim_native_conversion_route(source: object) -> str:
+    text = str(source or "").strip()
+    lowered = text.lower()
+    if not text:
+        return "missing"
+    if lowered.startswith("display_to_native_sim_coords"):
+        return "SIM_DISPLAY_ROTATE_K"
+    if lowered == "default_unrotate_refined_sim_display":
+        return "DISPLAY_ROTATE_K"
+    if lowered in {
+        "refined_sim_native_px",
+        "overlay_source_native_col_row",
+        "overlay_source_sim_native_xy",
+        "provider_detector_native",
+    }:
+        return "copied_native_field"
+    if "display_to_native" in lowered:
+        return "display_to_native"
+    return "unknown"
+
+
+def _geometry_fit_initial_pair_construction_audit(
+    *,
+    pair_id: object,
+    branch_index: object,
+    native_shape: Sequence[object],
+    background_display_rotate_k: int,
+    sim_display_rotate_k: int,
+    sim_display_before_provider: object,
+    sim_native_before_provider: object,
+    sim_native_source_before_provider: object,
+    sim_display_after_provider: object,
+    sim_native_after_provider: object,
+    sim_native_source_after_provider: object,
+    provider_simulated_point: object,
+    provider_simulated_frame: object,
+    provider_simulated_point_source: object,
+    provider_overwrites_existing_sim: bool,
+    bg_display: object = None,
+    bg_native: object = None,
+) -> dict[str, object]:
+    """Return a diagnostic-only audit for initial simulated point construction."""
+
+    sim_display_before = _geometry_fit_point_list(sim_display_before_provider)
+    sim_native_before = _geometry_fit_point_list(sim_native_before_provider)
+    sim_display_after = _geometry_fit_point_list(sim_display_after_provider)
+    sim_native_after = _geometry_fit_point_list(sim_native_after_provider)
+    provider_point = _geometry_fit_point_list(provider_simulated_point)
+    source_before = str(sim_native_source_before_provider or "")
+    source_after = str(sim_native_source_after_provider or "")
+    route_before = _geometry_fit_sim_native_conversion_route(source_before)
+    route_after = _geometry_fit_sim_native_conversion_route(source_after)
+    raw_display_native_same = bool(
+        sim_display_before is not None
+        and sim_native_before is not None
+        and _geometry_fit_points_match(sim_display_before, sim_native_before)
+    )
+    provider_point_overwrote = bool(
+        provider_overwrites_existing_sim
+        and sim_display_before is not None
+        and sim_display_after is not None
+        and not _geometry_fit_points_match(sim_display_before, sim_display_after)
+    )
+    try:
+        frame_audit = gui_geometry_overlay.audit_detector_point_frames(
+            pair_id=pair_id,
+            branch_index=branch_index,
+            native_shape=tuple(int(value) for value in native_shape[:2]),
+            background_display_rotate_k=int(background_display_rotate_k),
+            sim_display_rotate_k=int(sim_display_rotate_k),
+            sim_display=sim_display_before,
+            sim_native=sim_native_before,
+            sim_native_source=source_before,
+            bg_display=bg_display,
+            bg_native=bg_native,
+        )
+    except Exception as exc:
+        if isinstance(exc, ValueError):
+            raise
+        frame_audit = {
+            "frame_status": "audit_failed",
+            "audit_error": f"{type(exc).__name__}: {exc}",
+        }
+    audit: dict[str, object] = {
+        "pair_id": pair_id,
+        "branch_index": branch_index,
+        "sim_display_before_provider": sim_display_before,
+        "sim_native_before_provider": sim_native_before,
+        "sim_native_source_before_provider": source_before,
+        "sim_native_conversion_route_before_provider": route_before,
+        "sim_display_after_provider": sim_display_after,
+        "sim_native_after_provider": sim_native_after,
+        "sim_native_source_after_provider": source_after,
+        "sim_native_conversion_route_after_provider": route_after,
+        "provider_simulated_point": provider_point,
+        "provider_simulated_frame": str(provider_simulated_frame or ""),
+        "provider_simulated_point_source": str(provider_simulated_point_source or ""),
+        "provider_overwrites_existing_sim": bool(provider_overwrites_existing_sim),
+        "provider_point_overwrote_sim_display_after_sim_native": provider_point_overwrote,
+        "sim_native_copied_from_display_coordinate_field": bool(
+            raw_display_native_same
+            and route_before == "copied_native_field"
+            and int(background_display_rotate_k) % 4 != int(sim_display_rotate_k) % 4
+        ),
+        "saved_blue_square_display_converted_through": route_before,
+        "frame_audit": dict(frame_audit),
+    }
+    LOGGER.info("geometry_fit_initial_pair_construction_audit %s", audit)
+    return audit
+
+
 def _geometry_fit_jsonable(value: object) -> object:
     if isinstance(value, np.generic):
         return value.item()
@@ -2644,6 +2763,449 @@ def _geometry_fit_jsonable(value: object) -> object:
     if np.isfinite(numeric) and float(numeric).is_integer():
         return int(numeric)
     return float(numeric)
+
+
+def _geometry_fit_write_diagnostics_enabled(
+    env: Mapping[str, str] | None = None,
+) -> bool:
+    env_map = os.environ if env is None else env
+    value = str(env_map.get(GEOMETRY_WRITE_DIAGNOSTICS_ENV, "") or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _geometry_fit_callable_name(callback: object) -> str:
+    if not callable(callback):
+        return ""
+    module = str(getattr(callback, "__module__", "") or "")
+    qualname = str(getattr(callback, "__qualname__", "") or getattr(callback, "__name__", ""))
+    return f"{module}.{qualname}".strip(".") or type(callback).__name__
+
+
+def _geometry_fit_callable_id(callback: object) -> str | None:
+    if not callable(callback):
+        return None
+    return hex(id(callback))
+
+
+def _geometry_fit_runtime_caked_projector_signature(callback: object) -> str | None:
+    if not callable(callback):
+        return None
+    return f"{_geometry_fit_callable_name(callback)}@{_geometry_fit_callable_id(callback)}"
+
+
+def _geometry_fit_caked_delta_deg(
+    projected: tuple[float, float] | list[float] | None,
+    saved: tuple[float, float] | list[float] | None,
+) -> dict[str, object]:
+    if projected is None or saved is None:
+        return {
+            "available": False,
+            "delta_two_theta_deg": float("nan"),
+            "delta_phi_deg_wrapped": float("nan"),
+            "delta_norm_deg": float("nan"),
+        }
+    delta_two_theta = float(projected[0]) - float(saved[0])
+    delta_phi = float(_wrapped_phi_delta_deg(projected[1], saved[1]))
+    return {
+        "available": True,
+        "delta_two_theta_deg": float(delta_two_theta),
+        "delta_phi_deg_wrapped": float(delta_phi),
+        "delta_norm_deg": float(math.hypot(delta_two_theta, delta_phi)),
+    }
+
+
+def _geometry_fit_manual_caked_pair_with_source(
+    entry: Mapping[str, object],
+) -> tuple[tuple[float, float], str] | None:
+    for key in (
+        "sim_refined_caked_deg",
+        "sim_visual_caked_deg",
+        "sim_caked_display",
+        "sim_caked",
+        "sim_nominal_caked_deg",
+    ):
+        pair = _geometry_fit_point_list(entry.get(key))
+        if pair is not None:
+            return (float(pair[0]), float(pair[1])), str(key)
+    for x_key, y_key, source in (
+        ("refined_sim_caked_x", "refined_sim_caked_y", "refined_sim_caked_x/y"),
+        ("simulated_two_theta_deg", "simulated_phi_deg", "simulated_two_theta/phi"),
+    ):
+        try:
+            pair = (float(entry.get(x_key)), float(entry.get(y_key)))
+        except Exception:
+            continue
+        if np.isfinite(pair[0]) and np.isfinite(pair[1]):
+            return (float(pair[0]), float(pair[1])), source
+    return None
+
+
+def _geometry_fit_initial_pair_frame_status(entry: Mapping[str, object]) -> str:
+    audit = entry.get("initial_pair_construction_audit")
+    if isinstance(audit, Mapping):
+        frame_audit = audit.get("frame_audit")
+        if isinstance(frame_audit, Mapping):
+            frame_status = str(frame_audit.get("frame_status", "") or "")
+            if frame_status:
+                return frame_status
+    return ""
+
+
+def _geometry_fit_runtime_live_caked_pair(
+    native_to_caked_projector: Callable[[float, float], object] | None,
+    native_point: Sequence[float],
+) -> tuple[tuple[float, float] | None, str | None]:
+    if not callable(native_to_caked_projector):
+        return None, "runtime_live_projector_unavailable"
+    try:
+        projected = native_to_caked_projector(float(native_point[0]), float(native_point[1]))
+        projected_pair = _geometry_fit_point_list(projected)
+    except Exception as exc:
+        return None, f"runtime_live_projector_exception:{type(exc).__name__}"
+    if projected_pair is None:
+        return None, "runtime_live_projector_nonfinite"
+    return (float(projected_pair[0]), float(projected_pair[1])), None
+
+
+def _geometry_fit_manual_caked_recompute_audit_rows(
+    entries: Sequence[Mapping[str, object]] | None,
+    *,
+    native_to_caked_projector: Callable[[float, float], object] | None,
+    background_index: object = None,
+    caked_generation: object = None,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for raw_entry in entries or ():
+        if not isinstance(raw_entry, Mapping):
+            continue
+        entry = dict(raw_entry)
+        saved_payload = _geometry_fit_manual_caked_pair_with_source(entry)
+        native_point = _geometry_fit_point_list(entry.get("sim_native"))
+        native_source = str(entry.get("sim_native_source", "") or "")
+        if native_point is None:
+            native_point = _geometry_fit_point_list(entry.get("sim_refined_detector_native_px"))
+            if native_point is not None and not native_source:
+                native_source = "sim_refined_detector_native_px"
+        if saved_payload is None or native_point is None:
+            continue
+
+        saved_caked, field_source = saved_payload
+        recomputed_caked, fallback_reason = _geometry_fit_runtime_live_caked_pair(
+            native_to_caked_projector,
+            native_point,
+        )
+        delta = _geometry_fit_caked_delta_deg(recomputed_caked, saved_caked)
+        frame_status = _geometry_fit_initial_pair_frame_status(entry)
+        if bool(delta.get("available")):
+            status = (
+                "ok_saved_manual_caked"
+                if float(delta["delta_norm_deg"]) <= 1.0e-6
+                else "mismatch_saved_manual_caked_vs_live_exact"
+            )
+        else:
+            status = "recompute_unavailable"
+        rows.append(
+            {
+                "pair_id": entry.get("pair_id"),
+                "branch_index": entry.get("source_branch_index"),
+                "hkl": entry.get("hkl"),
+                "saved_manual_caked_deg": (
+                    float(saved_caked[0]),
+                    float(saved_caked[1]),
+                ),
+                "native_detector_px": (
+                    float(native_point[0]),
+                    float(native_point[1]),
+                ),
+                "recomputed_live_exact_caked_deg": (
+                    (float(recomputed_caked[0]), float(recomputed_caked[1]))
+                    if recomputed_caked is not None
+                    else None
+                ),
+                "delta_deg": delta,
+                "projector_callable_name": _geometry_fit_callable_name(native_to_caked_projector),
+                "projector_object_id": _geometry_fit_callable_id(native_to_caked_projector),
+                "projector_signature": _geometry_fit_runtime_caked_projector_signature(
+                    native_to_caked_projector
+                ),
+                "caked_generation": caked_generation,
+                "background_index": background_index,
+                "field_source": field_source,
+                "native_source": native_source,
+                "input_frame_claimed": "native_detector",
+                "source_frame_status": frame_status,
+                "frame_status": status,
+                "fallback_used": recomputed_caked is None,
+                "fallback_reason": fallback_reason,
+            }
+        )
+    return rows
+
+
+def _geometry_fit_same_native_runtime_live_projection_rows(
+    *,
+    native_to_caked_projector: Callable[[float, float], object] | None,
+    background_index: object = None,
+    theta_initial: object = None,
+    caked_generation: object = None,
+) -> list[dict[str, object]]:
+    trace_points = (
+        ("branch_0_sim_native", (1099.0, 1924.0)),
+        ("branch_1_sim_native", (1082.0, 1132.0)),
+        ("branch_0_observed_refined_native", (1083.270, 1915.182)),
+        ("branch_1_observed_refined_native", (1083.734, 1152.380)),
+    )
+    rows: list[dict[str, object]] = []
+    for point_role, native_point in trace_points:
+        caked_pair, fallback_reason = _geometry_fit_runtime_live_caked_pair(
+            native_to_caked_projector,
+            native_point,
+        )
+        rows.append(
+            {
+                "point_role": point_role,
+                "native_detector_px": (float(native_point[0]), float(native_point[1])),
+                "input_frame_claimed": "native_detector",
+                "projector_path": "runtime_live_exact_cake",
+                "projector_callable_name": _geometry_fit_callable_name(
+                    native_to_caked_projector
+                ),
+                "projector_object_id": _geometry_fit_callable_id(native_to_caked_projector),
+                "projector_signature": _geometry_fit_runtime_caked_projector_signature(
+                    native_to_caked_projector
+                ),
+                "background_index": background_index,
+                "theta_initial": theta_initial,
+                "caked_generation": caked_generation,
+                "phi_convention": "runtime_live_exact_cake_gui_phi",
+                "raw_output_caked_deg": caked_pair,
+                "wrapped_output_caked_deg": caked_pair,
+                "fallback_used": caked_pair is None,
+                "fallback_reason": fallback_reason,
+                "valid": caked_pair is not None,
+            }
+        )
+    return rows
+
+
+def _geometry_fit_overlay_diagnostic_bundle_path(stamp: object) -> Path:
+    stamp_text = str(stamp or "").strip()
+    safe_stamp = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in stamp_text)
+    if not safe_stamp:
+        safe_stamp = str(int(perf_counter() * 1000000.0))
+    return (
+        Path.home()
+        / ".cache"
+        / "ra_sim"
+        / "logs"
+        / f"geometry_fit_overlay_diagnostic_{safe_stamp}.json"
+    )
+
+
+def _geometry_fit_overlay_record_audit_payload(
+    overlay_records: Sequence[Mapping[str, object]] | None,
+) -> list[dict[str, object]]:
+    keys = (
+        "overlay_match_index",
+        "pair_id",
+        "hkl",
+        "match_status",
+        "initial_sim_display_raw",
+        "initial_sim_native",
+        "initial_sim_native_source",
+        "initial_sim_native_frame_status",
+        "initial_sim_display_rebuilt_from_native",
+        "initial_sim_display_raw_vs_rebuilt_delta_px",
+        "chosen_initial_sim_display_source",
+        "fit_prediction_source",
+        "fit_prediction_is_dynamic",
+        "final_sim_display_source",
+        "final_sim_native_source",
+        "stale_final_sim",
+    )
+    return [
+        {key: _geometry_fit_jsonable(record.get(key)) for key in keys if key in record}
+        for record in (overlay_records or ())
+        if isinstance(record, Mapping)
+    ]
+
+
+def _geometry_fit_prediction_resolver_audit_payload(
+    point_match_diagnostics: Sequence[Mapping[str, object]] | None,
+) -> list[dict[str, object]]:
+    keys = (
+        "overlay_match_index",
+        "pair_id",
+        "fit_prediction_source",
+        "fit_prediction_is_dynamic",
+        "resolver_path",
+        "handoff_attempted",
+        "handoff_accepted",
+        "hit_table_attempted",
+        "hit_table_accepted",
+        "trial_source_rows_attempted",
+        "trial_source_rows_available",
+        "trial_source_rows_count",
+        "point_only_projection",
+        "params_signature",
+        "simulation_cache_signature",
+        "cake_bundle_signature",
+        "fit_space_local_params_signature",
+    )
+    return [
+        {key: _geometry_fit_jsonable(record.get(key)) for key in keys if key in record}
+        for record in (point_match_diagnostics or ())
+        if isinstance(record, Mapping)
+    ]
+
+
+def _geometry_fit_draw_audit_payload(
+    overlay_records: Sequence[Mapping[str, object]] | None,
+) -> list[dict[str, object]]:
+    draw_audit: list[dict[str, object]] = []
+    for idx, record in enumerate(overlay_records or ()):
+        if not isinstance(record, Mapping):
+            continue
+        initial_sim = _geometry_fit_point_list(record.get("initial_sim_display"))
+        final_sim = _geometry_fit_point_list(record.get("final_sim_display"))
+        final_bg = _geometry_fit_point_list(record.get("final_bg_display"))
+        arrow_length = float("nan")
+        if initial_sim is not None and final_sim is not None:
+            arrow_length = float(
+                math.hypot(
+                    float(final_sim[0]) - float(initial_sim[0]),
+                    float(final_sim[1]) - float(initial_sim[1]),
+                )
+            )
+        fit_prediction_source = str(record.get("fit_prediction_source", "") or "")
+        dynamic_raw = record.get("fit_prediction_is_dynamic")
+        dynamic_text = str(dynamic_raw).strip().lower()
+        dynamic = dynamic_raw is True or dynamic_text in {"1", "true", "yes", "dynamic"}
+        if dynamic:
+            arrow_status = "dynamic_final_prediction"
+        elif "locked_manual_qr" in fit_prediction_source or "saved" in fit_prediction_source:
+            arrow_status = "locked_saved_prediction"
+        elif bool(record.get("stale_final_sim", False)):
+            arrow_status = "stale_prediction"
+        else:
+            arrow_status = "missing_dynamic_source"
+        draw_audit.append(
+            {
+                "overlay_match_index": record.get("overlay_match_index", idx),
+                "blue_square_point": _geometry_fit_jsonable(initial_sim),
+                "blue_square_source": record.get("chosen_initial_sim_display_source"),
+                "amber_triangle_point": _geometry_fit_jsonable(
+                    _geometry_fit_point_list(record.get("initial_bg_display"))
+                ),
+                "green_circle_point": _geometry_fit_jsonable(final_sim),
+                "green_circle_source": record.get("final_sim_display_source"),
+                "dashed_arrow_start": _geometry_fit_jsonable(initial_sim),
+                "dashed_arrow_end": _geometry_fit_jsonable(final_sim),
+                "dashed_arrow_length": float(arrow_length),
+                "match_status": record.get("match_status", "matched"),
+                "fit_prediction_source": fit_prediction_source,
+                "fit_prediction_is_dynamic": _geometry_fit_jsonable(dynamic_raw),
+                "final_sim_display_source": record.get("final_sim_display_source"),
+                "final_sim_native_source": record.get("final_sim_native_source"),
+                "arrow_semantics_status": arrow_status,
+                "residual_arrow_end": _geometry_fit_jsonable(final_bg),
+            }
+        )
+    return draw_audit
+
+
+def write_geometry_fit_overlay_diagnostic_bundle(
+    *,
+    stamp: object,
+    current_dataset: Mapping[str, object],
+    overlay_records: Sequence[Mapping[str, object]] | None,
+    point_match_diagnostics: Sequence[Mapping[str, object]] | None,
+    result: object,
+    frame_diag: Mapping[str, object] | None,
+    var_names: Sequence[object],
+    rms: float,
+    rms_unit: str,
+    log_path: Path | str,
+) -> Path | None:
+    """Write a compact diagnostic bundle for post-fit overlay audits."""
+
+    point_match_summary = getattr(result, "point_match_summary", None)
+    if not isinstance(point_match_summary, Mapping):
+        point_match_summary = {}
+    initial_pairs = [
+        dict(entry)
+        for entry in (current_dataset.get("initial_pairs_display", ()) or ())
+        if isinstance(entry, Mapping)
+    ]
+    payload = {
+        "trace_file_used": str(log_path),
+        "dataset_index": current_dataset.get("dataset_index"),
+        "dataset_label": current_dataset.get("label"),
+        "active_var_names": [str(name) for name in (var_names or ())],
+        "initial_pairs_audit": [
+            _geometry_fit_jsonable(
+                entry.get("initial_pair_construction_audit")
+                or entry.get("initial_sim_native_frame_audit")
+                or {
+                    "overlay_match_index": entry.get("overlay_match_index"),
+                    "pair_id": entry.get("pair_id"),
+                    "sim_display": entry.get("sim_display"),
+                    "sim_native": entry.get("sim_native"),
+                    "sim_native_source": entry.get("sim_native_source"),
+                }
+            )
+            for entry in initial_pairs
+        ],
+        "overlay_record_audit": _geometry_fit_overlay_record_audit_payload(overlay_records),
+        "draw_audit": _geometry_fit_draw_audit_payload(overlay_records),
+        "prediction_resolver_audit": _geometry_fit_prediction_resolver_audit_payload(
+            point_match_diagnostics
+        ),
+        "objective_sensitivity": _geometry_fit_jsonable(
+            {
+                "objective_param_sensitivity_status": point_match_summary.get(
+                    "objective_param_sensitivity_status"
+                ),
+                "objective_param_sensitivity_by_var": point_match_summary.get(
+                    "objective_param_sensitivity_by_var",
+                    [],
+                ),
+            }
+        ),
+        "projector_sensitivity": _geometry_fit_jsonable(
+            point_match_summary.get("projector_sensitivity", [])
+        ),
+        "same_native_projection_comparison": _geometry_fit_jsonable(
+            point_match_summary.get("same_native_projection_comparison", [])
+        ),
+        "manual_caked_recompute_audit": _geometry_fit_jsonable(
+            current_dataset.get("manual_caked_recompute_audit")
+            or point_match_summary.get("manual_caked_recompute_audit", [])
+            or []
+        ),
+        "final_fit_summary": _geometry_fit_jsonable(
+            {
+                "rms": float(rms),
+                "rms_unit": str(rms_unit),
+                "frame_diag": dict(frame_diag or {}),
+                "matched_overlay_record_count": len(list(overlay_records or ())),
+                "message": getattr(result, "message", None),
+            }
+        ),
+    }
+    path = _geometry_fit_overlay_diagnostic_bundle_path(stamp)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(_geometry_fit_jsonable(payload), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        register_run_output_path(path)
+    except Exception as exc:
+        LOGGER.info("geometry_fit_overlay_diagnostic_bundle_write_failed %s", exc)
+        return None
+    LOGGER.info("geometry_fit_overlay_diagnostic_bundle_written %s", path)
+    return path
 
 
 def _geometry_fit_report_jsonable(value: object) -> object:
@@ -8931,6 +9493,9 @@ def build_runtime_geometry_fit_manual_dataset_bindings(
         Callable[[Mapping[str, object] | None], dict[str, object] | None] | None
     ) = None,
     geometry_manual_caked_projection_for_index: Callable[[int], object] | None = None,
+    simulation_native_detector_coords_to_caked_display_coords: (
+        Callable[[float, float], object] | None
+    ) = None,
 ) -> GeometryFitRuntimeManualDatasetBindings:
     """Build the live manual-pair dataset bundle used during geometry-fit prep."""
 
@@ -8981,6 +9546,9 @@ def build_runtime_geometry_fit_manual_dataset_bindings(
         geometry_manual_caked_view_for_index=geometry_manual_caked_view_for_index,
         geometry_manual_refresh_pair_entry=geometry_manual_refresh_pair_entry,
         geometry_manual_caked_projection_for_index=geometry_manual_caked_projection_for_index,
+        simulation_native_detector_coords_to_caked_display_coords=(
+            simulation_native_detector_coords_to_caked_display_coords
+        ),
     )
 
 
@@ -9043,6 +9611,9 @@ def make_runtime_geometry_fit_manual_dataset_bindings_factory(
         Callable[[Mapping[str, object] | None], dict[str, object] | None] | None
     ) = None,
     geometry_manual_caked_projection_for_index: Callable[[int], object] | None = None,
+    simulation_native_detector_coords_to_caked_display_coords: (
+        Callable[[float, float], object] | None
+    ) = None,
 ) -> Callable[[], GeometryFitRuntimeManualDatasetBindings]:
     """Build a factory that resolves the live manual-pair dataset bundle on demand."""
 
@@ -9096,6 +9667,9 @@ def make_runtime_geometry_fit_manual_dataset_bindings_factory(
             geometry_manual_caked_view_for_index=(geometry_manual_caked_view_for_index),
             geometry_manual_refresh_pair_entry=(geometry_manual_refresh_pair_entry),
             geometry_manual_caked_projection_for_index=(geometry_manual_caked_projection_for_index),
+            simulation_native_detector_coords_to_caked_display_coords=(
+                simulation_native_detector_coords_to_caked_display_coords
+            ),
         )
 
     return _build
@@ -15931,6 +16505,9 @@ def build_geometry_manual_fit_dataset(
         provider_overwrites_existing_sim = bool(
             provider_simulated_point_source in _GEOMETRY_FIT_PICKER_OWNED_POINT_SOURCES
         )
+        sim_display_before_provider = _geometry_fit_point_list(initial_entry.get("sim_display"))
+        sim_native_before_provider = _geometry_fit_point_list(initial_entry.get("sim_native"))
+        sim_native_source_before_provider = initial_entry.get("sim_native_source")
         _install_provider_simulated_point(
             initial_entry,
             provider_simulated_point,
@@ -15958,6 +16535,36 @@ def build_geometry_manual_fit_dataset(
                 initial_entry["provider_simulated_frame"] = "caked_2theta_phi"
                 initial_entry["provider_simulated_point_source"] = "manual_picker_saved"
         _geometry_fit_apply_source_coverage_identity(initial_entry)
+        initial_pair_construction_audit = _geometry_fit_initial_pair_construction_audit(
+            pair_id=initial_entry.get("pair_id", pair_id),
+            branch_index=initial_entry.get("source_branch_index", saved_branch_index),
+            native_shape=tuple(int(value) for value in native_background.shape[:2]),
+            background_display_rotate_k=int(manual_dataset_bindings.display_rotate_k),
+            sim_display_rotate_k=0,
+            sim_display_before_provider=sim_display_before_provider,
+            sim_native_before_provider=sim_native_before_provider,
+            sim_native_source_before_provider=sim_native_source_before_provider,
+            sim_display_after_provider=initial_entry.get("sim_display"),
+            sim_native_after_provider=initial_entry.get("sim_native"),
+            sim_native_source_after_provider=initial_entry.get("sim_native_source"),
+            provider_simulated_point=provider_simulated_point,
+            provider_simulated_frame=provider_simulated_frame,
+            provider_simulated_point_source=provider_simulated_point_source,
+            provider_overwrites_existing_sim=provider_overwrites_existing_sim,
+            bg_display=initial_entry.get("bg_display"),
+        )
+        initial_entry["initial_pair_construction_audit"] = _geometry_fit_jsonable(
+            initial_pair_construction_audit
+        )
+        initial_entry["sim_native_conversion_route"] = str(
+            initial_pair_construction_audit.get("sim_native_conversion_route_before_provider", "")
+        )
+        initial_entry["provider_point_overwrote_sim_display_after_sim_native"] = bool(
+            initial_pair_construction_audit.get(
+                "provider_point_overwrote_sim_display_after_sim_native",
+                False,
+            )
+        )
         initial_pairs_display.append(initial_entry)
 
     measured_native = manual_dataset_bindings.unrotate_display_peaks(
@@ -17208,6 +17815,25 @@ def build_geometry_manual_fit_dataset(
         ),
     )
 
+    manual_caked_recompute_audit: list[dict[str, object]] = []
+    diagnostic_runtime_live_caked_projection_rows: list[dict[str, object]] = []
+    if _geometry_fit_write_diagnostics_enabled():
+        runtime_caked_projector = (
+            manual_dataset_bindings.simulation_native_detector_coords_to_caked_display_coords
+        )
+        manual_caked_recompute_audit = _geometry_fit_manual_caked_recompute_audit_rows(
+            initial_pairs_display,
+            native_to_caked_projector=runtime_caked_projector,
+            background_index=int(background_idx),
+        )
+        diagnostic_runtime_live_caked_projection_rows = (
+            _geometry_fit_same_native_runtime_live_projection_rows(
+                native_to_caked_projector=runtime_caked_projector,
+                background_index=int(background_idx),
+                theta_initial=float(theta_base),
+            )
+        )
+
     dataset_payload = {
         "dataset_index": int(background_idx),
         "label": label,
@@ -17242,6 +17868,7 @@ def build_geometry_manual_fit_dataset(
         "measured_native": measured_native,
         "measured_for_fit": measured_for_fit,
         "initial_pairs_display": initial_pairs_display,
+        "manual_caked_recompute_audit": manual_caked_recompute_audit,
         "native_background": native_background,
         "orientation_choice": orientation_choice,
         "orientation_diag": orientation_diag,
@@ -17273,6 +17900,12 @@ def build_geometry_manual_fit_dataset(
             "qr_fit_trial_source_rows_builder": qr_fit_trial_source_rows_builder,
             "qr_fit_trial_source_rows_builder_kind": (qr_fit_trial_source_rows_builder_kind),
             "baseline_fit_params": dict(baseline_fit_params_i),
+            "diagnostic_runtime_live_caked_projector": (
+                manual_dataset_bindings.simulation_native_detector_coords_to_caked_display_coords
+            ),
+            "diagnostic_runtime_live_caked_projection_rows": (
+                diagnostic_runtime_live_caked_projection_rows
+            ),
             "_manual_caked_fit_space_required": bool(manual_fit_requires_caked_space),
             "solver_requested_objective_space": (
                 "caked_deg" if bool(manual_fit_requires_caked_space) else "detector_native_px"
@@ -17788,8 +18421,7 @@ def prepare_geometry_fit_run(
 
     dataset_specs = build_geometry_fit_dataset_specs(dataset_infos)
     manual_fit_uses_caked_space = bool(
-        manual_pairs_use_caked_space
-        or geometry_fit_datasets_use_caked_fit_space(dataset_infos)
+        manual_pairs_use_caked_space or geometry_fit_datasets_use_caked_fit_space(dataset_infos)
     )
     if manual_fit_uses_caked_space:
         for spec in dataset_specs:
@@ -17798,9 +18430,8 @@ def prepare_geometry_fit_run(
                 spec_idx = int(spec.get("dataset_index"))
             except Exception:
                 spec_idx = None
-            if (
-                bool(manual_pairs_use_caked_space)
-                or (spec_idx is not None and int(spec_idx) in required_caked_background_set)
+            if bool(manual_pairs_use_caked_space) or (
+                spec_idx is not None and int(spec_idx) in required_caked_background_set
             ):
                 spec["_manual_caked_fit_space_required"] = True
                 spec["solver_requested_objective_space"] = "caked_deg"
@@ -17836,9 +18467,7 @@ def prepare_geometry_fit_run(
                 joint_background_mode=joint_background_mode,
                 geometry_runtime_cfg=geometry_runtime_cfg,
             )
-        projection_frame_error = locked_qr_caked_projection_frame_preflight_error(
-            dataset_infos
-        )
+        projection_frame_error = locked_qr_caked_projection_frame_preflight_error(dataset_infos)
         if projection_frame_error:
             return _failure_result(
                 projection_frame_error,
@@ -18332,9 +18961,7 @@ def locked_qr_caked_projection_frame_preflight_error(
         "locked_qr_caked_projection_frame_mismatch: the same locked Qr/Qz "
         "simulated detector point projects to different caked coordinates in "
         "the source trace and fit handoff. Rebuild the caked/source cache and "
-        "rerun the fit. Mismatched rows: "
-        + ", ".join(mismatch_labels)
-        + "."
+        "rerun the fit. Mismatched rows: " + ", ".join(mismatch_labels) + "."
     )
 
 
@@ -25764,8 +26391,8 @@ def build_geometry_fit_progress_text(
     base_summary = "\n".join(base_summary_lines)
     overlay_hint = (
         "Overlay: blue squares=selected simulated points, amber triangles=saved "
-        "background points, green circles=fitted simulated peaks, dashed "
-        "arrows=initial->fitted sim shifts."
+        "background points, green circles=dynamic fitted peaks or diagnostic final "
+        "points, dashed arrows=dynamic initial->fitted sim shifts."
     )
     visual_distance_line = ""
     diag = frame_diag if isinstance(frame_diag, Mapping) else {}
@@ -25773,7 +26400,12 @@ def build_geometry_fit_progress_text(
     final_visual_med = _geometry_fit_metric_float(diag.get("final_distance_median", np.nan))
     if np.isfinite(initial_visual_med) and np.isfinite(final_visual_med):
         delta_visual_med = float(final_visual_med - initial_visual_med)
-        visual_status = "improved" if delta_visual_med <= 0.0 else "worse"
+        if abs(delta_visual_med) <= 1.0e-9:
+            visual_status = "unchanged"
+        elif delta_visual_med < 0.0:
+            visual_status = "improved"
+        else:
+            visual_status = "worse"
         visual_distance_line = (
             "Visual overlay median distance: "
             f"initial={initial_visual_med:.2f}, fitted={final_visual_med:.2f} "
@@ -25911,6 +26543,23 @@ def postprocess_geometry_fit_result(
         rms_unit=rms_unit,
         result=result,
     )
+    diagnostic_json_path = None
+    if _geometry_fit_write_diagnostics_enabled():
+        LOGGER.info("%s active diagnostic-only", GEOMETRY_WRITE_DIAGNOSTICS_ENV)
+        diagnostic_json_path = write_geometry_fit_overlay_diagnostic_bundle(
+            stamp=stamp,
+            current_dataset=current_dataset,
+            overlay_records=overlay_records,
+            point_match_diagnostics=point_match_diagnostics,
+            result=result,
+            frame_diag=frame_diag,
+            var_names=var_names,
+            rms=rms,
+            rms_unit=rms_unit,
+            log_path=log_path,
+        )
+    if diagnostic_json_path is not None:
+        fit_summary_lines.append(f"Overlay diagnostic JSON: {diagnostic_json_path}")
     progress_text = build_geometry_fit_progress_text(
         current_dataset=current_dataset,
         dataset_count=int(dataset_count),
@@ -25934,6 +26583,8 @@ def postprocess_geometry_fit_result(
         ),
         "max_display_markers": int(max_display_markers),
     }
+    if diagnostic_json_path is not None:
+        overlay_state["diagnostic_json_path"] = str(diagnostic_json_path)
 
     return GeometryFitPostprocessResult(
         fitted_params=fitted_params,

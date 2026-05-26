@@ -5,6 +5,7 @@ import hashlib
 import logging
 from dataclasses import dataclass
 import math
+import os
 import time
 from threading import Lock
 from typing import (
@@ -60,6 +61,7 @@ from ra_sim.utils.parallel import (
 
 RNG = np.random.default_rng(42)
 LOGGER = logging.getLogger(__name__)
+QR_DISABLE_EARLY_HANDOFF_ENV = "RA_SIM_QR_DISABLE_EARLY_HANDOFF"
 FIT_SPACE_ANCHOR_SOURCE_KEYS: tuple[str, ...] = (
     "cached_fit_space_anchor",
     "dataset_fit_space_projector",
@@ -2611,6 +2613,8 @@ class GeometryFitDatasetContext:
     qr_fit_trial_source_rows_builder: Optional[Callable[..., Mapping[str, object] | None]] = None
     qr_fit_trial_source_rows_builder_kind: str | None = None
     baseline_fit_params: Optional[Dict[str, object]] = None
+    diagnostic_runtime_live_caked_projector: Optional[Callable[[float, float], object]] = None
+    diagnostic_runtime_live_caked_projection_rows: Optional[List[Dict[str, object]]] = None
 
 
 def _fit_hit_table_only_sim_buffer() -> np.ndarray:
@@ -2721,6 +2725,14 @@ def _copy_geometry_fit_dataset_context(
         baseline_fit_params=(
             dict(dataset_ctx.baseline_fit_params)
             if isinstance(dataset_ctx.baseline_fit_params, Mapping)
+            else None
+        ),
+        diagnostic_runtime_live_caked_projector=(
+            dataset_ctx.diagnostic_runtime_live_caked_projector
+        ),
+        diagnostic_runtime_live_caked_projection_rows=(
+            [dict(row) for row in dataset_ctx.diagnostic_runtime_live_caked_projection_rows]
+            if dataset_ctx.diagnostic_runtime_live_caked_projection_rows is not None
             else None
         ),
     )
@@ -4758,6 +4770,21 @@ def _build_geometry_fit_dataset_contexts(
         qr_fit_trial_source_rows_builder_kind = (
             str(entry.get("qr_fit_trial_source_rows_builder_kind", "") or "") or None
         )
+        diagnostic_runtime_live_caked_projector = entry.get(
+            "diagnostic_runtime_live_caked_projector",
+            None,
+        )
+        if not callable(diagnostic_runtime_live_caked_projector):
+            diagnostic_runtime_live_caked_projector = None
+        diagnostic_runtime_live_caked_projection_rows_raw = entry.get(
+            "diagnostic_runtime_live_caked_projection_rows",
+            None,
+        )
+        diagnostic_runtime_live_caked_projection_rows = [
+            dict(row)
+            for row in (diagnostic_runtime_live_caked_projection_rows_raw or ())
+            if isinstance(row, Mapping)
+        ]
         baseline_fit_params = entry.get("baseline_fit_params")
         if isinstance(baseline_fit_params, Mapping):
             baseline_fit_params = dict(baseline_fit_params)
@@ -4787,6 +4814,10 @@ def _build_geometry_fit_dataset_contexts(
                 qr_fit_trial_source_rows_builder=qr_fit_trial_source_rows_builder,
                 qr_fit_trial_source_rows_builder_kind=(qr_fit_trial_source_rows_builder_kind),
                 baseline_fit_params=baseline_fit_params,
+                diagnostic_runtime_live_caked_projector=(diagnostic_runtime_live_caked_projector),
+                diagnostic_runtime_live_caked_projection_rows=(
+                    diagnostic_runtime_live_caked_projection_rows or None
+                ),
             )
         )
     return contexts
@@ -17619,6 +17650,634 @@ def _project_detector_points_to_fit_space(
     return two_theta_arr, phi_arr, meta
 
 
+def _probe_detector_projector_sensitivity(
+    dataset_ctx: GeometryFitDatasetContext | None,
+    *,
+    native_detector_points_px: Sequence[Sequence[float]],
+    base_params: Mapping[str, object],
+    param_names: Sequence[str] = ("gamma", "Gamma"),
+    steps_deg: Sequence[float] = (0.1, 1.0),
+    center: Sequence[float] | None,
+    detector_distance: float,
+    pixel_size: float,
+) -> list[dict[str, object]]:
+    """Probe whether detector-to-fit-space projection changes with fit params."""
+
+    parsed_points: list[tuple[float, float]] = []
+    for point in native_detector_points_px:
+        finite = _finite_pair(point)
+        if finite is not None:
+            parsed_points.append((float(finite[0]), float(finite[1])))
+    if not parsed_points:
+        return []
+
+    cols = np.asarray([point[0] for point in parsed_points], dtype=np.float64)
+    rows = np.asarray([point[1] for point in parsed_points], dtype=np.float64)
+    base_local = dict(base_params)
+    base_two_theta, base_phi, base_meta = _project_detector_points_to_fit_space(
+        dataset_ctx,
+        cols,
+        rows,
+        local_params=base_local,
+        anchor_kind="simulated",
+        input_frame="native_detector",
+        center=center,
+        detector_distance=float(detector_distance),
+        pixel_size=float(pixel_size),
+        gamma_deg=float(base_local.get("gamma", 0.0) or 0.0),
+        Gamma_deg=float(base_local.get("Gamma", 0.0) or 0.0),
+    )
+
+    records: list[dict[str, object]] = []
+    for param in param_names:
+        name = str(param)
+        try:
+            base_value = float(base_local.get(name, 0.0) or 0.0)
+        except Exception:
+            base_value = 0.0
+        for raw_step in steps_deg:
+            try:
+                step = abs(float(raw_step))
+            except Exception:
+                continue
+            if not np.isfinite(step) or step <= 0.0:
+                continue
+            for direction, sign in (("plus", 1.0), ("minus", -1.0)):
+                trial_local = dict(base_local)
+                trial_local[name] = float(base_value + sign * step)
+                trial_two_theta, trial_phi, trial_meta = _project_detector_points_to_fit_space(
+                    dataset_ctx,
+                    cols,
+                    rows,
+                    local_params=trial_local,
+                    anchor_kind="simulated",
+                    input_frame="native_detector",
+                    center=center,
+                    detector_distance=float(detector_distance),
+                    pixel_size=float(pixel_size),
+                    gamma_deg=float(trial_local.get("gamma", 0.0) or 0.0),
+                    Gamma_deg=float(trial_local.get("Gamma", 0.0) or 0.0),
+                )
+                for idx, point in enumerate(parsed_points):
+                    base_caked = (
+                        float(base_two_theta[idx]) if idx < base_two_theta.size else float("nan"),
+                        float(base_phi[idx]) if idx < base_phi.size else float("nan"),
+                    )
+                    trial_caked = (
+                        float(trial_two_theta[idx]) if idx < trial_two_theta.size else float("nan"),
+                        float(trial_phi[idx]) if idx < trial_phi.size else float("nan"),
+                    )
+                    delta = (
+                        float(trial_caked[0] - base_caked[0]),
+                        float(_wrap_phi_deg(trial_caked[1] - base_caked[1])),
+                    )
+                    records.append(
+                        {
+                            "native_detector_px": (float(point[0]), float(point[1])),
+                            "param": name,
+                            "direction": direction,
+                            "step_deg": float(step),
+                            "base_caked_deg": base_caked,
+                            "perturbed_caked_deg": trial_caked,
+                            "delta_caked_deg": delta,
+                            "cake_bundle_signature": trial_meta.get("cake_bundle_signature"),
+                            "base_cake_bundle_signature": base_meta.get("cake_bundle_signature"),
+                            "fit_space_local_params_signature": trial_meta.get(
+                                "fit_space_local_params_signature"
+                            ),
+                            "base_fit_space_local_params_signature": base_meta.get(
+                                "fit_space_local_params_signature"
+                            ),
+                            "fit_space_projector_kind": trial_meta.get("fit_space_projector_kind"),
+                            "fit_space_source": trial_meta.get("fit_space_source"),
+                            "projection_valid": bool(trial_meta.get("valid", False)),
+                            "projection_invalid_reason": trial_meta.get("invalid_reason"),
+                            "exact_bundle_param_payload": {
+                                key: trial_local.get(key)
+                                for key in ("gamma", "Gamma")
+                                if key in trial_local
+                            },
+                        }
+                    )
+    return records
+
+
+def _same_native_projector_callable_name(projector: object) -> str:
+    if not callable(projector):
+        return ""
+    module = str(getattr(projector, "__module__", "") or "")
+    qualname = str(getattr(projector, "__qualname__", "") or getattr(projector, "__name__", ""))
+    return f"{module}.{qualname}".strip(".") or type(projector).__name__
+
+
+def _same_native_projector_id(projector: object) -> str | None:
+    if not callable(projector):
+        return None
+    return hex(id(projector))
+
+
+def _same_native_projection_pair_from_mapping(
+    projected: Mapping[str, object],
+) -> tuple[float, float] | None:
+    try:
+        two_theta = np.asarray(projected.get("two_theta_deg"), dtype=np.float64).reshape(-1)
+        phi = np.asarray(projected.get("phi_deg"), dtype=np.float64).reshape(-1)
+    except Exception:
+        return None
+    if two_theta.size < 1 or phi.size < 1:
+        return None
+    if not (np.isfinite(two_theta[0]) and np.isfinite(phi[0])):
+        return None
+    return float(two_theta[0]), float(phi[0])
+
+
+def _same_native_projection_pair_from_result(result: object) -> tuple[float, float] | None:
+    if isinstance(result, Mapping):
+        return _same_native_projection_pair_from_mapping(result)
+    if isinstance(result, (list, tuple, np.ndarray)) and len(result) >= 2:
+        return _finite_pair(result)
+    return None
+
+
+def _same_native_wrapped_caked_pair(
+    pair: tuple[float, float] | None,
+) -> tuple[float, float] | None:
+    if pair is None:
+        return None
+    return float(pair[0]), float(_wrap_phi_deg(float(pair[1])))
+
+
+def _same_native_caked_delta(
+    pair: tuple[float, float] | None,
+    reference: tuple[float, float] | None,
+) -> Dict[str, object]:
+    if pair is None or reference is None:
+        return {
+            "available": False,
+            "delta_two_theta_deg": float("nan"),
+            "delta_phi_deg_wrapped": float("nan"),
+            "delta_norm_deg": float("nan"),
+        }
+    delta_two_theta = float(pair[0] - reference[0])
+    delta_phi = float(_wrap_phi_deg(float(pair[1] - reference[1])))
+    return {
+        "available": True,
+        "delta_two_theta_deg": float(delta_two_theta),
+        "delta_phi_deg_wrapped": float(delta_phi),
+        "delta_norm_deg": float(math.hypot(delta_two_theta, delta_phi)),
+    }
+
+
+def _same_native_projection_record(
+    *,
+    native_detector_px: tuple[float, float],
+    point_role: str,
+    projector_path: str,
+    projector_callable: object,
+    raw_output: tuple[float, float] | None,
+    metadata: Mapping[str, object] | None = None,
+    fallback_used: bool = False,
+    fallback_reason: object = None,
+    background_index: object = None,
+    theta_initial: object = None,
+    gamma: object = None,
+    Gamma: object = None,
+    phi_convention: str = "",
+    caked_extent: object = None,
+    caked_generation: object = None,
+) -> Dict[str, object]:
+    meta = dict(metadata) if isinstance(metadata, Mapping) else {}
+    record: Dict[str, object] = {
+        "native_detector_px": (float(native_detector_px[0]), float(native_detector_px[1])),
+        "point_role": str(point_role),
+        "input_frame_claimed": "native_detector",
+        "projector_path": str(projector_path),
+        "projector_callable_name": _same_native_projector_callable_name(projector_callable),
+        "projector_object_id": _same_native_projector_id(projector_callable),
+        "projector_signature": meta.get("fit_space_local_params_signature")
+        or meta.get("projector_signature"),
+        "bundle_id": meta.get("cake_bundle_signature"),
+        "caked_bundle_signature": meta.get("cake_bundle_signature"),
+        "caked_generation": meta.get("caked_generation", caked_generation),
+        "background_index": meta.get("background_index", background_index),
+        "theta_initial": meta.get("theta_initial_active_deg", theta_initial),
+        "gamma": gamma,
+        "Gamma": Gamma,
+        "phi_convention": meta.get("phi_convention", phi_convention),
+        "caked_extent": meta.get("caked_extent", caked_extent),
+        "raw_output_caked_deg": raw_output,
+        "wrapped_output_caked_deg": _same_native_wrapped_caked_pair(raw_output),
+        "fallback_used": bool(fallback_used),
+        "fallback_reason": fallback_reason,
+        "projection_valid": bool(meta.get("valid", raw_output is not None)),
+        "projection_invalid_reason": meta.get("invalid_reason"),
+        "fit_space_source": meta.get("fit_space_source"),
+        "fit_space_projector_kind": meta.get("fit_space_projector_kind"),
+        "fit_space_local_params_signature": meta.get("fit_space_local_params_signature"),
+        "native_frame_conversion_source": meta.get("native_frame_conversion_source"),
+        "native_frame_conversion_count": meta.get("native_frame_conversion_count"),
+    }
+    LOGGER.info("same_native_caked_projection_comparison %s", record)
+    return record
+
+
+def _same_native_precomputed_runtime_row(
+    rows: Sequence[Mapping[str, object]] | None,
+    *,
+    point_role: str,
+    native_detector_px: tuple[float, float],
+) -> dict[str, object] | None:
+    for raw_row in rows or ():
+        if not isinstance(raw_row, Mapping):
+            continue
+        row = dict(raw_row)
+        row_role = str(row.get("point_role", "") or "")
+        if row_role and row_role != str(point_role):
+            continue
+        row_point = _finite_pair(row.get("native_detector_px"))
+        if row_point is None:
+            row_point = _finite_pair((row.get("native_col"), row.get("native_row")))
+        if row_point is None:
+            continue
+        if not np.allclose(
+            np.asarray(row_point, dtype=np.float64),
+            np.asarray(native_detector_px, dtype=np.float64),
+            atol=1.0e-6,
+            rtol=0.0,
+        ):
+            continue
+        return row
+    return None
+
+
+def _same_native_precomputed_runtime_pair(
+    row: Mapping[str, object] | None,
+) -> tuple[float, float] | None:
+    if not isinstance(row, Mapping):
+        return None
+    for key in (
+        "raw_output_caked_deg",
+        "wrapped_output_caked_deg",
+        "recomputed_live_exact_caked_deg",
+        "runtime_live_exact_caked_deg",
+        "caked_deg",
+    ):
+        pair = _finite_pair(row.get(key))
+        if pair is not None:
+            return pair
+    return None
+
+
+def _same_native_apply_precomputed_runtime_metadata(
+    record: dict[str, object],
+    row: Mapping[str, object],
+) -> dict[str, object]:
+    for key in (
+        "projector_callable_name",
+        "projector_object_id",
+        "projector_signature",
+        "bundle_id",
+        "caked_bundle_signature",
+        "caked_generation",
+        "background_index",
+        "theta_initial",
+        "phi_convention",
+        "caked_extent",
+        "projection_invalid_reason",
+        "fit_space_source",
+        "fit_space_projector_kind",
+        "fit_space_local_params_signature",
+        "native_frame_conversion_source",
+        "native_frame_conversion_count",
+    ):
+        if key in row:
+            record[key] = row.get(key)
+    return record
+
+
+def _compare_same_native_caked_projection_paths(
+    dataset_ctx: GeometryFitDatasetContext | None,
+    *,
+    native_detector_points_px: Sequence[Sequence[float]],
+    base_params: Mapping[str, object],
+    center: Sequence[float] | None,
+    detector_distance: float,
+    pixel_size: float,
+    point_roles: Sequence[object] | None = None,
+    background_index: object = None,
+    caked_extent: object = None,
+    caked_generation: object = None,
+) -> list[dict[str, object]]:
+    """Compare native-detector-to-caked projectors without changing fit behavior."""
+
+    parsed_points: list[tuple[float, float]] = []
+    for point in native_detector_points_px:
+        finite = _finite_pair(point)
+        if finite is not None:
+            parsed_points.append((float(finite[0]), float(finite[1])))
+    if not parsed_points:
+        return []
+
+    roles = [str(role) for role in (point_roles or ())]
+    while len(roles) < len(parsed_points):
+        roles.append(f"point_{len(roles)}")
+
+    try:
+        gamma_value = float(base_params.get("gamma", 0.0) or 0.0)
+    except Exception:
+        gamma_value = 0.0
+    try:
+        Gamma_value = float(base_params.get("Gamma", 0.0) or 0.0)
+    except Exception:
+        Gamma_value = 0.0
+    theta_initial = (
+        base_params.get("theta_initial")
+        if isinstance(base_params, Mapping) and "theta_initial" in base_params
+        else (
+            dataset_ctx.theta_initial
+            if isinstance(dataset_ctx, GeometryFitDatasetContext)
+            else None
+        )
+    )
+    resolved_background_index = (
+        background_index
+        if background_index is not None
+        else (
+            dataset_ctx.dataset_index
+            if isinstance(dataset_ctx, GeometryFitDatasetContext)
+            else None
+        )
+    )
+    fit_projector = (
+        dataset_ctx.fit_space_projector
+        if isinstance(dataset_ctx, GeometryFitDatasetContext)
+        else None
+    )
+    runtime_projector = (
+        dataset_ctx.diagnostic_runtime_live_caked_projector
+        if isinstance(dataset_ctx, GeometryFitDatasetContext)
+        else None
+    )
+    precomputed_runtime_rows = (
+        dataset_ctx.diagnostic_runtime_live_caked_projection_rows
+        if isinstance(dataset_ctx, GeometryFitDatasetContext)
+        else None
+    )
+    projector_unavailable_reason = (
+        dataset_ctx.fit_space_projector_unavailable_reason
+        if isinstance(dataset_ctx, GeometryFitDatasetContext)
+        else "missing_dataset_context"
+    )
+
+    records: list[dict[str, object]] = []
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for idx, point in enumerate(parsed_points):
+        role = roles[idx]
+        point_records: list[dict[str, object]] = []
+
+        if callable(runtime_projector):
+            try:
+                runtime_result = runtime_projector(float(point[0]), float(point[1]))
+                runtime_pair = _same_native_projection_pair_from_result(runtime_result)
+                runtime_reason = None if runtime_pair is not None else "nonfinite_runtime_output"
+            except Exception as exc:
+                runtime_pair = None
+                runtime_reason = f"runtime_projector_exception:{type(exc).__name__}"
+            point_records.append(
+                _same_native_projection_record(
+                    native_detector_px=point,
+                    point_role=role,
+                    projector_path="runtime_live_exact_cake",
+                    projector_callable=runtime_projector,
+                    raw_output=runtime_pair,
+                    fallback_used=runtime_pair is None,
+                    fallback_reason=runtime_reason,
+                    background_index=resolved_background_index,
+                    theta_initial=theta_initial,
+                    gamma=gamma_value,
+                    Gamma=Gamma_value,
+                    phi_convention="runtime_live_exact_cake_gui_phi",
+                    caked_extent=caked_extent,
+                    caked_generation=caked_generation,
+                )
+            )
+        else:
+            precomputed_runtime_row = _same_native_precomputed_runtime_row(
+                precomputed_runtime_rows,
+                point_role=role,
+                native_detector_px=point,
+            )
+            precomputed_runtime_pair = _same_native_precomputed_runtime_pair(
+                precomputed_runtime_row
+            )
+            runtime_fallback = precomputed_runtime_pair is None
+            runtime_reason = (
+                "runtime_live_projector_unavailable"
+                if runtime_fallback
+                else precomputed_runtime_row.get("fallback_reason")
+            )
+            runtime_record = _same_native_projection_record(
+                native_detector_px=point,
+                point_role=role,
+                projector_path="runtime_live_exact_cake",
+                projector_callable=None,
+                raw_output=precomputed_runtime_pair,
+                metadata=precomputed_runtime_row,
+                fallback_used=runtime_fallback,
+                fallback_reason=runtime_reason,
+                background_index=resolved_background_index,
+                theta_initial=theta_initial,
+                gamma=gamma_value,
+                Gamma=Gamma_value,
+                phi_convention="runtime_live_exact_cake_gui_phi",
+                caked_extent=caked_extent,
+                caked_generation=caked_generation,
+            )
+            if precomputed_runtime_row is not None:
+                runtime_record = _same_native_apply_precomputed_runtime_metadata(
+                    runtime_record,
+                    precomputed_runtime_row,
+                )
+            point_records.append(runtime_record)
+
+        two_theta_arr, phi_arr, geometry_meta = _project_detector_points_to_fit_space(
+            dataset_ctx,
+            np.asarray([point[0]], dtype=np.float64),
+            np.asarray([point[1]], dtype=np.float64),
+            local_params=dict(base_params),
+            anchor_kind="simulated",
+            input_frame="native_detector",
+            center=center,
+            detector_distance=float(detector_distance),
+            pixel_size=float(pixel_size),
+            gamma_deg=float(gamma_value),
+            Gamma_deg=float(Gamma_value),
+        )
+        geometry_pair = None
+        if two_theta_arr.size >= 1 and phi_arr.size >= 1:
+            geometry_pair = _finite_pair((float(two_theta_arr[0]), float(phi_arr[0])))
+        geometry_source = str(geometry_meta.get("fit_space_source") or "")
+        geometry_fallback = geometry_source == "analytic_detector_fit_space"
+        geometry_reason = (
+            projector_unavailable_reason or "fit_space_projector_not_configured"
+            if geometry_fallback
+            else geometry_meta.get("invalid_reason")
+        )
+        point_records.append(
+            _same_native_projection_record(
+                native_detector_px=point,
+                point_role=role,
+                projector_path="geometry_fit_project_detector_points_to_fit_space",
+                projector_callable=_project_detector_points_to_fit_space,
+                raw_output=geometry_pair,
+                metadata=geometry_meta,
+                fallback_used=geometry_fallback,
+                fallback_reason=geometry_reason,
+                background_index=resolved_background_index,
+                theta_initial=theta_initial,
+                gamma=gamma_value,
+                Gamma=Gamma_value,
+                phi_convention="geometry_fit_projected_phi",
+                caked_extent=caked_extent,
+                caked_generation=caked_generation,
+            )
+        )
+
+        direct_projector_record: dict[str, object] | None = None
+        if callable(fit_projector):
+            try:
+                direct_result = fit_projector(
+                    np.asarray([point[0]], dtype=np.float64),
+                    np.asarray([point[1]], dtype=np.float64),
+                    local_params=dict(base_params),
+                    anchor_kind="simulated",
+                    input_frame="native_detector",
+                )
+                direct_pair = _same_native_projection_pair_from_result(direct_result)
+                direct_meta = dict(direct_result) if isinstance(direct_result, Mapping) else {}
+                direct_reason = direct_meta.get("invalid_reason")
+                if direct_pair is None and direct_reason is None:
+                    direct_reason = "nonfinite_dataset_projector_output"
+            except Exception as exc:
+                direct_pair = None
+                direct_meta = {"valid": False, "invalid_reason": type(exc).__name__}
+                direct_reason = f"dataset_projector_exception:{type(exc).__name__}"
+            direct_projector_record = _same_native_projection_record(
+                native_detector_px=point,
+                point_role=role,
+                projector_path="dataset_fit_space_projector_direct",
+                projector_callable=fit_projector,
+                raw_output=direct_pair,
+                metadata=direct_meta,
+                fallback_used=direct_pair is None,
+                fallback_reason=direct_reason,
+                background_index=resolved_background_index,
+                theta_initial=theta_initial,
+                gamma=gamma_value,
+                Gamma=Gamma_value,
+                phi_convention="dataset_projector_phi",
+                caked_extent=caked_extent,
+                caked_generation=caked_generation,
+            )
+            point_records.append(direct_projector_record)
+            if (
+                isinstance(dataset_ctx, GeometryFitDatasetContext)
+                and str(dataset_ctx.fit_space_projector_kind or "") == "exact_caked_bundle"
+            ):
+                exact_record = dict(direct_projector_record)
+                exact_record["projector_path"] = "exact_caked_bundle_projector_direct"
+                exact_record["path_alias_of"] = "dataset_fit_space_projector_direct"
+                LOGGER.info("same_native_caked_projection_comparison %s", exact_record)
+                point_records.append(exact_record)
+        else:
+            point_records.append(
+                _same_native_projection_record(
+                    native_detector_px=point,
+                    point_role=role,
+                    projector_path="dataset_fit_space_projector_direct",
+                    projector_callable=None,
+                    raw_output=None,
+                    fallback_used=True,
+                    fallback_reason=projector_unavailable_reason
+                    or "fit_space_projector_not_configured",
+                    background_index=resolved_background_index,
+                    theta_initial=theta_initial,
+                    gamma=gamma_value,
+                    Gamma=Gamma_value,
+                    phi_convention="dataset_projector_phi",
+                    caked_extent=caked_extent,
+                    caked_generation=caked_generation,
+                )
+            )
+
+        analytic_two_theta, analytic_phi = _detector_pixels_to_fit_space(
+            np.asarray([point[0]], dtype=np.float64),
+            np.asarray([point[1]], dtype=np.float64),
+            center=center,
+            detector_distance=float(detector_distance),
+            pixel_size=float(pixel_size),
+            gamma_deg=float(gamma_value),
+            Gamma_deg=float(Gamma_value),
+        )
+        analytic_pair = None
+        if analytic_two_theta.size >= 1 and analytic_phi.size >= 1:
+            analytic_pair = _finite_pair((float(analytic_two_theta[0]), float(analytic_phi[0])))
+        point_records.append(
+            _same_native_projection_record(
+                native_detector_px=point,
+                point_role=role,
+                projector_path="analytic_detector_fit_space_fallback",
+                projector_callable=_detector_pixels_to_fit_space,
+                raw_output=analytic_pair,
+                metadata={"fit_space_source": "analytic_detector_fit_space", "valid": True},
+                fallback_used=True,
+                fallback_reason="explicit_analytic_fallback_probe",
+                background_index=resolved_background_index,
+                theta_initial=theta_initial,
+                gamma=gamma_value,
+                Gamma=Gamma_value,
+                phi_convention="analytic_flat_detector_phi_wrapped_-180_180",
+                caked_extent=caked_extent,
+                caked_generation=caked_generation,
+            )
+        )
+
+        grouped[role] = point_records
+        records.extend(point_records)
+
+    for point_records in grouped.values():
+        runtime_reference = next(
+            (
+                _finite_pair(record.get("raw_output_caked_deg"))
+                for record in point_records
+                if record.get("projector_path") == "runtime_live_exact_cake"
+                and _finite_pair(record.get("raw_output_caked_deg")) is not None
+            ),
+            None,
+        )
+        geometry_reference = next(
+            (
+                _finite_pair(record.get("raw_output_caked_deg"))
+                for record in point_records
+                if record.get("projector_path")
+                == "geometry_fit_project_detector_points_to_fit_space"
+                and _finite_pair(record.get("raw_output_caked_deg")) is not None
+            ),
+            None,
+        )
+        for record in point_records:
+            record_pair = _finite_pair(record.get("raw_output_caked_deg"))
+            record["delta_vs_runtime_live_exact"] = _same_native_caked_delta(
+                record_pair,
+                runtime_reference,
+            )
+            record["delta_vs_geometry_fit"] = _same_native_caked_delta(
+                record_pair,
+                geometry_reference,
+            )
+    return records
+
+
 def _fit_prediction_signature(value: object) -> str:
     payload = repr(_dynamic_reanchor_jsonable(value)).encode("utf-8", errors="replace")
     return hashlib.sha1(payload).hexdigest()
@@ -17634,6 +18293,10 @@ def _fit_prediction_array_signature(value: object) -> str:
 
 
 DEFAULT_PREDICTION_SOURCE_ROWS_CACHE_MAX_ENTRIES = 8
+
+
+def _optimization_env_flag_enabled(name: str) -> bool:
+    return str(os.environ.get(name, "")).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _normalize_prediction_source_rows_cache_max_entries(
@@ -20873,6 +21536,12 @@ def _resolve_qr_fit_prediction_from_trial_params(
     params_signature = _fit_prediction_trial_params_signature(trial_params)
     detector_sim_signature = _fit_prediction_array_signature(sim_buffer)
     point_only_projection = bool(fit_context.get("_qr_fit_point_only_projection", False))
+    disable_early_handoff = _optimization_env_flag_enabled(QR_DISABLE_EARLY_HANDOFF_ENV)
+    handoff_attempted = False
+    handoff_accepted = False
+    hit_table_attempted = False
+    hit_table_accepted = False
+    trial_source_rows_attempted = False
     out: Dict[str, object] = {
         "prediction_source": "dynamic_trial_simulation:locked_manual_qr_fit_prediction",
         "fit_prediction_resolver_function": "_resolve_qr_fit_prediction_from_trial_params",
@@ -20883,6 +21552,8 @@ def _resolve_qr_fit_prediction_from_trial_params(
         "source_rows_rebuilt_or_reused": "not_attempted",
         "reuse_valid_for_same_params_signature": True,
         "stale_prediction_cache_used_for_trial_params": False,
+        "point_only_projection": bool(point_only_projection),
+        "early_handoff_skipped_by_env": bool(disable_early_handoff),
         "branch_identity": _copy_source_identity_payload(locked_correspondence),
     }
     locked_key, locked_missing_fields, _locked_identity_payload = _fit_qr_branch_key_payload(
@@ -20893,6 +21564,8 @@ def _resolve_qr_fit_prediction_from_trial_params(
     source_rows_payload: Dict[str, object] | None = None
 
     def _handoff_native_payload() -> Dict[str, object] | None:
+        nonlocal handoff_attempted
+        handoff_attempted = True
         return _resolve_locked_qr_handoff_native_prediction(
             pair=pair,
             trial_params=trial_params,
@@ -20901,13 +21574,82 @@ def _resolve_qr_fit_prediction_from_trial_params(
             dataset_ctx=dataset_ctx,
         )
 
-    handoff_payload = _handoff_native_payload()
-    if handoff_payload is not None:
-        out.update(handoff_payload)
+    def _resolver_path_from_state(default: str = "unresolved") -> str:
+        source = str(out.get("locked_qr_detector_point_source", "") or "")
+        if source.startswith("trial_hit_tables") or source == "locked_hit_table_row":
+            return "hit_table"
+        if trial_source_rows_attempted:
+            return "trial_source_rows"
+        return default
+
+    def _finalize_resolver(path: str) -> Dict[str, object]:
+        if isinstance(source_rows_payload, Mapping):
+            rows_obj = source_rows_payload.get("rows", ()) or ()
+            source_rows_count = int(source_rows_payload.get("row_count", len(rows_obj)) or 0)
+            source_rows_available = bool(source_rows_payload.get("available", False))
+            source_rows_signature = source_rows_payload.get("source_rows_signature")
+            source_rows_source = source_rows_payload.get("source")
+        else:
+            source_rows_count = int(out.get("trial_source_rows_count", 0) or 0)
+            source_rows_available = bool(out.get("trial_source_rows_available", False))
+            source_rows_signature = out.get("trial_source_rows_signature")
+            source_rows_source = out.get("trial_source_rows_source")
+        out.update(
+            {
+                "resolver_path": str(path),
+                "handoff_attempted": bool(handoff_attempted),
+                "handoff_accepted": bool(handoff_accepted),
+                "hit_table_attempted": bool(hit_table_attempted),
+                "hit_table_accepted": bool(hit_table_accepted),
+                "trial_source_rows_attempted": bool(trial_source_rows_attempted),
+                "trial_source_rows_available": bool(source_rows_available),
+                "trial_source_rows_count": int(source_rows_count),
+                "trial_source_rows_signature": source_rows_signature,
+                "trial_source_rows_source": source_rows_source,
+                "point_only_projection": bool(point_only_projection),
+                "fit_prediction_is_dynamic_candidate": bool(
+                    str(path) not in {"handoff", "fallback_handoff"}
+                    and bool(out.get("available", False))
+                ),
+                "params_signature": params_signature,
+                "simulation_cache_signature": out.get(
+                    "simulation_cache_signature",
+                    detector_sim_signature,
+                ),
+                "cake_bundle_signature": out.get("cake_bundle_signature"),
+                "fit_space_local_params_signature": out.get(
+                    "fit_space_local_params_signature",
+                    out.get("caked_projection_signature"),
+                ),
+            }
+        )
+        LOGGER.info(
+            "qr_fit_prediction_resolver %s",
+            {
+                "resolver_path": out.get("resolver_path"),
+                "handoff_attempted": out.get("handoff_attempted"),
+                "handoff_accepted": out.get("handoff_accepted"),
+                "hit_table_attempted": out.get("hit_table_attempted"),
+                "hit_table_accepted": out.get("hit_table_accepted"),
+                "trial_source_rows_attempted": out.get("trial_source_rows_attempted"),
+                "trial_source_rows_count": out.get("trial_source_rows_count"),
+                "params_signature": out.get("params_signature"),
+                "simulation_cache_signature": out.get("simulation_cache_signature"),
+                "cake_bundle_signature": out.get("cake_bundle_signature"),
+                "fit_space_local_params_signature": out.get("fit_space_local_params_signature"),
+            },
+        )
         return out
 
+    handoff_payload = None if disable_early_handoff else _handoff_native_payload()
+    if handoff_payload is not None:
+        handoff_accepted = True
+        out.update(handoff_payload)
+        return _finalize_resolver("handoff")
+
     def _trial_source_rows_payload() -> Dict[str, object]:
-        nonlocal source_rows_payload
+        nonlocal source_rows_payload, trial_source_rows_attempted
+        trial_source_rows_attempted = True
         if source_rows_payload is not None:
             return dict(source_rows_payload)
         source_rows_fit_context: Mapping[str, object] = fit_context
@@ -20958,6 +21700,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
     deferred_hit_table_payload: Dict[str, object] | None = None
     resolution_payload: Dict[str, object]
     if hit_tables:
+        hit_table_attempted = True
         sim_point, hit_table_payload = _resolve_locked_qr_trial_detector_point_from_hit_tables(
             locked_correspondence,
             hit_tables=hit_tables,
@@ -20983,6 +21726,8 @@ def _resolve_qr_fit_prediction_from_trial_params(
                     "fit_prediction_requires_current_exact_hit_or_source_row"
                 )
                 sim_point = None
+            else:
+                hit_table_accepted = True
     elif point_only_projection:
         hit_table_payload["resolution_reason"] = "locked_hit_table_resolver_skipped_point_only"
     if sim_point is not None:
@@ -21243,7 +21988,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
                         "used_sim_refined_caked": False,
                     }
                 )
-                return out
+                return _finalize_resolver("trial_source_rows")
             source_row_refined_caked = _fit_qr_caked_pair_from_entry(
                 resolution_payload,
                 "source_row_refined_caked_deg",
@@ -21269,7 +22014,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
                         "sim_refinement_policy": "point_only_fail_closed",
                     }
                 )
-                return out
+                return _finalize_resolver("trial_source_rows")
         else:
             retained_source_row_refined_prediction = False
         observed_payload = _fit_qr_first_caked_pair_payload(
@@ -21406,13 +22151,14 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 "used_sim_refined_caked": bool(retained_source_row_refined_prediction),
             }
         )
-        return out
+        return _finalize_resolver("trial_source_rows")
     if sim_point is None:
         if handoff_payload is None:
             handoff_payload = _handoff_native_payload()
         if handoff_payload is not None:
+            handoff_accepted = True
             out.update(handoff_payload)
-            return out
+            return _finalize_resolver("fallback_handoff")
         reason = str(resolution_payload.get("resolution_reason", "locked_branch_unavailable"))
         if point_only_projection and bool(
             resolution_payload.get("source_row_is_caked_display_surface", False)
@@ -21421,13 +22167,13 @@ def _resolve_qr_fit_prediction_from_trial_params(
             out["sim_refinement_status"] = "point_only_dynamic_source_unavailable"
             out["sim_refinement_policy"] = "point_only_fail_closed"
         out.update({"available": False, "unavailable_reason": reason})
-        return out
+        return _finalize_resolver("unresolved")
     try:
         sim_col = float(sim_point[0])
         sim_row = float(sim_point[1])
     except Exception:
         out.update({"available": False, "unavailable_reason": "nonfinite_detector_point"})
-        return out
+        return _finalize_resolver(_resolver_path_from_state())
     if (not point_only_projection) and (
         not np.isfinite(sim_col)
         or not np.isfinite(sim_row)
@@ -21438,7 +22184,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
         or sim_row > float(image_size - 1)
     ):
         out.update({"available": False, "unavailable_reason": "off_detector"})
-        return out
+        return _finalize_resolver(_resolver_path_from_state())
 
     input_frame = str(
         resolution_payload.get("resolved_detector_point_input_frame") or "fit_detector"
@@ -21501,7 +22247,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 ),
             }
         )
-        return out
+        return _finalize_resolver(_resolver_path_from_state())
 
     projected_nominal_caked = (float(two_theta_arr[0]), float(phi_arr[0]))
     dynamic_source_anchor = _fit_qr_current_dynamic_caked_anchor(resolution_payload)
@@ -21549,7 +22295,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
                     "sim_refinement_policy": "point_only_fail_closed",
                 }
             )
-            return out
+            return _finalize_resolver(_resolver_path_from_state())
         if dynamic_source_anchor is not None:
             source_delta = (
                 float(projected_nominal_caked[0] - float(dynamic_source_anchor[0])),
@@ -21682,7 +22428,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
         ):
             if key in resolution_payload:
                 out[key] = copy.deepcopy(resolution_payload.get(key))
-        return out
+        return _finalize_resolver(_resolver_path_from_state("trial_source_rows"))
     alignment_payload = _fit_qr_saved_sim_caked_alignment_payload(
         pair,
         trial_params,
@@ -21827,7 +22573,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 "sim_refinement_local_nonzero_count": 0,
             }
         )
-        return out
+        return _finalize_resolver(_resolver_path_from_state())
     selected_sim_buffer = locked_detector_payload.get("image")
     caked_payload = _build_trial_sim_caked_image_payload(
         dataset_ctx if isinstance(dataset_ctx, GeometryFitDatasetContext) else None,
@@ -21884,7 +22630,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 "sim_refinement_local_nonzero_count": 0,
             }
         )
-        return out
+        return _finalize_resolver(_resolver_path_from_state())
     projected_caked_payload = _fit_qr_locked_projected_caked_image_payload(
         caked_payload.get("radial_axis"),
         caked_payload.get("azimuth_axis"),
@@ -21912,7 +22658,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 "sim_refinement_local_nonzero_count": 0,
             }
         )
-        return out
+        return _finalize_resolver(_resolver_path_from_state())
     refinement_caked_payload = dict(caked_payload)
     refinement_caked_payload.update(
         {
@@ -22028,7 +22774,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
     )
     if status != "refined" or refinement.get("refined") is None:
         out.update({"available": False, "unavailable_reason": status})
-        return out
+        return _finalize_resolver(_resolver_path_from_state())
     raw_refined = refinement["refined"]
     raw_delta = refinement.get("delta", (float("nan"), float("nan")))
     refined = (
@@ -22138,7 +22884,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
             ),
         }
     )
-    return out
+    return _finalize_resolver(_resolver_path_from_state())
 
 
 def _measured_fit_space_projection_input(
@@ -25318,6 +26064,13 @@ def fit_geometry_parameters(
                 return float("nan"), float("nan")
             return float(np.max(np.abs(finite))), float(np.linalg.norm(finite))
 
+        def _residual_norm(residual: np.ndarray) -> float:
+            arr = np.asarray(residual, dtype=float).reshape(-1)
+            finite = arr[np.isfinite(arr)]
+            if not finite.size:
+                return float("nan")
+            return float(np.linalg.norm(finite))
+
         def _max_finite(first: float, second: float) -> float:
             values = [float(value) for value in (first, second) if np.isfinite(value)]
             return float(max(values)) if values else float("nan")
@@ -25334,6 +26087,26 @@ def fit_geometry_parameters(
                     points.append(point)
             return points
 
+        def _predicted_detector_points(
+            summary: Mapping[str, object],
+        ) -> List[Tuple[float, float]]:
+            points: List[Tuple[float, float]] = []
+            for row in summary.get("_angular_residual_rows", ()) or ():
+                if not isinstance(row, Mapping):
+                    continue
+                for key in (
+                    "final_prediction_detector_native_px",
+                    "dynamic_final_detector_native_px",
+                    "fit_prediction_detector_native_px",
+                    "sim_refined_detector_native_px",
+                    "sim_nominal_detector_native_px",
+                ):
+                    point = _finite_pair(row.get(key))
+                    if point is not None:
+                        points.append(point)
+                        break
+            return points
+
         def _prediction_delta_norm(
             trial_summary: Mapping[str, object],
             base_points: Sequence[Tuple[float, float]],
@@ -25348,6 +26121,25 @@ def fit_geometry_parameters(
                     math.hypot(
                         float(trial_point[0] - base_point[0]),
                         float(_wrap_phi_deg(float(trial_point[1] - base_point[1]))),
+                    )
+                    for trial_point, base_point in zip(trial_points, base_points)
+                )
+            )
+
+        def _prediction_detector_delta_norm(
+            trial_summary: Mapping[str, object],
+            base_points: Sequence[Tuple[float, float]],
+        ) -> float:
+            trial_points = _predicted_detector_points(trial_summary)
+            if not trial_points and not base_points:
+                return float("nan")
+            if len(trial_points) != len(base_points):
+                return float("inf")
+            return float(
+                max(
+                    math.hypot(
+                        float(trial_point[0] - base_point[0]),
+                        float(trial_point[1] - base_point[1]),
                     )
                     for trial_point, base_point in zip(trial_points, base_points)
                 )
@@ -25386,6 +26178,26 @@ def fit_geometry_parameters(
                 or fit_space_signature
                 or _summary_first_value(summary, "projection_signature")
             )
+            objective_space = _summary_first_value(
+                summary, "objective_space"
+            ) or _summary_first_value(
+                summary,
+                "objective_residual_coordinate_space",
+            )
+            objective_units = _summary_first_value(
+                summary,
+                "objective_residual_units",
+            ) or _summary_first_value(summary, "metric_unit")
+            resolver_path = _summary_first_value(summary, "resolver_path")
+            if resolver_path is None:
+                if str(source_rows_state or "").startswith(("rebuilt", "reused")):
+                    resolver_path = "trial_source_rows"
+                elif str(source_rows_state or "") == "skipped_handoff_native_anchor":
+                    resolver_path = "handoff"
+                elif str(_summary_first_value(summary, "objective_cache_mode") or "") == (
+                    "hit_table_resolved"
+                ):
+                    resolver_path = "hit_table"
             return {
                 "trial_params": {
                     str(name): _dynamic_reanchor_jsonable(local_values.get(str(name)))
@@ -25407,6 +26219,9 @@ def fit_geometry_parameters(
                     "objective_cache_reject_reason",
                 ),
                 "projector_called_with_trial_params": projection_signature is not None,
+                "objective_space": objective_space,
+                "objective_units": objective_units,
+                "resolver_path": resolver_path,
             }
 
         def _sensitivity_steps_for_var(name: str, value: float) -> Tuple[float, ...]:
@@ -25423,6 +26238,8 @@ def fit_geometry_parameters(
                 "objective_param_sensitivity_error": str(exc),
             }
         base_predicted_points = _predicted_caked_points(base_summary)
+        base_detector_points = _predicted_detector_points(base_summary)
+        base_residual_norm = _residual_norm(base_residual)
         base_trial_signature = _fit_prediction_trial_params_signature(base_local)
 
         records: List[Dict[str, object]] = []
@@ -25472,6 +26289,11 @@ def fit_geometry_parameters(
                             trial_summary,
                             base_predicted_points,
                         )
+                        prediction_delta_px = _prediction_detector_delta_norm(
+                            trial_summary,
+                            base_detector_points,
+                        )
+                        perturbed_residual_norm = _residual_norm(trial_residual)
                         metadata = _probe_metadata(trial_summary, trial_local)
                         error = ""
                     except Exception as exc:
@@ -25479,6 +26301,8 @@ def fit_geometry_parameters(
                         max_delta = float("nan")
                         l2_delta = float("nan")
                         prediction_delta = float("nan")
+                        prediction_delta_px = float("nan")
+                        perturbed_residual_norm = float("nan")
                         metadata = {}
                         error = str(exc)
 
@@ -25517,12 +26341,18 @@ def fit_geometry_parameters(
                         metadata.get("projector_called_with_trial_params", False)
                     )
                     probe_record = {
+                        "param": str(name),
                         "step_deg": float(step),
                         "direction": direction,
                         "applied_step_deg": float(applied_step),
+                        "base_residual_norm": float(base_residual_norm),
+                        "perturbed_residual_norm": float(perturbed_residual_norm),
+                        "residual_delta_norm": float(l2_delta),
                         "cost": float(trial_cost),
                         "max_abs_residual_delta_deg": float(max_delta),
                         "residual_vector_delta_deg": float(l2_delta),
+                        "prediction_delta_px": float(prediction_delta_px),
+                        "prediction_delta_caked_deg": float(prediction_delta),
                         "prediction_caked_delta_from_base_deg": float(prediction_delta),
                     }
                     probe_record.update(metadata)
@@ -35785,6 +36615,56 @@ def fit_geometry_parameters(
                     np.asarray(result.x, dtype=float),
                     evaluator=point_match_evaluator,
                 )
+                if _optimization_env_flag_enabled("RA_SIM_GEOM_WRITE_DIAGNOSTICS"):
+                    try:
+                        projector_local = _apply_trial_params(np.asarray(result.x, dtype=float))
+                        point_match_summary["projector_sensitivity"] = (
+                            _probe_detector_projector_sensitivity(
+                                dataset_contexts[0] if dataset_contexts else None,
+                                native_detector_points_px=((1098.0, 1922.0), (1077.0, 1142.0)),
+                                base_params=projector_local,
+                                param_names=("gamma", "Gamma"),
+                                steps_deg=(0.1, 1.0),
+                                center=projector_local.get("center"),
+                                detector_distance=float(
+                                    projector_local.get("corto_detector", np.nan)
+                                ),
+                                pixel_size=float(_estimate_pixel_size(projector_local)),
+                            )
+                        )
+                    except Exception as exc:
+                        point_match_summary["projector_sensitivity_error"] = (
+                            f"{type(exc).__name__}: {exc}"
+                        )
+                    try:
+                        comparison_local = _apply_trial_params(np.asarray(result.x, dtype=float))
+                        point_match_summary["same_native_projection_comparison"] = (
+                            _compare_same_native_caked_projection_paths(
+                                dataset_contexts[0] if dataset_contexts else None,
+                                native_detector_points_px=(
+                                    (1099.0, 1924.0),
+                                    (1082.0, 1132.0),
+                                    (1083.270, 1915.182),
+                                    (1083.734, 1152.380),
+                                ),
+                                point_roles=(
+                                    "branch_0_sim_native",
+                                    "branch_1_sim_native",
+                                    "branch_0_observed_refined_native",
+                                    "branch_1_observed_refined_native",
+                                ),
+                                base_params=comparison_local,
+                                center=comparison_local.get("center"),
+                                detector_distance=float(
+                                    comparison_local.get("corto_detector", np.nan)
+                                ),
+                                pixel_size=float(_estimate_pixel_size(comparison_local)),
+                            )
+                        )
+                    except Exception as exc:
+                        point_match_summary["same_native_projection_comparison_error"] = (
+                            f"{type(exc).__name__}: {exc}"
+                        )
                 if locked_qr_identity_baseline_payload:
                     point_match_summary.update(copy.deepcopy(locked_qr_identity_baseline_payload))
                     point_match_summary["identity_baseline_selected"] = bool(

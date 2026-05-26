@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import math
+import logging
+import os
 from typing import Callable, Mapping, Sequence
 
 import numpy as np
+
+LOGGER = logging.getLogger(__name__)
+GEOMETRY_AUDIT_STRICT_ENV = "RA_SIM_GEOM_AUDIT_STRICT"
+GEOMETRY_DISABLE_SIM_NATIVE_REBUILD_ENV = "RA_SIM_GEOM_DISABLE_SIM_NATIVE_REBUILD"
 
 
 def _parse_optional_point(value: object) -> tuple[float, float] | None:
@@ -992,6 +998,134 @@ def display_to_native_sim_coords(
     )
 
 
+def _geometry_overlay_env_flag_enabled(name: str) -> bool:
+    return str(os.environ.get(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def audit_detector_point_frames(
+    *,
+    pair_id: object,
+    branch_index: object,
+    native_shape: tuple[int, ...],
+    background_display_rotate_k: int,
+    sim_display_rotate_k: int,
+    sim_display: Sequence[object] | None,
+    sim_native: Sequence[object] | None,
+    sim_native_source: object,
+    bg_display: Sequence[object] | None = None,
+    bg_native: Sequence[object] | None = None,
+) -> dict[str, object]:
+    """Classify whether a simulated point's native/display frames agree.
+
+    The helper is intentionally diagnostic-only. It compares a stored
+    ``sim_native`` point against two possible inversions of ``sim_display``:
+    the background detector display rotation and the simulation display
+    rotation. It does not rewrite either point.
+    """
+
+    native_frame_shape = tuple(int(value) for value in native_shape[:2])
+    sim_display_point = _parse_optional_point(sim_display)
+    sim_native_point = _parse_optional_point(sim_native)
+    bg_display_point = _parse_optional_point(bg_display)
+    bg_native_point = _parse_optional_point(bg_native)
+    source_text = str(sim_native_source or "")
+
+    expected_background_native: tuple[float, float] | None = None
+    expected_sim_native: tuple[float, float] | None = None
+    err_to_background_native = float("nan")
+    err_to_sim_native = float("nan")
+    raw_display_native_delta = float("nan")
+    status = "missing"
+
+    if (
+        len(native_frame_shape) >= 2
+        and sim_display_point is not None
+        and sim_native_point is not None
+    ):
+        expected_background_native = display_point_to_native_for_rotation(
+            float(sim_display_point[0]),
+            float(sim_display_point[1]),
+            native_frame_shape,
+            int(background_display_rotate_k),
+        )
+        expected_sim_native = display_to_native_sim_coords(
+            float(sim_display_point[0]),
+            float(sim_display_point[1]),
+            native_frame_shape,
+            sim_display_rotate_k=int(sim_display_rotate_k),
+        )
+        err_to_background_native = float(
+            math.hypot(
+                float(sim_native_point[0]) - float(expected_background_native[0]),
+                float(sim_native_point[1]) - float(expected_background_native[1]),
+            )
+        )
+        err_to_sim_native = float(
+            math.hypot(
+                float(sim_native_point[0]) - float(expected_sim_native[0]),
+                float(sim_native_point[1]) - float(expected_sim_native[1]),
+            )
+        )
+        raw_display_native_delta = float(
+            math.hypot(
+                float(sim_native_point[0]) - float(sim_display_point[0]),
+                float(sim_native_point[1]) - float(sim_display_point[1]),
+            )
+        )
+        tolerance_px = 1.0e-6
+        background_ok = bool(err_to_background_native <= tolerance_px)
+        sim_ok = bool(err_to_sim_native <= tolerance_px)
+        source_mentions_display = "display" in source_text.lower()
+        display_native_alias_under_background_rotation = bool(
+            raw_display_native_delta <= tolerance_px
+            and not background_ok
+            and int(background_display_rotate_k) % 4 != int(sim_display_rotate_k) % 4
+        )
+        source_mentions_overlay_or_saved = any(
+            marker in source_text.lower() for marker in ("overlay", "saved")
+        )
+        display_labeled_native = bool(
+            display_native_alias_under_background_rotation
+            and source_mentions_display
+        )
+        if display_labeled_native:
+            status = "mismatch_display_labeled_native"
+        elif display_native_alias_under_background_rotation and source_mentions_overlay_or_saved:
+            status = "mismatch_display_native_alias"
+        elif background_ok and sim_ok:
+            status = "ambiguous"
+        elif background_ok:
+            status = "ok_background_native"
+        elif sim_ok:
+            status = "ok_sim_native"
+        else:
+            status = "ambiguous"
+
+    record: dict[str, object] = {
+        "pair_id": pair_id,
+        "branch_index": branch_index,
+        "sim_display": sim_display_point,
+        "sim_native": sim_native_point,
+        "sim_native_source": source_text,
+        "background_display_rotate_k": int(background_display_rotate_k),
+        "sim_display_rotate_k": int(sim_display_rotate_k),
+        "expected_native_from_background_display": expected_background_native,
+        "expected_native_from_sim_display": expected_sim_native,
+        "err_to_background_native_px": float(err_to_background_native),
+        "err_to_sim_native_px": float(err_to_sim_native),
+        "raw_sim_display_to_native_delta_px": float(raw_display_native_delta),
+        "bg_display": bg_display_point,
+        "bg_native": bg_native_point,
+        "frame_status": status,
+    }
+    LOGGER.info("geometry_fit_frame_audit %s", record)
+    if status == "mismatch_display_labeled_native" and _geometry_overlay_env_flag_enabled(
+        GEOMETRY_AUDIT_STRICT_ENV
+    ):
+        raise ValueError("mismatch_display_labeled_native")
+    return record
+
+
 def best_orientation_alignment(
     sim_coords: list[tuple[float, float]],
     meas_coords: list[tuple[float, float]],
@@ -1434,11 +1568,33 @@ def _resolve_overlay_display_point(
         Callable[[float, float], tuple[float, float] | None] | None
     ) = None,
 ) -> tuple[float, float] | None:
+    point, _source, _space_status = _resolve_overlay_display_point_with_source(
+        entry,
+        display_key=display_key,
+        native_key=native_key,
+        show_caked_2d=show_caked_2d,
+        native_detector_coords_to_caked_display_coords=(
+            native_detector_coords_to_caked_display_coords
+        ),
+    )
+    return point
+
+
+def _resolve_overlay_display_point_with_source(
+    entry: Mapping[str, object],
+    *,
+    display_key: str,
+    native_key: str,
+    show_caked_2d: bool = False,
+    native_detector_coords_to_caked_display_coords: (
+        Callable[[float, float], tuple[float, float] | None] | None
+    ) = None,
+) -> tuple[tuple[float, float] | None, str, str]:
     if show_caked_2d:
         caked_display_key = display_key.replace("_display", "_caked_display")
         caked_point = _parse_overlay_point(entry.get(caked_display_key))
         if caked_point is not None:
-            return caked_point
+            return caked_point, caked_display_key, "caked_display"
         native_point = _parse_overlay_point(entry.get(native_key))
         if native_point is not None and native_detector_coords_to_caked_display_coords is not None:
             try:
@@ -1450,8 +1606,98 @@ def _resolve_overlay_display_point(
                 projected = None
             projected_point = _parse_overlay_point(projected)
             if projected_point is not None:
-                return projected_point
-    return _parse_overlay_point(entry.get(display_key))
+                return projected_point, native_key, "native_projected_to_caked"
+    display_point = _parse_overlay_point(entry.get(display_key))
+    if display_point is not None:
+        space_status = "detector_display_used_in_caked_mode" if show_caked_2d else "display"
+        return display_point, display_key, space_status
+    return None, "", "missing"
+
+
+def audit_geometry_fit_overlay_visual_distance_inputs(
+    overlay_records: Sequence[dict[str, object]] | None,
+    *,
+    show_caked_2d: bool = False,
+    native_detector_coords_to_caked_display_coords: (
+        Callable[[float, float], tuple[float, float] | None] | None
+    ) = None,
+) -> list[dict[str, object]]:
+    """Return diagnostic-only source records for visual-distance inputs."""
+
+    audit: list[dict[str, object]] = []
+    for idx, raw_entry in enumerate(overlay_records or []):
+        if not isinstance(raw_entry, Mapping):
+            continue
+
+        initial_sim = _resolve_overlay_display_point_with_source(
+            raw_entry,
+            display_key="initial_sim_display",
+            native_key="initial_sim_native",
+            show_caked_2d=show_caked_2d,
+            native_detector_coords_to_caked_display_coords=(
+                native_detector_coords_to_caked_display_coords
+            ),
+        )
+        initial_bg = _resolve_overlay_display_point_with_source(
+            raw_entry,
+            display_key="initial_bg_display",
+            native_key="initial_bg_native",
+            show_caked_2d=show_caked_2d,
+            native_detector_coords_to_caked_display_coords=(
+                native_detector_coords_to_caked_display_coords
+            ),
+        )
+        final_sim = _resolve_overlay_display_point_with_source(
+            raw_entry,
+            display_key="final_sim_display",
+            native_key="final_sim_native",
+            show_caked_2d=show_caked_2d,
+            native_detector_coords_to_caked_display_coords=(
+                native_detector_coords_to_caked_display_coords
+            ),
+        )
+        final_bg = _resolve_overlay_display_point_with_source(
+            raw_entry,
+            display_key="final_bg_display",
+            native_key="final_bg_native",
+            show_caked_2d=show_caked_2d,
+            native_detector_coords_to_caked_display_coords=(
+                native_detector_coords_to_caked_display_coords
+            ),
+        )
+
+        initial_distance = _point_delta(initial_sim[0], initial_bg[0])
+        final_distance = (
+            _point_delta(final_sim[0], final_bg[0])
+            if str(raw_entry.get("match_status", "matched")).strip().lower() == "matched"
+            else float("nan")
+        )
+        audit.append(
+            {
+                "overlay_match_index": raw_entry.get("overlay_match_index", idx),
+                "pair_id": raw_entry.get("pair_id"),
+                "match_status": raw_entry.get("match_status", "matched"),
+                "mode": "caked_2d" if show_caked_2d else "detector_display",
+                "units_claimed": "deg" if show_caked_2d else "px",
+                "initial_sim_point": initial_sim[0],
+                "initial_sim_source": initial_sim[1],
+                "initial_sim_space_status": initial_sim[2],
+                "initial_bg_point": initial_bg[0],
+                "initial_bg_source": initial_bg[1],
+                "initial_bg_space_status": initial_bg[2],
+                "final_sim_point": final_sim[0],
+                "final_sim_source": final_sim[1],
+                "final_sim_space_status": final_sim[2],
+                "final_bg_point": final_bg[0],
+                "final_bg_source": final_bg[1],
+                "final_bg_space_status": final_bg[2],
+                "initial_distance": float(initial_distance),
+                "final_distance": float(final_distance),
+                "included_initial_in_median": bool(np.isfinite(initial_distance)),
+                "included_final_in_median": bool(np.isfinite(final_distance)),
+            }
+        )
+    return audit
 
 
 def build_geometry_fit_overlay_records(
@@ -1615,8 +1861,41 @@ def build_geometry_fit_overlay_records(
                     float(recovered_native[0]),
                     float(recovered_native[1]),
                 )
+        initial_sim_frame_audit = audit_detector_point_frames(
+            pair_id=initial_entry.get(
+                "pair_id",
+                raw_entry.get("pair_id", initial_entry.get("overlay_match_index")),
+            ),
+            branch_index=initial_entry.get(
+                "source_branch_index",
+                raw_entry.get("source_branch_index", fallback_index),
+            ),
+            native_shape=native_frame_shape,
+            background_display_rotate_k=background_display_rotate_k,
+            sim_display_rotate_k=sim_display_rotate_k,
+            sim_display=initial_sim_display_raw,
+            sim_native=initial_sim_native,
+            sim_native_source=initial_entry.get("sim_native_source", "initial_entry.sim_native"),
+            bg_display=initial_bg_display_raw,
+            bg_native=initial_bg_native,
+        )
+        record["initial_sim_native_frame_status"] = str(
+            initial_sim_frame_audit.get("frame_status", "missing")
+        )
+        record["initial_sim_native_frame_audit"] = dict(initial_sim_frame_audit)
+        record["initial_sim_native_source"] = str(
+            initial_entry.get("sim_native_source", "initial_entry.sim_native")
+        )
+        if initial_sim_display_raw is not None:
+            record["initial_sim_display_raw"] = (
+                float(initial_sim_display_raw[0]),
+                float(initial_sim_display_raw[1]),
+            )
+
         initial_sim_display = None
         initial_bg_display = None
+        initial_sim_display_rebuilt = None
+        initial_sim_raw_vs_rebuilt_delta = float("nan")
         # Saved fits can be redrawn in a different view than the one that
         # produced the initial overlay snapshot, so prefer native coordinates
         # when available and rebuild the current overlay-display positions.
@@ -1627,9 +1906,68 @@ def build_geometry_fit_overlay_records(
                 native_frame_shape,
                 overlay_display_rotate_k,
             )
-            initial_sim_display = (float(rotated[0]), float(rotated[1]))
-        else:
+            initial_sim_display_rebuilt = (float(rotated[0]), float(rotated[1]))
+            if initial_sim_display_raw is not None:
+                initial_sim_raw_vs_rebuilt_delta = _point_delta(
+                    initial_sim_display_raw,
+                    initial_sim_display_rebuilt,
+                )
+        record["initial_sim_display_rebuilt_from_native"] = initial_sim_display_rebuilt
+        record["initial_sim_display_raw_vs_rebuilt_delta_px"] = float(
+            initial_sim_raw_vs_rebuilt_delta
+        )
+        disable_sim_native_rebuild = bool(
+            _geometry_overlay_env_flag_enabled(GEOMETRY_DISABLE_SIM_NATIVE_REBUILD_ENV)
+        )
+        if disable_sim_native_rebuild:
+            record["diagnostic_flag_RA_SIM_GEOM_DISABLE_SIM_NATIVE_REBUILD"] = True
+            LOGGER.info("%s active", GEOMETRY_DISABLE_SIM_NATIVE_REBUILD_ENV)
+        initial_sim_native_frame_status = str(
+            initial_sim_frame_audit.get("frame_status", "missing")
+        )
+        initial_sim_native_rebuild_valid = initial_sim_native_frame_status in {
+            "ok_background_native",
+            "ok_sim_native",
+        }
+        if (
+            initial_sim_display_rebuilt is not None
+            and initial_sim_display_raw is not None
+            and initial_sim_native_frame_status == "ambiguous"
+            and np.isfinite(float(initial_sim_raw_vs_rebuilt_delta))
+            and float(initial_sim_raw_vs_rebuilt_delta) <= 1.0e-6
+        ):
+            initial_sim_native_rebuild_valid = True
+        initial_sim_native_rebuild_rejected = bool(
+            initial_sim_display_rebuilt is not None
+            and initial_sim_display_raw is not None
+            and initial_sim_native_frame_status
+            in {"mismatch_display_labeled_native", "mismatch_display_native_alias"}
+            and not initial_sim_native_rebuild_valid
+        )
+        if initial_sim_native_rebuild_rejected:
+            record["initial_sim_native_rebuild_rejected_frame_status"] = (
+                initial_sim_native_frame_status
+            )
+        if (
+            initial_sim_display_rebuilt is not None
+            and not (
+                disable_sim_native_rebuild and initial_sim_display_raw is not None
+            )
+            and not initial_sim_native_rebuild_rejected
+        ):
+            initial_sim_display = initial_sim_display_rebuilt
+            record["chosen_initial_sim_display_source"] = "recomputed_from_initial_sim_native"
+        elif initial_sim_display_raw is not None:
             initial_sim_display = initial_sim_display_raw
+            if disable_sim_native_rebuild and initial_sim_display_rebuilt is not None:
+                source = "raw_initial_sim_display:diagnostic_rebuild_disabled"
+            elif initial_sim_native_rebuild_rejected:
+                source = "raw_initial_sim_display:rejected_initial_sim_native_frame"
+            else:
+                source = "raw_initial_sim_display"
+            record["chosen_initial_sim_display_source"] = source
+        else:
+            record["chosen_initial_sim_display_source"] = "missing"
         if initial_bg_native is not None:
             rotated = rotate_point_for_display(
                 float(initial_bg_native[0]),
@@ -1930,26 +2268,14 @@ def summarize_geometry_fit_overlay_visual_distances(
                 native_detector_coords_to_caked_display_coords
             ),
         )
-        if initial_sim is not None and initial_bg is not None:
-            initial_dist = float(
-                math.hypot(
-                    initial_sim[0] - initial_bg[0],
-                    initial_sim[1] - initial_bg[1],
-                )
-            )
+        initial_dist = _point_delta(initial_sim, initial_bg)
+        if np.isfinite(initial_dist):
             initial_distances.append(initial_dist)
-        else:
-            initial_dist = float("nan")
-        if status == "matched" and final_sim is not None and final_bg is not None:
-            final_dist = float(
-                math.hypot(
-                    final_sim[0] - final_bg[0],
-                    final_sim[1] - final_bg[1],
-                )
-            )
+        final_dist = (
+            _point_delta(final_sim, final_bg) if status == "matched" else float("nan")
+        )
+        if np.isfinite(final_dist):
             final_distances.append(final_dist)
-        else:
-            final_dist = float("nan")
         if np.isfinite(initial_dist) and np.isfinite(final_dist):
             paired_records += 1
             delta = float(final_dist - initial_dist)
@@ -2047,13 +2373,9 @@ def compute_geometry_overlay_frame_diagnostics(
         ):
             paired_records += 1
         if initial_sim is not None and final_sim is not None:
-            sim_frame_dists.append(
-                float(math.hypot(final_sim[0] - initial_sim[0], final_sim[1] - initial_sim[1]))
-            )
+            sim_frame_dists.append(_point_delta(final_sim, initial_sim))
         if initial_bg is not None and final_bg is not None:
-            bg_frame_dists.append(
-                float(math.hypot(final_bg[0] - initial_bg[0], final_bg[1] - initial_bg[1]))
-            )
+            bg_frame_dists.append(_point_delta(final_bg, initial_bg))
         try:
             render_delta = float(raw_entry.get("fit_sim_render_caked_delta", np.nan))
         except Exception:
@@ -2068,6 +2390,22 @@ def compute_geometry_overlay_frame_diagnostics(
             native_detector_coords_to_caked_display_coords
         ),
     )
+    visual_input_audit = audit_geometry_fit_overlay_visual_distance_inputs(
+        overlay_records,
+        show_caked_2d=show_caked_2d,
+        native_detector_coords_to_caked_display_coords=(
+            native_detector_coords_to_caked_display_coords
+        ),
+    )
+    caked_detector_display_input_count = 0
+    if show_caked_2d:
+        for audit_entry in visual_input_audit:
+            for role in ("initial_sim", "initial_bg", "final_sim", "final_bg"):
+                if (
+                    audit_entry.get(f"{role}_space_status")
+                    == "detector_display_used_in_caked_mode"
+                ):
+                    caked_detector_display_input_count += 1
 
     stats: dict[str, float] = {
         "overlay_record_count": float(len(list(overlay_records or []))),
@@ -2093,6 +2431,7 @@ def compute_geometry_overlay_frame_diagnostics(
             if fit_sim_render_caked_deltas
             else float("nan")
         ),
+        "caked_visual_detector_display_input_count": float(caked_detector_display_input_count),
         **visual_stats,
     }
 

@@ -2,7 +2,9 @@ import pytest
 import numpy as np
 
 from ra_sim.gui.geometry_overlay import (
+    audit_detector_point_frames,
     build_geometry_fit_overlay_records,
+    audit_geometry_fit_overlay_visual_distance_inputs,
     compose_orientation_transforms,
     compare_holistic_sim_residuals,
     compute_holistic_sim_residual,
@@ -10,6 +12,7 @@ from ra_sim.gui.geometry_overlay import (
     build_geometry_fit_visual_probe_records,
     detector_display_to_native_coords,
     detector_native_to_display_coords,
+    display_point_to_native_for_rotation,
     inverse_transform_points_orientation,
     probe_display_image_peak_near_point,
     rotate_point_for_display,
@@ -74,6 +77,34 @@ def test_probe_display_image_peak_near_point_finds_peak_in_display_coordinates()
     assert probe["image_peak_index"] == (2, 6)
     assert probe["peak_value"] == pytest.approx(12.0)
     assert probe["point_to_image_peak_delta"] < 0.25
+
+
+def test_display_to_native_for_background_rotation_trace_points():
+    shape = (3000, 3000)
+
+    assert display_point_to_native_for_rotation(1077, 1098, shape, -1) == pytest.approx(
+        (1098.0, 1922.0)
+    )
+    assert display_point_to_native_for_rotation(1857, 1077, shape, -1) == pytest.approx(
+        (1077.0, 1142.0)
+    )
+
+
+def test_audit_detector_point_frames_flags_display_labeled_native():
+    audit = audit_detector_point_frames(
+        pair_id="trace-pair",
+        branch_index=0,
+        native_shape=(3000, 3000),
+        background_display_rotate_k=-1,
+        sim_display_rotate_k=0,
+        sim_display=(1079.897, 1098.761),
+        sim_native=(1079.897, 1098.761),
+        sim_native_source="locked_manual_qr:saved_display_px",
+    )
+
+    assert audit["frame_status"] == "mismatch_display_labeled_native"
+    assert audit["err_to_sim_native_px"] == pytest.approx(0.0)
+    assert audit["err_to_background_native_px"] > 800.0
 
 
 def test_probe_display_image_peak_near_point_flags_shifted_marker():
@@ -539,6 +570,191 @@ def test_build_geometry_fit_overlay_records_prefers_native_initial_points_over_c
     assert records[0]["initial_bg_display"] == pytest.approx(expected_bg_display)
 
 
+def test_build_geometry_fit_overlay_records_audits_bad_initial_sim_native_jump():
+    records = build_geometry_fit_overlay_records(
+        [
+            {
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 0),
+                "sim_display": (1079.897, 1098.761),
+                "sim_native": (1079.897, 1098.761),
+                "sim_native_source": "locked_manual_qr:saved_display_px",
+                "bg_display": (1077.0, 1098.0),
+            }
+        ],
+        [
+            {
+                "match_status": "matched",
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 0),
+                "simulated_x": 1098.0,
+                "simulated_y": 1922.0,
+                "measured_x": 1077.0,
+                "measured_y": 1098.0,
+                "distance_px": 823.0,
+            }
+        ],
+        native_shape=(3000, 3000),
+        orientation_choice={
+            "indexing_mode": "xy",
+            "k": 0,
+            "flip_x": False,
+            "flip_y": False,
+            "flip_order": "yx",
+        },
+        sim_display_rotate_k=0,
+        background_display_rotate_k=-1,
+    )
+
+    assert records[0]["initial_sim_native_frame_status"] == "mismatch_display_labeled_native"
+    assert records[0]["initial_sim_display"] == pytest.approx((1079.897, 1098.761))
+    assert records[0]["initial_sim_display_raw_vs_rebuilt_delta_px"] > 800.0
+    assert records[0]["chosen_initial_sim_display_source"] == (
+        "raw_initial_sim_display:rejected_initial_sim_native_frame"
+    )
+
+
+def test_build_geometry_fit_overlay_records_rejects_source_agnostic_display_native_alias():
+    audit = audit_detector_point_frames(
+        pair_id="trace-pair",
+        branch_index=0,
+        native_shape=(3000, 3000),
+        background_display_rotate_k=-1,
+        sim_display_rotate_k=0,
+        sim_display=(1079.897, 1098.761),
+        sim_native=(1079.897, 1098.761),
+        sim_native_source="overlay_source_sim_native_xy",
+    )
+
+    assert audit["frame_status"] not in {"ok_background_native", "ok_sim_native"}
+
+    records = build_geometry_fit_overlay_records(
+        [
+            {
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 0),
+                "sim_display": (1079.897, 1098.761),
+                "sim_native": (1079.897, 1098.761),
+                "sim_native_source": "overlay_source_sim_native_xy",
+                "bg_display": (1077.0, 1098.0),
+            }
+        ],
+        [
+            {
+                "match_status": "matched",
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 0),
+                "simulated_x": 1098.0,
+                "simulated_y": 1922.0,
+                "measured_x": 1077.0,
+                "measured_y": 1098.0,
+                "distance_px": 823.0,
+            }
+        ],
+        native_shape=(3000, 3000),
+        orientation_choice={
+            "indexing_mode": "xy",
+            "k": 0,
+            "flip_x": False,
+            "flip_y": False,
+            "flip_order": "yx",
+        },
+        sim_display_rotate_k=0,
+        background_display_rotate_k=-1,
+    )
+
+    assert records[0]["initial_sim_display"] == pytest.approx((1079.897, 1098.761))
+    assert records[0]["initial_sim_display_raw_vs_rebuilt_delta_px"] > 800.0
+    assert records[0]["chosen_initial_sim_display_source"] == (
+        "raw_initial_sim_display:rejected_initial_sim_native_frame"
+    )
+
+
+def test_build_geometry_fit_overlay_records_accepts_valid_initial_sim_native_rebuild():
+    records = build_geometry_fit_overlay_records(
+        [
+            {
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 0),
+                "sim_display": (1077.0, 1098.0),
+                "sim_native": (1098.0, 1922.0),
+                "sim_native_source": "refined_sim_native_px",
+                "bg_display": (1077.0, 1098.0),
+            }
+        ],
+        [
+            {
+                "match_status": "matched",
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 0),
+                "simulated_x": 1098.0,
+                "simulated_y": 1922.0,
+                "measured_x": 1077.0,
+                "measured_y": 1098.0,
+                "distance_px": 0.0,
+            }
+        ],
+        native_shape=(3000, 3000),
+        orientation_choice={
+            "indexing_mode": "xy",
+            "k": 0,
+            "flip_x": False,
+            "flip_y": False,
+            "flip_order": "yx",
+        },
+        sim_display_rotate_k=0,
+        background_display_rotate_k=-1,
+    )
+
+    assert records[0]["initial_sim_native_frame_status"] == "ok_background_native"
+    assert records[0]["initial_sim_display"] == pytest.approx((1077.0, 1098.0))
+    assert records[0]["initial_sim_display_raw_vs_rebuilt_delta_px"] == pytest.approx(0.0)
+    assert records[0]["chosen_initial_sim_display_source"] == "recomputed_from_initial_sim_native"
+
+
+def test_build_geometry_fit_overlay_records_can_disable_sim_native_rebuild(monkeypatch):
+    monkeypatch.setenv("RA_SIM_GEOM_DISABLE_SIM_NATIVE_REBUILD", "1")
+
+    records = build_geometry_fit_overlay_records(
+        [
+            {
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 0),
+                "sim_display": (1079.897, 1098.761),
+                "sim_native": (1079.897, 1098.761),
+                "sim_native_source": "locked_manual_qr:saved_display_px",
+            }
+        ],
+        [
+            {
+                "match_status": "matched",
+                "overlay_match_index": 0,
+                "hkl": (1, 0, 0),
+                "simulated_x": 1098.0,
+                "simulated_y": 1922.0,
+                "measured_x": 1077.0,
+                "measured_y": 1098.0,
+                "distance_px": 823.0,
+            }
+        ],
+        native_shape=(3000, 3000),
+        orientation_choice={
+            "indexing_mode": "xy",
+            "k": 0,
+            "flip_x": False,
+            "flip_y": False,
+            "flip_order": "yx",
+        },
+        sim_display_rotate_k=0,
+        background_display_rotate_k=-1,
+    )
+
+    assert records[0]["initial_sim_display"] == pytest.approx((1079.897, 1098.761))
+    assert records[0]["chosen_initial_sim_display_source"] == (
+        "raw_initial_sim_display:diagnostic_rebuild_disabled"
+    )
+
+
 def test_build_geometry_fit_overlay_records_reprojects_legacy_display_fallbacks():
     native_shape = (256, 256)
     native_sim = (10.0, 20.0)
@@ -766,9 +982,7 @@ def test_dynamic_locked_qr_overlay_does_not_use_handoff_native_as_final_marker()
                 "fit_prediction_source": "locked_manual_qr:saved_detector_display_to_native",
                 "final_prediction_detector_native_px": (1414.0, 1929.0),
                 "final_prediction_detector_display_px": (1070.0, 1414.0),
-                "final_prediction_detector_native_px_source": (
-                    "dynamic_final_forward_simulation"
-                ),
+                "final_prediction_detector_native_px_source": ("dynamic_final_forward_simulation"),
                 "final_prediction_caked_deg": (21.9, 166.0),
                 "distance_px": 0.0,
             }
@@ -1038,6 +1252,40 @@ def test_visual_distance_summary_uses_the_same_caked_points_as_overlay_drawing()
     assert caked_summary["initial_distance_median"] == pytest.approx(2**0.5)
     assert caked_summary["final_distance_median"] == pytest.approx(0.02**0.5)
     assert caked_summary["worsened_count"] == pytest.approx(0.0)
+
+
+def test_caked_visual_distance_audit_flags_detector_pixel_fallback_inputs():
+    records = [
+        {
+            "match_status": "matched",
+            "pair_id": "branch-0",
+            "initial_sim_display": (1099.0, 1924.0),
+            "initial_bg_display": (1083.270, 1915.182),
+            "final_sim_caked_display": (32.744, 132.750),
+            "final_bg_caked_display": (34.0, 132.0),
+        }
+    ]
+
+    audit = audit_geometry_fit_overlay_visual_distance_inputs(
+        records,
+        show_caked_2d=True,
+        native_detector_coords_to_caked_display_coords=None,
+    )
+
+    assert audit[0]["initial_sim_source"] == "initial_sim_display"
+    assert audit[0]["initial_sim_space_status"] == "detector_display_used_in_caked_mode"
+    assert audit[0]["initial_bg_space_status"] == "detector_display_used_in_caked_mode"
+    assert audit[0]["initial_distance"] > 10.0
+    assert audit[0]["final_sim_space_status"] == "caked_display"
+    assert audit[0]["final_distance"] == pytest.approx(((32.744 - 34.0) ** 2 + 0.75**2) ** 0.5)
+
+    frame_diag, frame_warning = compute_geometry_overlay_frame_diagnostics(
+        records,
+        show_caked_2d=True,
+        native_detector_coords_to_caked_display_coords=None,
+    )
+    assert frame_diag["caked_visual_detector_display_input_count"] == pytest.approx(2.0)
+    assert frame_warning == ""
 
 
 def test_compute_geometry_overlay_frame_diagnostics_flags_fit_sim_render_mismatch():

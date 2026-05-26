@@ -66,7 +66,7 @@ def test_draw_geometry_fit_overlay_renders_markers_labels_and_residual_arrow() -
         labels = [artist.get_text() for artist in ax.texts]
 
         assert len(geometry_pick_artists) >= 5
-        assert any("fit sim" in label for label in labels)
+        assert any("diagnostic sim" in label for label in labels)
         assert any("|Δ|=5.7px" in label for label in labels)
         assert draws == ["draw"]
     finally:
@@ -162,6 +162,176 @@ def test_draw_geometry_fit_overlay_captures_fit_sim_artist_point() -> None:
         assert visual_probe_records[0]["record_point"] == pytest.approx((11.0, 13.0))
         assert visual_probe_records[0]["artist_point"] == pytest.approx((11.0, 13.0))
         assert visual_probe_records[0]["record_source"] == "fit_prediction_detector_display_px"
+    finally:
+        plt.close(fig)
+
+
+def test_draw_geometry_fit_overlay_suppresses_locked_saved_arrow_endpoint() -> None:
+    fig, ax = plt.subplots()
+    try:
+        geometry_pick_artists: list[object] = []
+        draw_audit_records: list[dict[str, object]] = []
+
+        overlays.draw_geometry_fit_overlay(
+            ax,
+            [
+                {
+                    "hkl": (1, 0, 1),
+                    "overlay_match_index": 0,
+                    "match_status": "matched",
+                    "initial_sim_display": (10.0, 20.0),
+                    "initial_bg_display": (11.0, 21.0),
+                    "final_sim_display": (40.0, 50.0),
+                    "final_sim_display_source": "fit_prediction_detector_display_px",
+                    "final_bg_display": (41.0, 51.0),
+                    "fit_prediction_source": (
+                        "locked_manual_qr:saved_detector_display_to_native:saved_display_px"
+                    ),
+                    "fit_prediction_is_dynamic": "no",
+                }
+            ],
+            geometry_pick_artists=geometry_pick_artists,
+            clear_geometry_pick_artists=lambda *, redraw=True: None,
+            draw_idle=lambda: None,
+            draw_audit_records=draw_audit_records,
+        )
+
+        assert len(draw_audit_records) == 1
+        assert draw_audit_records[0]["blue_square_point"] == pytest.approx((10.0, 20.0))
+        assert draw_audit_records[0]["green_circle_point"] == pytest.approx((40.0, 50.0))
+        assert draw_audit_records[0]["dashed_arrow_start"] is None
+        assert draw_audit_records[0]["dashed_arrow_end"] is None
+        assert np.isnan(float(draw_audit_records[0]["dashed_arrow_length"]))
+        assert draw_audit_records[0]["arrow_semantics_status"] == "locked_saved_prediction"
+        assert draw_audit_records[0]["suppressed_stale_arrow"] is True
+        assert draw_audit_records[0]["stale_arrow_drawn"] is False
+        assert draw_audit_records[0]["dashed_arrow_suppressed_by_diagnostic_flag"] is False
+        labels = [artist.get_text() for artist in ax.texts]
+        assert any("diagnostic sim" in label for label in labels)
+        assert not any("fit sim" in label for label in labels)
+        # Initial square, initial triangle, fitted green marker+label, residual arrow.
+        assert len(geometry_pick_artists) == 5
+    finally:
+        plt.close(fig)
+
+
+def test_draw_geometry_fit_overlay_audits_caked_projection_from_native() -> None:
+    fig, ax = plt.subplots()
+    try:
+        geometry_pick_artists: list[object] = []
+        draw_audit_records: list[dict[str, object]] = []
+
+        overlays.draw_geometry_fit_overlay(
+            ax,
+            [
+                {
+                    "hkl": (1, 0, 1),
+                    "overlay_match_index": 0,
+                    "match_status": "matched",
+                    "initial_sim_native": (100.0, 200.0),
+                    "initial_bg_native": (110.0, 210.0),
+                    "final_sim_native": (120.0, 220.0),
+                    "final_bg_native": (130.0, 230.0),
+                    "fit_prediction_source": "dynamic_final_forward_simulation",
+                    "fit_prediction_is_dynamic": True,
+                }
+            ],
+            geometry_pick_artists=geometry_pick_artists,
+            clear_geometry_pick_artists=lambda *, redraw=True: None,
+            draw_idle=lambda: None,
+            show_caked_2d=True,
+            native_detector_coords_to_caked_display_coords=lambda x, y: (
+                float(x) / 10.0,
+                float(y) / 10.0,
+            ),
+            draw_audit_records=draw_audit_records,
+        )
+
+        audit = draw_audit_records[0]["caked_projection_audit"]["initial_sim_display"]
+        assert audit["caked_projection_input_native"] == pytest.approx((100.0, 200.0))
+        assert audit["caked_projection_input_source"] == "initial_sim_native"
+        assert audit["caked_projection_output"] == pytest.approx((10.0, 20.0))
+        assert audit["caked_projection_valid"] is True
+    finally:
+        plt.close(fig)
+
+
+def test_draw_geometry_fit_overlay_keeps_dynamic_fitted_arrow() -> None:
+    fig, ax = plt.subplots()
+    try:
+        geometry_pick_artists: list[object] = []
+        draw_audit_records: list[dict[str, object]] = []
+
+        overlays.draw_geometry_fit_overlay(
+            ax,
+            [
+                {
+                    "hkl": (1, 0, 1),
+                    "overlay_match_index": 0,
+                    "match_status": "matched",
+                    "initial_sim_display": (10.0, 20.0),
+                    "initial_bg_display": (11.0, 21.0),
+                    "final_sim_display": (40.0, 50.0),
+                    "final_sim_display_source": "dynamic_final_forward_simulation",
+                    "final_bg_display": (41.0, 51.0),
+                    "fit_prediction_source": "dynamic_final_forward_simulation",
+                    "fit_prediction_is_dynamic": True,
+                }
+            ],
+            geometry_pick_artists=geometry_pick_artists,
+            clear_geometry_pick_artists=lambda *, redraw=True: None,
+            draw_idle=lambda: None,
+            draw_audit_records=draw_audit_records,
+        )
+
+        assert draw_audit_records[0]["arrow_semantics_status"] == "dynamic_final_prediction"
+        assert draw_audit_records[0]["dashed_arrow_start"] == pytest.approx((10.0, 20.0))
+        assert draw_audit_records[0]["dashed_arrow_end"] == pytest.approx((40.0, 50.0))
+        assert draw_audit_records[0]["dashed_arrow_length"] == pytest.approx(
+            float(np.hypot(30.0, 30.0))
+        )
+        assert draw_audit_records[0]["suppressed_stale_arrow"] is False
+        assert draw_audit_records[0]["stale_arrow_drawn"] is False
+        # Initial square, initial triangle, fitted arrow, fitted marker+label, residual arrow.
+        assert len(geometry_pick_artists) == 6
+    finally:
+        plt.close(fig)
+
+
+def test_draw_geometry_fit_overlay_can_disable_stale_fitted_arrow(monkeypatch) -> None:
+    monkeypatch.setenv("RA_SIM_GEOM_DISABLE_FITTED_ARROW_FOR_STALE_ENDPOINT", "1")
+    fig, ax = plt.subplots()
+    try:
+        geometry_pick_artists: list[object] = []
+        draw_audit_records: list[dict[str, object]] = []
+
+        overlays.draw_geometry_fit_overlay(
+            ax,
+            [
+                {
+                    "hkl": (1, 0, 1),
+                    "overlay_match_index": 0,
+                    "match_status": "matched",
+                    "initial_sim_display": (10.0, 20.0),
+                    "initial_bg_display": (11.0, 21.0),
+                    "final_sim_display": (40.0, 50.0),
+                    "final_bg_display": (41.0, 51.0),
+                    "fit_prediction_source": (
+                        "locked_manual_qr:saved_detector_display_to_native:saved_display_px"
+                    ),
+                    "fit_prediction_is_dynamic": "no",
+                }
+            ],
+            geometry_pick_artists=geometry_pick_artists,
+            clear_geometry_pick_artists=lambda *, redraw=True: None,
+            draw_idle=lambda: None,
+            draw_audit_records=draw_audit_records,
+        )
+
+        assert draw_audit_records[0]["arrow_semantics_status"] == "locked_saved_prediction"
+        assert draw_audit_records[0]["dashed_arrow_suppressed_by_diagnostic_flag"] is True
+        # Initial square, initial triangle, fitted green marker+label, residual arrow.
+        assert len(geometry_pick_artists) == 5
     finally:
         plt.close(fig)
 

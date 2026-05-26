@@ -80,6 +80,12 @@
   - Removed stale, unexported `ra_sim/hbn_fitter/fitter_old.py`; the maintained hBN fitter implementation remains `ra_sim/hbn_fitter/fitter.py`.
 
 - **Fitting and optimization**
+  - Added diagnostic-only geometry-fit overlay audits for initial simulated
+    point frame provenance, sim-native overlay rebuild deltas, stale fitted
+    arrow semantics, QR prediction resolver paths, and `gamma,Gamma`
+    objective/projector sensitivity, with A/B flags for isolating stale
+    handoff, sim-native rebuild, stale-arrow drawing, strict frame mismatches,
+    and auto caked-route selection.
   - Fixed locked Qr/Qz dynamic-angle fitting so handoff-native prediction
     anchors stay authoritative over stale source-row caked diagnostics during
     trial projection.

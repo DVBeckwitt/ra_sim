@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import math
+import logging
+import os
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import numpy as np
 
 from .geometry_overlay import normalize_initial_geometry_pairs_display
+
+LOGGER = logging.getLogger(__name__)
+GEOMETRY_DISABLE_FITTED_ARROW_FOR_STALE_ENDPOINT_ENV = (
+    "RA_SIM_GEOM_DISABLE_FITTED_ARROW_FOR_STALE_ENDPOINT"
+)
 
 
 def clear_artists(
@@ -40,6 +47,39 @@ def _parse_point(value: object) -> tuple[float, float] | None:
     if not (np.isfinite(col) and np.isfinite(row)):
         return None
     return float(col), float(row)
+
+
+def _overlay_env_flag_enabled(name: str) -> bool:
+    return str(os.environ.get(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _overlay_value_is_true(value: object) -> bool:
+    if isinstance(value, bool):
+        return bool(value)
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "dynamic"}
+
+
+def _arrow_semantics_status(entry: Mapping[str, object]) -> str:
+    final_native_source = str(entry.get("final_sim_native_source", "") or "")
+    final_display_source = str(entry.get("final_sim_display_source", "") or "")
+    final_prediction_source = str(entry.get("final_prediction_source", "") or "")
+    prediction_source = str(entry.get("fit_prediction_source", "") or "")
+    is_dynamic = _overlay_value_is_true(entry.get("fit_prediction_is_dynamic"))
+    dynamic_source = bool(
+        "dynamic_final_forward_simulation" in final_native_source
+        or "dynamic_final_forward_simulation" in final_display_source
+        or "dynamic_final_forward_simulation" in final_prediction_source
+        or final_display_source.startswith("dynamic_final")
+        or final_native_source.startswith("dynamic_final")
+    )
+    if is_dynamic or dynamic_source:
+        return "dynamic_final_prediction"
+    if _overlay_value_is_true(entry.get("stale_final_sim")):
+        return "stale_prediction"
+    prediction_source_lower = prediction_source.lower()
+    if "locked_manual_qr" in prediction_source_lower or "saved" in prediction_source_lower:
+        return "locked_saved_prediction"
+    return "missing_dynamic_source"
 
 
 def _normalize_q_group_key(value: object) -> tuple[object, ...] | None:
@@ -260,6 +300,7 @@ def draw_geometry_fit_overlay(
     ]
     | None = None,
     visual_probe_records: list[dict[str, object]] | None = None,
+    draw_audit_records: list[dict[str, object]] | None = None,
 ) -> None:
     """Draw one fixed-background/fitted-simulation overlay record per match."""
 
@@ -270,11 +311,19 @@ def draw_geometry_fit_overlay(
         *,
         display_key: str,
         native_key: str,
+        caked_projection_audit: dict[str, dict[str, object]] | None = None,
     ) -> tuple[float, float] | None:
         if show_caked_2d:
             caked_display_key = display_key.replace("_display", "_caked_display")
             caked_point = _parse_point(entry.get(caked_display_key))
             if caked_point is not None:
+                if caked_projection_audit is not None:
+                    caked_projection_audit[display_key] = {
+                        "caked_projection_input_native": None,
+                        "caked_projection_input_source": caked_display_key,
+                        "caked_projection_output": caked_point,
+                        "caked_projection_valid": True,
+                    }
                 return caked_point
             native_point = _parse_point(entry.get(native_key))
             if (
@@ -289,8 +338,22 @@ def draw_geometry_fit_overlay(
                 except Exception:
                     projected = None
                 projected_point = _parse_point(projected)
+                if caked_projection_audit is not None:
+                    caked_projection_audit[display_key] = {
+                        "caked_projection_input_native": native_point,
+                        "caked_projection_input_source": native_key,
+                        "caked_projection_output": projected_point,
+                        "caked_projection_valid": projected_point is not None,
+                    }
                 if projected_point is not None:
                     return projected_point
+            elif caked_projection_audit is not None:
+                caked_projection_audit[display_key] = {
+                    "caked_projection_input_native": native_point,
+                    "caked_projection_input_source": native_key,
+                    "caked_projection_output": None,
+                    "caked_projection_valid": False,
+                }
         return _parse_point(entry.get(display_key))
 
     def _plot_marker(
@@ -403,25 +466,30 @@ def draw_geometry_fit_overlay(
         if idx >= limit or not isinstance(entry, dict):
             break
 
+        caked_projection_audit: dict[str, dict[str, object]] = {}
         initial_sim_display = _resolve_display_point(
             entry,
             display_key="initial_sim_display",
             native_key="initial_sim_native",
+            caked_projection_audit=caked_projection_audit,
         )
         initial_bg_display = _resolve_display_point(
             entry,
             display_key="initial_bg_display",
             native_key="initial_bg_native",
+            caked_projection_audit=caked_projection_audit,
         )
         final_sim_display = _resolve_display_point(
             entry,
             display_key="final_sim_display",
             native_key="final_sim_native",
+            caked_projection_audit=caked_projection_audit,
         )
         final_bg_display = _resolve_display_point(
             entry,
             display_key="final_bg_display",
             native_key="final_bg_native",
+            caked_projection_audit=caked_projection_audit,
         )
 
         label = _format_pair_identity_label(
@@ -452,6 +520,40 @@ def draw_geometry_fit_overlay(
         matched = (
             status == "matched" and final_sim_display is not None and final_bg_display is not None
         )
+        arrow_semantics_status = _arrow_semantics_status(entry)
+        draw_audit_record: dict[str, object] | None = None
+        if draw_audit_records is not None:
+            draw_audit_record = {
+                "overlay_match_index": entry.get("overlay_match_index", idx),
+                "blue_square_point": initial_sim_display,
+                "blue_square_source": str(
+                    entry.get("chosen_initial_sim_display_source", "initial_sim_display")
+                ),
+                "amber_triangle_point": initial_bg_display,
+                "green_circle_point": final_sim_display,
+                "green_circle_source": str(
+                    entry.get(
+                        "final_sim_caked_display_source"
+                        if show_caked_2d
+                        else "final_sim_display_source",
+                        "",
+                    )
+                ),
+                "dashed_arrow_start": None,
+                "dashed_arrow_end": None,
+                "dashed_arrow_length": float("nan"),
+                "match_status": status,
+                "fit_prediction_source": str(entry.get("fit_prediction_source", "")),
+                "fit_prediction_is_dynamic": entry.get("fit_prediction_is_dynamic"),
+                "final_sim_display_source": str(entry.get("final_sim_display_source", "")),
+                "final_sim_native_source": str(entry.get("final_sim_native_source", "")),
+                "arrow_semantics_status": arrow_semantics_status,
+                "green_circle_semantics_status": arrow_semantics_status,
+                "dashed_arrow_suppressed_by_diagnostic_flag": False,
+                "suppressed_stale_arrow": False,
+                "stale_arrow_drawn": False,
+                "caked_projection_audit": dict(caked_projection_audit),
+            }
         if not matched:
             if initial_sim_display is not None and initial_bg_display is not None:
                 _plot_initial_link(
@@ -459,6 +561,8 @@ def draw_geometry_fit_overlay(
                     initial_bg_display,
                     label=label,
                 )
+            if draw_audit_record is not None:
+                draw_audit_records.append(draw_audit_record)
             continue
 
         sim_shift = (
@@ -469,7 +573,33 @@ def draw_geometry_fit_overlay(
             if initial_sim_display is not None
             else 0.0
         )
-        if initial_sim_display is not None and sim_shift > 0.25:
+        draw_fitted_shift_arrow = bool(
+            initial_sim_display is not None
+            and sim_shift > 0.25
+            and arrow_semantics_status == "dynamic_final_prediction"
+        )
+        suppress_stale_arrow = bool(
+            initial_sim_display is not None
+            and sim_shift > 0.25
+            and arrow_semantics_status != "dynamic_final_prediction"
+        )
+        diagnostic_flag_suppressed_arrow = bool(
+            suppress_stale_arrow
+            and _overlay_env_flag_enabled(GEOMETRY_DISABLE_FITTED_ARROW_FOR_STALE_ENDPOINT_ENV)
+        )
+        if suppress_stale_arrow:
+            if diagnostic_flag_suppressed_arrow:
+                LOGGER.info("%s active", GEOMETRY_DISABLE_FITTED_ARROW_FOR_STALE_ENDPOINT_ENV)
+            if draw_audit_record is not None:
+                draw_audit_record["dashed_arrow_suppressed_by_diagnostic_flag"] = (
+                    diagnostic_flag_suppressed_arrow
+                )
+                draw_audit_record["suppressed_stale_arrow"] = True
+        if draw_fitted_shift_arrow:
+            if draw_audit_record is not None and initial_sim_display is not None:
+                draw_audit_record["dashed_arrow_start"] = initial_sim_display
+                draw_audit_record["dashed_arrow_end"] = final_sim_display
+                draw_audit_record["dashed_arrow_length"] = float(sim_shift)
             _plot_arrow(
                 initial_sim_display,
                 final_sim_display,
@@ -478,11 +608,18 @@ def draw_geometry_fit_overlay(
                 lw=1.0,
                 alpha=0.85,
             )
+        elif suppress_stale_arrow and draw_audit_record is not None:
+            draw_audit_record["stale_arrow_drawn"] = False
 
+        final_sim_label_suffix = (
+            "fit sim"
+            if arrow_semantics_status == "dynamic_final_prediction"
+            else "diagnostic sim"
+        )
         fit_sim_artist = _plot_marker(
             final_sim_display[0],
             final_sim_display[1],
-            f"{label} fit sim",
+            f"{label} {final_sim_label_suffix}",
             "#00b894",
             "o",
             zorder=8,
@@ -520,6 +657,8 @@ def draw_geometry_fit_overlay(
                 }
             )
             visual_probe_records.append(visual_probe_record)
+        if draw_audit_record is not None:
+            draw_audit_records.append(draw_audit_record)
 
         residual_dist = math.hypot(
             final_sim_display[0] - final_bg_display[0],

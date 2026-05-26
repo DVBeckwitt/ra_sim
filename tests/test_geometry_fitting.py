@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Mapping
 import importlib.util
+import json
 import math
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ import numpy as np
 import pytest
 
 from ra_sim.fitting import optimization as opt
+from ra_sim.gui import geometry_fit as gui_geometry_fit
 from ra_sim.simulation import engine as sim_engine
 from ra_sim.simulation.types import (
     DetectorGeometry,
@@ -64,6 +66,530 @@ def _fake_process_peaks(*args, **kwargs):
         )
     ]
     return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
+
+
+def test_initial_pair_construction_audit_flags_provider_overwrite_and_bad_native() -> None:
+    audit = gui_geometry_fit._geometry_fit_initial_pair_construction_audit(
+        pair_id="pair-0",
+        branch_index=0,
+        native_shape=(3000, 3000),
+        background_display_rotate_k=-1,
+        sim_display_rotate_k=0,
+        sim_display_before_provider=(1079.897, 1098.761),
+        sim_native_before_provider=(1079.897, 1098.761),
+        sim_native_source_before_provider="refined_sim_native_px",
+        sim_display_after_provider=(1098.0, 1922.0),
+        sim_native_after_provider=(1079.897, 1098.761),
+        sim_native_source_after_provider="refined_sim_native_px",
+        provider_simulated_point=(1098.0, 1922.0),
+        provider_simulated_frame="display",
+        provider_simulated_point_source="manual_picker_saved",
+        provider_overwrites_existing_sim=True,
+        bg_display=(1077.0, 1098.0),
+    )
+
+    assert audit["saved_blue_square_display_converted_through"] == "copied_native_field"
+    assert audit["sim_native_copied_from_display_coordinate_field"] is True
+    assert audit["provider_point_overwrote_sim_display_after_sim_native"] is True
+    assert audit["frame_audit"]["frame_status"] == "ok_sim_native"
+
+
+def test_geometry_fit_progress_text_reports_unchanged_visual_overlay_distance() -> None:
+    text = gui_geometry_fit.build_geometry_fit_progress_text(
+        current_dataset={
+            "pair_count": 2,
+            "group_count": 1,
+            "orientation_choice": {"label": "manual"},
+        },
+        dataset_count=1,
+        joint_background_mode=False,
+        var_names=["gamma", "Gamma"],
+        values=[0.0, 0.0],
+        rms=102.175,
+        pixel_offsets=[],
+        export_record_count=0,
+        save_path="matched.npy",
+        log_path="fit.log",
+        frame_warning=None,
+        frame_diag={
+            "initial_distance_median": 797.07,
+            "final_distance_median": 797.07,
+        },
+    )
+
+    assert "green circles=dynamic fitted peaks or diagnostic final points" in text
+    assert "dashed arrows=dynamic initial->fitted sim shifts" in text
+    assert "Visual overlay median distance: initial=797.07, fitted=797.07 (unchanged)" in text
+    assert "(improved)" not in text
+
+
+def _wrapped_delta_deg(actual: float, expected: float) -> float:
+    return float(((float(actual) - float(expected) + 180.0) % 360.0) - 180.0)
+
+
+def test_trace_caked_projection_mismatch_is_not_one_simple_phi_transform() -> None:
+    pairs = [
+        {
+            "branch": 0,
+            "native_detector_px": (1099.0, 1924.0),
+            "manual_caked_deg": (39.777, 37.250),
+            "geometry_fit_caked_deg": (32.744, 132.750),
+        },
+        {
+            "branch": 1,
+            "native_detector_px": (1082.0, 1132.0),
+            "manual_caked_deg": (41.351, -38.750),
+            "geometry_fit_caked_deg": (38.359, 38.750),
+        },
+    ]
+    phi_transforms = {
+        "identity": lambda phi: phi,
+        "sign_flip": lambda phi: -phi,
+        "plus_90": lambda phi: phi + 90.0,
+        "minus_90": lambda phi: phi - 90.0,
+        "plus_180": lambda phi: phi + 180.0,
+        "minus_180": lambda phi: phi - 180.0,
+    }
+
+    transform_errors = {}
+    for name, transform in phi_transforms.items():
+        errors = []
+        for pair in pairs:
+            manual_two_theta, manual_phi = pair["manual_caked_deg"]
+            fit_two_theta, fit_phi = pair["geometry_fit_caked_deg"]
+            errors.append(
+                {
+                    "branch": pair["branch"],
+                    "delta_two_theta_deg": abs(float(manual_two_theta) - float(fit_two_theta)),
+                    "delta_phi_deg": abs(_wrapped_delta_deg(transform(manual_phi), fit_phi)),
+                }
+            )
+        transform_errors[name] = errors
+
+    assert all(
+        any(
+            error["delta_two_theta_deg"] > 0.5 or error["delta_phi_deg"] > 0.5
+            for error in errors
+        )
+        for errors in transform_errors.values()
+    ), json.dumps(transform_errors, sort_keys=True)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="manual live-caked and geometry-fit caked projections disagree for same native points",
+)
+def test_manual_and_geometry_fit_caked_projection_paths_are_comparable_for_same_native_point():
+    comparisons = [
+        {
+            "branch": 0,
+            "native_detector_px": (1099.0, 1924.0),
+            "manual_projector_path": (
+                "runtime_session._native_detector_coords_to_live_caked_coords:"
+                "detector_pixel_to_caked_bin"
+            ),
+            "geometry_fit_projector_path": (
+                "optimization._project_detector_points_to_fit_space"
+            ),
+            "manual_caked_deg": (39.777, 37.250),
+            "geometry_fit_caked_deg": (32.744, 132.750),
+        },
+        {
+            "branch": 1,
+            "native_detector_px": (1082.0, 1132.0),
+            "manual_projector_path": (
+                "runtime_session._native_detector_coords_to_live_caked_coords:"
+                "detector_pixel_to_caked_bin"
+            ),
+            "geometry_fit_projector_path": (
+                "optimization._project_detector_points_to_fit_space"
+            ),
+            "manual_caked_deg": (41.351, -38.750),
+            "geometry_fit_caked_deg": (38.359, 38.750),
+        },
+    ]
+
+    for comparison in comparisons:
+        assert comparison["manual_caked_deg"] == pytest.approx(
+            comparison["geometry_fit_caked_deg"],
+            abs=0.5,
+        ), json.dumps(comparison, sort_keys=True)
+
+
+def test_same_native_projection_comparison_identifies_geometry_fit_projector_path():
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        return _locked_qr_source_rows_payload([])
+
+    def runtime_live_projector(col, row):
+        if (float(col), float(row)) == pytest.approx((1099.0, 1924.0)):
+            return (39.777, 37.250)
+        return (41.351, -38.750)
+
+    def exact_projector(cols, rows, *, local_params=None, anchor_kind=None, input_frame=None):
+        del anchor_kind
+        params = dict(local_params or {})
+        cols_arr = np.asarray(cols, dtype=np.float64).reshape(-1)
+        rows_arr = np.asarray(rows, dtype=np.float64).reshape(-1)
+        two_theta = np.where(cols_arr > 1090.0, 32.744, 38.359)
+        phi = np.where(cols_arr > 1090.0, 132.750, 38.750)
+        return {
+            "two_theta_deg": two_theta,
+            "phi_deg": phi,
+            "native_cols": cols_arr,
+            "native_rows": rows_arr,
+            "fit_space_source": "dataset_fit_space_projector",
+            "input_frame": str(input_frame or ""),
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "cake_bundle_signature": "exact-bundle-test",
+            "fit_space_local_params_signature": (
+                f"gamma={float(params.get('gamma', 0.0))};"
+                f"Gamma={float(params.get('Gamma', 0.0))}"
+            ),
+            "valid": True,
+            "invalid_reason": None,
+            "native_frame_conversion_source": "identity_native_detector",
+            "native_frame_conversion_count": 0,
+        }
+
+    ctx = _point_only_qr_dataset_ctx(source_rows_builder, exact_projector)
+    ctx.diagnostic_runtime_live_caked_projector = runtime_live_projector
+
+    records = opt._compare_same_native_caked_projection_paths(
+        ctx,
+        native_detector_points_px=((1099.0, 1924.0), (1082.0, 1132.0)),
+        point_roles=("branch_0_sim_native", "branch_1_sim_native"),
+        base_params={"gamma": 0.0, "Gamma": 0.0, "center": [1500.0, 1500.0]},
+        center=[1500.0, 1500.0],
+        detector_distance=0.1,
+        pixel_size=1.0,
+    )
+
+    branch0 = {
+        str(record["projector_path"]): record
+        for record in records
+        if record["point_role"] == "branch_0_sim_native"
+    }
+
+    assert set(branch0) == {
+        "runtime_live_exact_cake",
+        "geometry_fit_project_detector_points_to_fit_space",
+        "dataset_fit_space_projector_direct",
+        "exact_caked_bundle_projector_direct",
+        "analytic_detector_fit_space_fallback",
+    }
+    assert branch0["runtime_live_exact_cake"]["raw_output_caked_deg"] == pytest.approx(
+        (39.777, 37.250)
+    )
+    assert branch0[
+        "geometry_fit_project_detector_points_to_fit_space"
+    ]["raw_output_caked_deg"] == pytest.approx((32.744, 132.750))
+    assert branch0["dataset_fit_space_projector_direct"]["raw_output_caked_deg"] == pytest.approx(
+        (32.744, 132.750)
+    )
+    assert branch0[
+        "geometry_fit_project_detector_points_to_fit_space"
+    ]["fallback_used"] is False
+    assert branch0["analytic_detector_fit_space_fallback"]["fallback_used"] is True
+    assert branch0[
+        "geometry_fit_project_detector_points_to_fit_space"
+    ]["delta_vs_runtime_live_exact"]["available"] is True
+    assert branch0[
+        "geometry_fit_project_detector_points_to_fit_space"
+    ]["delta_vs_runtime_live_exact"]["delta_norm_deg"] > 90.0
+    assert branch0[
+        "geometry_fit_project_detector_points_to_fit_space"
+    ]["delta_vs_geometry_fit"]["delta_norm_deg"] == pytest.approx(0.0)
+
+
+def test_same_native_projection_comparison_explains_analytic_geometry_fit_fallback():
+    subset = opt.ReflectionSimulationSubset(
+        miller=np.array([[2.0, 0.0, 0.0]], dtype=np.float64),
+        intensities=np.array([1.0], dtype=np.float64),
+        measured_entries=[],
+        original_indices=np.array([0], dtype=np.int64),
+        total_reflection_count=1,
+        fixed_source_reflection_count=1,
+        fallback_hkl_count=0,
+        reduced=False,
+    )
+    ctx = opt.GeometryFitDatasetContext(
+        dataset_index=0,
+        label="bg0",
+        theta_initial=0.0,
+        subset=subset,
+        fit_space_projector=None,
+        fit_space_projector_kind=None,
+        fit_space_projector_unavailable_reason="missing_exact_caked_bundle",
+    )
+
+    records = opt._compare_same_native_caked_projection_paths(
+        ctx,
+        native_detector_points_px=((1099.0, 1924.0),),
+        point_roles=("branch_0_sim_native",),
+        base_params={"gamma": 0.0, "Gamma": 0.0, "center": [1500.0, 1500.0]},
+        center=[1500.0, 1500.0],
+        detector_distance=0.1,
+        pixel_size=1.0,
+    )
+    by_path = {str(record["projector_path"]): record for record in records}
+
+    geometry_record = by_path["geometry_fit_project_detector_points_to_fit_space"]
+    assert geometry_record["fit_space_source"] == "analytic_detector_fit_space"
+    assert geometry_record["fallback_used"] is True
+    assert geometry_record["fallback_reason"] == "missing_exact_caked_bundle"
+    assert by_path["runtime_live_exact_cake"]["fallback_reason"] == (
+        "runtime_live_projector_unavailable"
+    )
+    assert by_path["dataset_fit_space_projector_direct"]["fallback_reason"] == (
+        "missing_exact_caked_bundle"
+    )
+
+
+def test_same_native_projection_comparison_uses_precomputed_runtime_live_rows_when_callable_missing():
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        return _locked_qr_source_rows_payload([])
+
+    def exact_projector(cols, rows, *, local_params=None, anchor_kind=None, input_frame=None):
+        del local_params, anchor_kind
+        cols_arr = np.asarray(cols, dtype=np.float64).reshape(-1)
+        rows_arr = np.asarray(rows, dtype=np.float64).reshape(-1)
+        return {
+            "two_theta_deg": np.asarray([32.744], dtype=np.float64),
+            "phi_deg": np.asarray([132.750], dtype=np.float64),
+            "native_cols": cols_arr,
+            "native_rows": rows_arr,
+            "fit_space_source": "dataset_fit_space_projector",
+            "input_frame": str(input_frame or ""),
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "cake_bundle_signature": "exact-bundle-test",
+            "fit_space_local_params_signature": "fit-space-sig",
+            "valid": True,
+            "invalid_reason": None,
+            "native_frame_conversion_source": "identity_native_detector",
+            "native_frame_conversion_count": 0,
+        }
+
+    ctx = _point_only_qr_dataset_ctx(source_rows_builder, exact_projector)
+    ctx.diagnostic_runtime_live_caked_projector = None
+    ctx.diagnostic_runtime_live_caked_projection_rows = [
+        {
+            "point_role": "branch_0_sim_native",
+            "native_detector_px": (1099.0, 1924.0),
+            "raw_output_caked_deg": (32.744, 132.750),
+            "projector_callable_name": (
+                "ra_sim.gui._runtime.runtime_session."
+                "_native_detector_coords_to_live_caked_coords"
+            ),
+            "projector_signature": "runtime-live-sig",
+            "caked_bundle_signature": "runtime-bundle-sig",
+            "caked_generation": 7,
+            "background_index": 0,
+            "theta_initial": 5.0,
+            "phi_convention": "runtime_live_exact_cake_gui_phi",
+        }
+    ]
+
+    records = opt._compare_same_native_caked_projection_paths(
+        ctx,
+        native_detector_points_px=((1099.0, 1924.0),),
+        point_roles=("branch_0_sim_native",),
+        base_params={"gamma": 0.0, "Gamma": 45.0, "center": [1500.0, 1500.0]},
+        center=[1500.0, 1500.0],
+        detector_distance=0.1,
+        pixel_size=1.0,
+    )
+    by_path = {str(record["projector_path"]): record for record in records}
+
+    runtime = by_path["runtime_live_exact_cake"]
+    geometry = by_path["geometry_fit_project_detector_points_to_fit_space"]
+    assert runtime["fallback_used"] is False
+    assert runtime["fallback_reason"] is None
+    assert runtime["raw_output_caked_deg"] == pytest.approx((32.744, 132.750))
+    assert runtime["caked_bundle_signature"] == "runtime-bundle-sig"
+    assert runtime["caked_generation"] == 7
+    assert geometry["delta_vs_runtime_live_exact"]["available"] is True
+    assert geometry["delta_vs_runtime_live_exact"]["delta_norm_deg"] == pytest.approx(0.0)
+
+
+def test_manual_caked_recompute_audit_records_saved_native_mismatch():
+    def runtime_live_projector(col, row):
+        assert (float(col), float(row)) == pytest.approx((1099.0, 1924.0))
+        return (32.744, 132.750)
+
+    rows = gui_geometry_fit._geometry_fit_manual_caked_recompute_audit_rows(
+        [
+            {
+                "pair_id": "bg0:pair0",
+                "source_branch_index": 0,
+                "hkl": (-1, 0, 10),
+                "sim_native": (1099.0, 1924.0),
+                "sim_native_source": "sim_refined_detector_native_px",
+                "sim_refined_caked_deg": (39.777, 37.250),
+                "initial_pair_construction_audit": {
+                    "frame_audit": {"frame_status": "ok_background_native"}
+                },
+            }
+        ],
+        native_to_caked_projector=runtime_live_projector,
+        background_index=0,
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["saved_manual_caked_deg"] == pytest.approx((39.777, 37.250))
+    assert row["native_detector_px"] == pytest.approx((1099.0, 1924.0))
+    assert row["recomputed_live_exact_caked_deg"] == pytest.approx((32.744, 132.750))
+    assert row["delta_deg"]["delta_two_theta_deg"] == pytest.approx(-7.033)
+    assert row["delta_deg"]["delta_phi_deg_wrapped"] == pytest.approx(95.5)
+    assert row["delta_deg"]["delta_norm_deg"] > 95.0
+    assert row["field_source"] == "sim_refined_caked_deg"
+    assert row["frame_status"] == "mismatch_saved_manual_caked_vs_live_exact"
+
+
+def test_geometry_fit_overlay_diagnostic_summarizer_handles_missing_keys(tmp_path) -> None:
+    module_path = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "diagnostics"
+        / "summarize_geometry_fit_overlay_diagnostics.py"
+    )
+    spec = importlib.util.spec_from_file_location("geom_overlay_summary", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    path = tmp_path / "geometry_fit_overlay_diagnostic_baseline.json"
+    path.write_text(
+        json.dumps(
+            {
+                "initial_pairs_audit": [
+                    {
+                        "frame_status": "mismatch_display_labeled_native",
+                        "err_to_background_native_px": 823.0,
+                    }
+                ],
+                "overlay_record_audit": [
+                    {
+                        "initial_sim_native_frame_status": (
+                            "mismatch_display_labeled_native"
+                        ),
+                        "initial_sim_display_raw_vs_rebuilt_delta_px": 823.4,
+                        "chosen_initial_sim_display_source": (
+                            "recomputed_from_initial_sim_native"
+                        ),
+                        "stale_final_sim": True,
+                    }
+                ],
+                "draw_audit": [
+                    {
+                        "arrow_semantics_status": "locked_saved_prediction",
+                        "fit_prediction_source": "locked_manual_qr:saved_display_px",
+                        "fit_prediction_is_dynamic": "no",
+                    }
+                ],
+                "prediction_resolver_audit": [
+                    {"resolver_path": "handoff", "handoff_accepted": True}
+                ],
+                "objective_sensitivity": {
+                    "objective_param_sensitivity_by_var": [
+                        {
+                            "param": "gamma",
+                            "residual_delta_norm": 0.0,
+                            "prediction_delta_px": 0.0,
+                            "prediction_delta_caked_deg": 0.0,
+                            "objective_space": "caked_deg",
+                        },
+                        {
+                            "param": "Gamma",
+                            "residual_delta_norm": 2.0,
+                            "prediction_delta_px": 3.0,
+                            "prediction_delta_caked_deg": 4.0,
+                            "objective_space": "caked_deg",
+                        },
+                    ]
+                },
+                "projector_sensitivity": [
+                    {
+                        "param": "gamma",
+                        "delta_caked_deg": 0.5,
+                    },
+                    {
+                        "param": "Gamma",
+                        "delta_caked_deg": 0.75,
+                    },
+                ],
+                "final_fit_summary": {
+                    "frame_diag": {
+                        "holistic_residual_initial_rmse": 102.175,
+                        "holistic_residual_final_rmse": 102.175,
+                        "holistic_residual_delta": 0.0,
+                    }
+                },
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    row = module.summarize_diagnostic_bundle(path, run_label="baseline")
+
+    assert row["run_label"] == "baseline"
+    assert row["points_count"] == 1
+    assert row["initial_frame_statuses"] == "mismatch_display_labeled_native"
+    assert row["max_err_to_background_native_px"] == 823.0
+    assert row["max_initial_sim_display_raw_vs_rebuilt_delta_px"] == 823.4
+    assert row["resolver_paths"] == "handoff"
+    assert row["handoff_accepted_count"] == 1
+    assert row["gamma_residual_delta_norm_max"] == 0.0
+    assert row["Gamma_residual_delta_norm_max"] == 2.0
+    assert row["projector_gamma_delta_caked_deg_max"] == 0.5
+    assert row["projector_Gamma_delta_caked_deg_max"] == 0.75
+    assert row["initial_rmse"] == 102.175
+    assert row["final_rmse"] == 102.175
+    assert row["blue_square_moved_from_raw_display"] is True
+    assert row["stale_arrow_drawn"] is True
+    assert "run_label" in module.format_markdown_table([row])
+
+    path = tmp_path / "geometry_fit_overlay_diagnostic_suppressed.json"
+    path.write_text(
+        json.dumps(
+            {
+                "draw_audit": [
+                    {
+                        "arrow_semantics_status": "locked_saved_prediction",
+                        "fit_prediction_source": "locked_manual_qr:saved_display_px",
+                        "fit_prediction_is_dynamic": "no",
+                        "suppressed_stale_arrow": True,
+                        "stale_arrow_drawn": False,
+                    }
+                ]
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    row = module.summarize_diagnostic_bundle(path, run_label="suppressed")
+
+    assert row["stale_arrow_drawn"] is False
+
+
+def test_geometry_fit_write_diagnostics_env_flag() -> None:
+    assert gui_geometry_fit._geometry_fit_write_diagnostics_enabled({}) is False
+    assert (
+        gui_geometry_fit._geometry_fit_write_diagnostics_enabled(
+            {gui_geometry_fit.GEOMETRY_WRITE_DIAGNOSTICS_ENV: "1"}
+        )
+        is True
+    )
+    assert (
+        gui_geometry_fit._geometry_fit_write_diagnostics_enabled(
+            {gui_geometry_fit.GEOMETRY_WRITE_DIAGNOSTICS_ENV: "false"}
+        )
+        is False
+    )
 
 
 def _fake_process_peaks_same_hkl_two_hits(*args, **kwargs):
@@ -6071,9 +6597,85 @@ def test_locked_qr_dynamic_prediction_prefers_handoff_native_even_when_hit_table
         "handoff_fit_prediction_detector_native_px"
     )
     assert prediction["source_rows_rebuilt_or_reused"] == "skipped_handoff_native_anchor"
+    assert prediction["resolver_path"] == "handoff"
+    assert prediction["handoff_attempted"] is True
+    assert prediction["handoff_accepted"] is True
+    assert prediction["hit_table_attempted"] is False
+    assert prediction["trial_source_rows_attempted"] is False
+    assert prediction["point_only_projection"] is True
     assert prediction["fit_prediction_detector_native_px"] == pytest.approx(list(handoff_native))
     assert prediction["fit_prediction_caked_deg"] == pytest.approx(list(handoff_caked))
     assert prediction["used_sim_nominal_caked_for_objective"] is False
+
+
+def test_qr_disable_early_handoff_allows_trial_source_rows_first(monkeypatch):
+    monkeypatch.setenv("RA_SIM_QR_DISABLE_EARLY_HANDOFF", "1")
+    handoff_native = (1381.0, 1890.0)
+    source_native = (1200.0, 1201.0)
+    source_caked = (28.381, 57.881)
+    source_builder_calls = 0
+    projector_inputs: list[tuple[float, float]] = []
+
+    def source_rows_builder(*, local_params=None):
+        nonlocal source_builder_calls
+        del local_params
+        source_builder_calls += 1
+        row = _point_only_dynamic_qr_row(*source_caked)
+        row.update(
+            {
+                "native_col": source_native[0],
+                "native_row": source_native[1],
+                "fit_prediction_detector_native_px": list(source_native),
+                "sim_refined_detector_native_px": list(source_native),
+                "sim_refined_caked_deg": list(source_caked),
+            }
+        )
+        return _locked_qr_source_rows_payload([row])
+
+    def projector(cols, rows, *, local_params=None, **_kwargs):
+        del local_params
+        col = float(np.asarray(cols, dtype=float).reshape(-1)[0])
+        row = float(np.asarray(rows, dtype=float).reshape(-1)[0])
+        projector_inputs.append((col, row))
+        assert (col, row) == pytest.approx(source_native)
+        return _point_only_projector_payload(
+            source_caked[0],
+            source_caked[1],
+            native_col=source_native[0],
+            native_row=source_native[1],
+        )
+
+    locked = _locked_qr_fixed_source_entry(
+        fit_prediction_detector_native_px=list(handoff_native),
+        fit_prediction_caked_authority="exact_projector_from_native",
+    )
+
+    prediction = opt._resolve_qr_fit_prediction_from_trial_params(
+        locked,
+        {"Gamma": 1.0},
+        {
+            "dataset_ctx": _point_only_qr_dataset_ctx(source_rows_builder, projector),
+            "hit_tables": (),
+            "sim_buffer": opt._fit_hit_table_only_sim_buffer(),
+            "image_size": 4000,
+            "fit_center": [2000.0, 2000.0],
+            "detector_distance": 0.1,
+            "pixel_size": 1.0,
+            "prediction_source_rows_cache": {},
+            "_qr_fit_point_only_projection": True,
+        },
+        locked,
+    )
+
+    assert source_builder_calls == 1
+    assert projector_inputs == [pytest.approx(source_native)]
+    assert prediction["resolver_path"] != "handoff"
+    assert prediction["handoff_attempted"] is False
+    assert prediction["early_handoff_skipped_by_env"] is True
+    assert prediction["trial_source_rows_attempted"] is True
+    assert prediction["trial_source_rows_available"] is True
+    assert prediction["trial_source_rows_count"] == 1
+    assert prediction["fit_prediction_detector_native_px"] == pytest.approx(list(source_native))
 
 
 def test_locked_qr_dynamic_prediction_does_not_fall_back_to_nominal_when_handoff_projection_fails():
@@ -9366,6 +9968,24 @@ def test_dynamic_objective_param_sensitivity_detects_sensitive_projector(
     assert summary["objective_param_sensitivity_by_var"][0]["prediction_changed"] is True
 
 
+def test_dynamic_objective_sensitivity_logs_trace_probe_fields(monkeypatch) -> None:
+    result = _dynamic_point_only_sensitivity_result(monkeypatch, sensitive=True)
+    record = result.point_match_summary["objective_param_sensitivity_by_var"][0]
+    probe = record["probes"][0]
+
+    assert probe["param"] == "gamma"
+    assert probe["base_residual_norm"] >= 0.0
+    assert probe["perturbed_residual_norm"] >= 0.0
+    assert probe["residual_delta_norm"] == pytest.approx(probe["residual_vector_delta_deg"])
+    assert probe["prediction_delta_caked_deg"] == pytest.approx(
+        probe["prediction_caked_delta_from_base_deg"]
+    )
+    assert "prediction_delta_px" in probe
+    assert probe["objective_space"] == "caked_deg"
+    assert probe["objective_units"] == "deg"
+    assert probe["resolver_path"] == "trial_source_rows"
+
+
 def test_dynamic_objective_sensitivity_ignores_sub_0p1_degree_false_negative(
     monkeypatch,
 ) -> None:
@@ -9470,6 +10090,64 @@ def test_gamma_Gamma_trial_params_reach_exact_caked_projector() -> None:
     assert projector_records
     assert projector_records[-1]["Gamma"] == pytest.approx(1.0)
     assert prediction["fit_prediction_caked_deg"] == pytest.approx([41.0, 0.0])
+
+
+def test_projector_sensitivity_probe_perturbs_trace_native_points() -> None:
+    projector_records: list[dict[str, object]] = []
+
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        return _locked_qr_source_rows_payload([])
+
+    def projector(cols, rows, *, local_params=None, **_kwargs):
+        params = dict(local_params) if isinstance(local_params, Mapping) else {}
+        projector_records.append(params)
+        gamma = float(params.get("gamma", 0.0) or 0.0)
+        capital_gamma = float(params.get("Gamma", 0.0) or 0.0)
+        cols_arr = np.asarray(cols, dtype=np.float64).reshape(-1)
+        rows_arr = np.asarray(rows, dtype=np.float64).reshape(-1)
+        return {
+            "two_theta_deg": np.full(cols_arr.shape, 40.0 + gamma + 2.0 * capital_gamma),
+            "phi_deg": np.full(rows_arr.shape, 10.0 - gamma + capital_gamma),
+            "native_cols": cols_arr,
+            "native_rows": rows_arr,
+            "fit_space_source": "dataset_fit_space_projector",
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "fit_space_local_params_signature": f"gamma={gamma};Gamma={capital_gamma}",
+            "cake_bundle_signature": "unit-test-bundle",
+            "input_frame": "native_detector",
+            "invalid_reason": None,
+            "native_frame_conversion_source": "",
+            "native_frame_conversion_count": 0,
+            "valid": True,
+        }
+
+    records = opt._probe_detector_projector_sensitivity(
+        _point_only_qr_dataset_ctx(source_rows_builder, projector),
+        native_detector_points_px=[(1098.0, 1922.0), (1077.0, 1142.0)],
+        base_params={"gamma": 0.0, "Gamma": 0.0},
+        param_names=("gamma", "Gamma"),
+        steps_deg=(0.1, 1.0),
+        center=[1500.0, 1500.0],
+        detector_distance=0.1,
+        pixel_size=1.0,
+    )
+
+    gamma_record = next(
+        record
+        for record in records
+        if record["param"] == "Gamma"
+        and record["step_deg"] == pytest.approx(1.0)
+        and record["direction"] == "plus"
+        and record["native_detector_px"] == pytest.approx((1098.0, 1922.0))
+    )
+    assert projector_records
+    assert gamma_record["base_caked_deg"] == pytest.approx((40.0, 10.0))
+    assert gamma_record["perturbed_caked_deg"] == pytest.approx((42.0, 11.0))
+    assert gamma_record["delta_caked_deg"] == pytest.approx((2.0, 1.0))
+    assert gamma_record["cake_bundle_signature"] == "unit-test-bundle"
+    assert gamma_record["fit_space_local_params_signature"] == "gamma=0.0;Gamma=1.0"
+    assert gamma_record["exact_bundle_param_payload"]["Gamma"] == pytest.approx(1.0)
 
 
 def test_qr_prediction_cache_key_includes_gamma_Gamma_signature() -> None:

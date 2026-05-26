@@ -32,6 +32,9 @@ _SIMULATION_GUI_STARTUP_ZERO_GEOMETRY_DEFAULT_NAMES = (
     "zs",
     "zb",
 )
+GEOMETRY_FIT_DISABLE_AUTO_CAKED_ROUTE_FOR_GAMMA_GAMMA_ENV = (
+    "RA_SIM_DISABLE_AUTO_CAKED_ROUTE_FOR_GAMMA_GAMMA"
+)
 
 
 gui_bootstrap.early_main_bootstrap(__name__)
@@ -42554,6 +42557,20 @@ def _build_geometry_fit_async_job(
             requested_projection_view_mode=initial_projection_view_mode,
         )
     )
+    disable_auto_caked_gamma_gamma = bool(
+        str(os.environ.get(GEOMETRY_FIT_DISABLE_AUTO_CAKED_ROUTE_FOR_GAMMA_GAMMA_ENV, ""))
+        .strip()
+        .lower()
+        in {"1", "true", "yes", "on"}
+        and set(var_names) == {"gamma", "Gamma"}
+    )
+    if disable_auto_caked_gamma_gamma:
+        manual_caked_fit_space_required_by_background = {
+            int(idx): False for idx in manual_caked_fit_space_required_by_background
+        }
+        execution_bindings.cmd_line(
+            f"{GEOMETRY_FIT_DISABLE_AUTO_CAKED_ROUTE_FOR_GAMMA_GAMMA_ENV}=1 active"
+        )
     manual_fit_requires_caked_space = any(
         bool(value) for value in manual_caked_fit_space_required_by_background.values()
     )
@@ -43161,6 +43178,7 @@ def _build_geometry_fit_async_job(
         "manual_caked_fit_space_required_by_background": dict(
             manual_caked_fit_space_required_by_background
         ),
+        "disable_auto_caked_route_for_gamma_gamma": bool(disable_auto_caked_gamma_gamma),
         "skipped_manual_pair_backgrounds": dict(skipped_manual_pair_backgrounds),
         "pick_uses_caked_space": bool(pick_uses_caked_space),
         "geometry_manual_simulated_lookup": (
@@ -47088,6 +47106,9 @@ def _initialize_runtime_controls_block_50() -> None:
             "geometry_manual_caked_view_for_index": (_geometry_fit_caked_view_for_index),
             "geometry_manual_caked_projection_for_index": (
                 _geometry_fit_caked_projection_for_index
+            ),
+            "simulation_native_detector_coords_to_caked_display_coords": (
+                _native_detector_coords_to_live_caked_coords
             ),
             "unrotate_display_peaks": _unrotate_display_peaks,
             "display_to_native_sim_coords": _display_to_native_sim_coords,
