@@ -442,10 +442,10 @@ def _install_streaming_fast_outer_backend(
         all_q = np.asarray(args[0], dtype=np.float64)
         peak_idx = int(args[1])
         sample_idx = int(args[2])
-        save_flag = int(args[25])
-        q_data = args[26]
-        q_count = args[27]
-        q_debug_truncated_count = args[28]
+        save_flag = int(args[23])
+        q_data = args[24]
+        q_count = args[25]
+        q_debug_truncated_count = args[26]
         candidate_mass = args[-6]
         candidate_row = args[-5]
         candidate_col = args[-4]
@@ -910,7 +910,6 @@ def test_weighted_event_pass2_does_not_tail_fill_inside_qset(monkeypatch):
     monkeypatch.setattr(diffraction, "_project_weighted_candidate_fast", fake_project_fast)
 
     sample_terms = np.zeros((1, diffraction._SAMPLE_COLS), dtype=np.float64)
-    sample_n2_array = np.ones(1, dtype=np.complex128)
     sample_eps2_array = np.ones(1, dtype=np.complex128)
     flat_event_rows = np.full(
         (3, diffraction.HIT_ROW_WITH_PROVENANCE_WIDTH),
@@ -939,10 +938,8 @@ def test_weighted_event_pass2_does_not_tail_fill_inside_qset(monkeypatch):
         np.array([1.0, 0.0, 0.0], dtype=np.float64),
         np.array([0.0, 0.0, 1.0], dtype=np.float64),
         sample_terms,
-        sample_n2_array,
         sample_eps2_array,
         0.0,
-        diffraction.OPTICS_MODE_EXACT,
         1.0,
         64,
         diffraction.EXIT_PROJECTION_INTERNAL,

@@ -3984,15 +3984,11 @@ def _project_weighted_candidate_fast(
     k_y_scat,
     re_k_z,
     im_k_z,
-    k_scat,
     k0,
     Ti2,
     L_in,
-    n2_real,
-    n2_samp,
     eps2,
     thickness_angstrom,
-    optics_mode,
     pixel_scale,
     image_size,
     exit_projection_mode,
@@ -4135,10 +4131,8 @@ def _weighted_event_pass1_for_qset(
     e1_det,
     e2_det,
     sample_terms,
-    sample_n2_array,
     sample_eps2_array,
     thickness,
-    optics_mode,
     pixel_scale,
     image_size,
     exit_projection_mode,
@@ -4158,12 +4152,9 @@ def _weighted_event_pass1_for_qset(
     k_y_scat = sample_terms[sample_idx, _SAMPLE_COL_KY_SCAT]
     re_k_z = sample_terms[sample_idx, _SAMPLE_COL_RE_KZ]
     im_k_z = sample_terms[sample_idx, _SAMPLE_COL_IM_KZ]
-    k_scat = sample_terms[sample_idx, _SAMPLE_COL_K_SCAT]
     k0 = sample_terms[sample_idx, _SAMPLE_COL_K0]
     Ti2 = sample_terms[sample_idx, _SAMPLE_COL_TI2]
     L_in = sample_terms[sample_idx, _SAMPLE_COL_L_IN]
-    n2_real = sample_terms[sample_idx, _SAMPLE_COL_N2_REAL]
-    n2_samp = sample_n2_array[sample_idx]
     eps2 = sample_eps2_array[sample_idx]
     thickness_angstrom = _thickness_to_angstrom(thickness)
 
@@ -4196,15 +4187,11 @@ def _weighted_event_pass1_for_qset(
             k_y_scat,
             re_k_z,
             im_k_z,
-            k_scat,
             k0,
             Ti2,
             L_in,
-            n2_real,
-            n2_samp,
             eps2,
             thickness_angstrom,
-            optics_mode,
             pixel_scale,
             image_size,
             exit_projection_mode,
@@ -4249,10 +4236,8 @@ def _weighted_event_project_store_for_qset(
     e1_det,
     e2_det,
     sample_terms,
-    sample_n2_array,
     sample_eps2_array,
     thickness,
-    optics_mode,
     pixel_scale,
     image_size,
     exit_projection_mode,
@@ -4278,12 +4263,9 @@ def _weighted_event_project_store_for_qset(
     k_y_scat = sample_terms[sample_idx, _SAMPLE_COL_KY_SCAT]
     re_k_z = sample_terms[sample_idx, _SAMPLE_COL_RE_KZ]
     im_k_z = sample_terms[sample_idx, _SAMPLE_COL_IM_KZ]
-    k_scat = sample_terms[sample_idx, _SAMPLE_COL_K_SCAT]
     k0 = sample_terms[sample_idx, _SAMPLE_COL_K0]
     Ti2 = sample_terms[sample_idx, _SAMPLE_COL_TI2]
     L_in = sample_terms[sample_idx, _SAMPLE_COL_L_IN]
-    n2_real = sample_terms[sample_idx, _SAMPLE_COL_N2_REAL]
-    n2_samp = sample_n2_array[sample_idx]
     eps2 = sample_eps2_array[sample_idx]
     thickness_angstrom = _thickness_to_angstrom(thickness)
 
@@ -4316,15 +4298,11 @@ def _weighted_event_project_store_for_qset(
             k_y_scat,
             re_k_z,
             im_k_z,
-            k_scat,
             k0,
             Ti2,
             L_in,
-            n2_real,
-            n2_samp,
             eps2,
             thickness_angstrom,
-            optics_mode,
             pixel_scale,
             image_size,
             exit_projection_mode,
@@ -4378,10 +4356,8 @@ def _weighted_event_pass2_for_qset(
     e1_det,
     e2_det,
     sample_terms,
-    sample_n2_array,
     sample_eps2_array,
     thickness,
-    optics_mode,
     pixel_scale,
     image_size,
     exit_projection_mode,
@@ -4420,12 +4396,9 @@ def _weighted_event_pass2_for_qset(
     k_y_scat = sample_terms[sample_idx, _SAMPLE_COL_KY_SCAT]
     re_k_z = sample_terms[sample_idx, _SAMPLE_COL_RE_KZ]
     im_k_z = sample_terms[sample_idx, _SAMPLE_COL_IM_KZ]
-    k_scat = sample_terms[sample_idx, _SAMPLE_COL_K_SCAT]
     k0 = sample_terms[sample_idx, _SAMPLE_COL_K0]
     Ti2 = sample_terms[sample_idx, _SAMPLE_COL_TI2]
     L_in = sample_terms[sample_idx, _SAMPLE_COL_L_IN]
-    n2_real = sample_terms[sample_idx, _SAMPLE_COL_N2_REAL]
-    n2_samp = sample_n2_array[sample_idx]
     eps2 = sample_eps2_array[sample_idx]
     thickness_angstrom = _thickness_to_angstrom(thickness)
 
@@ -4458,15 +4431,11 @@ def _weighted_event_pass2_for_qset(
             k_y_scat,
             re_k_z,
             im_k_z,
-            k_scat,
             k0,
             Ti2,
             L_in,
-            n2_real,
-            n2_samp,
             eps2,
             thickness_angstrom,
-            optics_mode,
             pixel_scale,
             image_size,
             exit_projection_mode,
@@ -4764,10 +4733,8 @@ def _weighted_event_sample_chunk_kernel(
     e1_det,
     e2_det,
     sample_terms,
-    sample_n2_array,
     sample_eps2_array,
     thickness,
-    optics_mode,
     pixel_scale,
     exit_projection_mode,
     q_data,
@@ -4887,10 +4854,8 @@ def _weighted_event_sample_chunk_kernel(
                         e1_det,
                         e2_det,
                         sample_terms,
-                        sample_n2_array,
                         sample_eps2_array,
                         thickness,
-                        optics_mode,
                         pixel_scale,
                         int(image_size),
                         exit_projection_mode,
@@ -4926,10 +4891,8 @@ def _weighted_event_sample_chunk_kernel(
                     e1_det,
                     e2_det,
                     sample_terms,
-                    sample_n2_array,
                     sample_eps2_array,
                     thickness,
-                    optics_mode,
                     pixel_scale,
                     int(image_size),
                     exit_projection_mode,
@@ -5064,10 +5027,8 @@ def _weighted_event_sample_chunk_kernel(
                     e1_det,
                     e2_det,
                     sample_terms,
-                    sample_n2_array,
                     sample_eps2_array,
                     thickness,
-                    optics_mode,
                     pixel_scale,
                     int(image_size),
                     exit_projection_mode,
@@ -5872,7 +5833,6 @@ def _calculate_phi_from_precomputed(
     e1_det,
     e2_det,
     sample_terms,
-    n2_samp_array,
     eps2_array,
     best_idx,
     save_flag,
@@ -6145,7 +6105,6 @@ def _calculate_phi_from_precomputed(
             Ti2 = sample_terms[chain_idx, _SAMPLE_COL_TI2]
             L_in = sample_terms[chain_idx, _SAMPLE_COL_L_IN]
             n2_real = sample_terms[chain_idx, _SAMPLE_COL_N2_REAL]
-            n2_samp = n2_samp_array[chain_idx]
             eps2 = eps2_array[chain_idx]
 
             if record_status:
@@ -6614,7 +6573,7 @@ def _calculate_phi_compiled(
     missed_kf : ndarray
         Outgoing wavevectors that failed to intersect the detector plane.
     """
-    R_sample, sample_terms, n2_samp_array, eps2_array, best_idx = _precompute_sample_terms(
+    R_sample, sample_terms, _n2_samp_array, eps2_array, best_idx = _precompute_sample_terms(
         wavelength_array,
         n2,
         n2_array,
@@ -6665,7 +6624,6 @@ def _calculate_phi_compiled(
         e1_det,
         e2_det,
         sample_terms,
-        n2_samp_array,
         eps2_array,
         best_idx,
         save_flag,
@@ -7686,10 +7644,8 @@ def _process_peaks_parallel_weighted_events_fast_serial(
                 e1_det,
                 e2_det,
                 sample_terms,
-                sample_n2_array,
                 sample_eps2_array,
                 float(thickness),
-                int(optics_mode),
                 float(pixel_scale),
                 int(exit_projection_mode),
                 q_data_chunk,
@@ -8009,10 +7965,8 @@ def _process_peaks_parallel_weighted_events_fast_serial(
                         e1_det,
                         e2_det,
                         sample_terms,
-                        sample_n2_array,
                         sample_eps2_array,
                         thickness,
-                        optics_mode,
                         pixel_scale,
                         int(image_size),
                         exit_projection_mode,
@@ -8048,10 +8002,8 @@ def _process_peaks_parallel_weighted_events_fast_serial(
                     e1_det,
                     e2_det,
                     sample_terms,
-                    sample_n2_array,
                     sample_eps2_array,
                     thickness,
-                    optics_mode,
                     pixel_scale,
                     int(image_size),
                     exit_projection_mode,
@@ -8188,10 +8140,8 @@ def _process_peaks_parallel_weighted_events_fast_serial(
                     e1_det,
                     e2_det,
                     sample_terms,
-                    sample_n2_array,
                     sample_eps2_array,
                     thickness,
-                    optics_mode,
                     pixel_scale,
                     int(image_size),
                     exit_projection_mode,

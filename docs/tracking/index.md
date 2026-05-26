@@ -49,10 +49,12 @@ points now resolve optics through the exact-only guard before runner dispatch.
 Explicit fast/Fresnel-CTR values fail loudly; stale GUI/headless saved states
 that contain `fast` are migrated to exact before simulation. The old fast
 optics LUT runtime calls are removed, while the weighted-event Numba performance
-backend remains enabled. No dependency, CI workflow, artifact schema, or
-operator debug backend migration is required. Shipping status: focused optics,
-GUI, fitting, simulation, and diagnostic figure tests passed locally; rollback
-is a normal git revert.
+backend remains enabled. The follow-up hot-path cleanup also removed dead
+internal weighted-event forwarding of exact-only optics mode and unused sample
+index data. No dependency, CI workflow, artifact schema, or operator debug
+backend migration is required. Shipping status: focused optics, GUI, fitting,
+simulation, and diagnostic figure tests passed locally; rollback is a normal
+git revert.
 
 Q-space viewer fix status note:
 Implemented runtime geometry ownership for Q-space display without backend
