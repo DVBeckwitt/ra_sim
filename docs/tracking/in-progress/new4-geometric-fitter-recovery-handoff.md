@@ -5,10 +5,37 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-05-21
+Last updated: 2026-05-26
 
 ## Current status
 
+- 2026-05-26 locked Qr/Qz QR-contract rejection classification follow-up
+  completed. The latest live dialog showed a caked angular objective with
+  finite but very large degree residuals, a failed QR fit surface contract,
+  `objective_source_authority=point_only_detector_projection`,
+  `optimizer_source_source=handoff_native_anchor_projection`, and the fallback
+  `manual_outliers_or_physical_bad_fit` recommendation. The classifier now
+  treats failed QR contracts, detector-projection objective use, source
+  authority mismatches, and visual/objective surface mismatches as
+  `locked_qr_dynamic_authority_mismatch` before the manual-outlier fallback.
+  The GUI rejection text now names the locked Qr/Qz dynamic caked-route source
+  as an internal projection-frame error and no longer surfaces the raw
+  `repair_locked_qr_dynamic_authority` token to operators. Bug/error status:
+  fixed in source and regression coverage for the screenshot-like rejection
+  family; the exact cached screenshot log was not present, but the closest
+  cached New4 trace with the same QR contract/source-authority signature is now
+  rejected as an internal route error. Feature/API status: no GUI control, CLI
+  flag, config key, saved-state field, artifact schema, dependency, CI
+  workflow, version bump, ADR, deprecation, or migration. Validation status:
+  focused classifier and GUI rejection tests passed, full
+  `tests/test_geometry_fitting.py` passed, `tests/test_cli_geometry_fit.py`
+  passed, `python -m ra_sim.dev check` passed, and headless New4
+  `fit-geometry --active-vars gamma,Gamma` still accepted with caked-degree
+  metrics. Shipping status: commit-ready as a bug-fix slice with rollback by
+  git revert. Remaining operator proof before closing the investigation:
+  rerun the actual Tk GUI workflow and confirm the live dialog reports the
+  internal locked-Qr route error or a successful caked-degree fit, not a manual
+  outlier recommendation.
 - 2026-05-21 live manual Tk caked route fix completed in source and automated
   gates. The exact `f761e78f` two-pair live failure shape is now encoded in the
   existing handoff checker tests: finite `fit_observed_caked_deg` and

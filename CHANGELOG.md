@@ -103,6 +103,10 @@
     `caked_simulation_image` refinement rows are not treated as same-authority
     detector branch proof unless explicit same-frame detector authority is
     present, and surfaced that authority in the Qr/Qz handoff audit.
+  - Fixed locked Qr/Qz caked angular rejection classification so failed QR
+    surface contracts, detector-projection objective use, source-authority
+    mismatches, and visual/objective surface mismatches are reported as
+    internal locked-Qr route errors instead of manual-outlier recommendations.
   - Fixed detector-origin locked Qr/Qz preflight so explicit fixed-source rows
     cannot continue to dataset build when selected-row exact caked projections
     are missing, while caked-origin baselines and full caked image storage

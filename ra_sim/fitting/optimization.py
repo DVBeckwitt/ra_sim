@@ -1036,6 +1036,17 @@ def _classify_dynamic_angular_failure(summary: Mapping[str, object]) -> Dict[str
         if isinstance(row, Mapping)
     ]
     if any(
+        str(row.get("qr_fit_contract_status", "") or "") == "fail"
+        or bool(row.get("detector_projection_used_for_objective", False))
+        or row.get("source_authority_match") is False
+        or row.get("visual_objective_surface_match") is False
+        for row in worst_rows
+    ):
+        return {
+            "dynamic_angular_failure_classification": "locked_qr_dynamic_authority_mismatch",
+            "recommended_next_fix": "repair_locked_qr_dynamic_authority",
+        }
+    if any(
         bool(row.get("used_sim_nominal_caked_for_objective", False))
         or str(row.get("fit_prediction_caked_authority", "") or "")
         in {"sim_nominal_caked", "saved_handoff_caked", "unknown"}

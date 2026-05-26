@@ -25102,16 +25102,18 @@ def build_geometry_fit_rejection_reason_lines(
             failure_class = str(
                 point_match_summary.get("dynamic_angular_failure_classification", "") or ""
             ).strip()
-            if failure_class == "locked_qr_dynamic_authority_mismatch":
+            locked_qr_authority_mismatch = failure_class == "locked_qr_dynamic_authority_mismatch"
+            if locked_qr_authority_mismatch:
                 reasons.append(
                     "Geometry fit rejected because the locked Qr/Qz dynamic-angle path "
                     "changed caked coordinate authority after preflight. This is an "
                     "internal projection-frame error, not a bad manual pick."
                 )
+                reasons.append("Repair the locked Qr/Qz dynamic caked-route source.")
             if failure_class:
                 reasons.append(f"Failure class: {failure_class}")
             recommended_fix = str(point_match_summary.get("recommended_next_fix", "") or "").strip()
-            if recommended_fix:
+            if recommended_fix and not locked_qr_authority_mismatch:
                 reasons.append(f"Recommended next fix: {recommended_fix}")
 
     identifiability_summary = getattr(result, "identifiability_summary", None)

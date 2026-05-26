@@ -10095,6 +10095,42 @@ def test_manual_caked_route_invariant_rejection_text_names_caked_route_block() -
     assert "No matched peak pairs were available for the fitted solution." not in rejection_reasons
 
 
+def test_locked_qr_dynamic_authority_rejection_text_names_internal_route_error() -> None:
+    from ra_sim.gui import geometry_fit as gui_geometry_fit
+
+    result = SimpleNamespace(
+        success=False,
+        final_metric_name="dynamic_angular_point_match",
+        final_metric_space="caked_deg",
+        final_metric_units="deg",
+        rms_deg=89.769996,
+        max_deg=102.31,
+        point_match_summary={
+            "metric_name": "dynamic_angular_point_match",
+            "metric_unit": "deg",
+            "matched_pair_count": 2,
+            "manual_caked_fit_pair_count": 2,
+            "manual_caked_residual_row_count": 2,
+            "raw_angular_row_count": 2,
+            "raw_angular_rms_deg": 89.769996,
+            "raw_angular_max_deg": 102.31,
+            "dynamic_angular_failure_classification": "locked_qr_dynamic_authority_mismatch",
+            "recommended_next_fix": "repair_locked_qr_dynamic_authority",
+        },
+    )
+
+    rejection_reasons = gui_geometry_fit.build_geometry_fit_rejection_reason_lines(
+        result,
+        rms=89.769996,
+    )
+
+    rejection_text = "\n".join(rejection_reasons)
+    assert "internal projection-frame error, not a bad manual pick" in rejection_text
+    assert "remove_or_repick_manual_outliers" not in rejection_text
+    assert "repair_locked_qr_dynamic_authority" not in rejection_text
+    assert "Repair the locked Qr/Qz dynamic caked-route source." in rejection_reasons
+
+
 def test_locked_qr_route_invariant_rejection_text_names_internal_route_error() -> None:
     from ra_sim.gui import geometry_fit as gui_geometry_fit
 
@@ -11070,6 +11106,49 @@ def test_dynamic_angular_classifies_locked_qr_authority_mismatch_as_internal() -
             ],
             "raw_angular_rms_deg": 81.0,
             "raw_angular_max_deg": 81.0,
+        }
+    )
+
+    assert classification["dynamic_angular_failure_classification"] == (
+        "locked_qr_dynamic_authority_mismatch"
+    )
+    assert classification["recommended_next_fix"] == "repair_locked_qr_dynamic_authority"
+
+
+def test_dynamic_angular_classifies_qr_surface_contract_failure_as_internal() -> None:
+    classification = opt._classify_dynamic_angular_failure(
+        {
+            "raw_angular_summary_matches_array_audit": True,
+            "objective_param_sensitivity_status": "sensitive",
+            "worst_angular_residual_rows": [
+                {
+                    "pair_id": "bg0:pair0",
+                    "source_branch_index": 0,
+                    "observed_caked_deg": [40.14, 35.57],
+                    "predicted_caked_deg": [37.15, -123.76],
+                    "objective_space": "caked_deg",
+                    "objective_source_authority": "point_only_detector_projection",
+                    "optimizer_source_source": "handoff_native_anchor_projection",
+                    "qr_fit_contract_status": "fail",
+                    "qr_fit_contract_failure_reasons": [
+                        "source_authority_mismatch",
+                        "visual_objective_surface_mismatch",
+                    ],
+                    "source_authority_match": False,
+                    "visual_objective_surface_match": False,
+                    "detector_projection_used_for_objective": True,
+                    "angular_residual_norm_deg": 159.36,
+                }
+            ],
+            "angular_residual_by_dataset": [
+                {
+                    "dataset_index": 0,
+                    "raw_angular_row_count": 1,
+                    "raw_angular_rms_deg": 159.36,
+                }
+            ],
+            "raw_angular_rms_deg": 159.36,
+            "raw_angular_max_deg": 159.36,
         }
     )
 
