@@ -11242,6 +11242,86 @@ def geometry_manual_nearest_candidate_to_point(
     return best_entry, float(np.sqrt(best_d2))
 
 
+def _geometry_manual_candidate_for_refined_background_point(
+    col: float,
+    row: float,
+    candidate_entries: Sequence[dict[str, object]] | None,
+    *,
+    group_key: object = None,
+    use_caked_display: bool = False,
+    nearest_candidate_to_point_fn: Callable[
+        [float, float, Sequence[dict[str, object]] | None],
+        tuple[dict[str, object] | None, float],
+    ] = geometry_manual_nearest_candidate_to_point,
+    profile_cache: Mapping[str, object] | None = None,
+) -> tuple[dict[str, object] | None, float]:
+    """Resolve branch identity from the refined background point, not session order."""
+
+    if nearest_candidate_to_point_fn is geometry_manual_nearest_candidate_to_point:
+        seed_candidate, seed_dist = nearest_candidate_to_point_fn(
+            float(col),
+            float(row),
+            candidate_entries,
+            use_caked_display=bool(use_caked_display),
+        )
+    else:
+        seed_candidate, seed_dist = nearest_candidate_to_point_fn(
+            float(col),
+            float(row),
+            candidate_entries,
+        )
+    if not isinstance(seed_candidate, dict):
+        return None, float("nan")
+    normalized_key = _geometry_manual_real_q_group_key(group_key)
+    selected_branch_slot = _geometry_manual_q_group_physical_branch_slot(
+        seed_candidate,
+        group_key=normalized_key,
+        profile_cache=profile_cache,
+    )
+    if (
+        isinstance(selected_branch_slot, tuple)
+        and len(selected_branch_slot) >= 2
+        and str(selected_branch_slot[0]) == "branch_id"
+        and str(selected_branch_slot[1]).startswith("unknown:")
+    ):
+        selected_branch_slot = None
+    if selected_branch_slot is None:
+        return dict(seed_candidate), float(seed_dist)
+    selected_candidate = _geometry_manual_select_q_group_representative(
+        candidate_entries,
+        group_key=group_key,
+        seed_candidate=seed_candidate,
+        branch_slot=selected_branch_slot,
+        profile_cache=profile_cache,
+    )
+    if isinstance(selected_candidate, dict):
+        return dict(selected_candidate), float(seed_dist)
+    return dict(seed_candidate), float(seed_dist)
+
+
+def _geometry_manual_background_click_refinement_seed(
+    col: float,
+    row: float,
+    *,
+    use_caked_space: bool,
+) -> dict[str, object]:
+    """Return a branch-neutral seed for local background peak refinement."""
+
+    seed = {
+        "manual_background_click_seed": True,
+        "manual_background_click_frame": "caked" if bool(use_caked_space) else "detector",
+        "sim_col": float(col),
+        "sim_row": float(row),
+        "sim_col_global": float(col),
+        "sim_row_global": float(row),
+    }
+    if bool(use_caked_space):
+        seed["caked_x"] = float(col)
+        seed["caked_y"] = float(row)
+        seed["sim_caked"] = (float(col), float(row))
+    return seed
+
+
 def _geometry_manual_saved_background_point(
     entry: Mapping[str, object] | None,
     *,
@@ -13178,46 +13258,28 @@ def geometry_manual_pick_preview_state(
         source_candidates if remaining_candidates else remaining_candidates
     )
 
-    tagged_candidate = geometry_manual_tagged_candidate_from_session(
-        pick_session,
-        active_remaining_candidates,
+    refinement_seed = _geometry_manual_background_click_refinement_seed(
+        float(raw_col),
+        float(raw_row),
+        use_caked_space=bool(use_caked_space),
     )
-    seed_candidate: dict[str, object] | None = None
-    if isinstance(tagged_candidate, dict):
-        seed_candidate = dict(tagged_candidate)
-        candidate_relation = "tagged sim"
-    else:
-        if nearest_candidate_to_point is geometry_manual_nearest_candidate_to_point:
-            seed_candidate, _seed_dist = nearest_candidate_to_point(
-                float(raw_col),
-                float(raw_row),
-                active_remaining_candidates,
-                use_caked_display=use_caked_space,
-            )
-        else:
-            seed_candidate, _seed_dist = nearest_candidate_to_point(
-                float(raw_col),
-                float(raw_row),
-                active_remaining_candidates,
-            )
-        candidate_relation = "nearest sim"
-    candidate = dict(seed_candidate) if isinstance(seed_candidate, dict) else None
-    if isinstance(seed_candidate, dict):
-        selected_candidate = _geometry_manual_select_q_group_representative(
-            active_remaining_candidates,
-            group_key=selected_group_key,
-            seed_candidate=seed_candidate,
-            profile_cache=profile_cache,
-        )
-        if isinstance(selected_candidate, dict):
-            candidate = selected_candidate
     refined_col, refined_row = refine_preview_point(
-        candidate,
+        refinement_seed,
         float(raw_col),
         float(raw_row),
         display_background=display_background,
         cache_data=state,
     )
+    candidate, _seed_dist = _geometry_manual_candidate_for_refined_background_point(
+        float(refined_col),
+        float(refined_row),
+        active_remaining_candidates,
+        group_key=selected_group_key,
+        use_caked_display=bool(use_caked_space),
+        nearest_candidate_to_point_fn=nearest_candidate_to_point,
+        profile_cache=profile_cache,
+    )
+    candidate_relation = "nearest refined background point"
     distance_details = geometry_manual_candidate_distance_details(
         float(refined_col),
         float(refined_row),
@@ -18023,6 +18085,7 @@ def geometry_manual_place_selection_at(
     | None = None,
     profile_cache: Mapping[str, object] | None = None,
     current_match_config: Callable[[], Mapping[str, object]] | Mapping[str, object] | None = None,
+    use_candidate_refinement_context: bool = False,
 ) -> tuple[bool, dict[str, object]]:
     """Record the next manual background point for the active Qr/Qz pick session."""
 
@@ -18310,47 +18373,49 @@ def geometry_manual_place_selection_at(
             ),
             stale_reason="manual placement uses local refinement without warmed picker cache",
         )
-    tagged_candidate = geometry_manual_tagged_candidate_from_session(
-        pick_session,
-        remaining_candidates,
-        candidate_source_key=candidate_source_key,
+    refinement_source_entry: dict[str, object] = _geometry_manual_background_click_refinement_seed(
+        float(col),
+        float(row),
+        use_caked_space=bool(use_caked_space),
     )
-    seed_candidate = tagged_candidate
-    if seed_candidate is None:
-        if nearest_candidate_to_point_fn is geometry_manual_nearest_candidate_to_point:
-            seed_candidate, _seed_dist = nearest_candidate_to_point_fn(
-                float(col),
-                float(row),
-                remaining_candidates,
-                use_caked_display=use_caked_space,
-            )
-        else:
-            seed_candidate, _seed_dist = nearest_candidate_to_point_fn(
-                float(col),
-                float(row),
-                remaining_candidates,
-            )
-    candidate = dict(seed_candidate) if isinstance(seed_candidate, dict) else None
-    if isinstance(seed_candidate, dict):
-        selected_candidate = _geometry_manual_select_q_group_representative(
+    if bool(use_candidate_refinement_context):
+        tagged_candidate = geometry_manual_tagged_candidate_from_session(
+            pick_session,
             remaining_candidates,
-            group_key=selected_group_key,
-            seed_candidate=seed_candidate,
-            profile_cache=profile_cache,
+            candidate_source_key=candidate_source_key,
         )
-        if isinstance(selected_candidate, dict):
-            candidate = selected_candidate
-    if candidate is None:
-        if callable(set_status_text):
-            set_status_text(
-                "Manual geometry picking could not find an unassigned simulated peak for that background point."
+        seed_candidate = tagged_candidate
+        if seed_candidate is None:
+            if nearest_candidate_to_point_fn is geometry_manual_nearest_candidate_to_point:
+                seed_candidate, _seed_dist = nearest_candidate_to_point_fn(
+                    float(col),
+                    float(row),
+                    remaining_candidates,
+                    use_caked_display=use_caked_space,
+                )
+            else:
+                seed_candidate, _seed_dist = nearest_candidate_to_point_fn(
+                    float(col),
+                    float(row),
+                    remaining_candidates,
+                )
+        context_candidate = dict(seed_candidate) if isinstance(seed_candidate, dict) else None
+        if isinstance(seed_candidate, dict):
+            selected_candidate = _geometry_manual_select_q_group_representative(
+                remaining_candidates,
+                group_key=selected_group_key,
+                seed_candidate=seed_candidate,
+                profile_cache=profile_cache,
             )
-        return False, current_session
+            if isinstance(selected_candidate, dict):
+                context_candidate = selected_candidate
+        if isinstance(context_candidate, dict):
+            refinement_source_entry = dict(context_candidate)
     resolved_background_pick = None
     if callable(resolve_background_pick_fn):
         try:
             resolved_background_pick = resolve_background_pick_fn(
-                candidate,
+                dict(refinement_source_entry),
                 float(col),
                 float(row),
                 active_view="caked" if use_caked_space else "detector",
@@ -18380,34 +18445,27 @@ def geometry_manual_place_selection_at(
     detector_to_caked_unavailable = False
     detector_to_caked_refreshed = False
     placement_error_px_value: float
+
+    def _candidate_for_refined_peak(
+        peak_col_value: float,
+        peak_row_value: float,
+    ) -> dict[str, object] | None:
+        candidate_entry, _dist = _geometry_manual_candidate_for_refined_background_point(
+            float(peak_col_value),
+            float(peak_row_value),
+            remaining_candidates,
+            group_key=selected_group_key,
+            use_caked_display=bool(use_caked_space),
+            nearest_candidate_to_point_fn=nearest_candidate_to_point_fn,
+            profile_cache=profile_cache,
+        )
+        if candidate_entry is None and callable(set_status_text):
+            set_status_text(
+                "Manual geometry picking could not find an unassigned simulated branch near that refined background point."
+            )
+        return candidate_entry
+
     if isinstance(resolved_background_pick, dict):
-        if use_caked_space:
-            refined_branch_candidate = None
-            if nearest_candidate_to_point_fn is geometry_manual_nearest_candidate_to_point:
-                refined_branch_candidate, _refined_branch_dist = nearest_candidate_to_point_fn(
-                    float(resolved_background_pick["refined_background_two_theta_deg"]),
-                    float(resolved_background_pick["refined_background_phi_deg"]),
-                    remaining_candidates,
-                    use_caked_display=True,
-                )
-            else:
-                refined_branch_candidate, _refined_branch_dist = nearest_candidate_to_point_fn(
-                    float(resolved_background_pick["refined_background_two_theta_deg"]),
-                    float(resolved_background_pick["refined_background_phi_deg"]),
-                    remaining_candidates,
-                )
-            if isinstance(refined_branch_candidate, dict):
-                selected_candidate = _geometry_manual_select_q_group_representative(
-                    remaining_candidates,
-                    group_key=selected_group_key,
-                    seed_candidate=refined_branch_candidate,
-                    profile_cache=profile_cache,
-                )
-                candidate = (
-                    dict(selected_candidate)
-                    if isinstance(selected_candidate, dict)
-                    else dict(refined_branch_candidate)
-                )
         peak_col = (
             float(resolved_background_pick["refined_background_two_theta_deg"])
             if use_caked_space
@@ -18418,6 +18476,9 @@ def geometry_manual_place_selection_at(
             if use_caked_space
             else float(resolved_background_pick["refined_detector_display_row"])
         )
+        candidate = _candidate_for_refined_peak(float(peak_col), float(peak_row))
+        if candidate is None:
+            return False, current_session
         candidate_distance_details = geometry_manual_candidate_distance_details(
             float(peak_col),
             float(peak_row),
@@ -18495,13 +18556,16 @@ def geometry_manual_place_selection_at(
             return False, current_session
 
         peak_col, peak_row = refine_preview_point(
-            candidate,
+            refinement_source_entry,
             float(col),
             float(row),
             display_background=display_background,
             cache_data=cache_data,
             allow_cache_build=False,
         )
+        candidate = _candidate_for_refined_peak(float(peak_col), float(peak_row))
+        if candidate is None:
+            return False, current_session
         candidate_distance_details = geometry_manual_candidate_distance_details(
             float(peak_col),
             float(peak_row),
@@ -19605,6 +19669,7 @@ def geometry_manual_auto_add_q_group_peaks(
                 position_sigma_px=position_sigma_px,
                 refine_saved_pair_entry_fn=refine_saved_pair_entry_fn,
                 profile_cache=profile_cache,
+                use_candidate_refinement_context=True,
             )
             if not handled:
                 skipped_points += 1

@@ -5623,11 +5623,11 @@ def test_geometry_manual_pick_preview_state_builds_status_message() -> None:
     assert preview["preview_color"] == mg.geometry_manual_preview_color(preview["sigma_px"])
     assert preview["quality_label"] == mg.geometry_manual_preview_quality_label(preview["sigma_px"])
     assert "test group" in preview["message"]
-    assert "nearest sim [right]" in preview["message"]
+    assert "nearest refined background point [right]" in preview["message"]
     assert f"quality={preview['quality_label']}" in preview["message"]
 
 
-def test_geometry_manual_pick_preview_state_prefers_tagged_candidate() -> None:
+def test_geometry_manual_pick_preview_state_uses_refined_click_nearest_candidate() -> None:
     session = {
         "group_key": ("q_group", "primary", 1, 2),
         "q_label": "test group",
@@ -5665,8 +5665,8 @@ def test_geometry_manual_pick_preview_state_prefers_tagged_candidate() -> None:
     )
 
     assert preview is not None
-    assert preview["candidate"]["label"] == "left"
-    assert "tagged sim [left]" in preview["message"]
+    assert preview["candidate"]["label"] == "right"
+    assert "nearest refined background point [right]" in preview["message"]
 
 
 def test_geometry_manual_pick_preview_state_refines_with_mosaic_top_context() -> None:
@@ -5720,8 +5720,13 @@ def test_geometry_manual_pick_preview_state_refines_with_mosaic_top_context() ->
 
     assert preview is not None
     assert seen["source_entry"] is not None
-    assert seen["source_entry"]["source_row_index"] == 31
+    source_entry = seen["source_entry"]
+    assert isinstance(source_entry, dict)
+    assert source_entry["manual_background_click_seed"] is True
+    assert source_entry["manual_background_click_frame"] == "detector"
+    assert "source_row_index" not in source_entry
     assert preview["candidate"]["source_row_index"] == 31
+    assert preview["candidate"]["branch_id"] == "+x"
     assert preview["candidate"]["selection_reason"] == "mosaic_top_per_branch"
 
 
@@ -5731,6 +5736,7 @@ def test_geometry_manual_pick_preview_state_uses_profile_cache_mosaic_top() -> N
         "label": "near",
         "sim_col": 10.0,
         "sim_row": 20.0,
+        "branch_id": "+x",
         "best_sample_index": 0,
         "source_table_index": 1,
         "source_row_index": 30,
@@ -5739,6 +5745,7 @@ def test_geometry_manual_pick_preview_state_uses_profile_cache_mosaic_top() -> N
         "label": "top",
         "sim_col": 35.0,
         "sim_row": 30.0,
+        "branch_id": "+x",
         "best_sample_index": 1,
         "source_table_index": 1,
         "source_row_index": 31,
@@ -5784,11 +5791,15 @@ def test_geometry_manual_pick_preview_state_uses_profile_cache_mosaic_top() -> N
 
     assert preview is not None
     assert all("mosaic_weight" not in entry for entry in entries)
-    assert seen["source_entry"]["source_row_index"] == 31
-    assert seen["source_entry"]["branch_id"] == "+x"
-    assert seen["source_entry"]["selection_reason"] == "mosaic_top_per_branch"
-    assert seen["source_entry"]["mosaic_weight"] == 0.9
+    source_entry = seen["source_entry"]
+    assert isinstance(source_entry, dict)
+    assert source_entry["manual_background_click_seed"] is True
+    assert source_entry["manual_background_click_frame"] == "detector"
+    assert "source_row_index" not in source_entry
     assert preview["candidate"]["source_row_index"] == 31
+    assert preview["candidate"]["branch_id"] == "+x"
+    assert preview["candidate"]["selection_reason"] == "mosaic_top_per_branch"
+    assert preview["candidate"]["mosaic_weight"] == 0.9
 
 
 def test_geometry_manual_pick_preview_state_colors_from_match_confidence() -> None:
@@ -17196,7 +17207,7 @@ def test_geometry_manual_moved_saved_background_peak_refines_locally() -> None:
         "refined_sim_y": 19.5,
     }
     saved_sets: list[list[dict[str, object]]] = []
-    refined_calls: list[tuple[str, float, float]] = []
+    refined_calls: list[tuple[bool, str, float, float]] = []
     status_messages: list[str] = []
 
     handled, next_session = mg.geometry_manual_place_selection_at(
@@ -17220,7 +17231,14 @@ def test_geometry_manual_moved_saved_background_peak_refines_locally() -> None:
         display_background=np.zeros((8, 8), dtype=float),
         get_cache_data=lambda **_kwargs: {},
         refine_preview_point=lambda candidate, col, row, **_kwargs: (
-            refined_calls.append((str(candidate.get("label")), float(col), float(row)))
+            refined_calls.append(
+                (
+                    bool(candidate.get("manual_background_click_seed")),
+                    str(candidate.get("manual_background_click_frame")),
+                    float(col),
+                    float(row),
+                )
+            )
             or (13.0, 24.0)
         ),
         set_pairs_for_index_fn=lambda _idx, entries: (
@@ -17238,7 +17256,7 @@ def test_geometry_manual_moved_saved_background_peak_refines_locally() -> None:
 
     assert handled is True
     assert next_session == {}
-    assert refined_calls == [("left", 12.4, 22.8)]
+    assert refined_calls == [(True, "detector", 12.4, 22.8)]
     assert len(saved_sets[-1]) == 2
     by_label = {entry["label"]: entry for entry in saved_sets[-1]}
     assert by_label["right"]["x"] == 30.0
@@ -17249,7 +17267,7 @@ def test_geometry_manual_moved_saved_background_peak_refines_locally() -> None:
     assert "Moved 1 manual background points for selected group" in status_messages[-1]
 
 
-def test_geometry_manual_place_selection_at_uses_tagged_candidate_first() -> None:
+def test_geometry_manual_place_selection_at_uses_refined_click_nearest_candidate() -> None:
     set_sessions: list[dict[str, object]] = []
     status_messages: list[str] = []
 
@@ -17303,10 +17321,10 @@ def test_geometry_manual_place_selection_at_uses_tagged_candidate_first() -> Non
     )
 
     assert handled is True
-    assert next_session["pending_entries"][0]["label"] == "left"
-    assert next_session["pending_entries"][0]["source_row_index"] == 2
-    assert "Assigned to left" in status_messages[-1]
-    assert set_sessions[-1]["pending_entries"][0]["source_row_index"] == 2
+    assert next_session["pending_entries"][0]["label"] == "right"
+    assert next_session["pending_entries"][0]["source_row_index"] == 3
+    assert "Assigned to right" in status_messages[-1]
+    assert set_sessions[-1]["pending_entries"][0]["source_row_index"] == 3
 
 
 def test_geometry_manual_select_q_group_at_tags_branch_mosaic_top_candidate() -> None:
@@ -17453,7 +17471,7 @@ def test_geometry_manual_select_q_group_at_uses_profile_cache_sample_weights() -
     assert by_branch["-x"]["source_row_index"] == 41
 
 
-def test_geometry_manual_place_selection_at_refines_with_tagged_candidate_context() -> None:
+def test_geometry_manual_place_selection_at_refines_with_background_click_seed() -> None:
     selected_ray = {
         "label": "tagged",
         "hkl": (1, 0, 0),
@@ -17504,7 +17522,12 @@ def test_geometry_manual_place_selection_at_refines_with_tagged_candidate_contex
     assert handled is True
     assert next_session == {}
     assert seen["source_entry"] is not None
-    assert seen["source_entry"]["source_row_index"] == 31
+    source_entry = seen["source_entry"]
+    assert isinstance(source_entry, dict)
+    assert source_entry["manual_background_click_seed"] is True
+    assert source_entry["manual_background_click_frame"] == "detector"
+    assert source_entry["sim_col"] == 5.0
+    assert "source_row_index" not in source_entry
     pair = saved_entry_sets[-1][0]
     assert pair["raw_x"] == 5.0
     assert pair["raw_y"] == 6.0
@@ -17521,6 +17544,7 @@ def test_geometry_manual_place_selection_at_uses_profile_cache_representative() 
         {
             "label": "near-low",
             "hkl": (1, 0, 0),
+            "branch_id": "+x",
             "sim_col": 10.0,
             "sim_row": 10.0,
             "best_sample_index": 0,
@@ -17530,6 +17554,7 @@ def test_geometry_manual_place_selection_at_uses_profile_cache_representative() 
         {
             "label": "top",
             "hkl": (1, 0, 0),
+            "branch_id": "+x",
             "sim_col": 14.0,
             "sim_row": 10.0,
             "best_sample_index": 1,
@@ -17578,14 +17603,16 @@ def test_geometry_manual_place_selection_at_uses_profile_cache_representative() 
     )
 
     assert handled is True
-    assert seen["source_entry"]["label"] == "top"
-    assert seen["source_entry"]["branch_id"] == "+x"
-    assert seen["source_entry"]["mosaic_weight"] == 0.9
+    source_entry = seen["source_entry"]
+    assert source_entry["manual_background_click_seed"] is True
+    assert source_entry["manual_background_click_frame"] == "detector"
+    assert "label" not in source_entry
     assert saved_entry_sets[-1][0]["source_row_index"] == 31
+    assert saved_entry_sets[-1][0]["branch_id"] == "+x"
     assert saved_entry_sets[-1][0]["mosaic_weight"] == 0.9
 
 
-def test_geometry_manual_place_selection_at_uses_tagged_branch_representative() -> None:
+def test_geometry_manual_place_selection_at_uses_refined_click_branch_representative() -> None:
     key = ("q_group", "primary", 6, 2)
     low = {
         "label": "low",
@@ -17652,13 +17679,14 @@ def test_geometry_manual_place_selection_at_uses_tagged_branch_representative() 
     )
 
     assert handled is True
-    assert seen["source_entry"]["label"] == "low"
-    assert seen["source_entry"]["selection_reason"] == "mosaic_top_per_branch"
-    assert seen["source_entry"]["branch_id"] == "+x"
-    assert seen["source_entry"]["source_branch_index"] == 0
-    assert seen["source_entry"]["source_reflection_index"] == 60
-    assert seen["source_entry"]["source_ray_id"] == "low-ray"
+    source_entry = seen["source_entry"]
+    assert source_entry["manual_background_click_seed"] is True
+    assert source_entry["manual_background_click_frame"] == "detector"
+    assert "label" not in source_entry
     assert saved_entry_sets == []
+    assert next_session["pending_entries"][0]["selection_reason"] == "mosaic_top_per_branch"
+    assert next_session["pending_entries"][0]["branch_id"] == "+x"
+    assert next_session["pending_entries"][0]["source_branch_index"] == 0
     assert next_session["pending_entries"][0]["source_reflection_index"] == 60
     assert next_session["pending_entries"][0]["source_ray_id"] == "low-ray"
     assert next_session["target_count"] == 2
@@ -22055,8 +22083,8 @@ def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:
     saved_entry_sets: list[list[dict[str, object]]] = []
 
     handled, next_session = mg.geometry_manual_place_selection_at(
-        181.0,
-        137.0,
+        188.0,
+        94.0,
         pick_session={
             "group_key": ("q_group", "primary", 1, 5),
             "group_entries": [dict(sibling_candidate), dict(candidate)],
@@ -22071,7 +22099,7 @@ def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:
         current_background_index=0,
         display_background=np.zeros((8, 8), dtype=float),
         get_cache_data=lambda **_kwargs: {},
-        refine_preview_point=lambda *_args, **_kwargs: (182.0, 138.0),
+        refine_preview_point=lambda *_args, **_kwargs: (188.0, 94.0),
         set_pairs_for_index_fn=lambda _idx, entries: (
             saved_entry_sets.append(list(entries or [])) or list(entries or [])
         ),
@@ -22181,7 +22209,7 @@ def test_fresh_emitted_pair_redraws_consistently_without_fit() -> None:
     assert detector_pair["overlay_match_index"] == 0
     assert detector_pair["hkl"] == (-1, 0, 5)
     assert detector_pair["q_group_key"] == ("q_group", "primary", 1, 5)
-    assert detector_pair["bg_display"] == (182.0, 138.0)
+    assert detector_pair["bg_display"] == (188.0, 94.0)
     assert detector_pair["sim_display"] == (190.0, 96.0)
     assert detector_pair["source_table_index"] == 9
     assert detector_pair["source_row_index"] == 0
