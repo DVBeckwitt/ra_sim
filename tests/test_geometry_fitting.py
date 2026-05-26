@@ -167,10 +167,7 @@ def test_trace_caked_projection_mismatch_is_not_one_simple_phi_transform() -> No
         transform_errors[name] = errors
 
     assert all(
-        any(
-            error["delta_two_theta_deg"] > 0.5 or error["delta_phi_deg"] > 0.5
-            for error in errors
-        )
+        any(error["delta_two_theta_deg"] > 0.5 or error["delta_phi_deg"] > 0.5 for error in errors)
         for errors in transform_errors.values()
     ), json.dumps(transform_errors, sort_keys=True)
 
@@ -188,9 +185,7 @@ def test_manual_and_geometry_fit_caked_projection_paths_are_comparable_for_same_
                 "runtime_session._native_detector_coords_to_live_caked_coords:"
                 "detector_pixel_to_caked_bin"
             ),
-            "geometry_fit_projector_path": (
-                "optimization._project_detector_points_to_fit_space"
-            ),
+            "geometry_fit_projector_path": ("optimization._project_detector_points_to_fit_space"),
             "manual_caked_deg": (39.777, 37.250),
             "geometry_fit_caked_deg": (32.744, 132.750),
         },
@@ -201,9 +196,7 @@ def test_manual_and_geometry_fit_caked_projection_paths_are_comparable_for_same_
                 "runtime_session._native_detector_coords_to_live_caked_coords:"
                 "detector_pixel_to_caked_bin"
             ),
-            "geometry_fit_projector_path": (
-                "optimization._project_detector_points_to_fit_space"
-            ),
+            "geometry_fit_projector_path": ("optimization._project_detector_points_to_fit_space"),
             "manual_caked_deg": (41.351, -38.750),
             "geometry_fit_caked_deg": (38.359, 38.750),
         },
@@ -243,8 +236,7 @@ def test_same_native_projection_comparison_identifies_geometry_fit_projector_pat
             "fit_space_projector_kind": "exact_caked_bundle",
             "cake_bundle_signature": "exact-bundle-test",
             "fit_space_local_params_signature": (
-                f"gamma={float(params.get('gamma', 0.0))};"
-                f"Gamma={float(params.get('Gamma', 0.0))}"
+                f"gamma={float(params.get('gamma', 0.0))};Gamma={float(params.get('Gamma', 0.0))}"
             ),
             "valid": True,
             "invalid_reason": None,
@@ -281,25 +273,29 @@ def test_same_native_projection_comparison_identifies_geometry_fit_projector_pat
     assert branch0["runtime_live_exact_cake"]["raw_output_caked_deg"] == pytest.approx(
         (39.777, 37.250)
     )
-    assert branch0[
-        "geometry_fit_project_detector_points_to_fit_space"
-    ]["raw_output_caked_deg"] == pytest.approx((32.744, 132.750))
+    assert branch0["geometry_fit_project_detector_points_to_fit_space"][
+        "raw_output_caked_deg"
+    ] == pytest.approx((32.744, 132.750))
     assert branch0["dataset_fit_space_projector_direct"]["raw_output_caked_deg"] == pytest.approx(
         (32.744, 132.750)
     )
-    assert branch0[
-        "geometry_fit_project_detector_points_to_fit_space"
-    ]["fallback_used"] is False
+    assert branch0["geometry_fit_project_detector_points_to_fit_space"]["fallback_used"] is False
     assert branch0["analytic_detector_fit_space_fallback"]["fallback_used"] is True
-    assert branch0[
-        "geometry_fit_project_detector_points_to_fit_space"
-    ]["delta_vs_runtime_live_exact"]["available"] is True
-    assert branch0[
-        "geometry_fit_project_detector_points_to_fit_space"
-    ]["delta_vs_runtime_live_exact"]["delta_norm_deg"] > 90.0
-    assert branch0[
-        "geometry_fit_project_detector_points_to_fit_space"
-    ]["delta_vs_geometry_fit"]["delta_norm_deg"] == pytest.approx(0.0)
+    assert (
+        branch0["geometry_fit_project_detector_points_to_fit_space"]["delta_vs_runtime_live_exact"][
+            "available"
+        ]
+        is True
+    )
+    assert (
+        branch0["geometry_fit_project_detector_points_to_fit_space"]["delta_vs_runtime_live_exact"][
+            "delta_norm_deg"
+        ]
+        > 90.0
+    )
+    assert branch0["geometry_fit_project_detector_points_to_fit_space"]["delta_vs_geometry_fit"][
+        "delta_norm_deg"
+    ] == pytest.approx(0.0)
 
 
 def test_same_native_projection_comparison_explains_analytic_geometry_fit_fallback():
@@ -379,8 +375,7 @@ def test_same_native_projection_comparison_uses_precomputed_runtime_live_rows_wh
             "native_detector_px": (1099.0, 1924.0),
             "raw_output_caked_deg": (32.744, 132.750),
             "projector_callable_name": (
-                "ra_sim.gui._runtime.runtime_session."
-                "_native_detector_coords_to_live_caked_coords"
+                "ra_sim.gui._runtime.runtime_session._native_detector_coords_to_live_caked_coords"
             ),
             "projector_signature": "runtime-live-sig",
             "caked_bundle_signature": "runtime-bundle-sig",
@@ -472,13 +467,9 @@ def test_geometry_fit_overlay_diagnostic_summarizer_handles_missing_keys(tmp_pat
                 ],
                 "overlay_record_audit": [
                     {
-                        "initial_sim_native_frame_status": (
-                            "mismatch_display_labeled_native"
-                        ),
+                        "initial_sim_native_frame_status": ("mismatch_display_labeled_native"),
                         "initial_sim_display_raw_vs_rebuilt_delta_px": 823.4,
-                        "chosen_initial_sim_display_source": (
-                            "recomputed_from_initial_sim_native"
-                        ),
+                        "chosen_initial_sim_display_source": ("recomputed_from_initial_sim_native"),
                         "stale_final_sim": True,
                     }
                 ],
@@ -5819,6 +5810,59 @@ def test_dynamic_angular_summary_reports_worst_rows() -> None:
     assert summary["worst_angular_residual_rows"][0]["pair_id"] == "bad"
 
 
+def test_dynamic_angular_summary_flags_handoff_acceptance_residual_mismatch() -> None:
+    summary = opt._summarize_dynamic_angular_residual_rows(
+        [
+            {
+                "dataset_index": 0,
+                "dataset_label": "bg0",
+                "pair_index": 0,
+                "pair_id": "branch-0",
+                "source_branch_index": 0,
+                "hkl": [-1, 0, 10],
+                "fit_residual_caked_norm_deg": 1.70,
+                "delta_two_theta_deg": 104.39,
+                "wrapped_delta_phi_deg": 0.0,
+                "weighted_delta_two_theta_deg": 104.39,
+                "weighted_delta_phi_deg": 0.0,
+            },
+            {
+                "dataset_index": 0,
+                "dataset_label": "bg0",
+                "pair_index": 1,
+                "pair_id": "branch-1",
+                "source_branch_index": 1,
+                "hkl": [-1, 0, 10],
+                "fit_residual_caked_norm_deg": 0.68,
+                "delta_two_theta_deg": 75.16,
+                "wrapped_delta_phi_deg": 0.0,
+                "weighted_delta_two_theta_deg": 75.16,
+                "weighted_delta_phi_deg": 0.0,
+            },
+        ]
+    )
+
+    assert summary["raw_angular_rms_deg"] == pytest.approx(math.sqrt((104.39**2 + 75.16**2) / 2.0))
+    assert summary["caked_acceptance_metric_consistency_status"] == "inconsistent"
+    assert summary["caked_acceptance_metric_inconsistent"] is True
+    assert summary["caked_acceptance_metric_inconsistent_count"] == 2
+    assert summary["caked_acceptance_metric_max_delta_norm_deg"] == pytest.approx(102.69)
+    classification = opt._classify_dynamic_angular_failure(summary)
+    assert classification["dynamic_angular_failure_classification"] == (
+        "caked_acceptance_metric_inconsistent"
+    )
+    assert classification["recommended_next_fix"] == "inspect_acceptance_metric_sources"
+    trace_rows = summary["caked_acceptance_metric_trace_rows"]
+    assert len(trace_rows) == 2
+    assert trace_rows[0]["pair_id"] == "branch-0"
+    assert trace_rows[0]["source_branch_index"] == 0
+    assert trace_rows[0]["hkl"] == [-1, 0, 10]
+    assert trace_rows[0]["residual_vector_deg"] == pytest.approx([104.39, 0.0])
+    assert trace_rows[0]["residual_norm_deg"] == pytest.approx(104.39)
+    assert trace_rows[0]["units"] == "deg"
+    assert trace_rows[0]["row_source"] == "pair_audit_and_acceptance_rows"
+
+
 def test_dynamic_angular_summary_by_dataset_is_count_weighted() -> None:
     summary = opt._summarize_dynamic_angular_residual_rows(
         [
@@ -5906,6 +5950,53 @@ def test_dynamic_angular_phi_residual_wraps_across_180_boundary() -> None:
     predicted_phi = 179.0
 
     assert abs(opt._wrap_phi_deg(predicted_phi - observed_phi)) == pytest.approx(2.0)
+
+
+def test_locked_qr_dynamic_objective_proof_requires_dynamic_final_prediction() -> None:
+    for role in (None, "", "diagnostic_locked_fallback", "typo"):
+        assert (
+            opt._fit_prediction_has_dynamic_objective_proof(
+                {
+                    "prediction_role": role,
+                    "fit_prediction_is_dynamic": "yes",
+                    "prediction_source": (
+                        "dynamic_trial_simulation:locked_manual_qr_fit_prediction"
+                    ),
+                }
+            )
+            is False
+        )
+    assert (
+        opt._fit_prediction_has_dynamic_objective_proof(
+            {
+                "prediction_role": "objective_trial",
+                "fit_prediction_is_dynamic": "no",
+                "fit_prediction_is_dynamic_candidate": True,
+                "prediction_source": "dynamic_trial_simulation:locked_manual_qr_fit_prediction",
+            }
+        )
+        is False
+    )
+    assert (
+        opt._fit_prediction_has_dynamic_objective_proof(
+            {
+                "prediction_role": "objective_trial",
+                "fit_prediction_is_dynamic": "yes",
+                "prediction_source": "locked_manual_qr:saved_detector_display_to_native",
+            }
+        )
+        is False
+    )
+    assert (
+        opt._fit_prediction_has_dynamic_objective_proof(
+            {
+                "prediction_role": "objective_trial",
+                "fit_prediction_is_dynamic": "yes",
+                "prediction_source": "dynamic_trial_simulation:locked_manual_qr_fit_prediction",
+            }
+        )
+        is True
+    )
 
 
 def test_locked_qr_plus_minus_180_does_not_hide_authority_mismatch() -> None:
@@ -6460,7 +6551,7 @@ def test_locked_qr_dynamic_objective_never_uses_nominal_caked_prediction():
     )
 
 
-def test_locked_qr_dynamic_prediction_prefers_handoff_native_over_stale_source_row():
+def test_locked_qr_diagnostic_prediction_prefers_handoff_native_over_stale_source_row():
     clean_native = (1381.0, 1890.0)
     clean_projected_caked = (21.977, 166.250)
     stale_native = (1200.0, 1201.0)
@@ -6524,9 +6615,11 @@ def test_locked_qr_dynamic_prediction_prefers_handoff_native_over_stale_source_r
             "_qr_fit_point_only_projection": True,
         },
         locked,
+        prediction_role="diagnostic_locked_fallback",
     )
 
     assert projector_inputs == [pytest.approx(clean_native)]
+    assert prediction["prediction_role"] == "diagnostic_locked_fallback"
     assert prediction["fit_prediction_detector_native_px"] == pytest.approx(list(clean_native))
     assert prediction["fit_prediction_caked_deg"] == pytest.approx(list(clean_projected_caked))
     assert prediction["predicted_caked_deg"] != pytest.approx(list(stale_nominal_caked))
@@ -6536,7 +6629,242 @@ def test_locked_qr_dynamic_prediction_prefers_handoff_native_over_stale_source_r
     assert prediction["used_sim_nominal_caked_for_objective"] is False
 
 
-def test_locked_qr_dynamic_prediction_prefers_handoff_native_even_when_hit_tables_exist():
+def test_locked_qr_objective_trial_prefers_dynamic_source_row_over_locked_handoff():
+    handoff_native = (1381.0, 1890.0)
+    source_native = (1200.0, 1201.0)
+    source_caked = (28.381, 57.881)
+    projector_inputs: list[tuple[float, float]] = []
+
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        row = _point_only_dynamic_qr_row(*source_caked)
+        row.update(
+            {
+                "native_col": source_native[0],
+                "native_row": source_native[1],
+                "fit_prediction_detector_native_px": list(source_native),
+                "sim_refined_detector_native_px": list(source_native),
+                "sim_refined_caked_deg": list(source_caked),
+            }
+        )
+        return _locked_qr_source_rows_payload([row])
+
+    def projector(cols, rows, *, local_params=None, **_kwargs):
+        del local_params
+        col = float(np.asarray(cols, dtype=float).reshape(-1)[0])
+        row = float(np.asarray(rows, dtype=float).reshape(-1)[0])
+        projector_inputs.append((col, row))
+        return _point_only_projector_payload(
+            source_caked[0],
+            source_caked[1],
+            native_col=source_native[0],
+            native_row=source_native[1],
+        )
+
+    locked = _locked_qr_fixed_source_entry(
+        fit_prediction_detector_native_px=list(handoff_native),
+        fit_prediction_caked_authority="exact_projector_from_native",
+    )
+
+    prediction = opt._resolve_qr_fit_prediction_from_trial_params(
+        locked,
+        {"Gamma": 1.0},
+        {
+            "dataset_ctx": _point_only_qr_dataset_ctx(source_rows_builder, projector),
+            "hit_tables": (),
+            "sim_buffer": opt._fit_hit_table_only_sim_buffer(),
+            "image_size": 4000,
+            "fit_center": [2000.0, 2000.0],
+            "detector_distance": 0.1,
+            "pixel_size": 1.0,
+            "prediction_source_rows_cache": {},
+            "_qr_fit_point_only_projection": True,
+        },
+        locked,
+        prediction_role="objective_trial",
+    )
+
+    assert projector_inputs == [pytest.approx(source_native)]
+    assert prediction["prediction_role"] == "objective_trial"
+    assert prediction["available"] is True
+    assert prediction["resolver_path"] == "trial_source_rows"
+    assert prediction["handoff_attempted"] is False
+    assert prediction["handoff_accepted"] is False
+    assert prediction["fit_prediction_is_dynamic_candidate"] is True
+    assert prediction["fit_prediction_detector_native_px"] == pytest.approx(list(source_native))
+
+
+def test_locked_qr_objective_trial_rejects_only_locked_handoff_prediction():
+    handoff_native = (1381.0, 1890.0)
+    handoff_caked = (21.977, 166.250)
+    projector_inputs: list[tuple[float, float]] = []
+
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        return _locked_qr_source_rows_payload([])
+
+    def projector(cols, rows, *, local_params=None, **_kwargs):
+        del local_params
+        col = float(np.asarray(cols, dtype=float).reshape(-1)[0])
+        row = float(np.asarray(rows, dtype=float).reshape(-1)[0])
+        projector_inputs.append((col, row))
+        return _point_only_projector_payload(
+            handoff_caked[0],
+            handoff_caked[1],
+            native_col=handoff_native[0],
+            native_row=handoff_native[1],
+        )
+
+    locked = _locked_qr_fixed_source_entry(
+        fit_prediction_detector_native_px=list(handoff_native),
+        fit_prediction_caked_deg=list(handoff_caked),
+        fit_prediction_caked_authority="exact_projector_from_native",
+    )
+
+    prediction = opt._resolve_qr_fit_prediction_from_trial_params(
+        locked,
+        {"Gamma": 1.0},
+        {
+            "dataset_ctx": _point_only_qr_dataset_ctx(source_rows_builder, projector),
+            "hit_tables": (),
+            "sim_buffer": opt._fit_hit_table_only_sim_buffer(),
+            "image_size": 4000,
+            "fit_center": [2000.0, 2000.0],
+            "detector_distance": 0.1,
+            "pixel_size": 1.0,
+            "prediction_source_rows_cache": {},
+            "_qr_fit_point_only_projection": True,
+        },
+        locked,
+        prediction_role="objective_trial",
+    )
+
+    assert projector_inputs == []
+    assert prediction["prediction_role"] == "objective_trial"
+    assert prediction["available"] is False
+    assert prediction["unavailable_reason"] == "dynamic_prediction_unavailable"
+    assert prediction["resolver_path"] == "unresolved"
+    assert prediction["handoff_attempted"] is False
+    assert prediction["handoff_accepted"] is False
+    assert prediction["fit_prediction_is_dynamic_candidate"] is False
+
+
+def test_locked_qr_diagnostic_locked_fallback_returns_locked_handoff_prediction():
+    handoff_native = (1381.0, 1890.0)
+    handoff_caked = (21.977, 166.250)
+    projector_inputs: list[tuple[float, float]] = []
+
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        raise AssertionError("diagnostic fallback should use locked handoff directly")
+
+    def projector(cols, rows, *, local_params=None, **_kwargs):
+        del local_params
+        col = float(np.asarray(cols, dtype=float).reshape(-1)[0])
+        row = float(np.asarray(rows, dtype=float).reshape(-1)[0])
+        projector_inputs.append((col, row))
+        return _point_only_projector_payload(
+            handoff_caked[0],
+            handoff_caked[1],
+            native_col=handoff_native[0],
+            native_row=handoff_native[1],
+        )
+
+    locked = _locked_qr_fixed_source_entry(
+        fit_prediction_detector_native_px=list(handoff_native),
+        fit_prediction_caked_deg=list(handoff_caked),
+        fit_prediction_caked_authority="exact_projector_from_native",
+    )
+
+    prediction = opt._resolve_qr_fit_prediction_from_trial_params(
+        locked,
+        {"Gamma": 1.0},
+        {
+            "dataset_ctx": _point_only_qr_dataset_ctx(source_rows_builder, projector),
+            "hit_tables": (),
+            "sim_buffer": opt._fit_hit_table_only_sim_buffer(),
+            "image_size": 4000,
+            "fit_center": [2000.0, 2000.0],
+            "detector_distance": 0.1,
+            "pixel_size": 1.0,
+            "prediction_source_rows_cache": {},
+            "_qr_fit_point_only_projection": True,
+        },
+        locked,
+        prediction_role="diagnostic_locked_fallback",
+    )
+
+    assert projector_inputs == [pytest.approx(handoff_native)]
+    assert prediction["prediction_role"] == "diagnostic_locked_fallback"
+    assert prediction["available"] is True
+    assert prediction["resolver_path"] == "handoff"
+    assert prediction["handoff_attempted"] is True
+    assert prediction["handoff_accepted"] is True
+    assert prediction["fit_prediction_is_dynamic_candidate"] is False
+    assert str(prediction["prediction_source"]).startswith("locked_manual_qr:")
+    assert prediction["fit_prediction_detector_native_px"] == pytest.approx(list(handoff_native))
+
+
+def test_qr_disable_early_handoff_not_needed_for_objective_trial(monkeypatch):
+    monkeypatch.setenv("RA_SIM_QR_DISABLE_EARLY_HANDOFF", "1")
+    handoff_native = (1381.0, 1890.0)
+    source_native = (1200.0, 1201.0)
+    source_caked = (28.381, 57.881)
+
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        row = _point_only_dynamic_qr_row(*source_caked)
+        row.update(
+            {
+                "native_col": source_native[0],
+                "native_row": source_native[1],
+                "fit_prediction_detector_native_px": list(source_native),
+                "sim_refined_detector_native_px": list(source_native),
+                "sim_refined_caked_deg": list(source_caked),
+            }
+        )
+        return _locked_qr_source_rows_payload([row])
+
+    def projector(cols, rows, *, local_params=None, **_kwargs):
+        del local_params
+        return _point_only_projector_payload(
+            source_caked[0],
+            source_caked[1],
+            native_col=source_native[0],
+            native_row=source_native[1],
+        )
+
+    locked = _locked_qr_fixed_source_entry(
+        fit_prediction_detector_native_px=list(handoff_native),
+        fit_prediction_caked_authority="exact_projector_from_native",
+    )
+
+    prediction = opt._resolve_qr_fit_prediction_from_trial_params(
+        locked,
+        {"Gamma": 1.0},
+        {
+            "dataset_ctx": _point_only_qr_dataset_ctx(source_rows_builder, projector),
+            "hit_tables": (),
+            "sim_buffer": opt._fit_hit_table_only_sim_buffer(),
+            "image_size": 4000,
+            "fit_center": [2000.0, 2000.0],
+            "detector_distance": 0.1,
+            "pixel_size": 1.0,
+            "prediction_source_rows_cache": {},
+            "_qr_fit_point_only_projection": True,
+        },
+        locked,
+        prediction_role="objective_trial",
+    )
+
+    assert prediction["prediction_role"] == "objective_trial"
+    assert prediction["resolver_path"] == "trial_source_rows"
+    assert prediction["early_handoff_skipped_by_env"] is False
+    assert prediction["handoff_attempted"] is False
+    assert prediction["fit_prediction_detector_native_px"] == pytest.approx(list(source_native))
+
+
+def test_locked_qr_diagnostic_prediction_prefers_handoff_native_even_when_hit_tables_exist():
     handoff_native = (1381.0, 1890.0)
     handoff_caked = (21.977, 166.250)
     stale_native = (1414.0, 1929.0)
@@ -6590,9 +6918,11 @@ def test_locked_qr_dynamic_prediction_prefers_handoff_native_even_when_hit_table
             "_qr_fit_point_only_projection": True,
         },
         locked,
+        prediction_role="diagnostic_locked_fallback",
     )
 
     assert projector_inputs == [pytest.approx(handoff_native)]
+    assert prediction["prediction_role"] == "diagnostic_locked_fallback"
     assert prediction["locked_qr_detector_point_source"] == (
         "handoff_fit_prediction_detector_native_px"
     )
@@ -6665,6 +6995,7 @@ def test_qr_disable_early_handoff_allows_trial_source_rows_first(monkeypatch):
             "_qr_fit_point_only_projection": True,
         },
         locked,
+        prediction_role="diagnostic_locked_fallback",
     )
 
     assert source_builder_calls == 1
@@ -6678,7 +7009,7 @@ def test_qr_disable_early_handoff_allows_trial_source_rows_first(monkeypatch):
     assert prediction["fit_prediction_detector_native_px"] == pytest.approx(list(source_native))
 
 
-def test_locked_qr_dynamic_prediction_does_not_fall_back_to_nominal_when_handoff_projection_fails():
+def test_locked_qr_diagnostic_prediction_does_not_fall_back_to_nominal_when_handoff_projection_fails():
     handoff_native = (1381.0, 1890.0)
     stale_native = (1414.0, 1929.0)
     stale_nominal_caked = (28.381, 57.881)
@@ -6741,9 +7072,11 @@ def test_locked_qr_dynamic_prediction_does_not_fall_back_to_nominal_when_handoff
             "_qr_fit_point_only_projection": True,
         },
         locked,
+        prediction_role="diagnostic_locked_fallback",
     )
 
     assert projector_inputs == [pytest.approx(handoff_native)]
+    assert prediction["prediction_role"] == "diagnostic_locked_fallback"
     assert prediction["available"] is False
     assert prediction["unavailable_reason"] == "locked_qr_dynamic_prediction_unprojectable"
     assert prediction["fit_prediction_caked_authority"] == "unknown"
@@ -7557,7 +7890,7 @@ def test_qr_caked_objective_allows_point_only_projection_only_for_true_detector_
     assert prediction["final_prediction_source"] == "dynamic_final_forward_simulation"
 
 
-def test_qr_fit_point_only_projection_prefers_current_hit_tables_over_source_rows() -> None:
+def test_qr_fit_point_only_projection_uses_current_hit_tables_after_source_rows_miss() -> None:
     source_rows_builder_calls = 0
     projector_calls = 0
 
@@ -7565,7 +7898,7 @@ def test_qr_fit_point_only_projection_prefers_current_hit_tables_over_source_row
         nonlocal source_rows_builder_calls
         del local_params
         source_rows_builder_calls += 1
-        raise AssertionError("current trial hit tables should resolve this point")
+        return _locked_qr_source_rows_payload([])
 
     def projector(cols, rows, *, local_params=None, **_kwargs):
         nonlocal projector_calls
@@ -7599,11 +7932,10 @@ def test_qr_fit_point_only_projection_prefers_current_hit_tables_over_source_row
         locked,
     )
 
-    assert source_rows_builder_calls == 0
+    assert source_rows_builder_calls == 1
     assert projector_calls == 1
     assert prediction["available"] is True
     assert prediction["locked_qr_detector_point_source"] == "trial_hit_tables_locked_representative"
-    assert prediction["source_rows_rebuilt_or_reused"] == "skipped_hit_table_resolved"
     assert prediction["objective_cache_mode"] == "hit_table_resolved"
     assert prediction["sim_nominal_projection_input_px"] == pytest.approx([21.0, 22.0])
     assert prediction["sim_nominal_caked_deg"] == pytest.approx([61.0, -11.0])
@@ -7769,7 +8101,9 @@ def test_qr_fit_point_only_projection_rejects_stale_hit_table_recovery_for_sourc
     assert prediction["point_only_detector_coordinate_source"] == "live_caked_source"
 
 
-def test_qr_fit_point_only_projection_uses_stale_hit_table_when_source_rows_unavailable() -> None:
+def test_qr_fit_point_only_projection_rejects_stale_hit_table_when_source_rows_unavailable() -> (
+    None
+):
     def source_rows_builder(*, local_params=None):
         del local_params
         raise AssertionError("unavailable source-row builder should not be called")
@@ -7802,18 +8136,16 @@ def test_qr_fit_point_only_projection_uses_stale_hit_table_when_source_rows_unav
         locked,
     )
 
-    assert prediction["available"] is True
-    assert prediction["resolution_reason"] == ("provider_local_branch_recovered_stale_peak_index")
+    assert prediction["available"] is False
+    assert prediction["unavailable_reason"] == "dynamic_prediction_unavailable"
+    assert prediction["resolution_reason"] == "qr_fit_trial_source_rows_builder_unavailable"
+    assert prediction["hit_table_resolution_reason"] == (
+        "provider_local_branch_recovered_stale_peak_index"
+    )
     assert prediction["locked_qr_detector_point_source"] == (
-        "trial_hit_tables_locked_representative"
+        "trial_source_rows_unresolved_after_hit_table_miss"
     )
     assert prediction["trial_source_rows_available"] is False
-    assert prediction["trial_source_rows_unavailable_reason"] == (
-        "qr_fit_trial_source_rows_builder_unavailable"
-    )
-    assert prediction["sim_nominal_projection_input_px"] == pytest.approx([21.0, 22.0])
-    assert prediction["sim_refined_caked_deg"] == pytest.approx([61.0, -11.0])
-    assert prediction["point_only_detector_coordinate_source"] == "trial_hit_tables"
 
 
 def test_qr_fit_objective_incomplete_missing_pairs_include_source_row_diagnostics(
@@ -7994,7 +8326,10 @@ def test_qr_fit_point_only_projection_rejects_stale_dynamic_source() -> None:
     )
 
     assert prediction["available"] is False
-    assert prediction["unavailable_reason"] == "point_only_dynamic_sim_visual_caked_deg_unavailable"
+    assert prediction["unavailable_reason"] == "dynamic_prediction_unavailable"
+    assert prediction["dynamic_prediction_unavailable_reason"] == (
+        "point_only_dynamic_sim_visual_caked_deg_unavailable"
+    )
 
 
 def test_qr_fit_point_only_projection_uses_detector_to_caked_projector_when_dynamic_source_is_valid() -> (
@@ -8101,7 +8436,7 @@ def test_dynamic_caked_source_row_uses_live_caked_prediction_without_point_only_
     assert prediction["detector_native_reprojection_used_for_objective"] is False
 
 
-def test_dynamic_caked_source_row_keeps_closer_saved_refined_sim_caked_prediction() -> None:
+def test_dynamic_caked_source_row_does_not_keep_closer_locked_saved_caked_prediction() -> None:
     def source_rows_builder(*, local_params=None):
         del local_params
         return _locked_qr_source_rows_payload([_point_only_dynamic_qr_row(40.0, 37.0)])
@@ -8134,9 +8469,10 @@ def test_dynamic_caked_source_row_keeps_closer_saved_refined_sim_caked_predictio
     )
 
     assert prediction["available"] is True
-    assert prediction["fit_prediction_caked_deg"] == pytest.approx([40.2, 35.3])
-    assert prediction["static_locked_caked_prediction_retained"] is True
-    assert prediction["objective_source_authority"] == "fit_prediction_caked_deg"
+    assert prediction["fit_prediction_caked_deg"] == pytest.approx([40.0, 37.0])
+    assert prediction["static_locked_caked_prediction_retained"] is False
+    assert prediction["objective_source_authority"] == "sim_visual_caked_deg"
+    assert prediction["fit_prediction_is_dynamic"] == "yes"
     assert prediction["detector_native_reprojection_used_for_objective"] is False
 
 
@@ -9024,6 +9360,221 @@ def _dynamic_point_only_sensitivity_result(
     )
 
 
+def test_gamma_fit_fails_closed_when_locked_qr_has_no_dynamic_prediction(
+    monkeypatch,
+) -> None:
+    def fake_process(*args, **kwargs):
+        image_size = int(args[2])
+        return (
+            np.zeros((image_size, image_size), dtype=np.float64),
+            [],
+            np.empty((0, 0, 0)),
+            np.empty(0),
+            np.empty(0),
+            [],
+        )
+
+    def fail_least_squares(*_args, **_kwargs):
+        raise AssertionError("solver must not run without dynamic QR predictions")
+
+    def source_rows_builder(*, local_params=None):
+        del local_params
+        return _locked_qr_source_rows_payload([])
+
+    def projector(cols, rows, *, local_params=None, **_kwargs):
+        del local_params
+        col = float(np.asarray(cols, dtype=float).reshape(-1)[0])
+        row = float(np.asarray(rows, dtype=float).reshape(-1)[0])
+        return _point_only_projector_payload(41.0, 0.0, native_col=col, native_row=row)
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fail_least_squares)
+
+    image_size = 30
+    experimental_image = np.zeros((image_size, image_size), dtype=np.float64)
+    measured = _locked_qr_fixed_source_entry(
+        native_col=12.0,
+        native_row=13.0,
+        fit_prediction_detector_native_px=[12.0, 13.0],
+        background_two_theta_deg=40.0,
+        background_phi_deg=0.0,
+        caked_x=40.0,
+        caked_y=0.0,
+        fit_space_anchor_override=True,
+        fit_space_anchor_source="manual_caked_click",
+    )
+    params = _base_params(image_size, optics_mode=1)
+    params.update(
+        {
+            "gamma": 0.0,
+            "Gamma": 0.0,
+            "center_x": 15.0,
+            "center_y": 15.0,
+            "center": [15.0, 15.0],
+        }
+    )
+    status_messages: list[str] = []
+
+    result = opt.fit_geometry_parameters(
+        np.array([[2.0, 0.0, 0.0]], dtype=np.float64),
+        np.array([1.0], dtype=np.float64),
+        image_size,
+        params,
+        measured_peaks=[measured],
+        var_names=["gamma", "Gamma"],
+        experimental_image=experimental_image,
+        dataset_specs=[
+            {
+                "dataset_index": 0,
+                "label": "bg0",
+                "theta_initial": 0.0,
+                "measured_peaks": [measured],
+                "experimental_image": experimental_image,
+                "fit_space_projector": projector,
+                "fit_space_projector_kind": "exact_caked_bundle",
+                "qr_fit_trial_source_rows_builder": source_rows_builder,
+                "qr_fit_trial_source_rows_builder_kind": "unit_test_empty_dynamic_rows",
+                "sim_caked_image_builder": lambda *_args, **_kwargs: pytest.fail(
+                    "point-only mode must not generate a caked image"
+                ),
+                "sim_caked_image_builder_kind": "must_not_call",
+            }
+        ],
+        status_callback=status_messages.append,
+        refinement_config={
+            "solver": {
+                "manual_point_fit_mode": True,
+                "dynamic_point_geometry_fit": True,
+                "_qr_fit_point_only_projection": True,
+                "fixed_manual_prediction_preflight_guard": True,
+                "restarts": 0,
+                "weighted_matching": False,
+                "use_measurement_uncertainty": False,
+                "max_nfev": 1,
+            },
+            "single_ray": {"enabled": False},
+            "identifiability": {"enabled": False},
+            "full_beam_polish": {"enabled": False},
+            "image_refinement": {"enabled": False},
+        },
+    )
+
+    assert not result.success
+    assert result.status < 0
+    assert result.message == "manual_qr_dynamic_prediction_unavailable"
+    assert result.x == pytest.approx([params["gamma"], params["Gamma"]])
+    assert result.point_match_summary["reason"] == "manual_qr_dynamic_prediction_unavailable"
+    assert result.point_match_summary["missing_pair_count"] == 1
+    assert any(
+        message == "Geometry fit not run: dynamic simulated peak predictions unavailable."
+        for message in status_messages
+    )
+    assert any(
+        "manual_caked_route_check" in message
+        and "evaluator=dynamic_prediction_probe_required" in message
+        for message in status_messages
+    )
+    assert not any(
+        "manual_caked_route_check" in message and "evaluator=dynamic_angular_point_match" in message
+        for message in status_messages
+    )
+    assert not any(message.startswith("Geometry fit: complete") for message in status_messages)
+
+
+def test_locked_saved_caked_prediction_does_not_enable_dynamic_angular_objective(
+    monkeypatch,
+) -> None:
+    def fake_process(*args, **_kwargs):
+        image_size = int(args[2])
+        return (
+            np.zeros((image_size, image_size), dtype=np.float64),
+            [],
+            np.empty((0, 0, 0)),
+            np.empty(0),
+            np.empty(0),
+            [],
+        )
+
+    def fake_least_squares(*_args, **_kwargs):
+        pytest.fail("locked saved caked predictions must fail closed before optimizer solve")
+
+    def projector(_cols, _rows, *, local_params=None, **_kwargs):
+        del local_params
+        return _point_only_projector_payload(40.0, 35.0)
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+
+    image_size = 30
+    measured = _locked_qr_fixed_source_entry(
+        native_col=8.0,
+        native_row=9.0,
+        background_detector_x=8.0,
+        background_detector_y=9.0,
+        background_detector_input_frame="native_detector",
+        manual_background_input_origin="detector",
+        background_two_theta_deg=40.0,
+        background_phi_deg=35.0,
+        fit_observed_caked_deg=[40.0, 35.0],
+        fit_prediction_caked_deg=[41.0, 34.5],
+        fit_prediction_source="locked_manual_qr:saved_detector_display_to_native:saved_display_px",
+        fit_prediction_is_dynamic="no",
+        fit_space_anchor_override=True,
+        fit_space_anchor_source="manual_caked_projection",
+    )
+    status_messages: list[str] = []
+
+    result = opt.fit_geometry_parameters(
+        np.array([[2.0, 0.0, 0.0]], dtype=np.float64),
+        np.array([1.0], dtype=np.float64),
+        image_size,
+        _base_params(image_size, optics_mode=1),
+        measured_peaks=[measured],
+        var_names=["gamma", "Gamma"],
+        experimental_image=np.zeros((image_size, image_size), dtype=np.float64),
+        dataset_specs=[
+            {
+                "dataset_index": 0,
+                "label": "bg0",
+                "theta_initial": 0.0,
+                "measured_peaks": [measured],
+                "experimental_image": np.zeros((image_size, image_size), dtype=np.float64),
+                "_manual_caked_fit_space_required": True,
+                "fit_space_projector": projector,
+                "fit_space_projector_kind": "exact_caked_bundle",
+            }
+        ],
+        status_callback=status_messages.append,
+        refinement_config={
+            "solver": {
+                "manual_point_fit_mode": True,
+                "dynamic_point_geometry_fit": False,
+                "fixed_manual_prediction_preflight_guard": True,
+                "restarts": 0,
+                "weighted_matching": False,
+                "use_measurement_uncertainty": False,
+                "max_nfev": 1,
+            },
+            "single_ray": {"enabled": False},
+            "identifiability": {"enabled": False},
+            "full_beam_polish": {"enabled": False},
+            "image_refinement": {"enabled": False},
+        },
+    )
+
+    assert not result.success
+    assert result.message == "manual_qr_dynamic_prediction_unavailable"
+    assert result.final_metric_name == "manual_qr_dynamic_prediction_unavailable"
+    assert result.point_match_summary["reason"] == "manual_qr_dynamic_prediction_unavailable"
+    assert result.point_match_summary.get("metric_name") != "dynamic_angular_point_match"
+    assert result.point_match_summary.get("dynamic_angular_failure_classification") != (
+        "manual_outliers_or_physical_bad_fit"
+    )
+    assert not any(
+        "evaluator=dynamic_angular_point_match" in message for message in status_messages
+    )
+
+
 def test_dynamic_angular_point_match_final_metric_uses_caked_deg_not_pixel_rms(
     monkeypatch,
 ) -> None:
@@ -9034,6 +9585,16 @@ def test_dynamic_angular_point_match_final_metric_uses_caked_deg_not_pixel_rms(
     assert result.final_metric_units == "deg"
     assert result.point_match_summary["acceptance_metric_space"] == "caked_deg"
     assert result.point_match_summary["metric_unit"] == "deg"
+    assert all(
+        str(row.get("prediction_role", "")) in {"objective_trial", "final_dynamic_prediction"}
+        for row in result.point_match_summary.get("_angular_residual_rows", ())
+        if isinstance(row, Mapping)
+    )
+    assert all(
+        str(row.get("fit_prediction_is_dynamic", "")).lower() == "yes"
+        for row in result.point_match_summary.get("_angular_residual_rows", ())
+        if isinstance(row, Mapping)
+    )
     assert math.isfinite(result.rms_deg)
     assert not math.isfinite(result.rms_px)
 
@@ -9093,7 +9654,7 @@ def test_same_hkl_two_branch_detector_origin_locked_qr_fit_uses_two_pairs(
             "source_peak_index": 0,
             "source_reflection_index": 910,
             "observed": (33.063, 130.754),
-            "predicted": (32.696, 129.750),
+            "predicted": (32.259, 132.250),
         },
         {
             "branch": 1,
@@ -9103,7 +9664,7 @@ def test_same_hkl_two_branch_detector_origin_locked_qr_fit_uses_two_pairs(
             "source_peak_index": 1,
             "source_reflection_index": 911,
             "observed": (37.566, 39.750),
-            "predicted": (38.124, 41.281),
+            "predicted": (38.312, 39.750),
         },
     ]
 
@@ -9265,6 +9826,44 @@ def test_same_hkl_two_branch_detector_origin_locked_qr_fit_uses_two_pairs(
     assert result.point_match_summary["metric_unit"] == "deg"
     assert result.point_match_summary["matched_pair_count"] == 2
     assert result.point_match_summary.get("final_matched_pair_count", 2) == 2
+    expected_norms = [
+        math.hypot(32.259 - 33.063, opt._wrap_phi_deg(132.250 - 130.754)),
+        math.hypot(38.312 - 37.566, opt._wrap_phi_deg(39.750 - 39.750)),
+    ]
+    expected_rms = math.sqrt(sum(norm * norm for norm in expected_norms) / len(expected_norms))
+    assert result.point_match_summary["raw_angular_rms_deg"] == pytest.approx(expected_rms)
+    assert result.point_match_summary["final_rms_deg"] == pytest.approx(expected_rms)
+    assert result.rms_deg == pytest.approx(expected_rms)
+    worst_norms = sorted(
+        [
+            float(row["angular_residual_norm_deg"])
+            for row in result.point_match_summary["worst_angular_residual_rows"]
+        ],
+        reverse=True,
+    )
+    assert worst_norms[:2] == pytest.approx(sorted(expected_norms, reverse=True))
+    trace_rows = sorted(
+        result.point_match_summary["caked_acceptance_metric_trace_rows"],
+        key=lambda row: int(row["source_branch_index"]),
+    )
+    assert len(trace_rows) == 2
+    assert trace_rows[0]["observed_caked_deg"] == pytest.approx([33.063, 130.754])
+    assert trace_rows[0]["predicted_caked_deg"] == pytest.approx([32.259, 132.250])
+    assert trace_rows[0]["residual_norm_deg"] == pytest.approx(expected_norms[0])
+    assert trace_rows[0]["fit_prediction_is_dynamic"] == "yes"
+    assert trace_rows[0]["prediction_role"] == "objective_trial"
+    assert trace_rows[0]["row_source"] in {
+        "trial_source_rows",
+        "source_cache",
+        "pair_audit_and_trial_source_rows",
+        "pair_audit_and_source_cache",
+    }
+    assert result.point_match_summary.get("dynamic_angular_failure_classification") != (
+        "manual_outliers_or_physical_bad_fit"
+    )
+    assert result.point_match_summary.get("recommended_next_fix") != (
+        "remove_or_repick_manual_outliers"
+    )
     assert bool(result.geometry_fit_debug_summary["manual_caked_fit_space_required"]) is True
     assert bool(result.geometry_fit_debug_summary["manual_caked_fit_space_ready"]) is True
     assert result.geometry_fit_debug_summary["manual_caked_fit_pair_count"] == 2
@@ -9276,7 +9875,7 @@ def test_same_hkl_two_branch_detector_origin_locked_qr_fit_uses_two_pairs(
     route_lines = [line for line in status_messages if "manual_caked_route_check" in line]
     assert route_lines == [
         "manual_caked_route_check objective_space=caked_deg required=true ready=true "
-        "observed_caked=2 predicted_caked=2 evaluator=dynamic_angular_point_match unit=deg"
+        "observed_caked=2 predicted_caked=2 evaluator=dynamic_prediction_probe_required unit=deg"
     ]
     assert any("Geometry fit: setup mode=dynamic-angle" in line for line in status_messages)
 
@@ -9774,10 +10373,10 @@ def test_locked_qr_final_validation_requires_all_fixed_pairs(monkeypatch) -> Non
     )
 
     assert not result.success
-    assert result.final_metric_name == "locked_manual_qr_identity_loss"
-    assert result.point_match_summary["reason"] == "locked_manual_qr_identity_loss"
+    assert result.final_metric_name == "manual_qr_dynamic_prediction_unavailable"
+    assert result.point_match_summary["reason"] == "manual_qr_dynamic_prediction_unavailable"
     assert result.point_match_summary["expected_fixed_qr_pair_count"] == 2
-    assert result.point_match_summary["final_matched_pair_count"] < 2
+    assert result.point_match_summary["dynamic_prediction_unavailable_pair_count"] == 1
     assert result.point_match_summary["final_metric_name"] != "central_point_match"
 
 
@@ -9939,15 +10538,14 @@ def test_dynamic_objective_sensitivity_detects_real_threading_failure_at_five_de
 
     assert not result.success
     assert result.status == -9
-    assert result.message == "dynamic_objective_not_sensitive_to_fit_variables"
+    assert result.message == "objective_insensitive_to_active_params"
     assert summary["objective_param_sensitivity_status"] == "all_fit_vars_insensitive"
     assert summary["recommended_next_fix"] == "thread_trial_params_to_projector"
     assert summary["first_acceptance_metric_divergence"] == (
-        "dynamic_objective_not_sensitive_to_fit_variables"
+        "objective_insensitive_to_active_params"
     )
     assert any(
-        message.startswith("Geometry fit: failed")
-        and "dynamic_objective_not_sensitive_to_fit_variables" in message
+        message == "Geometry fit not accepted: residual is insensitive to gamma/Gamma."
         for message in messages
     )
     assert not any(message.startswith("Geometry fit: complete") for message in messages)

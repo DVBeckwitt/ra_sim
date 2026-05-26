@@ -62,6 +62,20 @@ from ra_sim.utils.parallel import (
 RNG = np.random.default_rng(42)
 LOGGER = logging.getLogger(__name__)
 QR_DISABLE_EARLY_HANDOFF_ENV = "RA_SIM_QR_DISABLE_EARLY_HANDOFF"
+QR_PREDICTION_ROLE_OBJECTIVE_TRIAL = "objective_trial"
+QR_PREDICTION_ROLE_FINAL_DYNAMIC = "final_dynamic_prediction"
+QR_PREDICTION_ROLE_DIAGNOSTIC_LOCKED_FALLBACK = "diagnostic_locked_fallback"
+QR_DYNAMIC_PREDICTION_UNAVAILABLE = "dynamic_prediction_unavailable"
+MANUAL_QR_DYNAMIC_PREDICTION_UNAVAILABLE = "manual_qr_dynamic_prediction_unavailable"
+OBJECTIVE_INSENSITIVE_TO_ACTIVE_PARAMS = "objective_insensitive_to_active_params"
+GEOMETRY_FIT_DYNAMIC_PREDICTION_UNAVAILABLE_TEXT = (
+    "Geometry fit not run: dynamic simulated peak predictions unavailable."
+)
+GEOMETRY_FIT_OBJECTIVE_INSENSITIVE_TEXT = (
+    "Geometry fit not accepted: residual is insensitive to gamma/Gamma."
+)
+CAKED_ACCEPTANCE_METRIC_INCONSISTENT = "caked_acceptance_metric_inconsistent"
+CAKED_ACCEPTANCE_CONSISTENCY_TOL_DEG = 1.0e-3
 FIT_SPACE_ANCHOR_SOURCE_KEYS: tuple[str, ...] = (
     "cached_fit_space_anchor",
     "dataset_fit_space_projector",
@@ -483,12 +497,105 @@ def _summarize_dynamic_angular_residual_rows(
     weighted_max = float("nan")
     weighted_count = 0
     by_dataset: Dict[tuple[int, str], Dict[str, object]] = {}
+    consistency_checked_count = 0
+    consistency_max_delta = float("nan")
+    inconsistent_rows: List[Dict[str, object]] = []
+    trace_rows: List[Dict[str, object]] = []
 
     def _row_int(value: object, fallback: int = -1) -> int:
         try:
             return int(value)
         except Exception:
             return int(fallback)
+
+    def _audit_residual_norm(row: Mapping[str, object]) -> float:
+        for key in (
+            "fit_residual_caked_norm_deg",
+            "manual_qr_fit_residual_caked_norm_deg",
+            "handoff_fit_residual_caked_norm_deg",
+        ):
+            value = _safe_float(row.get(key), float("nan"))
+            if np.isfinite(value):
+                return float(value)
+        for key in (
+            "manual_qr_fit_residual_caked_deg",
+            "fit_residual_caked_deg",
+            "handoff_fit_residual_caked_deg",
+        ):
+            value = row.get(key)
+            if not isinstance(value, (list, tuple, np.ndarray)) or len(value) < 2:
+                continue
+            first = _safe_float(value[0], float("nan"))
+            second = _safe_float(value[1], float("nan"))
+            if np.isfinite(first) and np.isfinite(second):
+                return float(math.hypot(first, second))
+        return float("nan")
+
+    def _acceptance_row_source(record: Mapping[str, object], audit_norm: float) -> str:
+        explicit = str(record.get("caked_acceptance_row_source", "") or "").strip()
+        if np.isfinite(audit_norm):
+            return (
+                "pair_audit_and_acceptance_rows"
+                if explicit in {"", "unknown"}
+                else f"pair_audit_and_{explicit}"
+            )
+        if explicit:
+            return explicit
+        source = str(
+            record.get("fit_prediction_source", record.get("prediction_source", "")) or ""
+        ).strip()
+        if source.startswith("locked_manual_qr:"):
+            return "locked_fallback"
+        if str(record.get("source_rows_rebuilt_or_reused", "") or "").strip():
+            return "trial_rows"
+        if str(record.get("objective_cache_mode", "") or "").strip():
+            return "source_cache"
+        predicted_field = str(record.get("predicted_caked_source_field", "") or "").strip()
+        if "nominal" in predicted_field:
+            return "nominal_caked_fields"
+        if "refined" in predicted_field:
+            return "refined_caked_fields"
+        if bool(record.get("stale_final_sim", False)):
+            return "stale_manual_fields"
+        return "acceptance_rows"
+
+    def _trace_acceptance_row(
+        record: Mapping[str, object],
+        *,
+        audit_norm: float,
+        delta_two_theta: float,
+        delta_phi: float,
+        angular_norm: float,
+    ) -> Dict[str, object]:
+        return {
+            "dataset_index": int(record["dataset_index"]),
+            "dataset_label": str(record["dataset_label"]),
+            "pair_index": int(record["pair_index"]),
+            "pair_id": str(record["pair_id"]),
+            "source_branch_index": record.get("source_branch_index"),
+            "branch": record.get(
+                "branch", record.get("branch_index", record.get("source_branch_index"))
+            ),
+            "hkl": _dynamic_reanchor_jsonable(record.get("hkl")),
+            "observed_caked_deg": _dynamic_reanchor_jsonable(record.get("observed_caked_deg")),
+            "predicted_caked_deg": _dynamic_reanchor_jsonable(record.get("predicted_caked_deg")),
+            "observed_caked_source_field": record.get("observed_caked_source_field"),
+            "predicted_caked_source_field": record.get("predicted_caked_source_field"),
+            "fit_prediction_is_dynamic": record.get("fit_prediction_is_dynamic"),
+            "fit_prediction_source": record.get(
+                "fit_prediction_source",
+                record.get("prediction_source"),
+            ),
+            "prediction_role": record.get("prediction_role"),
+            "residual_vector_deg": [float(delta_two_theta), float(delta_phi)],
+            "residual_norm_deg": float(angular_norm),
+            "units": "deg",
+            "row_source": _acceptance_row_source(record, audit_norm),
+            "handoff_audit_caked_residual_norm_deg": (
+                float(audit_norm) if np.isfinite(audit_norm) else float("nan")
+            ),
+            "acceptance_caked_residual_norm_deg": float(angular_norm),
+        }
 
     for row in rows or ():
         if not isinstance(row, Mapping):
@@ -530,6 +637,57 @@ def _summarize_dynamic_angular_residual_rows(
             record["weighted_delta_phi_deg"] = float(weighted_delta_phi)
         if np.isfinite(weighted_norm):
             record["weighted_angular_residual_norm_deg"] = float(weighted_norm)
+        audit_norm = _audit_residual_norm(record)
+        trace_row = _trace_acceptance_row(
+            record,
+            audit_norm=float(audit_norm),
+            delta_two_theta=float(delta_two_theta),
+            delta_phi=float(delta_phi),
+            angular_norm=float(angular_norm),
+        )
+        if np.isfinite(audit_norm):
+            consistency_checked_count += 1
+            consistency_delta = abs(float(angular_norm) - float(audit_norm))
+            consistency_max_delta = (
+                float(consistency_delta)
+                if not np.isfinite(consistency_max_delta)
+                else float(max(consistency_max_delta, float(consistency_delta)))
+            )
+            record["handoff_audit_caked_residual_norm_deg"] = float(audit_norm)
+            record["acceptance_caked_residual_norm_deg"] = float(angular_norm)
+            record["caked_acceptance_metric_delta_norm_deg"] = float(consistency_delta)
+            consistency_status = (
+                "inconsistent"
+                if float(consistency_delta) > CAKED_ACCEPTANCE_CONSISTENCY_TOL_DEG
+                else "consistent"
+            )
+            record["caked_acceptance_metric_consistency_status"] = consistency_status
+            if consistency_status == "inconsistent":
+                inconsistent_rows.append(
+                    {
+                        "dataset_index": trace_row["dataset_index"],
+                        "dataset_label": trace_row["dataset_label"],
+                        "pair_index": trace_row["pair_index"],
+                        "pair_id": trace_row["pair_id"],
+                        "source_branch_index": trace_row["source_branch_index"],
+                        "hkl": trace_row["hkl"],
+                        "handoff_audit_caked_residual_norm_deg": trace_row[
+                            "handoff_audit_caked_residual_norm_deg"
+                        ],
+                        "acceptance_caked_residual_norm_deg": trace_row[
+                            "acceptance_caked_residual_norm_deg"
+                        ],
+                        "caked_acceptance_metric_delta_norm_deg": float(consistency_delta),
+                        "observed_caked_deg": trace_row["observed_caked_deg"],
+                        "predicted_caked_deg": trace_row["predicted_caked_deg"],
+                        "observed_caked_source_field": trace_row["observed_caked_source_field"],
+                        "predicted_caked_source_field": trace_row["predicted_caked_source_field"],
+                        "fit_prediction_source": trace_row["fit_prediction_source"],
+                        "prediction_role": trace_row["prediction_role"],
+                        "fit_prediction_is_dynamic": trace_row["fit_prediction_is_dynamic"],
+                    }
+                )
+        trace_rows.append(trace_row)
         normalized_rows.append(record)
 
         raw_sum += float(angular_norm)
@@ -636,6 +794,11 @@ def _summarize_dynamic_angular_residual_rows(
                 "weighted_angular_max_weighted_deg": float(dataset_summary["_weighted_max"]),
             }
         )
+    consistency_status = (
+        "not_evaluated"
+        if consistency_checked_count <= 0
+        else ("inconsistent" if inconsistent_rows else "consistent")
+    )
     return {
         "raw_angular_row_count": int(raw_count),
         "raw_angular_rms_deg": (
@@ -650,6 +813,14 @@ def _summarize_dynamic_angular_residual_rows(
         "weighted_angular_max_weighted_deg": float(weighted_max),
         "angular_residual_by_dataset": dataset_rows,
         "worst_angular_residual_rows": worst_rows,
+        "caked_acceptance_metric_consistency_status": consistency_status,
+        "caked_acceptance_metric_inconsistent": bool(inconsistent_rows),
+        "caked_acceptance_metric_checked_count": int(consistency_checked_count),
+        "caked_acceptance_metric_inconsistent_count": int(len(inconsistent_rows)),
+        "caked_acceptance_metric_max_delta_norm_deg": float(consistency_max_delta),
+        "caked_acceptance_metric_tolerance_deg": float(CAKED_ACCEPTANCE_CONSISTENCY_TOL_DEG),
+        "caked_acceptance_metric_inconsistent_rows": inconsistent_rows,
+        "caked_acceptance_metric_trace_rows": trace_rows,
     }
 
 
@@ -830,6 +1001,15 @@ def _classify_dynamic_angular_failure(summary: Mapping[str, object]) -> Dict[str
         return {
             "dynamic_angular_failure_classification": "summary_mismatch",
             "recommended_next_fix": "recompute_summary_from_row_records",
+        }
+    if (
+        bool(summary.get("caked_acceptance_metric_inconsistent", False))
+        or str(summary.get("caked_acceptance_metric_consistency_status", "") or "")
+        == "inconsistent"
+    ):
+        return {
+            "dynamic_angular_failure_classification": CAKED_ACCEPTANCE_METRIC_INCONSISTENT,
+            "recommended_next_fix": "inspect_acceptance_metric_sources",
         }
     if _dynamic_angular_objective_already_aligned(summary):
         return {
@@ -2201,6 +2381,7 @@ def _manual_caked_fit_space_readiness_summary(
     predicted_count = 0
     exact_projector_available = False
     dynamic_prediction_available = False
+    dynamic_prediction_probe_available = False
     saw_candidate_dataset = False
     missing_reasons: Set[str] = set()
 
@@ -2220,18 +2401,24 @@ def _manual_caked_fit_space_readiness_summary(
             str(spec.get("fit_space_projector_kind", "") or "") == "exact_caked_bundle"
             and callable(spec.get("fit_space_projector"))
         )
-        has_dynamic_prediction = callable(spec.get("qr_fit_trial_source_rows_builder"))
+        has_dynamic_prediction_probe = callable(spec.get("qr_fit_trial_source_rows_builder"))
         exact_projector_available = bool(exact_projector_available or has_exact_projector)
-        dynamic_prediction_available = bool(dynamic_prediction_available or has_dynamic_prediction)
+        dynamic_prediction_probe_available = bool(
+            dynamic_prediction_probe_available or has_dynamic_prediction_probe
+        )
         expected_count += int(len(fixed_entries))
         if not has_exact_projector:
             missing_reasons.add("missing_exact_caked_projector")
         for entry in fixed_entries:
+            has_dynamic_prediction = _fit_prediction_has_dynamic_objective_proof(entry)
+            dynamic_prediction_available = bool(
+                dynamic_prediction_available or has_dynamic_prediction
+            )
             if _entry_has_caked_fit_space_anchor(entry):
                 observed_count += 1
             else:
                 missing_reasons.add("missing_observed_caked_anchor")
-            if _entry_has_caked_fit_space_prediction(entry) or has_dynamic_prediction:
+            if _entry_has_caked_fit_space_prediction(entry) or has_dynamic_prediction_probe:
                 predicted_count += 1
             else:
                 missing_reasons.add("missing_predicted_caked_anchor")
@@ -2251,6 +2438,10 @@ def _manual_caked_fit_space_readiness_summary(
         "predicted_caked_count": int(predicted_count),
         "exact_projector_available": bool(exact_projector_available),
         "dynamic_prediction_available": bool(dynamic_prediction_available),
+        "dynamic_prediction_probe_available": bool(dynamic_prediction_probe_available),
+        "dynamic_prediction_candidate_available": bool(
+            dynamic_prediction_available or dynamic_prediction_probe_available
+        ),
         "missing_reasons": sorted(missing_reasons),
     }
 
@@ -5908,6 +6099,11 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             "saved_sim_detector_native_rejected_reason",
             "fit_prediction_resolver_function",
             "prediction_source",
+            "prediction_role",
+            "fit_prediction_is_dynamic",
+            "fit_prediction_is_dynamic_candidate",
+            "endpoint_semantic_status",
+            "caked_acceptance_row_source",
             "fit_qr_branch_key",
             "fit_qr_branch_key_missing_fields",
             "fit_qr_branch_identity",
@@ -5985,6 +6181,13 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
         "objective_cache_mode",
         "objective_cache_hit",
         "objective_cache_reject_reason",
+        "prediction_source",
+        "prediction_role",
+        "fit_prediction_is_dynamic",
+        "fit_prediction_is_dynamic_candidate",
+        "endpoint_semantic_status",
+        "caked_acceptance_row_source",
+        "dynamic_prediction_unavailable_reason",
     )
 
     def _append_qr_fit_missing_pair(
@@ -7178,10 +7381,66 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                 )
             continue
 
+        fixed_manual_qr_pair = _fixed_manual_qr_pair_requires_shared_resolver(measured_entry)
+        if fixed_manual_qr_pair and not _fit_prediction_has_dynamic_objective_proof(fit_prediction):
+            fit_prediction = dict(fit_prediction)
+            fit_prediction.update(
+                {
+                    "available": False,
+                    "unavailable_reason": QR_DYNAMIC_PREDICTION_UNAVAILABLE,
+                    "dynamic_prediction_unavailable_reason": (
+                        "non_dynamic_prediction_rejected_for_caked_objective"
+                    ),
+                    "caked_objective_rejected_non_dynamic_prediction": True,
+                    "endpoint_semantic_status": _fit_prediction_endpoint_semantics(fit_prediction),
+                    "caked_acceptance_row_source": _caked_acceptance_row_source(fit_prediction),
+                }
+            )
+            unavailable_reason = str(fit_prediction["unavailable_reason"])
+            _append_qr_fit_missing_pair(
+                idx,
+                diag,
+                measured_entry,
+                unavailable_reason,
+                fit_prediction,
+            )
+            residual_components[idx, 0] = float(missing_pair_penalty_deg) * float(priority_weight)
+            residual_components[idx, 1] = 0.0
+            missing_pairs += 1
+            if collect_diagnostics:
+                diagnostics.append(
+                    {
+                        **diag,
+                        "dataset_index": int(dataset_ctx.dataset_index),
+                        "dataset_label": str(dataset_ctx.label),
+                        "theta_initial_deg": float(theta_value),
+                        "match_kind": "fixed_source",
+                        "match_status": "missing_pair",
+                        "resolution_kind": "fit_prediction",
+                        "resolution_reason": "fit_prediction_unavailable",
+                        "resolution_subreason": str(
+                            fit_prediction["dynamic_prediction_unavailable_reason"]
+                        ),
+                        **_resolution_trace_fields(fit_prediction),
+                        "fit_prediction_unavailable_reason": unavailable_reason,
+                        **fit_prediction,
+                        **measured_diag_fields,
+                        **simulated_diag_fields,
+                        "valid": False,
+                        "invalid_projection_reason": str(
+                            fit_prediction["dynamic_prediction_unavailable_reason"]
+                        ),
+                        "weighted_missing_penalty_deg": float(missing_pair_penalty_deg)
+                        * float(priority_weight),
+                        **priority_fields,
+                    }
+                )
+            continue
+
         _remember_candidate_source_rows(fit_prediction)
         nominal_caked = fit_prediction.get("sim_nominal_caked_deg", (np.nan, np.nan))
         refined_caked = fit_prediction.get("sim_refined_caked_deg", (np.nan, np.nan))
-        if _fixed_manual_qr_pair_requires_shared_resolver(measured_entry):
+        if fixed_manual_qr_pair:
             qr_fit_resolved_count += 1
         sim_two_theta = float(refined_caked[0])
         sim_phi = float(refined_caked[1])
@@ -7360,6 +7619,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                 "q_group_key": _dynamic_reanchor_jsonable(diag.get("q_group_key")),
                 "hkl": _dynamic_reanchor_jsonable(diag.get("hkl")),
                 "source_branch_index": diag.get("source_branch_index"),
+                "branch_index": diag.get("source_branch_index"),
                 "source_table_index": diag.get("source_table_index"),
                 "source_row_index": diag.get("source_row_index"),
                 "source_peak_index": diag.get("source_peak_index"),
@@ -7367,6 +7627,10 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                 "predicted_caked_deg": objective_sim_caked_deg,
                 "objective_sim_caked_deg": list(objective_sim_caked_deg),
                 "observed_caked_authority": "manual_target_caked_deg",
+                "observed_caked_source_field": str(measured_reason),
+                "observed_caked_source": measured_fit_space_source,
+                "predicted_caked_source_field": "sim_refined_caked_deg",
+                "predicted_caked_source": fit_prediction.get("sim_refined_caked_authority"),
                 "fit_prediction_caked_authority": fit_prediction.get(
                     "fit_prediction_caked_authority"
                 ),
@@ -7387,6 +7651,20 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                 "weighted_delta_phi_deg": float(weighted_delta_phi),
                 "weighted_angular_residual_norm_deg": float(weighted_angular_distance),
                 "fit_prediction_source": fit_prediction.get("prediction_source"),
+                "prediction_role": fit_prediction.get("prediction_role"),
+                "fit_prediction_is_dynamic": fit_prediction.get("fit_prediction_is_dynamic"),
+                "fit_prediction_is_dynamic_candidate": fit_prediction.get(
+                    "fit_prediction_is_dynamic_candidate"
+                ),
+                "endpoint_semantic_status": _fit_prediction_endpoint_semantics(fit_prediction),
+                "caked_acceptance_row_source": _caked_acceptance_row_source(fit_prediction),
+                "fit_residual_caked_norm_deg": _safe_float(
+                    measured_entry.get("fit_residual_caked_norm_deg"),
+                    float("nan"),
+                ),
+                "fit_residual_caked_deg": _dynamic_reanchor_jsonable(
+                    measured_entry.get("fit_residual_caked_deg")
+                ),
                 "resolution_reason": str(sim_reason),
                 "locked_qr_detector_point_source": fit_prediction.get(
                     "locked_qr_detector_point_source"
@@ -21520,11 +21798,78 @@ def _resolve_locked_qr_handoff_native_prediction(
     }
 
 
+def _normalize_qr_prediction_role(value: object) -> str:
+    role = str(value or "").strip()
+    if role in {
+        QR_PREDICTION_ROLE_OBJECTIVE_TRIAL,
+        QR_PREDICTION_ROLE_FINAL_DYNAMIC,
+        QR_PREDICTION_ROLE_DIAGNOSTIC_LOCKED_FALLBACK,
+    }:
+        return role
+    return QR_PREDICTION_ROLE_OBJECTIVE_TRIAL
+
+
+def _prediction_value_is_true(value: object) -> bool:
+    if value is True:
+        return True
+    return str(value or "").strip().lower() in {"1", "true", "yes", "dynamic"}
+
+
+def _fit_prediction_endpoint_semantics(entry: Mapping[str, object]) -> str:
+    if _prediction_value_is_true(entry.get("fit_prediction_is_dynamic")):
+        return "dynamic_final_prediction"
+    prediction_source = str(
+        entry.get("prediction_source", entry.get("fit_prediction_source", "")) or ""
+    ).lower()
+    if "locked_manual_qr" in prediction_source or "saved" in prediction_source:
+        return "locked_saved_prediction"
+    if bool(entry.get("stale_final_sim", False)):
+        return "stale_prediction"
+    return "missing_dynamic_source"
+
+
+def _fit_prediction_has_dynamic_objective_proof(entry: Mapping[str, object]) -> bool:
+    role = str(entry.get("prediction_role") or "").strip()
+    if role not in {
+        QR_PREDICTION_ROLE_OBJECTIVE_TRIAL,
+        QR_PREDICTION_ROLE_FINAL_DYNAMIC,
+    }:
+        return False
+    source = (
+        str(entry.get("fit_prediction_source", entry.get("prediction_source", "")) or "")
+        .strip()
+        .lower()
+    )
+    if source.startswith("locked_manual_qr:saved"):
+        return False
+    return _prediction_value_is_true(entry.get("fit_prediction_is_dynamic"))
+
+
+def _caked_acceptance_row_source(entry: Mapping[str, object]) -> str:
+    resolver_path = str(entry.get("resolver_path", "") or "").strip()
+    if resolver_path:
+        return resolver_path
+    source = str(entry.get("prediction_source", "") or "").strip()
+    if source.startswith("locked_manual_qr:"):
+        return "handoff"
+    if str(entry.get("source_rows_rebuilt_or_reused", "") or "").strip():
+        return "trial_source_rows"
+    if str(entry.get("objective_cache_mode", "") or "").strip():
+        return "source_cache"
+    if bool(entry.get("used_sim_nominal_caked_for_objective", False)):
+        return "nominal_caked"
+    if bool(entry.get("used_sim_refined_caked", False)):
+        return "refined_caked"
+    return "unknown"
+
+
 def _resolve_qr_fit_prediction_from_trial_params(
     pair: Mapping[str, object],
     trial_params: Mapping[str, object],
     fit_context: Mapping[str, object],
     locked_correspondence: Mapping[str, object],
+    *,
+    prediction_role: object = QR_PREDICTION_ROLE_OBJECTIVE_TRIAL,
 ) -> Dict[str, object]:
     """Regenerate one locked Qr prediction from trial params, project, refine in cake."""
 
@@ -21536,7 +21881,13 @@ def _resolve_qr_fit_prediction_from_trial_params(
     params_signature = _fit_prediction_trial_params_signature(trial_params)
     detector_sim_signature = _fit_prediction_array_signature(sim_buffer)
     point_only_projection = bool(fit_context.get("_qr_fit_point_only_projection", False))
-    disable_early_handoff = _optimization_env_flag_enabled(QR_DISABLE_EARLY_HANDOFF_ENV)
+    normalized_prediction_role = _normalize_qr_prediction_role(prediction_role)
+    locked_handoff_allowed = (
+        normalized_prediction_role == QR_PREDICTION_ROLE_DIAGNOSTIC_LOCKED_FALLBACK
+    )
+    early_handoff_disabled_by_env = _optimization_env_flag_enabled(QR_DISABLE_EARLY_HANDOFF_ENV)
+    disable_early_handoff = bool(not locked_handoff_allowed or early_handoff_disabled_by_env)
+    prefer_trial_source_rows = not locked_handoff_allowed
     handoff_attempted = False
     handoff_accepted = False
     hit_table_attempted = False
@@ -21544,6 +21895,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
     trial_source_rows_attempted = False
     out: Dict[str, object] = {
         "prediction_source": "dynamic_trial_simulation:locked_manual_qr_fit_prediction",
+        "prediction_role": normalized_prediction_role,
         "fit_prediction_resolver_function": "_resolve_qr_fit_prediction_from_trial_params",
         "params_signature": params_signature,
         "simulation_cache_signature": detector_sim_signature,
@@ -21553,7 +21905,10 @@ def _resolve_qr_fit_prediction_from_trial_params(
         "reuse_valid_for_same_params_signature": True,
         "stale_prediction_cache_used_for_trial_params": False,
         "point_only_projection": bool(point_only_projection),
-        "early_handoff_skipped_by_env": bool(disable_early_handoff),
+        "early_handoff_skipped_by_env": bool(
+            locked_handoff_allowed and early_handoff_disabled_by_env
+        ),
+        "early_handoff_skipped_by_role": bool(not locked_handoff_allowed),
         "branch_identity": _copy_source_identity_payload(locked_correspondence),
     }
     locked_key, locked_missing_fields, _locked_identity_payload = _fit_qr_branch_key_payload(
@@ -21566,13 +21921,19 @@ def _resolve_qr_fit_prediction_from_trial_params(
     def _handoff_native_payload() -> Dict[str, object] | None:
         nonlocal handoff_attempted
         handoff_attempted = True
-        return _resolve_locked_qr_handoff_native_prediction(
+        payload = _resolve_locked_qr_handoff_native_prediction(
             pair=pair,
             trial_params=trial_params,
             fit_context=fit_context,
             locked_correspondence=locked_correspondence,
             dataset_ctx=dataset_ctx,
         )
+        if payload is not None:
+            payload = dict(payload)
+            payload["prediction_role"] = QR_PREDICTION_ROLE_DIAGNOSTIC_LOCKED_FALLBACK
+            payload["prediction_source"] = "locked_manual_qr:fit_prediction_detector_native_px"
+            payload["fit_prediction_is_dynamic"] = "no"
+        return payload
 
     def _resolver_path_from_state(default: str = "unresolved") -> str:
         source = str(out.get("locked_qr_detector_point_source", "") or "")
@@ -21607,10 +21968,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 "trial_source_rows_signature": source_rows_signature,
                 "trial_source_rows_source": source_rows_source,
                 "point_only_projection": bool(point_only_projection),
-                "fit_prediction_is_dynamic_candidate": bool(
-                    str(path) not in {"handoff", "fallback_handoff"}
-                    and bool(out.get("available", False))
-                ),
+                "prediction_role": normalized_prediction_role,
                 "params_signature": params_signature,
                 "simulation_cache_signature": out.get(
                     "simulation_cache_signature",
@@ -21623,6 +21981,17 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 ),
             }
         )
+        is_dynamic_candidate = bool(
+            normalized_prediction_role
+            in {
+                QR_PREDICTION_ROLE_OBJECTIVE_TRIAL,
+                QR_PREDICTION_ROLE_FINAL_DYNAMIC,
+            }
+            and str(path) not in {"handoff", "fallback_handoff"}
+            and bool(out.get("available", False))
+        )
+        out["fit_prediction_is_dynamic_candidate"] = bool(is_dynamic_candidate)
+        out["fit_prediction_is_dynamic"] = "yes" if is_dynamic_candidate else "no"
         LOGGER.info(
             "qr_fit_prediction_resolver %s",
             {
@@ -21692,14 +22061,33 @@ def _resolve_qr_fit_prediction_from_trial_params(
             "objective_process_peaks_called": False,
         }
 
+    def _resolve_trial_source_rows_detector_point() -> Tuple[
+        Optional[Tuple[float, float]], Dict[str, object]
+    ]:
+        nonlocal source_rows_payload, source_point, source_payload
+        if source_rows_payload is None:
+            source_rows_payload = _trial_source_rows_payload()
+        if source_payload is None:
+            source_point, source_payload = _resolve_locked_qr_trial_detector_point_from_source_rows(
+                locked_correspondence,
+                source_rows_payload=source_rows_payload,
+            )
+        return source_point, dict(source_payload or {})
+
     hit_table_payload: Dict[str, object] = {
         "resolution_reason": "locked_hit_table_resolver_not_attempted"
     }
     sim_point: Optional[Tuple[float, float]] = None
+    source_point: Optional[Tuple[float, float]] = None
+    source_payload: Dict[str, object] | None = None
     deferred_hit_table_sim_point: Optional[Tuple[float, float]] = None
     deferred_hit_table_payload: Dict[str, object] | None = None
     resolution_payload: Dict[str, object]
-    if hit_tables:
+    if prefer_trial_source_rows:
+        source_point, source_payload = _resolve_trial_source_rows_detector_point()
+        if source_point is not None:
+            sim_point = source_point
+    if sim_point is None and hit_tables:
         hit_table_attempted = True
         sim_point, hit_table_payload = _resolve_locked_qr_trial_detector_point_from_hit_tables(
             locked_correspondence,
@@ -21728,46 +22116,52 @@ def _resolve_qr_fit_prediction_from_trial_params(
                 sim_point = None
             else:
                 hit_table_accepted = True
-    elif point_only_projection:
+    elif sim_point is None and point_only_projection:
         hit_table_payload["resolution_reason"] = "locked_hit_table_resolver_skipped_point_only"
     if sim_point is not None:
-        source_rows_diag = _skipped_trial_source_rows_payload()
-        resolution_payload = dict(hit_table_payload)
-        resolution_payload.update(
-            {
-                "trial_source_rows_available": bool(source_rows_diag.get("available", False)),
-                "trial_source_rows_count": int(
-                    source_rows_diag.get(
-                        "row_count",
-                        len(source_rows_diag.get("rows", ()) or ()),
-                    )
-                    or 0
-                ),
-                "trial_source_rows_signature": source_rows_diag.get("source_rows_signature"),
-                "trial_source_rows_source": source_rows_diag.get("source"),
-                "source_rows_rebuilt_or_reused": source_rows_diag.get(
-                    "source_rows_rebuilt_or_reused"
-                ),
-                "reuse_valid_for_same_params_signature": source_rows_diag.get(
-                    "reuse_valid_for_same_params_signature"
-                ),
-                "objective_cache_mode": source_rows_diag.get("objective_cache_mode"),
-                "objective_cache_hit": bool(source_rows_diag.get("objective_cache_hit", False)),
-                "objective_cache_reject_reason": source_rows_diag.get(
-                    "objective_cache_reject_reason"
-                ),
-                "objective_process_peaks_called": bool(
-                    source_rows_diag.get("objective_process_peaks_called", False)
-                ),
-                "locked_qr_detector_point_source": "trial_hit_tables_locked_representative",
-            }
-        )
+        if source_point is not None and source_payload is not None:
+            resolution_payload = dict(source_payload)
+            resolution_payload.update(
+                {
+                    "hit_table_resolution_reason": hit_table_payload.get("resolution_reason"),
+                    "hit_table_resolution_kind": hit_table_payload.get("resolution_kind"),
+                    "locked_qr_detector_point_source": "trial_source_rows_locked_representative",
+                }
+            )
+        else:
+            source_rows_diag = _skipped_trial_source_rows_payload()
+            resolution_payload = dict(hit_table_payload)
+            resolution_payload.update(
+                {
+                    "trial_source_rows_available": bool(source_rows_diag.get("available", False)),
+                    "trial_source_rows_count": int(
+                        source_rows_diag.get(
+                            "row_count",
+                            len(source_rows_diag.get("rows", ()) or ()),
+                        )
+                        or 0
+                    ),
+                    "trial_source_rows_signature": source_rows_diag.get("source_rows_signature"),
+                    "trial_source_rows_source": source_rows_diag.get("source"),
+                    "source_rows_rebuilt_or_reused": source_rows_diag.get(
+                        "source_rows_rebuilt_or_reused"
+                    ),
+                    "reuse_valid_for_same_params_signature": source_rows_diag.get(
+                        "reuse_valid_for_same_params_signature"
+                    ),
+                    "objective_cache_mode": source_rows_diag.get("objective_cache_mode"),
+                    "objective_cache_hit": bool(source_rows_diag.get("objective_cache_hit", False)),
+                    "objective_cache_reject_reason": source_rows_diag.get(
+                        "objective_cache_reject_reason"
+                    ),
+                    "objective_process_peaks_called": bool(
+                        source_rows_diag.get("objective_process_peaks_called", False)
+                    ),
+                    "locked_qr_detector_point_source": "trial_hit_tables_locked_representative",
+                }
+            )
     else:
-        source_rows_payload = _trial_source_rows_payload()
-        source_point, source_payload = _resolve_locked_qr_trial_detector_point_from_source_rows(
-            locked_correspondence,
-            source_rows_payload=source_rows_payload,
-        )
+        source_point, source_payload = _resolve_trial_source_rows_detector_point()
         sim_point = source_point
         resolution_payload = dict(source_payload)
         resolution_payload["hit_table_resolution_reason"] = hit_table_payload.get(
@@ -21793,6 +22187,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
         elif (
             deferred_hit_table_sim_point is not None
             and _finite_pair(deferred_hit_table_sim_point) is not None
+            and not prefer_trial_source_rows
             and not bool(source_rows_payload.get("available", False))
             and source_rows_builder_unavailable
         ):
@@ -22052,7 +22447,8 @@ def _resolve_qr_fit_prediction_from_trial_params(
         static_point = static_payload.get("point")
         retained_static_caked_prediction = False
         if (
-            not retained_source_row_refined_prediction
+            locked_handoff_allowed
+            and not retained_source_row_refined_prediction
             and isinstance(observed_point, tuple)
             and isinstance(static_point, tuple)
         ):
@@ -22153,7 +22549,7 @@ def _resolve_qr_fit_prediction_from_trial_params(
         )
         return _finalize_resolver("trial_source_rows")
     if sim_point is None:
-        if handoff_payload is None:
+        if locked_handoff_allowed and handoff_payload is None:
             handoff_payload = _handoff_native_payload()
         if handoff_payload is not None:
             handoff_accepted = True
@@ -22166,7 +22562,16 @@ def _resolve_qr_fit_prediction_from_trial_params(
             reason = "point_only_dynamic_sim_visual_caked_deg_unavailable"
             out["sim_refinement_status"] = "point_only_dynamic_source_unavailable"
             out["sim_refinement_policy"] = "point_only_fail_closed"
-        out.update({"available": False, "unavailable_reason": reason})
+        unavailable_reason = (
+            QR_DYNAMIC_PREDICTION_UNAVAILABLE if not locked_handoff_allowed else reason
+        )
+        out.update(
+            {
+                "available": False,
+                "unavailable_reason": unavailable_reason,
+                "dynamic_prediction_unavailable_reason": reason,
+            }
+        )
         return _finalize_resolver("unresolved")
     try:
         sim_col = float(sim_point[0])
@@ -24208,13 +24613,28 @@ def fit_geometry_parameters(
     manual_caked_predicted_count = int(
         manual_caked_fit_space_readiness.get("predicted_caked_count", 0) or 0
     )
+    manual_caked_dynamic_prediction_available = bool(
+        manual_caked_fit_space_readiness.get("dynamic_prediction_available", False)
+    )
+    manual_caked_dynamic_prediction_probe_available = bool(
+        manual_caked_fit_space_readiness.get("dynamic_prediction_probe_available", False)
+    )
+    manual_caked_dynamic_prediction_candidate_available = bool(
+        manual_caked_fit_space_readiness.get(
+            "dynamic_prediction_candidate_available",
+            manual_caked_dynamic_prediction_available
+            or manual_caked_dynamic_prediction_probe_available,
+        )
+    )
     manual_caked_missing_reasons = list(
         manual_caked_fit_space_readiness.get("missing_reasons", ()) or ()
     )
+    active_gamma_fit = any(str(name) in {"gamma", "Gamma"} for name in var_names)
     dynamic_point_geometry_fit_auto_enabled = bool(
         point_match_mode
         and not dynamic_point_geometry_fit_requested
         and manual_caked_fit_space_ready
+        and manual_caked_dynamic_prediction_candidate_available
     )
     dynamic_point_geometry_fit = bool(
         dynamic_point_geometry_fit_requested or dynamic_point_geometry_fit_auto_enabled
@@ -24647,12 +25067,18 @@ def fit_geometry_parameters(
     params.setdefault("theta_offset", 0.0)
 
     if manual_caked_fit_space_required or manual_caked_fit_space_ready:
-        route_evaluator = (
-            "dynamic_angular_point_match"
-            if manual_caked_fit_space_ready
-            else "manual_caked_fit_space_missing"
+        route_ready = bool(
+            manual_caked_fit_space_ready and manual_caked_dynamic_prediction_candidate_available
         )
-        route_unit = "deg" if manual_caked_fit_space_ready else "none"
+        if route_ready and manual_caked_dynamic_prediction_available:
+            route_evaluator = "dynamic_angular_point_match"
+        elif route_ready and manual_caked_dynamic_prediction_probe_available:
+            route_evaluator = "dynamic_prediction_probe_required"
+        elif manual_caked_fit_space_ready and not manual_caked_dynamic_prediction_available:
+            route_evaluator = MANUAL_QR_DYNAMIC_PREDICTION_UNAVAILABLE
+        else:
+            route_evaluator = "manual_caked_fit_space_missing"
+        route_unit = "deg" if route_ready else "none"
         _emit_status(
             "manual_caked_route_check "
             f"objective_space=caked_deg "
@@ -24724,6 +25150,15 @@ def fit_geometry_parameters(
             "manual_caked_fit_pair_count": int(manual_caked_fit_pair_count),
             "manual_caked_fit_observed_caked_count": int(manual_caked_observed_count),
             "manual_caked_fit_predicted_caked_count": int(manual_caked_predicted_count),
+            "manual_caked_dynamic_prediction_available": bool(
+                manual_caked_dynamic_prediction_available
+            ),
+            "manual_caked_dynamic_prediction_probe_available": bool(
+                manual_caked_dynamic_prediction_probe_available
+            ),
+            "manual_caked_dynamic_prediction_candidate_available": bool(
+                manual_caked_dynamic_prediction_candidate_available
+            ),
             "manual_caked_fit_missing_reasons": list(manual_caked_missing_reasons),
         }
         if isinstance(extra_summary, Mapping):
@@ -24736,6 +25171,15 @@ def fit_geometry_parameters(
             "manual_caked_fit_pair_count": int(manual_caked_fit_pair_count),
             "manual_caked_fit_observed_caked_count": int(manual_caked_observed_count),
             "manual_caked_fit_predicted_caked_count": int(manual_caked_predicted_count),
+            "manual_caked_dynamic_prediction_available": bool(
+                manual_caked_dynamic_prediction_available
+            ),
+            "manual_caked_dynamic_prediction_probe_available": bool(
+                manual_caked_dynamic_prediction_probe_available
+            ),
+            "manual_caked_dynamic_prediction_candidate_available": bool(
+                manual_caked_dynamic_prediction_candidate_available
+            ),
             "manual_caked_fit_missing_reasons": list(manual_caked_missing_reasons),
             "dynamic_point_geometry_fit": bool(dynamic_point_geometry_fit),
             "dynamic_point_geometry_fit_auto_enabled": bool(
@@ -24800,6 +25244,15 @@ def fit_geometry_parameters(
             "expected_fixed_qr_pair_count": int(locked_manual_qr_expected_count),
             "locked_manual_qr_pair_ids": list(locked_manual_qr_route.get("pair_ids", ()) or ()),
             "exact_fit_space_projector_available": bool(locked_manual_qr_exact_projector_available),
+            "manual_caked_dynamic_prediction_available": bool(
+                manual_caked_dynamic_prediction_available
+            ),
+            "manual_caked_dynamic_prediction_probe_available": bool(
+                manual_caked_dynamic_prediction_probe_available
+            ),
+            "manual_caked_dynamic_prediction_candidate_available": bool(
+                manual_caked_dynamic_prediction_candidate_available
+            ),
         }
         if not locked_manual_qr_exact_projector_available:
             return _manual_caked_preflight_failure_result(
@@ -24809,6 +25262,27 @@ def fit_geometry_parameters(
                     "refusing detector-pixel central_point_match fallback"
                 ),
                 status=-12,
+                extra_summary=locked_summary,
+            )
+        if manual_caked_fit_space_required and not manual_caked_fit_space_ready:
+            return _manual_caked_preflight_failure_result(
+                reason="manual_caked_fit_space_missing",
+                message=(
+                    "manual caked fit-space requires exact caked anchors/projector; "
+                    "refusing detector-pixel central_point_match fallback"
+                ),
+                status=-10,
+            )
+        if (
+            active_gamma_fit
+            and manual_caked_fit_space_ready
+            and not manual_caked_dynamic_prediction_candidate_available
+        ):
+            _emit_status(GEOMETRY_FIT_DYNAMIC_PREDICTION_UNAVAILABLE_TEXT)
+            return _manual_caked_preflight_failure_result(
+                reason=MANUAL_QR_DYNAMIC_PREDICTION_UNAVAILABLE,
+                message=MANUAL_QR_DYNAMIC_PREDICTION_UNAVAILABLE,
+                status=-14,
                 extra_summary=locked_summary,
             )
         if not dynamic_point_geometry_fit or not manual_caked_fit_space_ready:
@@ -27453,6 +27927,9 @@ def fit_geometry_parameters(
         "manual_caked_fit_pair_count": int(manual_caked_fit_pair_count),
         "manual_caked_fit_observed_caked_count": int(manual_caked_observed_count),
         "manual_caked_fit_predicted_caked_count": int(manual_caked_predicted_count),
+        "manual_caked_dynamic_prediction_available": bool(
+            manual_caked_dynamic_prediction_available
+        ),
         "manual_caked_fit_missing_reasons": list(manual_caked_missing_reasons),
         "provider_local_saved_sim_offset_baseline_primed": bool(
             provider_local_saved_sim_offset_baseline_primed
@@ -27755,6 +28232,73 @@ def fit_geometry_parameters(
                 "identity_baseline_rows": copy.deepcopy(baseline_rows),
             }
             geometry_fit_debug_summary.update(copy.deepcopy(locked_qr_identity_baseline_payload))
+            active_gamma_fit = any(str(name) in {"gamma", "Gamma"} for name in var_names)
+            dynamic_unavailable_pairs = [
+                dict(item)
+                for item in (preflight_summary.get("qr_fit_missing_pairs", ()) or ())
+                if isinstance(item, Mapping)
+            ]
+            if active_gamma_fit and dynamic_unavailable_pairs:
+                reason = MANUAL_QR_DYNAMIC_PREDICTION_UNAVAILABLE
+                public_preflight_summary = _public_point_match_summary(preflight_summary)
+                public_preflight_summary.update(
+                    {
+                        "reason": reason,
+                        "metric_name": reason,
+                        "final_metric_name": reason,
+                        "preflight_error": reason,
+                        "dynamic_prediction_unavailable_pair_count": int(
+                            len(dynamic_unavailable_pairs)
+                        ),
+                        "dynamic_prediction_unavailable_pairs": copy.deepcopy(
+                            dynamic_unavailable_pairs
+                        ),
+                        "expected_fixed_qr_pair_count": int(locked_manual_qr_expected_count),
+                        "final_matched_pair_count": int(
+                            public_preflight_summary.get("matched_pair_count", 0) or 0
+                        ),
+                    }
+                )
+                blocked_summary = copy.deepcopy(geometry_fit_debug_summary)
+                blocked_summary["optimizer_start_blocked_reason"] = reason
+                blocked_summary["dynamic_prediction_unavailable_pairs"] = copy.deepcopy(
+                    dynamic_unavailable_pairs
+                )
+                blocked_result = OptimizeResult(
+                    x=np.asarray(x0_arr, dtype=float).copy(),
+                    fun=preflight_fun,
+                    success=False,
+                    status=-14,
+                    message=reason,
+                    nfev=0,
+                    active_mask=np.zeros(np.asarray(x0_arr, dtype=float).shape, dtype=int),
+                    optimality=float("nan"),
+                )
+                blocked_result.cost = float("nan")
+                blocked_result.robust_cost = float("nan")
+                blocked_result.weighted_objective_rms = float("nan")
+                blocked_result.weighted_objective_rms_units = "deg"
+                blocked_result.weighted_residual_rms_px = float("nan")
+                blocked_result.rms_px = float("nan")
+                blocked_result.rms_deg = float("nan")
+                blocked_result.max_deg = float("nan")
+                blocked_result.final_metric_name = reason
+                blocked_result.final_metric_space = "caked_deg"
+                blocked_result.final_metric_units = "deg"
+                blocked_result.optimizer_start_blocked_reason = reason
+                blocked_result.dynamic_prediction_unavailable_pairs = copy.deepcopy(
+                    dynamic_unavailable_pairs
+                )
+                blocked_result.objective_trace = copy.deepcopy(objective_trace_records)
+                blocked_result.point_match_diagnostics = [
+                    dict(entry) for entry in preflight_diagnostics if isinstance(entry, Mapping)
+                ]
+                blocked_result.point_match_summary = public_preflight_summary
+                blocked_result.least_squares_called = False
+                blocked_result.optimizer_solve_called = False
+                blocked_result.geometry_fit_debug_summary = blocked_summary
+                _emit_status(GEOMETRY_FIT_DYNAMIC_PREDICTION_UNAVAILABLE_TEXT)
+                return blocked_result
         preflight_anchor_diagnostics = _qr_dynamic_baseline_anchor_diagnostics(
             preflight_diagnostics
         )
@@ -36733,7 +37277,7 @@ def fit_geometry_parameters(
                             )
                     if not acceptable_dynamic_objective:
                         point_match_summary["first_acceptance_metric_divergence"] = (
-                            "dynamic_objective_not_sensitive_to_fit_variables"
+                            OBJECTIVE_INSENSITIVE_TO_ACTIVE_PARAMS
                         )
                         point_match_summary["recommended_next_fix"] = (
                             "thread_trial_params_to_projector"
@@ -36746,7 +37290,7 @@ def fit_geometry_parameters(
                     ):
                         result.success = False
                         result.status = -9
-                        result.message = "dynamic_objective_not_sensitive_to_fit_variables"
+                        result.message = OBJECTIVE_INSENSITIVE_TO_ACTIVE_PARAMS
             point_match_summary["single_ray_coarse_enabled"] = False
             point_match_summary["full_beam_polish_enabled"] = bool(
                 full_beam_polish_summary.get("enabled", False)
@@ -37329,15 +37873,20 @@ def fit_geometry_parameters(
         )
     else:
         failure_reason = str(getattr(result, "message", "") or "").strip()
-        failure_reason_part = f", reason={failure_reason}" if failure_reason else ""
-        _emit_status(
-            "Geometry fit: failed "
-            f"(status={int(getattr(result, 'status', 0) or 0)}"
-            f"{failure_reason_part}, "
-            f"cost={float(getattr(result, 'cost', np.nan)):.6f}, "
-            f"{completion_metric_text}"
-            f"{metric_part}{matched_pair_count_text})"
-        )
+        if failure_reason == MANUAL_QR_DYNAMIC_PREDICTION_UNAVAILABLE:
+            _emit_status(GEOMETRY_FIT_DYNAMIC_PREDICTION_UNAVAILABLE_TEXT)
+        elif failure_reason == OBJECTIVE_INSENSITIVE_TO_ACTIVE_PARAMS:
+            _emit_status(GEOMETRY_FIT_OBJECTIVE_INSENSITIVE_TEXT)
+        else:
+            failure_reason_part = f", reason={failure_reason}" if failure_reason else ""
+            _emit_status(
+                "Geometry fit: failed "
+                f"(status={int(getattr(result, 'status', 0) or 0)}"
+                f"{failure_reason_part}, "
+                f"cost={float(getattr(result, 'cost', np.nan)):.6f}, "
+                f"{completion_metric_text}"
+                f"{metric_part}{matched_pair_count_text})"
+            )
     if metric_space_text == "caked_deg" and isinstance(point_match_summary, Mapping):
         _emit_status(
             "dynamic angular residual summary: "

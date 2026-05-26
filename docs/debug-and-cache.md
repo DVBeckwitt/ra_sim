@@ -89,6 +89,26 @@ The GUI acceptance gate remains detector-pixel strict even when caked angular
 diagnostics are present. The caked angular acceptance shortcut is reserved for
 true headless geometry-fit runs that set the private headless runtime flag.
 
+### Manual QR/Qz Caked Acceptance Status
+
+Status: fixed in the current working tree.
+
+Locked manual Qr/Qz caked fits distinguish dynamic prediction candidates from
+dynamic prediction proof. A callable trial source-row builder only means the
+fit can probe for dynamic predictions; it is not enough to label the route as
+`dynamic_angular_point_match` before a row proves:
+
+- `prediction_role` is `objective_trial` or `final_dynamic_prediction`
+- `fit_prediction_is_dynamic=yes`
+- `fit_prediction_source` is not a locked saved manual QR handoff
+
+If pair-audit caked residuals and final caked acceptance rows disagree for the
+same pairs, the failure class is `caked_acceptance_metric_inconsistent` and the
+recommended next fix is `inspect_acceptance_metric_sources`, not manual
+repicking. When active `gamma` or `Gamma` fitting has only locked/non-dynamic
+predictions available, the route fails closed with
+`manual_qr_dynamic_prediction_unavailable` before optimizer solve.
+
 For Bi2Se3 headless `gamma,Gamma` recovery runs, `fit-geometry` now writes visual
 approval artifacts into the same output directory as the fitted state and
 progress sidecar. A run such as:
