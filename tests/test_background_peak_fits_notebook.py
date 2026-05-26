@@ -4663,7 +4663,7 @@ def test_choose_final_output_dir_destroys_tk_root_when_dialog_raises(
     monkeypatch.setitem(sys.modules, "tkinter", fake_tk)
     monkeypatch.setitem(sys.modules, "tkinter.filedialog", fake_filedialog)
 
-    with pytest.raises(RuntimeError, match="final output folder chooser unavailable"):
+    with pytest.raises(RuntimeError, match="final figure output folder chooser unavailable"):
         choose_final_output_dir(
             mode="popup",
             output_dir=Path("out"),
@@ -4673,10 +4673,61 @@ def test_choose_final_output_dir_destroys_tk_root_when_dialog_raises(
         )
 
     assert destroyed == [True]
-    assert "waiting for final output folder chooser" in capsys.readouterr().out
+    assert "waiting for final figure output folder chooser" in capsys.readouterr().out
 
 
-def test_parallel_script_save_folder_chooser_updates_all_output_dirs_after_sample_detection() -> (
+def test_choose_final_output_dir_uses_directory_dialog_and_current_figure_dir(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    namespace = _script_functions("choose_final_output_dir")
+    choose_final_output_dir = namespace["choose_final_output_dir"]
+    destroyed: list[bool] = []
+    calls: list[dict[str, object]] = []
+    output_dir = tmp_path / "diagnostics"
+    figure_dir = tmp_path / "figures"
+    selected_dir = tmp_path / "selected_figures"
+
+    class _FakeRoot:
+        def withdraw(self) -> None:
+            return None
+
+        def destroy(self) -> None:
+            destroyed.append(True)
+
+    fake_tk = ModuleType("tkinter")
+    fake_filedialog = ModuleType("tkinter.filedialog")
+    fake_tk.Tk = lambda: _FakeRoot()  # type: ignore[attr-defined]
+
+    def _askdirectory(**kwargs) -> str:
+        calls.append(dict(kwargs))
+        return str(selected_dir)
+
+    fake_filedialog.askdirectory = _askdirectory  # type: ignore[attr-defined]
+    fake_tk.filedialog = fake_filedialog  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "tkinter", fake_tk)
+    monkeypatch.setitem(sys.modules, "tkinter.filedialog", fake_filedialog)
+
+    chosen = choose_final_output_dir(
+        mode="popup",
+        output_dir=output_dir,
+        figure_output_dir=figure_dir,
+        backend_name="TkAgg",
+        env={},
+    )
+
+    assert chosen == selected_dir
+    assert calls == [
+        {
+            "title": "Choose final figure output folder",
+            "initialdir": str(figure_dir),
+            "mustexist": False,
+        }
+    ]
+    assert destroyed == [True]
+
+
+def test_parallel_script_save_folder_chooser_updates_figure_dir_at_final_save_boundary() -> (
     None
 ):
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
@@ -4685,15 +4736,17 @@ def test_parallel_script_save_folder_chooser_updates_all_output_dirs_after_sampl
     assert "RA_SIM_ALL_BACKGROUND_SAVE_DIR_EDIT_MODE" in source
 
     refresh_output = source.index("refresh_figure_output_dir()")
-    chooser = source.index("selected_output_dir = choose_final_output_dir(", refresh_output)
+    used_peaks = source.index("used_peaks_md, used_peaks_csv = write_used_peaks_note()")
+    chooser = source.index("selected_figure_output_dir = choose_final_output_dir(", used_peaks)
+    figure7a = source.index("# Figure 7a:", chooser)
     active_lattice = source.index("ACTIVE_LATTICE = active_lattice_constants_from_state(state)")
-    chooser_block = source[chooser:active_lattice]
+    chooser_block = source[chooser:figure7a]
 
-    assert refresh_output < chooser < active_lattice
-    assert "OUT_DIR = selected_output_dir" in chooser_block
-    assert "FIGURE_OUT_DIR = selected_output_dir" in chooser_block
-    assert "OUT_DIR.mkdir(parents=True, exist_ok=True)" in chooser_block
-    assert "FIGURE_OUT_DIR.mkdir(parents=True, exist_ok=True)" in chooser_block
+    assert refresh_output < active_lattice < used_peaks < chooser < figure7a
+    assert re.search(r"^\s*OUT_DIR\s*=\s*selected_figure_output_dir", chooser_block, re.M) is None
+    assert re.search(r"^\s*FIGURE_OUT_DIR\s*=\s*selected_figure_output_dir", chooser_block, re.M)
+    assert re.search(r"^\s*OUT_DIR\.mkdir\(parents=True, exist_ok=True\)", chooser_block, re.M) is None
+    assert re.search(r"^\s*FIGURE_OUT_DIR\.mkdir\(parents=True, exist_ok=True\)", chooser_block, re.M)
 
 
 def test_parallel_script_refreshes_figure_output_after_state_sample_detection() -> None:
@@ -4713,7 +4766,7 @@ def test_parallel_script_prints_state_load_progress_before_output_chooser() -> N
     loading_print = source.index('print(f"loading state={STATE_PATH}", flush=True)')
     state_load = source.index('state_doc = json.loads(STATE_PATH.read_text(encoding="utf-8"))')
     background_count_print = source.index('print(f"background_files={len(background_files)}"')
-    chooser = source.index("selected_output_dir = choose_final_output_dir(")
+    chooser = source.index("selected_figure_output_dir = choose_final_output_dir(")
 
     assert loading_print < state_load < background_count_print < chooser
 

@@ -1210,16 +1210,16 @@ def choose_final_output_dir(
 
         root = tk.Tk()
         root.withdraw()
-        print("waiting for final output folder chooser...", flush=True)
+        print("waiting for final figure output folder chooser...", flush=True)
         selected = filedialog.askdirectory(
-            title="Choose final output folder",
-            initialdir=str(Path(output_dir).expanduser()),
+            title="Choose final figure output folder",
+            initialdir=str(Path(figure_output_dir).expanduser()),
             mustexist=False,
         )
     except Exception as exc:
         if str(mode or "auto").strip().lower() == "popup":
-            raise RuntimeError(f"final output folder chooser unavailable: {exc}") from exc
-        print(f"skipped final output folder chooser: {exc}")
+            raise RuntimeError(f"final figure output folder chooser unavailable: {exc}") from exc
+        print(f"skipped final figure output folder chooser: {exc}")
         return None
     finally:
         if root is not None:
@@ -6893,27 +6893,6 @@ if detected_sample_name:
     SAMPLE_LABEL = _sample_label_from_name(SAMPLE_NAME)
 refresh_figure_stems()
 refresh_figure_output_dir()
-selected_output_dir = choose_final_output_dir(
-    mode=_setting_text(
-        "SAVE_OUTPUT_DIR_EDIT_MODE_OVERRIDE",
-        "RA_SIM_ALL_BACKGROUND_SAVE_DIR_EDIT_MODE",
-        "auto",
-    ),
-    output_dir=OUT_DIR,
-    figure_output_dir=FIGURE_OUT_DIR,
-    output_dir_override=OUTPUT_DIR,
-    figure_output_dir_override=FIGURE_OUTPUT_DIR,
-    backend_name=mpl.get_backend(),
-    env=os.environ,
-)
-if selected_output_dir is not None:
-    OUT_DIR = selected_output_dir
-    FIGURE_OUT_DIR = selected_output_dir
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    FIGURE_OUT_DIR.mkdir(parents=True, exist_ok=True)
-    refresh_profile_output_dir()
-print(f"figures={FIGURE_OUT_DIR}")
-print(f"profiles={PROFILE_OUT_DIR}")
 ACTIVE_LATTICE = active_lattice_constants_from_state(state)
 ACTIVE_LATTICE_A = float(ACTIVE_LATTICE["a"])
 ACTIVE_LATTICE_C = float(ACTIVE_LATTICE["c"])
@@ -9078,6 +9057,25 @@ def write_used_peaks_note() -> tuple[Path, Path]:
 used_peaks_md, used_peaks_csv = write_used_peaks_note()
 print(f"saved={used_peaks_md}")
 print(f"saved={used_peaks_csv}")
+
+selected_figure_output_dir = choose_final_output_dir(
+    mode=_setting_text(
+        "SAVE_OUTPUT_DIR_EDIT_MODE_OVERRIDE",
+        "RA_SIM_ALL_BACKGROUND_SAVE_DIR_EDIT_MODE",
+        "auto",
+    ),
+    output_dir=OUT_DIR,
+    figure_output_dir=FIGURE_OUT_DIR,
+    output_dir_override=OUTPUT_DIR,
+    figure_output_dir_override=FIGURE_OUTPUT_DIR,
+    backend_name=mpl.get_backend(),
+    env=os.environ,
+)
+if selected_figure_output_dir is not None:
+    FIGURE_OUT_DIR = selected_figure_output_dir
+    FIGURE_OUT_DIR.mkdir(parents=True, exist_ok=True)
+print(f"figures={FIGURE_OUT_DIR}")
+print(f"profiles={PROFILE_OUT_DIR}")
 
 # Figure 7a: detector-space measured images with fitted-peak contours and detector-space peak models.
 ordered_backgrounds = sorted(background_results, key=lambda bg: angle_sort_value(bg["tilt_deg"]))

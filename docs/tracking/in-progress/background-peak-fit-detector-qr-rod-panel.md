@@ -1131,6 +1131,19 @@ Passing checks:
   artifact-schema, or CI workflow migration is required. Shipping status: ready
   for local diagnostic use; rollback is a normal git revert because no
   data/schema migration is involved.
+- 2026-05-26 final-figure save-folder chooser slice: the maintained `.py`
+  diagnostic now asks for the final figure output folder at the final
+  figure-save boundary instead of during early state setup. The dialog is a Tk
+  directory chooser (`askdirectory`) titled for final figure output, initializes
+  from the current figure directory, and only redirects `FIGURE_OUT_DIR` so
+  diagnostics, caches, CSV/JSON/NPY artifacts, and profile output roots keep
+  their existing paths unless explicitly overridden. Validation passed with the
+  full nearby notebook-test suite and `python -m ra_sim.dev check`. Bug/error status: fixes the confusing
+  early choose-file/save-location workflow by using a proper save-folder chooser
+  for final figures. Feature status: complete for final figure destination
+  selection. Migration/deprecation status: no dependency, CLI, config,
+  saved-state schema, artifact-schema, or CI workflow migration is required.
+  Shipping status: ready for local diagnostic use.
 
 Known validation limits:
 
