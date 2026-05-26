@@ -221,17 +221,23 @@ def load_geometry_placements_file(path: str | os.PathLike[str]) -> dict[str, Any
     return payload
 
 
-def _normalize_optics_mode(value, fallback="fast"):
-    """Return optics-mode label as ``'fast'`` or ``'exact'``."""
+def _normalize_optics_mode(value, fallback="exact"):
+    """Return exact-only optics label, migrating legacy fast GUI state."""
 
     if value is None:
         return fallback
 
     # Support legacy numeric storage and bool-like flags.
     if isinstance(value, (int, np.integer)):
-        return "exact" if int(value) == 1 else "fast"
+        numeric = int(value)
+        if numeric in {0, 1}:
+            return "exact"
+        return fallback
     if isinstance(value, (float, np.floating)):
-        return "exact" if int(round(float(value))) == 1 else "fast"
+        numeric = int(round(float(value)))
+        if numeric in {0, 1}:
+            return "exact"
+        return fallback
 
     text = str(value).strip().lower()
     text = text.replace("–", "-").replace("—", "-")
@@ -264,12 +270,12 @@ def _normalize_optics_mode(value, fallback="fast"):
         "ufd",
         "dwba-lite",
     }:
-        return "fast"
+        return "exact"
 
     if "complex-k dwba" in text or "complex_k_dwba" in text:
         return "exact"
     if "fresnel" in text and "ctr" in text:
-        return "fast"
+        return "exact"
 
     return fallback
 
@@ -408,7 +414,7 @@ def load_parameters(
             if stored_resolution:
                 resolution_var.set(stored_resolution)
         if optics_mode_var is not None:
-            current_mode = _normalize_optics_mode(optics_mode_var.get(), fallback="fast")
+            current_mode = _normalize_optics_mode(optics_mode_var.get(), fallback="exact")
             stored_mode = _normalize_optics_mode(
                 params.get('optics_mode', current_mode),
                 fallback=current_mode,
@@ -585,7 +591,7 @@ def save_all_parameters(
     if optics_mode_var is not None:
         parameters['optics_mode'] = _normalize_optics_mode(
             optics_mode_var.get(),
-            fallback="fast",
+            fallback="exact",
         )
     if iodine_z_var is not None:
         parameters['iodine_z'] = float(iodine_z_var.get())

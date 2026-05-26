@@ -17,6 +17,7 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 | Mosaic selected-pair profile fitting | `python -m pytest tests/test_mosaic_shape_optimization.py` | CLI/headless mosaic smoke plus stale-cache guards after wiring |
 | Structure-factor intensity fitting | Structure-factor parity tests plus synthetic ROI tests when added | Held-out image and held-out reflection-family regressions |
 | Simulation or diffraction behavior | Targeted simulation tests | Full tests plus benchmark when performance-sensitive |
+| Optics-mode compatibility or migration | `python -m pytest tests/test_fast_optics_disabled.py tests/test_exit_refraction_and_depth_units.py tests/test_cli_geometry_fit.py::test_headless_geometry_fit_optics_defaults_to_exact_and_rejects_fast tests/test_cli_geometry_fit.py::test_cli_saved_gui_optics_mode_migrates_stale_fast_to_exact` | Simulation, engine, GUI, and fitting suites |
 | Timing or performance behavior | Timing or benchmark script | Compare generated artifact summaries |
 | Docs-only change | Path and link sanity | No full code run required |
 
@@ -176,7 +177,7 @@ Current status: the collection baseline is stable at 2055 tests, but the four-fi
 | GUI helpers and runtime behavior | `tests/test_gui_window_affinity.py` | `python -m pytest tests/test_gui_window_affinity.py` | Window launch context capture, monitor metadata, geometry placement, and clamp behavior. | Untiered; direct pytest or full suite. |
 | Simulation and diffraction engine | `tests/test_ctr_fast_attenuation.py` | `python -m ra_sim.dev test-fast` | CTR attenuation for finite and semi-infinite stacks, absorption limits, and interference minima. | Fast manifest in ra_sim/test_tiers.py. |
 | Simulation and diffraction engine | `tests/test_diffraction_constraints.py` | `python -m pytest tests/test_diffraction_constraints.py` | Diffraction kernel constraints, fallback rules, debug kwargs, wavelength N2, and invalid sample guards. | Untiered; direct pytest or full suite. |
-| Simulation and diffraction engine | `tests/test_diffraction_inner_loop_optimizations.py` | `python -m pytest tests/test_diffraction_inner_loop_optimizations.py` | Local pixel cache and fast optics LUT parity against direct calculations. | Untiered; direct pytest or full suite. |
+| Simulation and diffraction engine | `tests/test_diffraction_inner_loop_optimizations.py` | `python -m pytest tests/test_diffraction_inner_loop_optimizations.py` | Local pixel cache behavior and inner-loop regression coverage. | Untiered; direct pytest or full suite. |
 | Simulation and diffraction engine | `tests/test_diffraction_local_arc.py` | `python -m pytest tests/test_diffraction_local_arc.py` | Local arc windows, broad-profile fallback, mass preservation, and nominal visibility culling. | Untiered; direct pytest or full suite. |
 | Simulation and diffraction engine | `tests/test_diffraction_safe_wrapper.py` | `python -m pytest tests/test_diffraction_safe_wrapper.py` | Safe diffraction wrapper defaults, backend selection, event normalization, and beam replacement rules. | Untiered; direct pytest or full suite. |
 | Simulation and diffraction engine | `tests/test_diffraction_subpixel.py` | `python -m pytest tests/test_diffraction_subpixel.py` | Bilinear hit accumulation, subpixel centroids, local peak merging, and cache-to-hit-row mapping. | Untiered; direct pytest or full suite. |
@@ -415,6 +416,7 @@ config, or artifact schema changed.
 | `scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py` | Runs parallel background peak-fit diagnostics with a shared linear baseline. |
 | `scripts/diagnostics/background_peak_fit_worker.py` | Worker helper for background peak-fit diagnostic batches. |
 | `scripts/diagnostics/run_all_background_peak_fits.py` | Launches the maintained Python background peak-fit diagnostic batch runner by default. |
+| `scripts/diagnostics/summarize_geometry_fit_overlay_diagnostics.py` | Summarizes geometry-fit overlay diagnostic payloads. |
 | `tests/test_background_peak_fits_notebook.py` | Checks notebook-oriented background peak-fit workflows. |
 | `tests/test_beam_center_pick_helpers.py` | Checks beam-center pick helper behavior. |
 | `tests/test_disordered_phase_current_refresh.py` | Checks disordered-phase current refresh behavior. |

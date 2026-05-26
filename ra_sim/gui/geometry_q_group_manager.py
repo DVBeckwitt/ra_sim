@@ -18,6 +18,7 @@ from ra_sim.simulation.intersection_cache_schema import (
     extract_hit_row_provenance,
 )
 from ra_sim.simulation.diffraction import (
+    OPTICS_MODE_EXACT,
     get_process_peaks_runtime_kwargs,
     intersection_cache_to_hit_tables,
     process_peaks_parallel as diffraction_process_peaks_parallel,
@@ -497,7 +498,9 @@ def _geometry_fit_param_summary(
         "theta_initial": _copy_simulation_diag_value(params_local.get("theta_initial")),
         "center": _copy_simulation_diag_value(params_local.get("center")),
         "n2": _copy_simulation_diag_value(params_local.get("n2")),
-        "optics_mode": _copy_simulation_diag_value(params_local.get("optics_mode", 0)),
+        "optics_mode": _copy_simulation_diag_value(
+            params_local.get("optics_mode", OPTICS_MODE_EXACT)
+        ),
     }
 
 
@@ -2528,7 +2531,7 @@ def simulate_geometry_fit_hit_tables(
             np.array([1.0, 0.0, 0.0]),
             np.array([0.0, 1.0, 0.0]),
             save_flag=0,
-            optics_mode=int(params_local.get("optics_mode", 0)),
+            optics_mode=int(params_local.get("optics_mode", OPTICS_MODE_EXACT)),
             solve_q_steps=int(mosaic.get("solve_q_steps", default_solve_q_steps)),
             solve_q_rel_tol=float(mosaic.get("solve_q_rel_tol", default_solve_q_rel_tol)),
             solve_q_mode=int(mosaic.get("solve_q_mode", default_solve_q_mode)),

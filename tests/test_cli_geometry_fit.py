@@ -44,10 +44,17 @@ def test_cli_build_parser_includes_fit_geometry_command() -> None:
     assert "fit-geometry" in _get_subparser_choices(parser)
 
 
-def test_headless_geometry_fit_optics_defaults_to_exact_and_preserves_fast() -> None:
+def test_headless_geometry_fit_optics_defaults_to_exact_and_rejects_fast() -> None:
     assert headless_geometry_fit._normalize_optics_mode_label(None) == "exact"
     assert headless_geometry_fit._resolve_optics_mode_flag(None) == diffraction.OPTICS_MODE_EXACT
-    assert headless_geometry_fit._resolve_optics_mode_flag("fast") == diffraction.OPTICS_MODE_FAST
+    with pytest.raises(diffraction.FastOpticsDisabledError):
+        headless_geometry_fit._resolve_optics_mode_flag("fast")
+
+
+def test_cli_saved_gui_optics_mode_migrates_stale_fast_to_exact() -> None:
+    source = inspect.getsource(cli.run_headless_geometry_fit)
+    assert "current_optics_mode_flag=lambda: simulation_diffraction.OPTICS_MODE_EXACT" in source
+    assert "_saved_state_var_value(saved_variables, \"optics_mode_var\"" not in source
 
 
 def test_shared_headless_geometry_fit_backfills_caked_manual_pairs_before_prepare() -> None:

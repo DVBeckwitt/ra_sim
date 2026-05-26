@@ -40,9 +40,11 @@ from ra_sim.fitting import optimization_runtime as _runtime
 from ra_sim.fitting.optimization_runtime import SimulationCache
 from ra_sim.simulation.intersection_cache_schema import extract_hit_row_provenance
 from ra_sim.simulation.diffraction import (
+    OPTICS_MODE_EXACT,
     get_last_process_peaks_safe_stats,
     hit_tables_to_max_positions,
     process_peaks_parallel_safe as _DIFFRACTION_PROCESS_PEAKS_SAFE_WRAPPER,
+    require_exact_optics_mode,
 )
 from ra_sim.utils.calculations import (
     _legacy_kernel_n2_sample_array_from_angstrom,
@@ -6369,6 +6371,7 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             "Gamma_deg": Gamma_deg,
             "prediction_source_rows_cache": fit_prediction_shared_source_rows_cache,
             "_qr_fit_point_only_projection": bool(qr_fit_point_only_projection),
+            "_qr_fit_prefer_current_hit_tables_for_point_only": bool(qr_fit_point_only_projection),
         }
         if _fixed_manual_qr_pair_requires_shared_resolver(measured_entry):
             fit_prediction = _resolve_qr_fit_prediction_from_trial_params(
@@ -8844,7 +8847,7 @@ def fit_mosaic_widths_separable(
     kernel_params_base = dict(params)
     kernel_params_base.update(
         {
-            "optics_mode": params.get("optics_mode", 0),
+            "optics_mode": params.get("optics_mode", OPTICS_MODE_EXACT),
             "sample_depth_m": params.get("sample_depth_m", params.get("thickness", 0.0)),
             "pixel_size_m": params.get("pixel_size_m", params.get("pixel_size", 100e-6)),
             "sample_width_m": params.get("sample_width_m", 0.0),
@@ -12510,7 +12513,7 @@ def _simulation_kernel_kwargs(
         mosaic_params = {}
 
     kwargs: Dict[str, object] = {
-        "optics_mode": int(params.get("optics_mode", 0)),
+        "optics_mode": require_exact_optics_mode(params.get("optics_mode", OPTICS_MODE_EXACT)),
         "solve_q_steps": int(mosaic_params.get("solve_q_steps", 1000)),
         "solve_q_rel_tol": float(mosaic_params.get("solve_q_rel_tol", 5.0e-4)),
         "solve_q_mode": int(mosaic_params.get("solve_q_mode", 1)),
@@ -21887,7 +21890,13 @@ def _resolve_qr_fit_prediction_from_trial_params(
     )
     early_handoff_disabled_by_env = _optimization_env_flag_enabled(QR_DISABLE_EARLY_HANDOFF_ENV)
     disable_early_handoff = bool(not locked_handoff_allowed or early_handoff_disabled_by_env)
-    prefer_trial_source_rows = not locked_handoff_allowed
+    prefer_current_hit_tables_for_point_only = bool(
+        point_only_projection
+        and fit_context.get("_qr_fit_prefer_current_hit_tables_for_point_only", False)
+    )
+    prefer_trial_source_rows = bool(
+        not locked_handoff_allowed and not prefer_current_hit_tables_for_point_only
+    )
     handoff_attempted = False
     handoff_accepted = False
     hit_table_attempted = False
@@ -24322,7 +24331,7 @@ def compute_peak_position_error_geometry_local(
     debye_y,
     wavelength,
     pixel_tol=np.inf,
-    optics_mode=0,
+    optics_mode=OPTICS_MODE_EXACT,
 ):
     """
     Objective for DE: returns the 1D array of distances for all matched peaks.
@@ -24346,7 +24355,7 @@ def compute_peak_position_error_geometry_local(
         "debye_x": debye_x,
         "debye_y": debye_y,
         "mosaic_params": mosaic_params,
-        "optics_mode": int(optics_mode),
+        "optics_mode": require_exact_optics_mode(optics_mode),
     }
     D, *_ = simulate_and_compare_hkl(
         miller,
@@ -25272,6 +25281,7 @@ def fit_geometry_parameters(
                     "refusing detector-pixel central_point_match fallback"
                 ),
                 status=-10,
+                extra_summary=locked_summary,
             )
         if (
             active_gamma_fit
@@ -25557,7 +25567,7 @@ def fit_geometry_parameters(
             debye_y=local["debye_y"],
             wavelength=local["lambda"],
             pixel_tol=pixel_tol,
-            optics_mode=local.get("optics_mode", 0),
+            optics_mode=local.get("optics_mode", OPTICS_MODE_EXACT),
         )
         return np.asarray(residual, dtype=float)
 

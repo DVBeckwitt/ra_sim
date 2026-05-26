@@ -98,7 +98,7 @@ def test_simulate_respects_typed_request_with_custom_runner() -> None:
 
 def test_simulate_forwards_extended_kernel_options() -> None:
     request = _build_request()
-    request.optics_mode = 7
+    request.optics_mode = diffraction.OPTICS_MODE_EXACT
     request.collect_hit_tables = False
     request.build_intersection_cache = False
     request.accumulate_image = False
@@ -123,7 +123,7 @@ def test_simulate_forwards_extended_kernel_options() -> None:
 
     simulate(request, peak_runner=fake_runner)
 
-    assert seen["optics_mode"] == 7
+    assert seen["optics_mode"] == diffraction.OPTICS_MODE_EXACT
     assert seen["collect_hit_tables"] is False
     assert seen["accumulate_image"] is False
     assert "single_sample_indices" not in seen
@@ -155,26 +155,25 @@ def test_simulate_defaults_to_exact_optics_when_request_omits_mode() -> None:
     assert seen["optics_mode"] == diffraction.OPTICS_MODE_EXACT
 
 
-def test_simulate_preserves_explicit_fast_optics_mode() -> None:
+def test_simulate_rejects_explicit_fast_optics_mode() -> None:
     request = _build_request()
     request.optics_mode = diffraction.OPTICS_MODE_FAST
-    seen: dict[str, object] = {}
 
     def fake_runner(*args, **kwargs):
-        seen.update(kwargs)
-        image = np.array(args[6], copy=True)
-        return (
-            image,
-            [],
-            np.array([1.0], dtype=np.float64),
-            np.array([2.0], dtype=np.float64),
-            np.array([3.0], dtype=np.float64),
-            [np.empty((0, 3), dtype=np.float64)],
-        )
+        raise AssertionError("fast optics should fail before the peak runner")
 
-    simulate(request, peak_runner=fake_runner)
+    with pytest.raises(diffraction.FastOpticsDisabledError):
+        simulate(request, peak_runner=fake_runner)
 
-    assert seen["optics_mode"] == diffraction.OPTICS_MODE_FAST
+def test_simulate_rejects_unsupported_optics_mode() -> None:
+    request = _build_request()
+    request.optics_mode = 7
+
+    def fake_runner(*args, **kwargs):
+        raise AssertionError("unsupported optics should fail before the peak runner")
+
+    with pytest.raises(ValueError, match="Unsupported optics_mode"):
+        simulate(request, peak_runner=fake_runner)
 
 
 def test_simulate_populates_and_reuses_beam_n2_sample_array(monkeypatch) -> None:
@@ -1152,7 +1151,7 @@ def test_simulate_qr_rods_respects_typed_request_with_custom_runner() -> None:
 
 def test_simulate_qr_rods_forwards_extended_kernel_options() -> None:
     request = _build_request()
-    request.optics_mode = 5
+    request.optics_mode = diffraction.OPTICS_MODE_EXACT
     request.collect_hit_tables = False
     request.build_intersection_cache = False
     request.accumulate_image = False
@@ -1178,7 +1177,7 @@ def test_simulate_qr_rods_forwards_extended_kernel_options() -> None:
 
     simulate_qr_rods(qr_dict, request, peak_runner=fake_runner)
 
-    assert seen["optics_mode"] == 5
+    assert seen["optics_mode"] == diffraction.OPTICS_MODE_EXACT
     assert seen["collect_hit_tables"] is False
     assert seen["accumulate_image"] is False
     assert seen["pixel_size_m"] == request.geometry.pixel_size_m
@@ -1208,6 +1207,18 @@ def test_simulate_qr_rods_defaults_to_exact_optics_when_request_omits_mode() -> 
     simulate_qr_rods(qr_dict, request, peak_runner=fake_runner)
 
     assert seen["optics_mode"] == diffraction.OPTICS_MODE_EXACT
+
+
+def test_simulate_qr_rods_rejects_explicit_fast_optics_mode() -> None:
+    request = _build_request()
+    request.optics_mode = diffraction.OPTICS_MODE_FAST
+    qr_dict = {1: {"hk": (1, 0), "L": np.array([0.0]), "I": np.array([1.0]), "deg": 1}}
+
+    def fake_runner(*args, **kwargs):
+        raise AssertionError("fast optics should fail before the rod runner")
+
+    with pytest.raises(diffraction.FastOpticsDisabledError):
+        simulate_qr_rods(qr_dict, request, peak_runner=fake_runner)
 
 
 def test_simulate_qr_rods_populates_missing_beam_n2_sample_array(monkeypatch) -> None:

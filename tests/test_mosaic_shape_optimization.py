@@ -256,7 +256,7 @@ def _base_params(image_size, sigma_deg=0.35, gamma_deg=0.25, eta=0.25):
         "corto_detector": 0.12,
         "gamma": 0.0,
         "Gamma": 0.0,
-        "optics_mode": 0,
+        "optics_mode": 1,
         "pixel_size": 1.0e-3,
         "pixel_size_m": 1.0e-3,
     }

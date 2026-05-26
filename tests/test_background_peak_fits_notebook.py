@@ -757,6 +757,13 @@ def test_parallel_script_final_rod_plot_filters_incomplete_detector_branch_suppo
         "detector_plot_rod_entries = detector_complete_branch_rod_entries(" in final_profile_source
     )
     assert "skipped_incomplete_detector_hk" in final_profile_source
+    plot_entries_source = final_profile_source[
+        final_profile_source.index("plot_rod_entries = [") : final_profile_source.index(
+            "\ndetector_plot_rod_keys_all"
+        )
+    ]
+    assert "for rod in rod_entries" in plot_entries_source
+    assert "for rod in detector_plot_rod_entries" not in plot_entries_source
 
 
 def test_parallel_script_pbi2_hidden_rods_are_final_visibility_only() -> None:
@@ -1828,7 +1835,7 @@ def test_parallel_script_qr_sideband_plot_data_can_use_explicit_data_column() ->
     ]
     final_profile_source = source[
         source.index("for row, rod in enumerate(plot_rod_entries):") : source.index(
-            "\nrod_profile_png"
+            "\ntry:\n    rod_profile_png"
         )
     ]
 
@@ -2427,7 +2434,7 @@ def test_parallel_script_final_profile_plot_uses_gui_data_and_smoothed_copy() ->
     ]
     final_profile_source = source[
         source.index("for row, rod in enumerate(plot_rod_entries):") : source.index(
-            "\nrod_profile_png"
+            "\ntry:\n    rod_profile_png"
         )
     ]
     nonzero_profile_source = final_profile_source[final_profile_source.index("for col,") :]
@@ -5966,6 +5973,16 @@ def test_parallel_script_final_rod_profile_figure_filters_empty_entries() -> Non
     assert "plot_rod_entries = rod_entries + [specular_rod_entry]" not in source
     assert 'if 0 not in hidden_plot_hk and (0, "qz") in drawable_profile_keys:' in source
     assert "skipped HK=0 final figure row: no drawable real m=0/qz profile rows" in source
+    omitted_nonzero_guard = source[
+        source.index("drawable_nonzero_profile_hk = sorted(", plot_entries) : source.index(
+            "\nrod_note_lines.extend(",
+            plot_entries,
+        )
+    ]
+    assert "if drawable_nonzero_profile_hk and not nonzero_plot_rod_entries:" in (
+        omitted_nonzero_guard
+    )
+    assert "drawable nonzero Qr-rod profile rows were omitted" in omitted_nonzero_guard
 
 
 def test_parallel_script_shared_rod_profile_l_axis_limits_span_all_profile_axes() -> None:
@@ -11379,7 +11396,7 @@ def test_parallel_script_routes_profile_figures_to_profile_output_dir() -> None:
         ("support_png, support_pdf = save_manuscript_figure(", "rod_profile_note ="),
         (
             "rod_profile_png, rod_profile_pdf = save_manuscript_figure(",
-            "display(Image(filename=str(rod_profile_png)))",
+            "display(Image(filename=str(published_rod_profile_png)))",
         ),
     ):
         assert call_start in source
@@ -11393,6 +11410,28 @@ def test_parallel_script_routes_profile_figures_to_profile_output_dir() -> None:
         )
     ]
     assert "output_dir=PROFILE_OUT_DIR" not in detector_region_call
+
+    rod_profile_call = source[
+        source.index("rod_profile_png, rod_profile_pdf = save_manuscript_figure(") : source.index(
+            "display(Image(filename=str(published_rod_profile_png)))"
+        )
+    ]
+    assert (
+        'rod_profile_png = require_saved_figure(rod_profile_png, label="final Qr-rod profile PNG")'
+        in rod_profile_call
+    )
+    assert (
+        "published_rod_profile_png, published_rod_profile_pdf = save_manuscript_figure("
+        in rod_profile_call
+    )
+    assert "fig, ROD_PROFILE_STEM\n        )" in rod_profile_call
+    assert (
+        'published_rod_profile_png,\n            label="published final Qr-rod profile PNG",'
+        in rod_profile_call
+    )
+    assert "finally:\n    plt.close(fig)" in rod_profile_call
+    assert "print(f\"saved={rod_profile_png}\")" in rod_profile_call
+    assert "print(f\"saved={published_rod_profile_png}\")" in rod_profile_call
 
 
 def test_save_manuscript_figure_creates_output_dir_and_skips_vector_when_disabled(
@@ -11416,6 +11455,27 @@ def test_save_manuscript_figure_creates_output_dir_and_skips_vector_when_disable
     assert png_path.exists()
     assert not (tmp_path / "figures" / "example.pdf").exists()
     assert not (tmp_path / "figures" / "example.svg").exists()
+
+
+def test_require_saved_figure_accepts_nonempty_file_and_rejects_missing_or_empty(
+    tmp_path: Path,
+) -> None:
+    namespace = _script_functions("require_saved_figure")
+    require_saved_figure = namespace["require_saved_figure"]
+
+    saved_path = tmp_path / "example.png"
+    saved_path.write_bytes(b"not empty")
+
+    assert require_saved_figure(saved_path, label="demo figure") == saved_path
+
+    missing_path = tmp_path / "missing.png"
+    with pytest.raises(RuntimeError, match=r"demo figure.*missing\.png"):
+        require_saved_figure(missing_path, label="demo figure")
+
+    empty_path = tmp_path / "empty.png"
+    empty_path.write_bytes(b"")
+    with pytest.raises(RuntimeError, match=r"demo figure.*empty\.png.*empty"):
+        require_saved_figure(empty_path, label="demo figure")
 
 
 def test_parallel_script_reports_detector_region_svg_only_when_vector_file_is_written() -> None:

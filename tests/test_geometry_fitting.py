@@ -12,6 +12,7 @@ import pytest
 
 from ra_sim.fitting import optimization as opt
 from ra_sim.gui import geometry_fit as gui_geometry_fit
+from ra_sim.simulation import diffraction
 from ra_sim.simulation import engine as sim_engine
 from ra_sim.simulation.types import (
     DetectorGeometry,
@@ -23,7 +24,7 @@ from ra_sim.simulation.types import (
 )
 
 
-def _base_params(image_size: int, *, optics_mode: int = 0) -> dict:
+def _base_params(image_size: int, *, optics_mode: int = diffraction.OPTICS_MODE_EXACT) -> dict:
     return {
         "gamma": 0.0,
         "Gamma": 0.0,
@@ -1364,7 +1365,7 @@ def _build_forward_warmup_request() -> SimulationRequest:
         save_flag=0,
         record_status=False,
         thickness=0.0,
-        optics_mode=0,
+        optics_mode=1,
         collect_hit_tables=True,
         accumulate_image=True,
         exit_projection_mode="internal",
@@ -4308,7 +4309,7 @@ def test_fit_geometry_parameters_dynamic_point_path_records_fit_space_provenance
     assert int(result.point_match_summary["per_dataset"][0]["fit_space_anchor_count_detector"]) == 2
 
 
-def test_simulate_and_compare_hkl_forwards_optics_mode(monkeypatch):
+def test_simulate_and_compare_hkl_forwards_exact_optics_mode(monkeypatch):
     optics_seen = []
 
     def fake_process(*args, **kwargs):
@@ -4320,7 +4321,7 @@ def test_simulate_and_compare_hkl_forwards_optics_mode(monkeypatch):
     image_size = 8
     miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
     intensities = np.array([1.0], dtype=np.float64)
-    params = _base_params(image_size, optics_mode=2)
+    params = _base_params(image_size, optics_mode=diffraction.OPTICS_MODE_EXACT)
     measured = [{"label": "1,0,0", "x": 4.0, "y": 4.0}]
 
     distances, *_ = opt.simulate_and_compare_hkl(
@@ -4332,7 +4333,29 @@ def test_simulate_and_compare_hkl_forwards_optics_mode(monkeypatch):
     )
 
     assert distances.size == 2
-    assert optics_seen == [2]
+    assert optics_seen == [diffraction.OPTICS_MODE_EXACT]
+
+
+def test_simulate_and_compare_hkl_rejects_fast_optics_before_runner(monkeypatch):
+    def fake_process(*args, **kwargs):
+        raise AssertionError("fast optics should fail before process_peaks_parallel_safe")
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
+
+    image_size = 8
+    miller = np.array([[1.0, 0.0, 0.0]], dtype=np.float64)
+    intensities = np.array([1.0], dtype=np.float64)
+    params = _base_params(image_size, optics_mode=diffraction.OPTICS_MODE_FAST)
+    measured = [{"label": "1,0,0", "x": 4.0, "y": 4.0}]
+
+    with pytest.raises(diffraction.FastOpticsDisabledError):
+        opt.simulate_and_compare_hkl(
+            miller,
+            intensities,
+            image_size,
+            params,
+            measured,
+        )
 
 
 def test_simulate_and_compare_hkl_can_force_python_runner(monkeypatch):

@@ -890,53 +890,12 @@ def _resolve_solve_q_mode(mode_raw: object) -> int:
 
 
 def _normalize_optics_mode_label(value: object) -> str:
-    diffraction = _load_simulation_diffraction()
-    if value is None:
-        return "exact"
-    if isinstance(value, (int, np.integer, float, np.floating)):
-        return "exact" if int(round(float(value))) == diffraction.OPTICS_MODE_EXACT else "fast"
-
-    text = " ".join(str(value).strip().lower().split())
-    if text in {
-        "1",
-        "true",
-        "yes",
-        "on",
-        "exact",
-        "precise",
-        "slow",
-        "complex_k_dwba_slab",
-        "complex-k dwba slab optics",
-        "phase-matched complex-k multilayer dwba",
-    }:
-        return "exact"
-    if text in {
-        "0",
-        "false",
-        "no",
-        "off",
-        "fast",
-        "approx",
-        "fresnel_ctr_damping",
-        "fresnel-weighted kinematic ctr absorption correction",
-        "uncoupled fresnel + ctr damping (ufd)",
-        "fast dwba-lite (fresnel + depth-sum attenuation)",
-        "ufd",
-        "dwba-lite",
-    }:
-        return "fast"
-    if "complex-k dwba" in text or "complex_k_dwba" in text:
-        return "exact"
-    return "fast"
+    return "exact"
 
 
 def _resolve_optics_mode_flag(value: object) -> int:
     diffraction = _load_simulation_diffraction()
-    return (
-        diffraction.OPTICS_MODE_EXACT
-        if _normalize_optics_mode_label(value) == "exact"
-        else diffraction.OPTICS_MODE_FAST
-    )
+    return diffraction.require_exact_optics_mode(value)
 
 
 def _default_fit_toggle_values() -> dict[str, bool]:
@@ -1201,10 +1160,13 @@ def _build_var_store(
         "weight2_var": defaults.defaults["weight2"],
     }
 
-    return {
-        name: _HeadlessVar(saved_variables.get(name, default))
-        for name, default in var_defaults.items()
-    }
+    var_store: dict[str, _HeadlessVar] = {}
+    for name, default in var_defaults.items():
+        value = saved_variables.get(name, default)
+        if name == "optics_mode_var":
+            value = _normalize_optics_mode_label(value)
+        var_store[name] = _HeadlessVar(value)
+    return var_store
 
 
 def _restore_manual_pairs(

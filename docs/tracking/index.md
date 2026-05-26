@@ -33,7 +33,7 @@ intensity contract, but remains downstream of green mosaic fitting.
 | Qr/Qz shape sensitivity | feature | - | [#249](https://github.com/DVBeckwitt/ra_sim/issues/249) | p1 | 2026-04-22 | [q-group-shape-sensitivity.md](in-progress/q-group-shape-sensitivity.md) |
 | Q-space viewer fix | bug | - | none | p1 | 2026-04-30 | [q-space-viewer-fix.md](in-progress/q-space-viewer-fix.md) |
 | Sim caked detector replay | bug | - | none | p1 | 2026-05-09 | [sim-caked-detector-replay.md](in-progress/sim-caked-detector-replay.md) |
-| Background peak fit detector Qr rod panel | bug/feature | - | none | p1 | 2026-05-22 | [background-peak-fit-detector-qr-rod-panel.md](in-progress/background-peak-fit-detector-qr-rod-panel.md) |
+| Background peak fit detector Qr rod panel | bug/feature | - | none | p1 | 2026-05-26 | [background-peak-fit-detector-qr-rod-panel.md](in-progress/background-peak-fit-detector-qr-rod-panel.md) |
 | Beam center background pick | feature | - | none | p1 | 2026-05-01 | [beam-center-background-pick.md](in-progress/beam-center-background-pick.md) |
 | Background Qr reference picks | feature | - | none | p2 | 2026-04-30 | [background-qr-reference-picks.md](in-progress/background-qr-reference-picks.md) |
 | 6H Qr reference SF picking | feature/bug | - | none | p1 | 2026-04-30 | [6h-qr-reference-sf-picking.md](in-progress/6h-qr-reference-sf-picking.md) |
@@ -41,6 +41,22 @@ intensity contract, but remains downstream of green mosaic fitting.
 | Mosaic fitter recovery | feature | - | none | p1 | 2026-04-24 | [mosaic-fitter.md](in-progress/mosaic-fitter.md) |
 | Weighted-event representative cache carry-through | bug | - | none | p1 | 2026-04-24 | [weighted-event-representative-cache-carry-through.md](in-progress/weighted-event-representative-cache-carry-through.md) |
 | Fast-path cache audit and QR selector policy | bug | - | none | p2 | 2026-04-28 | [fast-path-cache-audit-phase1.md](in-progress/fast-path-cache-audit-phase1.md) |
+
+Exact-only optics closeout note:
+Bug/feature status fixed locally as of 2026-05-26. Public simulation, engine,
+CLI/headless, GUI runtime, direct diffraction, and geometry-fitting entry
+points now resolve optics through the exact-only guard before runner dispatch.
+Explicit fast/Fresnel-CTR values fail loudly; stale GUI/headless saved states
+that contain `fast` are migrated to exact before simulation. The old fast
+optics LUT runtime calls are removed, while the weighted-event Numba performance
+backend remains enabled. The follow-up hot-path cleanup also removed dead
+internal weighted-event forwarding of exact-only optics mode and unused sample
+index data. No dependency, CI workflow, artifact schema, or operator debug
+backend migration is required. Shipping status: focused optics, GUI, fitting,
+simulation, and diagnostic figure tests passed locally; rollback is a normal
+git revert. Post-commit quality review found no correctness, security,
+performance, bloat, test-quality, new-file, or abstraction blockers in the
+hot-path cleanup commit.
 
 Q-space viewer fix status note:
 Implemented runtime geometry ownership for Q-space display without backend

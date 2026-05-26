@@ -1252,7 +1252,7 @@ def test_precompute_sample_terms_rejects_hits_outside_finite_sample_bounds(monke
         0.0,
         1.0,
         0.0,
-        diffraction.OPTICS_MODE_FAST,
+        diffraction.OPTICS_MODE_EXACT,
         0.0,
         0.0,
         0.0,
@@ -1274,12 +1274,6 @@ def test_calculate_phi_from_precomputed_uses_pixel_size(monkeypatch):
         diffraction,
         "solve_q",
         lambda *_args, **_kwargs: (np.array([[0.0, 0.0, 0.0, 1.0]], dtype=np.float64), 0),
-    )
-    monkeypatch.setattr(diffraction, "_build_fast_optics_lut_row", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        diffraction,
-        "_lookup_fast_optics_lut_row",
-        lambda *_args, **_kwargs: (1.0, 0.0, 1.0, 0.0),
     )
     monkeypatch.setattr(
         diffraction,
@@ -1316,7 +1310,6 @@ def test_calculate_phi_from_precomputed_uses_pixel_size(monkeypatch):
         np.array([1.0, 0.0, 0.0], dtype=np.float64),
         np.array([0.0, 1.0, 0.0], dtype=np.float64),
         sample_terms,
-        np.array([1.0 + 0.0j], dtype=np.complex128),
         np.array([1.0 + 0.0j], dtype=np.complex128),
         0,
         0,
@@ -1368,12 +1361,6 @@ def test_calculate_phi_from_precomputed_samples_one_ring_point_using_total_ring_
         "_sample_q_ring_solution",
         lambda *_args, **_kwargs: (1, 4.0),
     )
-    monkeypatch.setattr(diffraction, "_build_fast_optics_lut_row", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        diffraction,
-        "_lookup_fast_optics_lut_row",
-        lambda *_args, **_kwargs: (1.0, 0.0, 1.0, 0.0),
-    )
     monkeypatch.setattr(
         diffraction,
         "intersect_line_plane",
@@ -1409,7 +1396,6 @@ def test_calculate_phi_from_precomputed_samples_one_ring_point_using_total_ring_
         np.array([1.0, 0.0, 0.0], dtype=np.float64),
         np.array([0.0, 1.0, 0.0], dtype=np.float64),
         sample_terms,
-        np.array([1.0 + 0.0j], dtype=np.complex128),
         np.array([1.0 + 0.0j], dtype=np.complex128),
         0,
         0,

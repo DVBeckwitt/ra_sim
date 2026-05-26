@@ -196,8 +196,10 @@ to make the Qr rod detector and integration figures source-consistent:
   selected-region figure, and `hk0_l3_star.png` crop.
 - Final Qr-rod profile figure row selection now filters rods through the
   drawable profile data and marker-derived positive-L mapping before allocating
-  subplot rows. Empty rods, such as the observed Bi2Te3 `HK=7` row, are skipped
-  instead of producing blank figure rows.
+  subplot rows. Detector-support completeness remains a diagnostic, so drawable
+  nonzero-HK rows are still included in the combined HK=0/HK!=0 compilation.
+  Empty rods, such as the observed Bi2Te3 `HK=7` row, are skipped instead of
+  producing blank figure rows.
 - PbI2 nonzero Qr-rod extraction uses same-Qz transverse Qr sideband
   subtraction. The central raw density remains in `background_density_raw`, the
   sideband estimate is written as `qr_sideband_background_density`, and
@@ -575,7 +577,9 @@ Passing checks:
   rows are retained and edited `HK=0` Qz markers are converted to the updated
   detector theta/phi used by downstream exported images.
 - Final Qr-rod profile row regression coverage verifies empty rods such as the
-  observed Bi2Te3 `HK=7` case are excluded before subplot rows are allocated.
+  observed Bi2Te3 `HK=7` case are excluded before subplot rows are allocated,
+  and that drawable profile rows are not suppressed by detector-support
+  completeness diagnostics.
 - Bi2Se3/Bi2Te3 low-L specular marker regression coverage uses embedded
   artifact-shaped m=0 profiles. It verifies the Bi2Se3 weak marker is included
   despite the over-high preliminary shared baseline, the unsupported nearby

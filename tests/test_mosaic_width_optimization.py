@@ -604,7 +604,7 @@ def test_fit_mosaic_widths_separable_passes_full_mosaic_to_kernel_kwargs(
 
     call_params = captured["params"]
     assert isinstance(call_params, dict)
-    assert call_params["optics_mode"] == params.get("optics_mode", 0)
+    assert call_params["optics_mode"] == params.get("optics_mode", 1)
     assert call_params["sample_depth_m"] == params.get(
         "sample_depth_m", params.get("thickness", 0.0)
     )

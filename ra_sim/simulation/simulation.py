@@ -10,8 +10,8 @@ from ra_sim.simulation.diffraction import (
     DEFAULT_SOLVE_Q_MODE,
     DEFAULT_SOLVE_Q_REL_TOL,
     OPTICS_MODE_EXACT,
-    OPTICS_MODE_FAST,
     process_peaks_parallel_safe,
+    require_exact_optics_mode,
 )
 from ra_sim.simulation.engine import simulate
 from ra_sim.simulation.mosaic_profiles import generate_random_profiles
@@ -132,7 +132,7 @@ def _build_legacy_request(
     sample_length_m=0.0,
     thickness=0.0,
     n2_sample_array=None,
-    exit_projection_mode="internal",
+    exit_projection_mode="external",
 ) -> SimulationRequest:
     """Build one typed simulation request from the legacy positional inputs."""
 
@@ -226,7 +226,7 @@ def _build_legacy_request(
         image_buffer=np.zeros((image_size_int, image_size_int), dtype=np.float64),
         save_flag=0,
         thickness=float(thickness),
-        optics_mode=OPTICS_MODE_EXACT if optics_mode is None else int(optics_mode),
+        optics_mode=require_exact_optics_mode(optics_mode),
         collect_hit_tables=True,
         exit_projection_mode=str(exit_projection_mode).strip().lower(),
     )
@@ -271,7 +271,7 @@ def simulate_diffraction(
     sample_length_m=0.0,
     thickness=0.0,
     n2_sample_array=None,
-    exit_projection_mode="internal",
+    exit_projection_mode="external",
 ):
     """Run one legacy positional simulation through the typed engine API."""
 
