@@ -7131,10 +7131,6 @@ QR_ROD_PEAK_EDIT_CONTEXT_SIGNATURE = {
     "rod_profile_policy": ROD_PROFILE_BACKGROUND_POLICY_SIGNATURE,
 }
 
-NO_BACKGROUND_PEAK_ENTRIES_MESSAGE = (
-    "fit validation failed: no background peak entries found in geometry.manual_pairs or usable "
-    "geometry.peak_records; save background peak matches or peak records before running this notebook"
-)
 expected_fit_count = sum(len(v) for v in entries_by_bg.values())
 print(
     f"backgrounds={len(background_files)} points={expected_fit_count} "
@@ -7160,8 +7156,6 @@ for idx, path in enumerate(background_files):
     print(
         f"{SAMPLE_NAME} {format_angle_value(BACKGROUND_TILT_DEG[idx])} deg: {Path(path).name} points={len(entries_by_bg[idx])}"
     )
-if expected_fit_count == 0:
-    raise RuntimeError(NO_BACKGROUND_PEAK_ENTRIES_MESSAGE)
 
 
 def robust_peak_background_plane(
@@ -7956,15 +7950,19 @@ for prep in background_preps:
     for local_idx, entry in enumerate(prepared_entries):
         fit_jobs.append((bg_idx, local_idx, entry))
 
-if not fit_jobs:
-    raise RuntimeError(NO_BACKGROUND_PEAK_ENTRIES_MESSAGE)
-
 PRE_EDITOR_CACHE_PATH = pre_editor_cache_path(OUT_DIR, STATE_PATH)
 PRE_EDITOR_CACHE_INPUT_SIGNATURE = {
     "state_filename": Path(STATE_PATH).name,
     "background_files": [Path(path).name for path in background_files],
     "background_tilt_deg": {
         int(idx): float(BACKGROUND_TILT_DEG[idx]) for idx in sorted(BACKGROUND_TILT_DEG)
+    },
+    "background_peak_entries": {
+        "source": str(background_peak_entry_source),
+        "expected_fit_count": int(expected_fit_count),
+        "counts_by_background": {
+            int(idx): int(len(entries_by_bg[idx])) for idx in sorted(entries_by_bg)
+        },
     },
     "backend_orientation": {
         "rotation_k": int(backend_rotation_k),
@@ -8961,8 +8959,6 @@ def get_fit_item(bg_idx: int, label: str, branch: str) -> dict[str, object]:
 
 
 fit_count = int(len(fit_table))
-if expected_fit_count == 0:
-    raise RuntimeError(NO_BACKGROUND_PEAK_ENTRIES_MESSAGE)
 success_count = int(fit_table["success"].astype(bool).sum())
 optimizer_success_count = (
     int(fit_table.get("optimizer_success", fit_table["success"]).astype(bool).sum())
@@ -8998,6 +8994,20 @@ print(
 
 # Complementary record of which peaks were used after exclusions.
 def write_used_peaks_note() -> tuple[Path, Path]:
+    used_peak_columns = [
+        "sample_name",
+        "tilt_deg",
+        "peak_number",
+        "hkl",
+        "branch",
+        "q_group_key",
+        "branch_id",
+        "source_branch_index",
+        "fit_two_theta_deg",
+        "fit_phi_deg",
+        "fit_detector_col",
+        "fit_detector_row",
+    ]
     rows = []
     for tilt in sorted(fit_table["tilt_deg"].unique(), key=angle_sort_value):
         sub = fit_table[fit_table["tilt_deg"] == tilt].copy()
@@ -9019,7 +9029,7 @@ def write_used_peaks_note() -> tuple[Path, Path]:
                     "fit_detector_row": float(row["fit_detector_row"]),
                 }
             )
-    used = pd.DataFrame(rows)
+    used = pd.DataFrame(rows, columns=used_peak_columns)
     csv_path = OUT_DIR / f"{USED_PEAKS_STEM}.csv"
     md_path = OUT_DIR / f"{USED_PEAKS_STEM}.md"
     used.to_csv(csv_path, index=False)
@@ -9038,6 +9048,12 @@ def write_used_peaks_note() -> tuple[Path, Path]:
     for tilt, label in sorted(EXCLUDED_PEAKS_BY_TILT, key=lambda item: angle_sort_value(item[0])):
         lines.append(f"- {tilt_text(tilt)}: {hkl_text(label)}")
     lines.extend(["", "## Used peaks", ""])
+    if used.empty:
+        lines.append("No peaks were used.")
+        lines.append("")
+        md_path.write_text("\n".join(lines), encoding="utf-8")
+        return md_path, csv_path
+
     for tilt in sorted(used["tilt_deg"].unique(), key=angle_sort_value):
         sub = used[used["tilt_deg"] == tilt]
         lines.extend(

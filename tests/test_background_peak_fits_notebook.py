@@ -7066,22 +7066,63 @@ def test_parallel_script_background_entries_fallback_filters_excluded_records() 
     assert [entry["_label"] for entry in entries[1]] == ["1,0,2"]
 
 
-def test_parallel_script_empty_entry_message_mentions_peak_record_fallback() -> None:
+def test_parallel_script_empty_background_peak_entries_are_noop_fit_stage() -> None:
     source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=str(PARALLEL_SCRIPT_PATH))
-    message = None
-    for node in tree.body:
-        if not isinstance(node, ast.Assign):
-            continue
-        if any(
-            isinstance(target, ast.Name) and target.id == "NO_BACKGROUND_PEAK_ENTRIES_MESSAGE"
-            for target in node.targets
-        ):
-            message = ast.literal_eval(node.value)
-            break
 
-    assert "geometry.manual_pairs or usable geometry.peak_records" in message
+    assert "backgrounds={len(background_files)} points={expected_fit_count}" in source
     assert "entry_source={background_peak_entry_source}" in source
+    assert "NO_BACKGROUND_PEAK_ENTRIES_MESSAGE" not in source
+    assert '"background_peak_entries": {' in source
+    assert '"source": str(background_peak_entry_source)' in source
+    assert '"expected_fit_count": int(expected_fit_count)' in source
+    assert '"counts_by_background": {' in source
+    assert (
+        "if expected_fit_count == 0:\n    raise RuntimeError(NO_BACKGROUND_PEAK_ENTRIES_MESSAGE)"
+        not in source
+    )
+    assert "if not fit_jobs:\n    raise RuntimeError(NO_BACKGROUND_PEAK_ENTRIES_MESSAGE)" not in source
+
+
+def test_parallel_script_used_peaks_note_handles_empty_fit_table(tmp_path: Path) -> None:
+    namespace = _script_functions(
+        "angle_sort_value",
+        "format_angle_value",
+        "hkl_text",
+        "tilt_text",
+        "write_used_peaks_note",
+    )
+    write_used_peaks_note = namespace["write_used_peaks_note"]
+    namespace.update(
+        {
+            "OUT_DIR": tmp_path,
+            "USED_PEAKS_STEM": "used_peaks",
+            "SAMPLE_LABEL": "PbI2",
+            "STATE_PATH": Path("low_disorder.json"),
+            "SAMPLE_NAME": "PbI2",
+            "EXCLUDED_PEAKS_BY_TILT": [],
+            "fit_table": pd.DataFrame(columns=["tilt_deg"]),
+        }
+    )
+
+    md_path, csv_path = write_used_peaks_note()
+
+    used = pd.read_csv(csv_path)
+    assert used.empty
+    assert list(used.columns) == [
+        "sample_name",
+        "tilt_deg",
+        "peak_number",
+        "hkl",
+        "branch",
+        "q_group_key",
+        "branch_id",
+        "source_branch_index",
+        "fit_two_theta_deg",
+        "fit_phi_deg",
+        "fit_detector_col",
+        "fit_detector_row",
+    ]
+    assert "No peaks were used." in md_path.read_text(encoding="utf-8")
 
 
 def test_parallel_script_qr_rod_peak_edits_round_trip_json(tmp_path: Path) -> None:

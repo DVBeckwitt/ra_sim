@@ -46,6 +46,7 @@
   - Fixed saved HK=0 Qr-rod profile figures so the final plot no longer applies hidden L-window clipping or a PbI2 x-axis cap; it autoscale-matches the accepted GUI ROI trace.
   - Replaced the stale `scripts/diagnostics/comparison.py` generated duplicate with a compatibility wrapper around the maintained background peak-fit diagnostic so old entry points cannot overwrite Qr-rod figures with obsolete `Simulation` overlays.
   - Pointed the background peak-fit batch runner and Bi2Te3/Bi2Se3/PbI2 batch file at the maintained Python diagnostic by default instead of the removed notebook path.
+  - Allowed the maintained background peak-fit diagnostic to treat states with no saved background peak points as an empty no-op peak-fit stage instead of aborting before background outputs are assembled.
   - Linked the Qr-rod marker editor and detector-preview windows so closing either window also closes the other.
   - Merged the background peak-fit Qr-rod region picker into one combined nonzero/HK=0 editor and added a startup state-file chooser when the batch runner is using its default GUI state path.
   - Added final-figure `m` visibility checkboxes to the combined Qr-rod region editor; the final Qr-rod profile panels now use the GUI-accepted visibility list while integration tables and saved region specs retain all accepted rods.

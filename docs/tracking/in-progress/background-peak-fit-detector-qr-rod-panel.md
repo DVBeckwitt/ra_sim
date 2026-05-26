@@ -4,7 +4,7 @@ Type: bug/feature
 Owner: -
 Issue: none
 Priority: p1
-Last updated: 2026-05-23
+Last updated: 2026-05-26
 Status: implemented locally, Qr-rod editor startup and L-bound callback crash
 fixed, detector label editing/import/export restored through a responsive Tk
 canvas popup, detector companion preview/deferred Delta Qr validation passing,
@@ -27,7 +27,10 @@ dragging; nonzero plus/minus branches now share an L grid and common finite
 support, HK=0/specular no longer exposes or applies L min/max controls, and
 final Qr-rod profile figures now skip peak fitting and draw only the
 GUI-integrated trace plus a slider-controlled smoothed copy with optional
-curvature-adaptive extra smoothing
+curvature-adaptive extra smoothing; no-point background peak-fit states now
+run as empty no-op peak-fit stages with explicit empty used-peak outputs and
+cache identity that distinguishes true no-point inputs from failed seed
+preparation
 
 ## Problem
 
@@ -1109,11 +1112,34 @@ Passing checks:
   should use the printed `profiles=` path for profile artifacts. Shipping
   status: ready for local diagnostic use; rollback is a normal git revert
   because no data/schema migration is involved.
+- 2026-05-26 zero-point background peak-fit slice: states with no entries from
+  `geometry.manual_pairs` and no usable `geometry.peak_records` no longer abort
+  the maintained `.py` diagnostic at `points=0`. The peak-fit stage remains an
+  empty no-op, per-background peak model arrays still assemble as zeros,
+  `all_background_peak_fit_table.csv` keeps its stable schema, and the used
+  peaks note/CSV now write an explicit empty result with `No peaks were used.`
+  The pre-editor cache identity now includes background peak entry source,
+  expected fit count, and per-background entry counts so true no-point states
+  cannot reuse cache entries from runs where entries existed but all seed
+  preparation failed. Validation passed with
+  `python -m pytest tests/test_background_peak_fits_notebook.py -ra`
+  (`280 passed, 8 skipped`) and `python -m ra_sim.dev check` (`295 passed`,
+  Ruff clean, mypy clean). Bug/error status: fixed for the user log signature
+  `backgrounds=1 points=0 entry_source=none` failing before output assembly.
+  Feature status: complete for empty/no-op peak-fit handling. Migration and
+  deprecation status: no dependency, CLI, config, saved-state schema,
+  artifact-schema, or CI workflow migration is required. Shipping status: ready
+  for local diagnostic use; rollback is a normal git revert because no
+  data/schema migration is involved.
 
 Known validation limits:
 
 - Full `tests/test_background_peak_fits_notebook.py` is passing after the
   legacy notebook consumer migration.
+- The zero-point background peak-fit slice was validated with focused script
+  helper/source tests and the nearby notebook-test suite. The full local
+  diagnostic script was not rerun because it depends on local detector data and
+  may open interactive editors.
 - The 2026-05-10 Bi2Se3 weak-marker fix was validated with focused tests using
   embedded real-profile values, not a full real-sample script run.
 - The PbI2 headless diagnostic path has been rerun. The L3 star crop,
