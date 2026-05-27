@@ -9,6 +9,28 @@ Last updated: 2026-05-27
 
 ## Summary
 
+2026-05-27 phase 8 small test-helper simplification:
+`tests/test_gui_analysis_visibility.py`,
+`tests/test_gui_runtime_display_acceleration.py`,
+`tests/test_gui_geometry_q_group_manager.py`,
+`tests/test_gui_background_manager.py`,
+`tests/test_geometry_fit_lattice_ui_helpers.py`,
+`tests/test_hbn_fitter_bundle_export.py`, and `tests/test_simulation.py` now
+reuse the shared `RuntimeVar` test fake instead of carrying equivalent local
+`_FakeVar` or `_DummyVar` classes. Trace-capable, call-recording,
+coercing, widget, and direct `.value` assertion fakes remain local and are out
+of this phase. Bug/error/feature status: no runtime behavior defect or feature
+change; this is maintenance-only test cleanup. UI/API/interface status: no GUI
+control, frontend state contract, public API, CLI flag, config key,
+saved-state schema, artifact schema, dependency, or production interface
+changed. CI/deprecation/migration status: no CI workflow, migration path,
+deprecation notice, compatibility shim, release/version change, new file, or
+new abstraction required. Review status: no correctness, bloat, security,
+performance, test-quality, new-file, or abstraction blockers were found.
+Shipping status: targeted Phase 8 tests, `python -m ra_sim.dev check`, and
+`git diff --check` pass locally. Rollback is a normal git revert of the
+test/doc cleanup.
+
 2026-05-27 phase 7 GUI views test-helper simplification:
 `tests/test_gui_views.py` now reuses the shared `RuntimeVar` test fake instead
 of carrying an equivalent local `_FakeVar` class. The shared `RuntimeVar`

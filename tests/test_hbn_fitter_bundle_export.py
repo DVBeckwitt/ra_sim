@@ -5,14 +5,7 @@ from pathlib import Path
 import numpy as np
 
 from ra_sim.hbn_fitter import fitter as hbn_fitter
-
-
-class _DummyVar:
-    def __init__(self, value: str) -> None:
-        self._value = value
-
-    def get(self) -> str:
-        return self._value
+from tests.helpers.gui_fakes import RuntimeVar as _DummyVar
 
 
 class _DummyFitter:

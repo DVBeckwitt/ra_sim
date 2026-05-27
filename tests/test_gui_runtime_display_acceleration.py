@@ -1,17 +1,7 @@
 from types import SimpleNamespace
 
 from ra_sim.gui import runtime_display_acceleration
-
-
-class _FakeVar:
-    def __init__(self, value=None) -> None:
-        self.value = value
-
-    def get(self):
-        return self.value
-
-    def set(self, value) -> None:
-        self.value = value
+from tests.helpers.gui_fakes import RuntimeVar as _FakeVar
 
 
 class _FakeWidget:

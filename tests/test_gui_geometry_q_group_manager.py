@@ -6,14 +6,7 @@ import pytest
 
 from ra_sim.gui import geometry_q_group_manager, state
 from ra_sim.simulation import diffraction, intersection_cache_schema as cache_schema
-
-
-class _FakeVar:
-    def __init__(self, value):
-        self._value = value
-
-    def get(self):
-        return self._value
+from tests.helpers.gui_fakes import RuntimeVar as _FakeVar
 
 
 def _entry(group_key, *, peak_count, total_intensity, source="primary"):

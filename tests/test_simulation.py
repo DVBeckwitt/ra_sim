@@ -4,14 +4,7 @@ import pytest
 from ra_sim.simulation import diffraction
 from ra_sim.simulation import simulation as sim_mod
 from ra_sim.utils.calculations import _legacy_kernel_n2_sample_array_from_angstrom
-
-
-class _DummyVar:
-    def __init__(self, value):
-        self._value = value
-
-    def get(self):
-        return self._value
+from tests.helpers.gui_fakes import RuntimeVar as _DummyVar
 
 
 def test_simulate_diffraction_reuses_supplied_profile_samples(monkeypatch):

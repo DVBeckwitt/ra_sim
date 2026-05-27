@@ -1,14 +1,7 @@
 from __future__ import annotations
 
 from ra_sim.gui import analysis_visibility
-
-
-class _FakeVar:
-    def __init__(self, value: object) -> None:
-        self.value = value
-
-    def get(self) -> object:
-        return self.value
+from tests.helpers.gui_fakes import RuntimeVar as _FakeVar
 
 
 def test_analysis_outputs_visible_when_analyze_tab_selected() -> None:

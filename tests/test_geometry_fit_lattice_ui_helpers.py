@@ -1,15 +1,5 @@
 from ra_sim.gui import geometry_fit
-
-
-class _DummyVar:
-    def __init__(self, value):
-        self._value = value
-
-    def get(self):
-        return self._value
-
-    def set(self, value):
-        self._value = value
+from tests.helpers.gui_fakes import RuntimeVar as _DummyVar
 
 
 def test_geometry_fit_param_order_includes_lattice_parameters() -> None:

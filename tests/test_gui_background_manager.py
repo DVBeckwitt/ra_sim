@@ -3,17 +3,7 @@ from pathlib import Path
 import numpy as np
 
 from ra_sim.gui import background_manager, state
-
-
-class _DummyVar:
-    def __init__(self, value):
-        self._value = value
-
-    def get(self):
-        return self._value
-
-    def set(self, value):
-        self._value = value
+from tests.helpers.gui_fakes import RuntimeVar as _DummyVar
 
 
 class _DummySlider:
