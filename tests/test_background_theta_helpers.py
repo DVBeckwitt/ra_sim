@@ -2,17 +2,7 @@ from __future__ import annotations
 
 
 from ra_sim.gui import background_theta, state_io
-
-
-class _Var:
-    def __init__(self, value):
-        self._value = value
-
-    def get(self):
-        return self._value
-
-    def set(self, value) -> None:
-        self._value = value
+from tests.helpers.gui_fakes import RuntimeVar as _Var
 
 
 def test_parse_background_theta_values_accepts_common_delimiters() -> None:

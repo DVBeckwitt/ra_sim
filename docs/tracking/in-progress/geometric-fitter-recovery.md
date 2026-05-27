@@ -9,6 +9,23 @@ Last updated: 2026-05-27
 
 ## Summary
 
+2026-05-27 phase 2 test-helper simplification follow-up:
+`tests/test_background_theta_helpers.py`, `tests/test_data_loading_parameters.py`,
+`tests/test_gui_state_restore_helpers.py`, `tests/test_gui_structure_model.py`,
+and `tests/test_gui_ordered_structure_fit.py` now reuse the shared `RuntimeVar`
+test fake instead of redefining equivalent local `_Var` classes. Files whose
+helpers coerce values, omit `set()`, or carry custom state semantics were left
+unchanged. Bug/error/feature status: no runtime behavior defect or feature
+change; this is maintenance-only test cleanup. UI/API/interface status: no GUI
+control, frontend state contract, public API, CLI flag, config key, saved-state
+schema, artifact schema, or dependency changed. CI/deprecation/migration
+status: no CI workflow, migration path, deprecation notice, compatibility shim,
+or release/version change required. Review status: checked for correctness,
+bloat, security, performance, test quality, avoidable new files, and avoidable
+abstractions with no blockers found. Shipping status: targeted helper tests,
+ruff checks, `python -m ra_sim.dev check`, and `git diff --check` pass locally;
+rollback is a normal git revert of the cleanup/doc commit.
+
 2026-05-27 runtime import-safe test-helper simplification follow-up:
 `tests/test_gui_runtime_import_safe.py` now reuses the shared `RuntimeVar`
 test fake instead of redefining equivalent local `_Var` classes in the touched

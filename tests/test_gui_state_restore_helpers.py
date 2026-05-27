@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from ra_sim.gui import controllers, state, state_io
+from tests.helpers.gui_fakes import RuntimeVar as _Var
 
 
 class _DisplayRecorder:
@@ -10,17 +11,6 @@ class _DisplayRecorder:
 
     def set_data(self, value) -> None:
         self.last_data = value
-
-
-class _Var:
-    def __init__(self, value) -> None:
-        self._value = value
-
-    def get(self):
-        return self._value
-
-    def set(self, value) -> None:
-        self._value = value
 
 
 def test_load_background_files_for_state_reuses_identical_files_without_reread(

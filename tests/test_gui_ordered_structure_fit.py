@@ -4,17 +4,7 @@ import numpy as np
 
 from ra_sim.gui import ordered_structure_fit
 from ra_sim.gui.state import OrderedStructureFitSnapshot
-
-
-class _Var:
-    def __init__(self, value):
-        self._value = value
-
-    def get(self):
-        return self._value
-
-    def set(self, value) -> None:
-        self._value = value
+from tests.helpers.gui_fakes import RuntimeVar as _Var
 
 
 def test_solve_positive_weighted_scale_returns_expected_value() -> None:

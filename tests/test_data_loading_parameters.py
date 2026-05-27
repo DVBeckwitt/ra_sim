@@ -1,17 +1,7 @@
 import numpy as np
 
 from ra_sim.io.data_loading import load_parameters, save_all_parameters
-
-
-class _Var:
-    def __init__(self, value):
-        self._value = value
-
-    def get(self):
-        return self._value
-
-    def set(self, value) -> None:
-        self._value = value
+from tests.helpers.gui_fakes import RuntimeVar as _Var
 
 
 def _required_parameter_vars():
