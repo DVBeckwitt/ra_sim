@@ -34,7 +34,13 @@ is ready for review after the documented validation gates, with rollback by
 reverting that single cleanup commit if a removed internal path proves active.
 Follow-up review cleanup removed the remaining uncalled legacy mosaic-shape ROI
 scaffolding from `optimization.py`; active mosaic profile fitting and the
-public `fit_mosaic_shape_parameters()` entry point remain unchanged.
+public `fit_mosaic_shape_parameters()` entry point remain unchanged. Shipping
+handoff: cleanup committed as `4c2c6fbe`; targeted mosaic/cache tests,
+testing-index docs guard, `python -m ra_sim.dev check`, and `git diff --check`
+passed. Bug/error/feature status: no fitter behavior change and no new feature;
+deprecation status: the removed private mosaic-shape ROI scaffolding is
+unsupported dead code; rollback is a single-commit revert if a hidden private
+consumer is later found.
 
 2026-05-27 exact-only locked Qr/Qz readiness gate update: non-exact optics
 modes are no longer supported for the fitter path, so the remaining operator
