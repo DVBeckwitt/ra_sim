@@ -13,8 +13,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from ra_sim.gui.peak_sensitivity import PeakSensitivityEvaluationError  # noqa: E402
-from ra_sim.gui.peak_transport_validation import (  # noqa: E402
+from ra_sim.gui.peak_sensitivity import PeakSensitivityEvaluationError
+from ra_sim.gui.peak_transport_validation import (
     METRIC_ALL,
     METRIC_CHOICES,
     TransportValidationOptions,

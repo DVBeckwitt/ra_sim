@@ -1,4 +1,3 @@
-import os
 import csv
 import datetime
 from pathlib import Path
@@ -214,7 +213,6 @@ def solve_q(k_in_crystal, k_scat, G_vec, sigma, N_steps=1000):
     bragg_rad_sq = G_vec[0]*G_vec[0] + G_vec[1]*G_vec[1] + G_vec[2]*G_vec[2]
     if bragg_rad_sq < 1e-14:
         return np.zeros((0,4), dtype=np.float64)
-    bragg_rad = sqrt(bragg_rad_sq)
     
     Ax = -k_in_crystal[0]
     Ay = -k_in_crystal[1]
@@ -435,7 +433,6 @@ def calculate_phi(
 ):
     gz0 = 2.0*pi*(L/cv)
     gr0 = 4.0*pi/av * sqrt((H*H + H*K + K*K)/3.0)
-    G   = sqrt(gr0*gr0 + gz0*gz0)
     G_vec = np.array([0.0, gr0, gz0], dtype=np.float64)
     max_I_sign0 = -1.0
     max_x_sign0 = np.nan

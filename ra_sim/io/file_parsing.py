@@ -1,6 +1,5 @@
 """Parsing helpers for detector configuration and blob files."""
 
-import json
 import numpy as np
 from ra_sim.debug_controls import register_run_input_paths
 

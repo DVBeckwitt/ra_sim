@@ -39,12 +39,10 @@ import math
 import os
 import json
 import argparse
-from pathlib import Path
 
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
-import yaml
 from scipy.optimize import minimize
 
 from matplotlib.patches import Rectangle

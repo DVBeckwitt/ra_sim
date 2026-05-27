@@ -58,6 +58,7 @@
   - Fixed selected Qr-set blue square overlays so theta-updated live simulation rows move the simulated marker instead of replaying stale saved refined detector pixels.
   - Fixed plain geometry-fit source-cache rebuilds so fresh-simulation timeouts fail preflight before optimizer preparation, matching targeted preflight timeout handling.
   - Fixed detector-origin locked Qr/Qz geometry-fit preflight so locked source identity no longer forces synchronous caked-view preparation on the GUI thread, while worker-side locked-Qr projection readiness still fails closed before dataset build.
+  - Fixed geometry-fit job-local live-row handoff so validated Q-group snapshot rows are used before saved manual-pair fallback rows when live rows are empty, preserving disordered-phase source rows while coordinate-free Q-group metadata still falls back to saved manual pairs.
   - Fixed saved Qr/Qz ghost-representative placements so changing simulation parameters refreshes their simulated marker positions from current source rows or current simulated-peak rows even when the saved placed row no longer carries ghost provenance, rejects stale warm-cache simulated pixels when the current ghost is missing, and preserves measured background clicks.
   - Fixed settled geometry-overlay redraw so view-bound Qr/Qz initial square markers are rebuilt from the current simulation instead of replayed from stale remembered display coordinates.
   - Fixed detector-mode locked Qr/Qz geometry-fit preflight so selected detector rows generate exact caked projected rows for the worker locked-Qr readiness gate once a projection payload exists, without promoting detector fit-space or caked-objective flags; current saved manual pairs still replace unmatched stale live-preview source rows during fit job build.
@@ -510,6 +511,7 @@
   - Expanded `ra_sim/gui/background_manager.py` with backend-orientation debug status plus rotate/flip/reset runtime helpers and callback wiring, leaving `ra_sim/gui/runtime.py` with thin background debug status-refresh and control-wiring call sites.
 
 - **Repository cleanup**
+  - Removed generated geometry-fit logs, temporary preflight JSON dumps, and the duplicate root PbI2 high-temperature CIF helper; the maintained implementation remains `ra_sim.utils.pbi2_ht_shift_cif`, and generated geometry logs are now ignored.
   - Removed tracked root artifacts that did not belong in the long-term project layout: `ig_graph.sqlite`, `ig_graph.sqlite-shm`, `ig_graph.sqlite-wal`, `session.json`, `oneline`, `et --hard a485e65`, and the legacy root `hbn.py`.
   - Added root-level ignore rules so those local artifacts stay out of version control.
   - Expanded `ra_sim/gui/manual_geometry.py` with background-path matching, placement export-row/snapshot assembly, placement snapshot apply, and placement export/import dialog workflow helpers, leaving `ra_sim/gui/runtime.py` with thin delegates plus file-dialog dir and caked-view callback wiring.

@@ -4496,17 +4496,6 @@ def test_select_peak_from_canvas_click_waits_for_refreshed_caked_cache_when_bund
     select_calls = []
     status_messages = []
     sync_calls = []
-    misleading_payload = peak_selection.build_hkl_pick_simulation_point_payload(
-        [
-            {
-                "hkl": (9, 9, 9),
-                "hkl_raw": (9.0, 9.0, 9.0),
-                "caked_x": 51.0,
-                "caked_y": 59.0,
-                "intensity": 99.0,
-            }
-        ]
-    )
     refresh_requests: list[bool] = []
 
     def ensure_peak_overlay_data(*, force: bool = False) -> bool:
@@ -4789,17 +4778,6 @@ def test_select_peak_from_canvas_click_uses_current_caked_cache_positions_for_ne
     assert runtime_state.peak_millers == [(0, 0, 3), (0, 0, 0)]
     assert select_calls[0][0] == 0
     assert select_calls[0][1]["selected_native"] == (300.0, 300.0)
-    misleading_payload = peak_selection.build_hkl_pick_simulation_point_payload(
-        [
-            {
-                "hkl": (9, 9, 9),
-                "hkl_raw": (9.0, 9.0, 9.0),
-                "caked_x": 51.0,
-                "caked_y": 59.0,
-                "intensity": 99.0,
-            }
-        ]
-    )
 
     def _ensure_caked_overlay(*, force: bool = False) -> bool:
         ok = peak_selection.ensure_runtime_peak_overlay_data(

@@ -11,7 +11,6 @@ import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
@@ -19,9 +18,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from ra_sim.gui import geometry_fit as gui_geometry_fit  # noqa: E402
-from ra_sim.simulation import exact_cake_portable  # noqa: E402
-from scripts.debug import validate_geometry_preflight_rebind as preflight  # noqa: E402
+from ra_sim.gui import geometry_fit as gui_geometry_fit
+from ra_sim.simulation import exact_cake_portable
+from scripts.debug import validate_geometry_preflight_rebind as preflight
 
 DEFAULT_STATE_PATH = REPO_ROOT / "artifacts" / "geometry_fit_gui_states" / "new4.json"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "artifacts" / "geometry_fit_ladder" / "new4"

@@ -68,7 +68,7 @@ import numpy as np
 import pandas as pd
 from IPython.display import Image, display
 from scipy.ndimage import binary_dilation, gaussian_filter1d
-from scipy.optimize import least_squares, nnls
+from scipy.optimize import least_squares
 
 try:
     from numba import njit, prange, set_num_threads, get_num_threads
@@ -97,7 +97,6 @@ except Exception:  # Numba is optional; the notebook still runs without JIT acce
 
 from ra_sim.fitting.rod_profiles import caked_field_to_gui_phi, qz_profile_from_caked_mask
 from ra_sim.gui.background import apply_background_backend_orientation
-from ra_sim.gui import controllers as gui_controllers
 from ra_sim.gui import qr_cylinder_overlay as gui_qr_cylinder_overlay
 from ra_sim.io.osc_reader import read_osc
 from ra_sim.utils.calculations import IndexofRefraction
@@ -10982,7 +10981,7 @@ def caked_qz_map_for_background(
             zb=float(config.zb),
         )
         _qx_detector, qz_detector_corners, _qy_detector = (
-            exact_qspace_portable._shared_detector_maps_for_shape(  # noqa: SLF001
+            exact_qspace_portable._shared_detector_maps_for_shape(
                 tuple(bg["detector_image"].shape),
                 qspace_geometry,
             )
@@ -11586,7 +11585,7 @@ def detector_solid_angle_for_background(bg: dict[str, object]) -> np.ndarray | N
             wavelength=WAVELENGTH_M,
         )
         if hasattr(ai, "_solid_angle_for_shape"):
-            return np.asarray(ai._solid_angle_for_shape(detector_shape), dtype=np.float64)  # noqa: SLF001
+            return np.asarray(ai._solid_angle_for_shape(detector_shape), dtype=np.float64)
     except Exception:
         pass
     return None

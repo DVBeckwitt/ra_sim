@@ -6,7 +6,6 @@ import queue
 import threading
 from collections.abc import Callable
 from importlib.resources import as_file, files
-from typing import Any
 
 try:
     import winsound as _winsound

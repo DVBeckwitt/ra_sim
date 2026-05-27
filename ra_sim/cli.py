@@ -38,7 +38,7 @@ import math
 from pathlib import Path
 import sys
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Dict, Mapping, Sequence
+from typing import TYPE_CHECKING, Dict, Mapping, Sequence
 
 import numpy as np
 from PIL import Image
@@ -963,7 +963,6 @@ def run_headless_geometry_fit(
     gui_controllers = geometry_modules.gui_controllers
     gui_geometry_fit = geometry_modules.gui_geometry_fit
     gui_geometry_overlay = geometry_modules.gui_geometry_overlay
-    gui_geometry_q_group_manager = geometry_modules.gui_geometry_q_group_manager
     gui_manual_geometry = geometry_modules.gui_manual_geometry
     gui_structure_model = geometry_modules.gui_structure_model
     AtomSiteOverrideState = geometry_modules.AtomSiteOverrideState
@@ -977,10 +976,7 @@ def run_headless_geometry_fit(
     stacking_fault = _load_stacking_fault_module()
     diffraction_tools = _load_diffraction_tools_module()
     detector_two_theta_max = diffraction_tools.detector_two_theta_max
-
     simulation_diffraction = _load_simulation_modules().diffraction
-    hit_tables_to_max_positions = simulation_diffraction.hit_tables_to_max_positions
-    process_peaks_parallel = simulation_diffraction.process_peaks_parallel
 
     tools_module = _load_tools_module()
     build_intensity_dataframes = tools_module.build_intensity_dataframes
@@ -1816,30 +1812,6 @@ def run_headless_geometry_fit(
             return exact_cake.raw_phi_to_gui_phi(value)
         except Exception:
             return value
-
-    simulation_callbacks = (
-        gui_geometry_q_group_manager.make_runtime_geometry_fit_simulation_callbacks(
-            process_peaks_parallel=process_peaks_parallel,
-            hit_tables_to_max_positions=hit_tables_to_max_positions,
-            native_sim_to_display_coords=lambda col, row, image_shape: (
-                gui_geometry_overlay.native_sim_to_display_coords(
-                    col,
-                    row,
-                    image_shape,
-                    sim_display_rotate_k=HEADLESS_GEOMETRY_SIM_DISPLAY_ROTATE_K,
-                )
-            ),
-            peak_table_lattice_factory=None,
-            primary_a_factory=lambda: float(a_var.get()),
-            primary_c_factory=lambda: float(c_var.get()),
-            default_source_label="primary",
-            round_pixel_centers=False,
-            default_solve_q_steps=int(mosaic_params["solve_q_steps"]),
-            default_solve_q_rel_tol=float(mosaic_params["solve_q_rel_tol"]),
-            default_solve_q_mode=int(mosaic_params["solve_q_mode"]),
-            prefer_safe_python_runner=True,
-        )
-    )
 
     projection_callbacks = gui_manual_geometry.make_runtime_geometry_manual_projection_callbacks(
         caked_view_enabled=lambda: isinstance(

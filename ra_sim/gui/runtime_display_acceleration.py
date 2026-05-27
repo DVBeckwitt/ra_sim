@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
 
 
 def parse_fast_viewer_env_flag(raw_value: object) -> bool:

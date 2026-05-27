@@ -18200,7 +18200,6 @@ def _run_locked_qr_projection_missing_worker_case(
                 fit_source_resolution_kind="provider_fixed_source_local",
                 optimizer_request_has_fixed_source=True,
             )
-    live_row = live_rows[0]
     perf_lock = threading.Lock()
     perf_state = {"value": 0.0}
 
@@ -22309,7 +22308,7 @@ def test_second_unchanged_preflight_reuses_targeted_projected_cache(monkeypatch)
 
 def test_targeted_projected_cache_miss_reprojects_when_view_changes(monkeypatch) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
-    simulation_state = _patch_runtime_targeted_rebuild_env(monkeypatch, runtime_session)
+    _patch_runtime_targeted_rebuild_env(monkeypatch, runtime_session)
     required_pairs = [_geometry_fit_worker_required_pair()]
     current_view = {"mode": "detector"}
     first_project_calls: list[int] = []
@@ -22440,7 +22439,7 @@ def test_targeted_projected_cache_miss_reprojects_when_view_changes(monkeypatch)
         raising=False,
     )
 
-    second_rows = runtime_session._geometry_manual_rebuild_source_rows_for_background(
+    runtime_session._geometry_manual_rebuild_source_rows_for_background(
         0,
         consumer="geometry_fit_dataset",
         required_pairs=required_pairs,
@@ -22458,7 +22457,7 @@ def test_same_mode_changed_projection_signature_forces_cache_miss(
     monkeypatch,
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
-    simulation_state = _patch_runtime_targeted_rebuild_env(monkeypatch, runtime_session)
+    _patch_runtime_targeted_rebuild_env(monkeypatch, runtime_session)
     required_pairs = [_geometry_fit_worker_required_pair()]
     current_signature = {
         "mode": "caked",
@@ -22565,7 +22564,7 @@ def test_same_mode_changed_projection_signature_forces_cache_miss(
         ),
     )
 
-    first_rows = runtime_session._geometry_manual_rebuild_source_rows_for_background(
+    runtime_session._geometry_manual_rebuild_source_rows_for_background(
         0,
         consumer="geometry_fit_dataset",
         required_pairs=required_pairs,
@@ -22596,7 +22595,7 @@ def test_same_mode_changed_projection_signature_forces_cache_miss(
         raising=False,
     )
 
-    second_rows = runtime_session._geometry_manual_rebuild_source_rows_for_background(
+    runtime_session._geometry_manual_rebuild_source_rows_for_background(
         0,
         consumer="geometry_fit_dataset",
         required_pairs=required_pairs,
@@ -22612,7 +22611,7 @@ def test_same_mode_changed_projection_signature_forces_cache_miss(
 
 def test_targeted_projected_cache_stored_rows_only_does_not_count_as_hit(monkeypatch) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
-    simulation_state = _patch_runtime_targeted_rebuild_env(monkeypatch, runtime_session)
+    _patch_runtime_targeted_rebuild_env(monkeypatch, runtime_session)
     required_pairs = [_geometry_fit_worker_required_pair()]
     rebuild_calls: list[int] = []
     projected_rows = [dict(_geometry_fit_worker_live_row(), projected_cache_refresh=True)]

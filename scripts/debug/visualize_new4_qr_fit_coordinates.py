@@ -19,11 +19,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from ra_sim.fitting import optimization as opt  # noqa: E402
-from ra_sim.gui import geometry_fit as gui_geometry_fit  # noqa: E402
-from scripts.debug import run_new4_caked_point_reprojection_check as reprojection  # noqa: E402
-from scripts.debug import run_new4_geometry_fit_ladder as ladder  # noqa: E402
-from scripts.debug import validate_geometry_preflight_rebind as preflight  # noqa: E402
+from ra_sim.fitting import optimization as opt
+from ra_sim.gui import geometry_fit as gui_geometry_fit
+from scripts.debug import run_new4_caked_point_reprojection_check as reprojection
+from scripts.debug import run_new4_geometry_fit_ladder as ladder
+from scripts.debug import validate_geometry_preflight_rebind as preflight
 
 
 DEFAULT_STATE_PATH = REPO_ROOT / "artifacts" / "geometry_fit_gui_states" / "bi2se3.json"

@@ -8,7 +8,6 @@ import socket
 import subprocess
 import sys
 import traceback
-from pathlib import Path
 from ra_sim import install_prereqs
 from ra_sim.config import get_config_dir
 from ra_sim.debug_controls import (

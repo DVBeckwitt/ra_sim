@@ -491,7 +491,7 @@ def capture_manual_geometry_overlay_input_from_render_path(
         key: dict(entry)
         for entry in saved
         if (
-            key := manual_geometry._geometry_manual_caked_qr_projection_key(entry)  # noqa: SLF001
+            key := manual_geometry._geometry_manual_caked_qr_projection_key(entry)
         )
         is not None
     }
@@ -505,7 +505,7 @@ def capture_manual_geometry_overlay_input_from_render_path(
                 continue
             row = dict(raw_row)
             source = saved_projection_rows.get(
-                manual_geometry._geometry_manual_caked_qr_projection_key(row)  # noqa: SLF001
+                manual_geometry._geometry_manual_caked_qr_projection_key(row)
             )
             if isinstance(source, Mapping):
                 sim_display = _point_from_keys(source, ("refined_sim_x", "refined_sim_y"))

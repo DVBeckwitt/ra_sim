@@ -33,7 +33,6 @@ from ra_sim.fitting.background_peak_matching import (
     match_simulated_peaks_to_peak_context,
 )
 from ra_sim.fitting.optimization import (
-    _detector_pixels_to_fit_space,
     _fit_space_pixel_size_provenance,
     _locked_qr_prediction_caked_authority_mismatch,
     _resolve_fixed_manual_qr_fit_prediction,
@@ -46,7 +45,6 @@ from ra_sim.simulation.exact_cake_portable import (
     FastAzimuthalIntegrator,
     build_angle_axes,
     build_cake_transform_bundle,
-    detector_pixel_to_caked_bin,
     detector_two_theta_max_deg,
     gui_phi_to_raw_phi,
     integrate_detector_to_cake_lut,
@@ -18245,11 +18243,6 @@ def prepare_geometry_fit_run(
         else bool(include_all_selected_backgrounds)
     )
 
-    required_indices = (
-        list(selected_background_indices)
-        if build_all_selected_backgrounds
-        else [int(primary_index)]
-    )
     enabled_pairs_by_background: dict[int, list[Mapping[str, object]]] = {}
     missing_indices = []
     for idx in selected_background_indices:
@@ -27280,7 +27273,6 @@ def execute_runtime_geometry_fit_solver_phase(
     """Run the worker-safe logging and solver phase before any UI-state apply."""
 
     resolved_log_path = Path(log_path)
-    logging_disabled = geometry_fit_all_logging_disabled()
     _, _log_line, _log_section = _build_geometry_fit_log_writers(resolved_log_path)
 
     def _emit_execution_event(kind: str, **payload: object) -> None:

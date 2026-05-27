@@ -6,8 +6,6 @@ from pathlib import Path
 import re
 
 import numpy as np
-import json
-import matplotlib.pyplot as plt
 import math
 
 from ra_sim.config import get_material_config

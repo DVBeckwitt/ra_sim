@@ -43,15 +43,13 @@ import math
 import json
 import copy
 import contextlib
-import concurrent.futures
 import inspect
 import queue
 import faulthandler
 import hashlib
-import re
 import threading
 import traceback
-from collections import OrderedDict, defaultdict, namedtuple
+from collections import OrderedDict, defaultdict
 from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import wraps
@@ -142,9 +140,6 @@ from ra_sim.utils.stacking_fault import (
     DEFAULT_PHI_L_DIVISOR,
     _cell_a_c_from_cif,
     _infer_iodine_z_like_diffuse,
-    ht_Iinf_dict,
-    ht_dict_to_arrays,
-    ht_dict_to_qr_dict,
     normalize_phi_l_divisor,
     normalize_phase_delta_expression,
     validate_phase_delta_expression,
@@ -168,7 +163,7 @@ from ra_sim.utils.parallel import (
     make_detached_thread_pool_executor,
     temporary_numba_thread_limit,
 )
-from ra_sim.io.file_parsing import parse_poni_file, Open_ASC
+from ra_sim.io.file_parsing import parse_poni_file, Open_ASC  # noqa: F401
 from ra_sim.utils.diffraction_tools import (
     DEFAULT_PIXEL_SIZE_M,
     detector_two_theta_max,
@@ -177,8 +172,6 @@ from ra_sim.utils.diffraction_tools import (
 )
 from ra_sim.io.data_loading import (
     load_geometry_placements_file,
-    load_and_format_reference_profiles,
-    save_all_parameters,
     save_geometry_placements_file,
     load_parameters,
     load_gui_state_file,
@@ -186,10 +179,8 @@ from ra_sim.io.data_loading import (
 )
 from ra_sim.fitting.optimization import (
     _measured_detector_anchor,
-    build_measured_dict,
     fit_geometry_parameters,
     fit_mosaic_shape_parameters,
-    fit_mosaic_widths_separable,
     focus_mosaic_profile_dataset_specs,
     simulate_and_compare_hkl,
 )
@@ -220,7 +211,6 @@ from ra_sim.simulation.diffraction import (
     OPTICS_MODE_EXACT,
     process_peaks_parallel,
     process_peaks_parallel_safe,
-    process_qr_rods_parallel,
 )
 from ra_sim.simulation.intersection_cache_schema import (
     CACHE_COL_DETECTOR_COL,
@@ -231,7 +221,6 @@ from ra_sim.simulation.intersection_cache_schema import (
     CACHE_COL_PHI,
     CURRENT_CAKED_COL_PHI,
     CURRENT_CAKED_COL_TWO_THETA,
-    CURRENT_DETECTOR_CACHE_WIDTH,
     HIT_ROW_COL_H,
     HIT_ROW_COL_K,
     HIT_ROW_COL_L,
@@ -248,7 +237,6 @@ from ra_sim.simulation.intersection_cache_schema import (
 )
 from ra_sim.simulation.diffraction_debug import (
     process_peaks_parallel_debug,
-    process_qr_rods_parallel_debug,
     dump_debug_log,
 )
 from ra_sim.simulation.engine import (
@@ -261,9 +249,9 @@ from ra_sim.simulation.exact_cake import start_exact_cake_numba_warmup_in_backgr
 from ra_sim.simulation.exact_cake_portable import (
     CakeTransformBundle,
     FastAzimuthalIntegrator,
-    build_geometry,
+    build_geometry,  # noqa: F401
     caked_point_to_detector_pixel,
-    detector_points_to_angles,
+    detector_points_to_angles,  # noqa: F401
     detector_pixel_to_caked_bin,
     gui_phi_to_raw_phi,
     integrate_detector_to_cake_lut,
@@ -324,7 +312,6 @@ from ra_sim.gui._runtime.live_cache_helpers import (
     live_cache_count as _live_cache_count,
     live_cache_inventory_snapshot as _build_live_cache_inventory_snapshot,
     live_cache_shape as _live_cache_shape,
-    live_cache_short_text as _live_cache_short_text,
     live_cache_signature_summary as _live_cache_signature_summary,
 )
 from ra_sim.gui import fit2d_error_sound as gui_fit2d_error_sound
@@ -343,7 +330,7 @@ from ra_sim.gui import geometry_fit as gui_geometry_fit
 from ra_sim.gui import controllers as gui_controllers
 from ra_sim.gui import display_projection as gui_display_projection
 from ra_sim.gui.caked_intensity_policy import (
-    GUI_CAKED_VIEW_CORRECT_SOLID_ANGLE,
+    GUI_CAKED_VIEW_CORRECT_SOLID_ANGLE,  # noqa: F401
     resolve_gui_caked_view_correct_solid_angle,
 )
 from ra_sim.gui import main_matplotlib_interaction as gui_main_matplotlib_interaction
@@ -351,7 +338,6 @@ from ra_sim.gui import main_figure_chrome as gui_main_figure_chrome
 from ra_sim.gui import state as gui_state
 from ra_sim.gui import state_io as gui_state_io
 from ra_sim.gui import structure_factor_pruning as gui_structure_factor_pruning
-from ra_sim.gui.sliders import create_slider
 from ra_sim.gui.diffuse_cif_toggle import (
     open_diffuse_cif_toggle_algebraic,
     export_algebraic_ht_txt,
@@ -4946,11 +4932,10 @@ def _set_geometry_manual_pick_session(
     pick_session: dict[str, object] | None,
 ) -> dict[str, object]:
     """Replace the active manual-geometry pick session in the shared state container."""
-    result = gui_controllers.replace_manual_geometry_pick_session(
+    return gui_controllers.replace_manual_geometry_pick_session(
         geometry_manual_state,
         pick_session,
     )
-    return result
 
 
 def _clear_geometry_manual_undo_stack() -> None:
@@ -10358,9 +10343,7 @@ def _current_selected_qr_rod_detector_shared_inputs() -> dict[str, object] | Non
         return None
     if not isinstance(config, gui_qr_cylinder_overlay.QrCylinderOverlayRenderConfig):
         return None
-    effective_config = gui_qr_cylinder_overlay._selected_qr_mask_projection_config(  # noqa: SLF001
-        config
-    )
+    effective_config = gui_qr_cylinder_overlay._selected_qr_mask_projection_config(config)
 
     q_maps = gui_qr_cylinder_overlay.detector_qr_qz_maps_for_projection(
         config=effective_config,
@@ -11718,8 +11701,7 @@ def _initialize_runtime_controls_block_05() -> None:
 
 
 def qr_cylinder_overlay_runtime_toggle(*args, **kwargs):
-    result = _qr_cylinder_overlay_runtime_toggle_impl(*args, **kwargs)
-    return result
+    return _qr_cylinder_overlay_runtime_toggle_impl(*args, **kwargs)
 
 
 QR_CYLINDER_DISPLAY_MODE_OFF = "Off"
@@ -11816,7 +11798,7 @@ def _sync_selected_qr_rod_controls_state() -> None:
         return
 
     option_pairs = _selected_qr_rod_option_pairs(_analysis_selected_qr_rod_entries())
-    gui_integration_range_drag._set_runtime_selected_qr_rod_options(  # noqa: SLF001
+    gui_integration_range_drag._set_runtime_selected_qr_rod_options(
         range_view_state,
         option_pairs,
     )
@@ -11828,9 +11810,9 @@ def _sync_selected_qr_rod_controls_state() -> None:
 
     if selected_qr_rod_view_active and not has_options:
         setattr(range_view_state, "integrate_selected_qr_rod_value", False)
-        gui_integration_range_drag._safe_var_set(toggle_var, False)  # noqa: SLF001
+        gui_integration_range_drag._safe_var_set(toggle_var, False)
 
-    selected_key = gui_integration_range_drag._get_runtime_string_value(  # noqa: SLF001
+    selected_key = gui_integration_range_drag._get_runtime_string_value(
         range_view_state,
         "selected_qr_rod_key",
         "",
@@ -11843,13 +11825,13 @@ def _sync_selected_qr_rod_controls_state() -> None:
     if option_keys and not selected_keys:
         selected_keys = [option_keys[0]]
     if option_keys:
-        gui_integration_range_drag._set_runtime_selected_qr_rod_keys(  # noqa: SLF001
+        gui_integration_range_drag._set_runtime_selected_qr_rod_keys(
             range_view_state,
             selected_keys,
         )
         selected_key = selected_keys[0] if selected_keys else ""
     elif not option_keys and selected_qr_rod_view_active:
-        gui_integration_range_drag._set_runtime_selected_qr_rod_keys(  # noqa: SLF001
+        gui_integration_range_drag._set_runtime_selected_qr_rod_keys(
             range_view_state,
             [],
         )
@@ -11858,7 +11840,7 @@ def _sync_selected_qr_rod_controls_state() -> None:
     display_label = (getattr(range_view_state, "selected_qr_rod_option_labels", {}) or {}).get(
         selected_key, ""
     )
-    gui_integration_range_drag._safe_var_set(  # noqa: SLF001
+    gui_integration_range_drag._safe_var_set(
         getattr(range_view_state, "selected_qr_rod_display_var", None),
         display_label,
     )
@@ -11873,13 +11855,13 @@ def _sync_selected_qr_rod_controls_state() -> None:
         qz_lo, qz_hi = _qz_slider_bounds_from_extent(qz_extent)
         qz_display_lo = _selected_qr_rod_qz_to_display_value(qz_lo, range_view_state)
         qz_display_hi = _selected_qr_rod_qz_to_display_value(qz_hi, range_view_state)
-        gui_integration_range_drag._set_runtime_slider_bounds(  # noqa: SLF001
+        gui_integration_range_drag._set_runtime_slider_bounds(
             range_view_state,
             "qz_min",
             qz_display_lo,
             qz_display_hi,
         )
-        gui_integration_range_drag._set_runtime_slider_bounds(  # noqa: SLF001
+        gui_integration_range_drag._set_runtime_slider_bounds(
             range_view_state,
             "qz_max",
             qz_display_lo,
@@ -11903,12 +11885,12 @@ def _sync_selected_qr_rod_controls_state() -> None:
         clamped_qz_max = min(max(float(current_qz_max), qz_lo), qz_hi)
         if clamped_qz_min > clamped_qz_max:
             clamped_qz_min, clamped_qz_max = qz_lo, qz_hi
-        gui_integration_range_drag._set_runtime_range_value(  # noqa: SLF001
+        gui_integration_range_drag._set_runtime_range_value(
             range_view_state,
             "qz_min",
             _selected_qr_rod_qz_to_display_value(clamped_qz_min, range_view_state),
         )
-        gui_integration_range_drag._set_runtime_range_value(  # noqa: SLF001
+        gui_integration_range_drag._set_runtime_range_value(
             range_view_state,
             "qz_max",
             _selected_qr_rod_qz_to_display_value(clamped_qz_max, range_view_state),
@@ -11961,7 +11943,7 @@ def _sync_selected_qr_rod_controls_state() -> None:
         for widget in rod_widgets:
             _set_runtime_widget_enabled(widget, bool(has_options and rod_mode_enabled))
 
-    gui_integration_range_drag._sync_runtime_range_text_vars(range_view_state)  # noqa: SLF001
+    gui_integration_range_drag._sync_runtime_range_text_vars(range_view_state)
 
 
 def _geometry_overlays_enabled() -> bool:
@@ -12914,7 +12896,6 @@ def _toggle_caked_2d_requires_overlay_invalidation(target_view_mode: str) -> boo
     if str(target_view_mode).strip().lower() not in {"detector", "caked"}:
         return True
     geometry_overlay_view_state = globals().get("geometry_overlay_actions_view_state")
-    analysis_view_state = globals().get("analysis_view_controls_view_state")
     show_geometry_overlays = bool(
         getattr(
             getattr(geometry_overlay_view_state, "show_geometry_overlays_var", None),
@@ -15203,7 +15184,7 @@ def _set_1d_layout_for_selected_qr_rods(count: int) -> list[object]:
     try:
         fig_1d.clear()
         axes_array = fig_1d.subplots(count, 1, sharex=True, squeeze=False)
-        axes = [axis for axis in axes_array.ravel()]
+        axes = list(axes_array.ravel())
     except Exception:
         _set_1d_layout_for_selected_qr_rod()
         return [ax_1d_radial] if ax_1d_radial is not None else []
@@ -27572,7 +27553,7 @@ def reset_to_defaults():
     caked_intensity_mode_var.set("density")
     rod_profile_intensity_mode_var.set("density")
     selected_qr_rod_key_var.set("")
-    gui_integration_range_drag._set_runtime_selected_qr_rod_keys(  # noqa: SLF001
+    gui_integration_range_drag._set_runtime_selected_qr_rod_keys(
         integration_range_controls_view_state,
         [],
     )
@@ -29739,7 +29720,6 @@ def _geometry_source_snapshot_signature_for_background(
     background_index: int,
     param_set: dict[str, object] | None = None,
 ):
-    background_idx = int(background_index)
     params = dict(_current_geometry_fit_params())
     if isinstance(param_set, dict):
         params.update(dict(param_set))
@@ -30911,7 +30891,6 @@ def _geometry_fit_filter_hit_tables_for_required_branch_groups(
             "hit_tables_expanded_for_rebinding": int(len(copied_tables)),
         }
 
-    required_hkls = {tuple(key[0]) for key in required_keys}
     required_group_identities = {
         tuple(key[2])
         for key in required_keys
@@ -31440,18 +31419,6 @@ def _geometry_manual_rebuild_source_rows_for_background(
         required_manual_fit_targets
     )
     preflight_mode = "manual_geometry_targeted" if required_branch_group_keys else "full"
-    required_branch_group_keys_digest = (
-        gui_geometry_fit._geometry_fit_required_branch_group_keys_digest(
-            required_branch_group_keys,
-            background_index=int(background_idx),
-            requested_signature=requested_signature,
-            requested_signature_summary=requested_signature_summary,
-            preflight_mode=preflight_mode,
-            consumer=lookup_context,
-            projection_view_mode=projection_view_mode,
-            projection_view_signature=projection_view_signature,
-        )
-    )
 
     def _build_source_rows_for_rebuild(
         source_tables: Sequence[object] | None,
@@ -32896,13 +32863,11 @@ def _initialize_runtime_controls_block_39() -> None:
 
 
 def _set_geometry_preview_exclude_mode(enabled: bool, message: str | None = None):
-    result = _set_geometry_preview_exclude_mode_impl(enabled, message=message)
-    return result
+    return _set_geometry_preview_exclude_mode_impl(enabled, message=message)
 
 
 def _clear_live_geometry_preview_exclusions(*args, **kwargs):
-    result = _clear_live_geometry_preview_exclusions_impl(*args, **kwargs)
-    return result
+    return _clear_live_geometry_preview_exclusions_impl(*args, **kwargs)
 
 
 def _on_live_geometry_preview_toggle(*args, **kwargs):
@@ -32914,8 +32879,7 @@ def _on_live_geometry_preview_toggle(*args, **kwargs):
         gui_controllers.clear_geometry_preview_skip_once(geometry_preview_state)
         _clear_geometry_preview_artists(redraw=True)
         return False
-    result = _on_live_geometry_preview_toggle_impl(*args, **kwargs)
-    return result
+    return _on_live_geometry_preview_toggle_impl(*args, **kwargs)
 
 
 def _initialize_runtime_controls_block_40() -> None:
@@ -34732,8 +34696,6 @@ def save_q_space_representation():
         **get_process_peaks_runtime_kwargs(),
     )
 
-    max_positions_local = hit_tables_to_max_positions(hit_tables)
-
     current_2d_display = global_image_buffer.copy()
 
     data_dict = {
@@ -34840,9 +34802,7 @@ def _current_selected_qr_rod_keys_from_view_state() -> list[str]:
         selected_keys = []
     if not selected_keys:
         primary_key = str(
-            gui_integration_range_drag._safe_var_get(  # noqa: SLF001
-                globals().get("selected_qr_rod_key_var")
-            )
+            gui_integration_range_drag._safe_var_get(globals().get("selected_qr_rod_key_var"))
             or getattr(view_state, "selected_qr_rod_key_value", "")
             or ""
         )
@@ -34888,7 +34848,7 @@ def _apply_analysis_range_snapshot(snapshot: Mapping[str, object] | None) -> Non
         elif key in {"qz_min", "qz_max"}:
             numeric_value = _selected_qr_rod_qz_to_display_value(numeric_value, view_state)
         setattr(view_state, f"{key}_value", numeric_value)
-        gui_integration_range_drag._safe_var_set(  # noqa: SLF001
+        gui_integration_range_drag._safe_var_set(
             getattr(view_state, f"{key}_var", None),
             numeric_value,
         )
@@ -34900,21 +34860,21 @@ def _apply_analysis_range_snapshot(snapshot: Mapping[str, object] | None) -> Non
     if "integrate_selected_qr_rod" in snapshot:
         integrate_value = bool(snapshot.get("integrate_selected_qr_rod"))
         setattr(view_state, "integrate_selected_qr_rod_value", integrate_value)
-        gui_integration_range_drag._safe_var_set(  # noqa: SLF001
+        gui_integration_range_drag._safe_var_set(
             getattr(view_state, "integrate_selected_qr_rod_var", None),
             integrate_value,
         )
     if "mirror_selected_qr_phi" in snapshot:
         mirror_value = bool(snapshot.get("mirror_selected_qr_phi"))
         setattr(view_state, "mirror_selected_qr_phi_value", mirror_value)
-        gui_integration_range_drag._safe_var_set(  # noqa: SLF001
+        gui_integration_range_drag._safe_var_set(
             getattr(view_state, "mirror_selected_qr_phi_var", None),
             mirror_value,
         )
     if "include_selected_qr_rod_shape" in snapshot:
         include_shape_value = bool(snapshot.get("include_selected_qr_rod_shape"))
         setattr(view_state, "include_selected_qr_rod_shape_value", include_shape_value)
-        gui_integration_range_drag._safe_var_set(  # noqa: SLF001
+        gui_integration_range_drag._safe_var_set(
             getattr(view_state, "include_selected_qr_rod_shape_var", None),
             include_shape_value,
         )
@@ -34923,7 +34883,7 @@ def _apply_analysis_range_snapshot(snapshot: Mapping[str, object] | None) -> Non
             snapshot.get("caked_intensity_mode", "density")
         )
         setattr(view_state, "caked_intensity_mode_value", caked_intensity_mode)
-        gui_integration_range_drag._safe_var_set(  # noqa: SLF001
+        gui_integration_range_drag._safe_var_set(
             getattr(view_state, "caked_intensity_mode_var", None),
             caked_intensity_mode,
         )
@@ -34936,7 +34896,7 @@ def _apply_analysis_range_snapshot(snapshot: Mapping[str, object] | None) -> Non
             "rod_profile_intensity_mode_value",
             rod_profile_intensity_mode,
         )
-        gui_integration_range_drag._safe_var_set(  # noqa: SLF001
+        gui_integration_range_drag._safe_var_set(
             getattr(view_state, "rod_profile_intensity_mode_var", None),
             rod_profile_intensity_mode,
         )
@@ -34956,7 +34916,7 @@ def _apply_analysis_range_snapshot(snapshot: Mapping[str, object] | None) -> Non
         setattr(view_state, "selected_qr_rod_keys_value", list(selected_keys))
         setattr(view_state, "selected_qr_rod_keys", list(selected_keys))
         setattr(view_state, "selected_qr_rod_key_value", selected_key)
-        gui_integration_range_drag._set_runtime_selected_qr_rod_keys(  # noqa: SLF001
+        gui_integration_range_drag._set_runtime_selected_qr_rod_keys(
             view_state,
             selected_keys,
         )
@@ -35018,9 +34978,7 @@ def _current_analysis_roi_values() -> dict[str, object]:
                 )
             ),
             "selected_qr_rod_key": str(
-                gui_integration_range_drag._safe_var_get(  # noqa: SLF001
-                    globals().get("selected_qr_rod_key_var")
-                )
+                gui_integration_range_drag._safe_var_get(globals().get("selected_qr_rod_key_var"))
                 or getattr(
                     globals().get("integration_range_controls_view_state"),
                     "selected_qr_rod_key_value",
@@ -39390,6 +39348,14 @@ def _geometry_fit_job_local_source_rows_from_picker_or_q_group_cache(
     manual_pairs: Sequence[Mapping[str, object]] | None = None,
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
     q_group_entries = _geometry_fit_q_group_cache_entries()
+    q_group_rows = _geometry_fit_flatten_q_group_cache_entries(q_group_entries)
+    q_group_validation: Mapping[str, object] = {}
+    if q_group_rows:
+        q_group_validation = gui_geometry_fit.validate_geometry_fit_live_source_rows(
+            q_group_rows,
+            required_pairs=manual_pairs or (),
+            require_canonical_required_pairs=True,
+        )
     cache_data = _geometry_fit_manual_picker_cache_data_for_job(
         background_index=int(background_index),
         params_local=params_local,
@@ -39440,14 +39406,17 @@ def _geometry_fit_job_local_source_rows_from_picker_or_q_group_cache(
         )
         if row is not None:
             normalized_manual_pair_rows.append(row)
-    if normalized_manual_pair_rows:
+    if q_group_validation.get("valid"):
+        rows = q_group_rows
+        cache_source = "q_group_snapshot"
+    elif normalized_manual_pair_rows:
         rows = normalized_manual_pair_rows
         cache_source = "saved_manual_pairs"
     elif normalized_picker_rows:
         rows = normalized_picker_rows
         cache_source = "manual_picker_cache"
     else:
-        rows = _geometry_fit_flatten_q_group_cache_entries(q_group_entries)
+        rows = []
         cache_source = "q_group_snapshot"
     diagnostics = {
         "q_group_cached_entries": int(len(q_group_entries)),
@@ -41518,11 +41487,10 @@ def _run_async_geometry_fit_worker_job(
             )
         )
         try:
-            projected_rows = _geometry_fit_rows_for_background(
+            return _geometry_fit_rows_for_background(
                 background_index,
                 projection_callbacks.project_peaks_to_current_view(normalized_rows),
             )
-            return projected_rows
         except Exception:
             if normalized_mode == "q_space":
                 return []
@@ -44520,10 +44488,10 @@ def _on_fit_geometry_click_async():
         message = "Geometry fit already running."
         _geometry_fit_cmd_line("geometry fit already running")
         progress_label_geometry.config(text=message)
-        return None
+        return
 
     if not callable(geometry_fit_action_bindings_factory):
-        return None
+        return
 
     _geometry_fit_before_run()
     bindings = geometry_fit_action_bindings_factory()
@@ -44558,11 +44526,11 @@ def _on_fit_geometry_click_async():
             error_text=error_text,
         )
         _show_geometry_fit_action_notice(action_result)
-        return None
+        return
 
     _clear_geometry_fit_worker_events()
     _submit_async_geometry_fit_job(job)
-    return None
+    return
 
 
 def _initialize_runtime_controls_block_50() -> None:

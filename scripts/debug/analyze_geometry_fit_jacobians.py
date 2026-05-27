@@ -42,7 +42,7 @@ import copy
 import json
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import yaml

@@ -16,7 +16,7 @@ ROOT = _repo_root()
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from ra_sim.gui.geometry_fit_coordinate_diagnostics import (  # noqa: E402
+from ra_sim.gui.geometry_fit_coordinate_diagnostics import (
     run_new4_visual_backend_coordinate_diagnostic,
 )
 

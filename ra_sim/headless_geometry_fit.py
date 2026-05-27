@@ -30,7 +30,6 @@ from ra_sim.simulation.intersection_cache_schema import extract_hit_row_provenan
 if TYPE_CHECKING:
     from ra_sim.gui.state import (
         AtomSiteOverrideState,
-        BackgroundRuntimeState,
         SimulationRuntimeState,
     )
 

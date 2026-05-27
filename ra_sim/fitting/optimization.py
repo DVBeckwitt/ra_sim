@@ -3848,7 +3848,6 @@ def recommend_next_stage(
             )
         )
         if len(block_global) == 1:
-            idx_local = block_local[0]
             indep_j = block_independence
             if weak_block or indep_j < float(single_release_min_indep):
                 continue
@@ -20585,7 +20584,6 @@ def _resolve_qr_fit_prediction_from_trial_params(
 
     dataset_ctx = fit_context.get("dataset_ctx")
     hit_tables = fit_context.get("hit_tables", ())
-    max_positions = fit_context.get("max_positions")
     sim_buffer = fit_context.get("sim_buffer")
     image_size = int(fit_context.get("image_size", 0) or 0)
     params_signature = _fit_prediction_trial_params_signature(trial_params)
@@ -23177,13 +23175,6 @@ def fit_geometry_parameters(
     if not isinstance(discrete_modes_cfg, dict):
         discrete_modes_cfg = {}
     manual_point_fit_mode = bool(solver_cfg.get("manual_point_fit_mode", False))
-    manual_point_fit_has_cached_sources = bool(
-        _dataset_specs_have_geometry_source_identities(dataset_spec_entries)
-        or (
-            not dataset_spec_entries
-            and _measured_entries_have_geometry_source_identities(measured_peaks)
-        )
-    )
 
     solver_loss = str(solver_cfg.get("loss", "linear")).strip().lower()
     if solver_loss not in {"linear", "soft_l1", "huber", "cauchy", "arctan"}:
@@ -23411,28 +23402,6 @@ def fit_geometry_parameters(
             not manual_point_fit_mode,
         )
     )
-    stagnation_probe_enabled = bool(
-        solver_cfg.get(
-            "stagnation_probe",
-            point_match_mode and not manual_point_fit_mode,
-        )
-    )
-    stagnation_probe_fraction = float(solver_cfg.get("stagnation_probe_fraction", 0.35))
-    if not np.isfinite(stagnation_probe_fraction) or stagnation_probe_fraction <= 0.0:
-        stagnation_probe_fraction = 0.0
-    stagnation_probe_min_improvement = float(
-        solver_cfg.get("stagnation_probe_min_improvement", 1e-6)
-    )
-    if not np.isfinite(stagnation_probe_min_improvement):
-        stagnation_probe_min_improvement = 1e-6
-    stagnation_probe_min_improvement = max(0.0, stagnation_probe_min_improvement)
-    stagnation_probe_pairwise = bool(solver_cfg.get("stagnation_probe_pairwise", True))
-    stagnation_probe_pair_limit = int(solver_cfg.get("stagnation_probe_pair_limit", 6))
-    stagnation_probe_pair_limit = max(0, stagnation_probe_pair_limit)
-    stagnation_probe_random_directions = int(
-        solver_cfg.get("stagnation_probe_random_directions", 0)
-    )
-    stagnation_probe_random_directions = max(0, stagnation_probe_random_directions)
     manual_fail_fast_enabled = bool(
         solver_cfg.get("manual_fail_fast", manual_point_fit_mode and point_match_mode)
     )
@@ -27241,7 +27210,6 @@ def fit_geometry_parameters(
     ]
     if not all_candidate_param_names:
         all_candidate_param_names = [str(name) for name in var_names]
-    active_name_set = {str(name) for name in var_names}
 
     nominal_scale_by_group = {
         "center": max(float(image_size) * 0.05, 1.0),
@@ -30847,12 +30815,6 @@ def fit_geometry_parameters(
         except Exception:
             reference_start_point_rms = float("nan")
         try:
-            reference_start_point_match_cost = float(
-                reference_start_acceptance_metrics.get("point_match_cost", np.nan)
-            )
-        except Exception:
-            reference_start_point_match_cost = float("nan")
-        try:
             reference_start_unweighted_peak_rms = float(
                 reference_start_acceptance_metrics.get("unweighted_peak_rms_px", np.nan)
             )
@@ -31226,14 +31188,6 @@ def fit_geometry_parameters(
             )
         except Exception:
             trial_unweighted_peak_max = float("nan")
-        point_match_cost_tol = max(
-            1.0e-9 * max(abs(float(reference_start_point_match_cost)), 1.0),
-            1.0e-12,
-        )
-        weighted_rms_tol = max(
-            1.0e-9 * max(abs(float(reference_start_point_rms)), 1.0),
-            1.0e-12,
-        )
         raw_peak_rms_tol = max(
             1.0e-6 * max(abs(float(reference_start_unweighted_peak_rms)), 1.0),
             1.0e-9,
@@ -31348,24 +31302,12 @@ def fit_geometry_parameters(
             int(reference_start_fixed_source_resolved_count) <= 0
             or int(candidate_fixed_source_resolved_count) > 0
         )
-        point_match_cost_ok = bool(
-            np.isfinite(trial_point_match_cost)
-            and trial_point_match_cost
-            <= float(reference_start_point_match_cost) + point_match_cost_tol
-        )
         matched_ok = bool(
             int(candidate_fixed_source_resolved_count)
             >= int(reference_start_fixed_source_resolved_count)
             and (
                 not manual_fixed_source_polish
                 or int(trial_matched) >= int(reference_start_fixed_source_resolved_count)
-            )
-        )
-        weighted_rms_ok = bool(
-            not np.isfinite(reference_start_point_rms)
-            or (
-                np.isfinite(trial_point_rms)
-                and trial_point_rms <= float(reference_start_point_rms) + weighted_rms_tol
             )
         )
         raw_peak_rms_ok = bool(
@@ -32110,19 +32052,12 @@ def fit_geometry_parameters(
         if manual_fixed_pair_gate_failed:
             selected_candidate_name = None
             selected_candidate_source = None
-        selected_entry: dict[str, object] | None = None
         start_candidate_name = _candidate_name_from_source(
             selected_start_bundle.get("vector_source", "start_vector")
         )
         start_candidate_source = str(selected_start_bundle.get("vector_source", "start_vector"))
         for entry in candidate_ledger:
             entry["selected"] = False
-        if not manual_fixed_pair_gate_failed:
-            selected_entry = _find_candidate_ledger_entry(
-                candidate_ledger,
-                candidate_name=str(selected_candidate_name),
-                x_vector_source=str(selected_candidate_source),
-            )
         start_entry, no_op_optimum = _should_select_no_op_start_candidate(
             candidate_ledger,
             start_candidate_name=start_candidate_name,
@@ -32134,7 +32069,6 @@ def fit_geometry_parameters(
         if no_op_optimum:
             selected_candidate_name = str(start_candidate_name)
             selected_candidate_source = str(start_candidate_source)
-            selected_entry = start_entry
             retained_detector_source = str(
                 selected_start_bundle.get("vector_source", retained_detector_source)
             )
@@ -33836,7 +33770,6 @@ def fit_geometry_parameters(
                 )
                 seed_trace_reference_pair_ids.append(pair_id)
         except Exception:
-            seed_trace_reference_residual = np.asarray([], dtype=float)
             seed_trace_reference_diagnostics = []
             seed_trace_reference_summary = {}
             seed_trace_reference_pair_map = {}

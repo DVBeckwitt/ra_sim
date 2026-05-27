@@ -1377,14 +1377,14 @@ def qz_bounds_from_caked_drag_for_qr_rod_bins(
     if not np.any(radial_mask) or not np.any(azimuth_mask):
         return None
 
-    resolved_projection = gui_qr_cylinder_overlay._resolve_caked_projection_context(  # noqa: SLF001
+    resolved_projection = gui_qr_cylinder_overlay._resolve_caked_projection_context(
         projection_context,
     )
     if resolved_projection is None:
         return None
     detector_shape = tuple(int(v) for v in resolved_projection["detector_shape"])
     bundle = resolved_projection["transform_bundle"]
-    lut_orientation = gui_qr_cylinder_overlay._resolve_detector_to_caked_lut(  # noqa: SLF001
+    lut_orientation = gui_qr_cylinder_overlay._resolve_detector_to_caked_lut(
         bundle,
         detector_shape=detector_shape,
         n_radial=int(radial_values.size),
@@ -1408,7 +1408,7 @@ def qz_bounds_from_caked_drag_for_qr_rod_bins(
     raw_dragged[raw_to_gui, :] = display_dragged
 
     detector_size = int(detector_shape[0]) * int(detector_shape[1])
-    detector_weight = gui_qr_cylinder_overlay._matrix_vector_product(  # noqa: SLF001
+    detector_weight = gui_qr_cylinder_overlay._matrix_vector_product(
         caked_to_detector,
         raw_dragged.reshape(-1),
         expected_size=detector_size,
@@ -1422,8 +1422,8 @@ def qz_bounds_from_caked_drag_for_qr_rod_bins(
     if not np.isfinite(max_weight) or max_weight <= 0.0:
         return None
     weight_threshold = max(
-        gui_qr_cylinder_overlay._SELECTED_QR_ROD_LUT_ABS_EPS,  # noqa: SLF001
-        gui_qr_cylinder_overlay._SELECTED_QR_ROD_LUT_REL_EPS * max_weight,  # noqa: SLF001
+        gui_qr_cylinder_overlay._SELECTED_QR_ROD_LUT_ABS_EPS,
+        gui_qr_cylinder_overlay._SELECTED_QR_ROD_LUT_REL_EPS * max_weight,
     )
     detector_support = (detector_weight > weight_threshold).reshape(detector_shape)
     if not np.any(detector_support):

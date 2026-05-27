@@ -199,7 +199,7 @@ def test_manual_pair_store_keeps_backgrounds_separate() -> None:
             }
         ],
     )
-    bg1_pairs = _set_pairs(
+    _set_pairs(
         pairs_by_background,
         1,
         [
@@ -27953,7 +27953,6 @@ def _diag_minus_1_0_10_point_consistency_rungs(tmp_path, monkeypatch, *, print_t
     caked_callbacks = detector_fixture["caked_callbacks"]
     detector_saved = _diag_branch_map(detector_fixture["detector_saved"])
     detector_to_caked = _diag_branch_map(detector_fixture["detector_to_caked"])
-    visual_map = detector_fixture["visual_map"]
     with contextlib.redirect_stdout(io.StringIO()):
         caked_probe = _diag_minus_1_0_10_caked_probe(tmp_path)
     with contextlib.redirect_stdout(io.StringIO()):

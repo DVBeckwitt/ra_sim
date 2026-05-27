@@ -4044,7 +4044,6 @@ def _run_fresh_slot_validation(
         return result
 
     saved_entry_sets: list[list[dict[str, object]]] = []
-    set_sessions: list[dict[str, object]] = []
     refine_preview_point = (
         lambda candidate, raw_col, raw_row, **kwargs: gui_manual_geometry.geometry_manual_refine_preview_point(
             candidate,

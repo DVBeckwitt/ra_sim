@@ -21,10 +21,10 @@ from ra_sim.utils.parallel import (
 from .diffraction import (
     OPTICS_MODE_EXACT,
     _set_last_process_peaks_representative_hit_tables,
+    build_intersection_cache,  # noqa: F401 - public monkeypatch surface for engine tests
     build_branch_representative_intersection_cache,
     get_process_peaks_runtime_kwargs,
     get_last_process_peaks_representative_hit_tables,
-    build_intersection_cache,
     normalize_events_per_beam_phase_backend,
     process_peaks_parallel_safe,
     process_qr_rods_parallel_safe,

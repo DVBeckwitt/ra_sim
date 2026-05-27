@@ -11,7 +11,7 @@ from pathlib import Path
 from threading import local
 
 import numpy as np
-from ra_sim.config import get_dir, get_instrument_config
+from ra_sim.config import get_instrument_config
 from math import sin, cos, sqrt, pi, exp, acos
 from ra_sim.simulation.intersection_cache_schema import (
     CACHE_COL_BEST_SAMPLE_INDEX,
@@ -31,7 +31,6 @@ from ra_sim.simulation.intersection_cache_schema import (
     cache_table_to_hit_table,
     coerce_float64_table,
 )
-from ra_sim.simulation.mosaic_profiles import cluster_beam_profiles
 from ra_sim.debug_controls import (
     current_startup_debug_log_path,
     intersection_cache_logging_enabled,
@@ -45,8 +44,6 @@ from ra_sim.utils.calculations import (
 )
 from ra_sim.utils.parallel import resolve_weighted_event_worker_count
 from ra_sim.utils.numba_compat import (
-    NUMBA_AVAILABLE,
-    NUMBA_IMPORT_ERROR,
     List,
     njit,
     prange,
@@ -3945,10 +3942,6 @@ def _project_weighted_candidate_fast(
     k_ty_prime = Qy + k_y_scat
     k_tz_prime = Qz + re_k_z
     kr = sqrt(k_tx_prime * k_tx_prime + k_ty_prime * k_ty_prime)
-    if kr < 1e-12:
-        twotheta_t_prime = 0.0
-    else:
-        twotheta_t_prime = np.arctan(k_tz_prime / kr)
 
     valid_exit, kf_x, kf_y, kf_z, twotheta_t, _reason = _exit_projection_wavevector(
         k_tx_prime,
@@ -6025,7 +6018,6 @@ def _calculate_phi_from_precomputed(
             k_y_scat = sample_terms[chain_idx, _SAMPLE_COL_KY_SCAT]
             re_k_z = sample_terms[chain_idx, _SAMPLE_COL_RE_KZ]
             im_k_z = sample_terms[chain_idx, _SAMPLE_COL_IM_KZ]
-            k_scat = sample_terms[chain_idx, _SAMPLE_COL_K_SCAT]
             k0 = sample_terms[chain_idx, _SAMPLE_COL_K0]
             Ti2 = sample_terms[chain_idx, _SAMPLE_COL_TI2]
             L_in = sample_terms[chain_idx, _SAMPLE_COL_L_IN]

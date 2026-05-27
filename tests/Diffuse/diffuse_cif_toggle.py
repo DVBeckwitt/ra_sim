@@ -17,7 +17,6 @@ from matplotlib.widgets import Slider, RangeSlider, Button, CheckButtons
 
 # External project utilities (as in your originals)
 from ra_sim.utils.tools import intensities_for_hkls
-from ra_sim.utils.calculations import d_spacing, two_theta
 import Dans_Diffraction as dif
 from Dans_Diffraction.functions_crystallography import (
     xray_scattering_factor,

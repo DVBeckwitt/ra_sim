@@ -8,9 +8,7 @@ implementation.
 
 from __future__ import annotations
 
-import copy
 import math
-import os
 import sys
 from typing import Mapping
 

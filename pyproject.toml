@@ -108,9 +108,9 @@ line-length = 100
 cache-dir = "~/.cache/ra_sim/dev/ruff"
 
 [tool.ruff.lint]
-# Keep enforcement incremental: parser/runtime-critical issues plus a small
-# pyupgrade ratchet for mechanical cleanup that the current tree can support.
-select = ["E9", "F63", "F7", "F82", "UP015", "UP018"]
+# Keep enforcement incremental: parser/runtime-critical issues, unused code
+# checks, and a small pyupgrade ratchet that the current tree can support.
+select = ["E9", "F401", "F63", "F7", "F82", "F841", "UP015", "UP018"]
 
 [tool.ruff.lint.per-file-ignores]
 # Keep this out of the UP015 ratchet until the active I/O refactor settles.

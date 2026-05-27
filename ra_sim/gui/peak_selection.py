@@ -3815,7 +3815,6 @@ def _nearest_peak_index_for_click(
     max_axis_distance_px: float | None = None,
 ) -> tuple[int, float, bool]:
     peak_positions = getattr(simulation_runtime_state, "peak_positions", ())
-    peak_intensities = getattr(simulation_runtime_state, "peak_intensities", ())
 
     def _best_peak(
         candidate_indices: Sequence[int] | None,

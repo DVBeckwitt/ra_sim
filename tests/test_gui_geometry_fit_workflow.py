@@ -35881,7 +35881,6 @@ def test_restore_runtime_geometry_fit_undo_state_applies_state_and_redraws_overl
     a_var = _DummyVar(0.0)
     theta_offset_var = _DummyVar("")
     stored_profile_cache: dict[str, object] = {}
-    stored_overlay_state: dict[str, object] | None = None
     events: list[object] = []
 
     restored = geometry_fit.restore_runtime_geometry_fit_undo_state(

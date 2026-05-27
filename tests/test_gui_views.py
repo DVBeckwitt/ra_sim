@@ -1,7 +1,6 @@
 import tkinter as tk
 from types import SimpleNamespace
 
-import pytest
 
 from ra_sim.gui import state, views
 

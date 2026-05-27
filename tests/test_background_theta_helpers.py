@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
 
 from ra_sim.gui import background_theta, state_io
 

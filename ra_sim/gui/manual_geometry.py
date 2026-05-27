@@ -35,7 +35,6 @@ from ra_sim.simulation.exact_cake_portable import (
 )
 from ra_sim.utils.calculations import (
     resolve_canonical_branch,
-    source_branch_index_from_phi_deg,
 )
 from ra_sim.utils.parallel import (
     default_reserved_cpu_worker_count,
@@ -15971,7 +15970,6 @@ def make_runtime_geometry_manual_projection_callbacks(
                 "display_row",
             )
             legacy_sim_point = _entry_point(entry, "sim_col", "sim_row")
-            legacy_xy_point = _entry_point(entry, "x", "y")
             raw_sim_detector_point = _entry_point(entry, "sim_col_raw", "sim_row_raw")
             raw_detector_display = raw_sim_detector_point
             raw_detector_display_source = (

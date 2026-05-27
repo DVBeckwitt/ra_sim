@@ -52,6 +52,8 @@ ra_sim/simulation/output.png
 
 # Generated diagnostic artifacts
 /debug/beam_center_trace.jsonl
+/geometry_fit_log_*.txt
+/new4_*.log
 /artifacts/background_peak_fits/
 /artifacts/plots/
 /artifacts/test_refactor_baseline/

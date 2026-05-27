@@ -23,6 +23,7 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 
 ## Current patch status
 
+- 2026-05-27: Reviewed cleanup and geometry handoff patch is fixed locally. Geometry-fit async jobs now use validated Q-group snapshot rows before saved manual-pair fallback rows when live rows are empty, so disordered-phase source rows survive the handoff; coordinate-free Q-group metadata still falls back to saved manual pairs. Generated geometry-fit logs, temporary preflight JSON dumps, and the duplicate root PbI2 high-temperature CIF helper were removed or ignored. Status: verified with `python -m pytest tests/test_geometry_fit_job_live_rows_handoff.py -ra`, `python -m pytest tests/test_gui_runtime_import_safe.py -ra`, and `python -m ra_sim.dev check`.
 - 2026-05-26: Exact-optics migration cleanup is fixed locally. Headless geometry-fit saved states write `optics_mode_var` as `exact`; `calculate_phi` keeps dispatcher metadata aligned after Numba compilation; optics, exit-projection, and depth-unit coverage now live in `tests/test_diffraction_constraints.py`. Status: verified with `python -m ra_sim.dev check` on this worktree.
 
 ## Dev validation commands

@@ -6,7 +6,6 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
