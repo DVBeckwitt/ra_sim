@@ -5,6 +5,7 @@ import pytest
 from pathlib import Path
 
 from ra_sim.gui import structure_model
+from ra_sim.utils.calculations import critical_qz_from_refractive_index
 from tests.helpers.gui_fakes import RuntimeVar as _Var
 
 
@@ -182,6 +183,67 @@ def test_build_initial_structure_model_state_initializes_single_cif(monkeypatch)
     assert np.array_equal(state.sim_primary_qr_all[1]["L"], np.array([1.0]))
     assert np.array_equal(state.sim_primary_qr_all[1]["I"], np.array([2.0]))
     assert state.last_occ_for_ht == [1.0]
+
+
+def test_parratt_low_q_stitch_changes_only_zero_zero_curve(monkeypatch):
+    c_lattice = 6.78
+    lambda_angstrom = 1.54
+    n_film = 1.0 - 2.0e-5 + 2.0e-6j
+    qc = critical_qz_from_refractive_index(n_film, lambda_angstrom)
+    qz = np.linspace(0.15 * qc, 8.0 * qc, 500)
+    L_vals = qz * c_lattice / (2.0 * np.pi)
+    zero_i = 10.0 + 0.25 * np.cos(8.0 * np.pi * L_vals)
+    side_i = 4.0 + 0.1 * np.sin(2.0 * np.pi * L_vals)
+    curves = {
+        (0, 0): {"L": L_vals.copy(), "I": zero_i.copy()},
+        (1, 0): {"L": L_vals.copy(), "I": side_i.copy()},
+    }
+    monkeypatch.setattr(
+        structure_model,
+        "resolve_index_of_refraction",
+        lambda *_args, **_kwargs: n_film,
+    )
+
+    stitched, metadata = structure_model.apply_parratt_low_q_stitch_to_ht_curves(
+        curves,
+        enabled=True,
+        cif_path="material.cif",
+        lambda_angstrom=lambda_angstrom,
+        c_lattice_angstrom=c_lattice,
+        finite_stack=True,
+        stack_layers=74,
+    )
+
+    assert metadata["active"] is True
+    assert metadata["target_hk"] == (0, 0)
+    assert not np.allclose(stitched[(0, 0)]["I"][qz < 2.5 * qc], zero_i[qz < 2.5 * qc])
+    np.testing.assert_array_equal(stitched[(1, 0)]["I"], side_i)
+    np.testing.assert_array_equal(curves[(0, 0)]["I"], zero_i)
+
+
+def test_parratt_low_q_stitch_skips_when_finite_stack_disabled(monkeypatch):
+    L_vals = np.linspace(0.001, 0.5, 100)
+    intensity = 10.0 + L_vals
+    curves = {(0, 0): {"L": L_vals.copy(), "I": intensity.copy()}}
+    monkeypatch.setattr(
+        structure_model,
+        "resolve_index_of_refraction",
+        lambda *_args, **_kwargs: 1.0 - 2.0e-5 + 2.0e-6j,
+    )
+
+    stitched, metadata = structure_model.apply_parratt_low_q_stitch_to_ht_curves(
+        curves,
+        enabled=True,
+        cif_path="material.cif",
+        lambda_angstrom=1.54,
+        c_lattice_angstrom=6.78,
+        finite_stack=False,
+        stack_layers=74,
+    )
+
+    np.testing.assert_array_equal(stitched[(0, 0)]["I"], intensity)
+    assert metadata["active"] is False
+    assert metadata["reason"] == "finite_stack_disabled"
 
 
 def test_build_initial_structure_model_state_skips_zero_weight_ht_caches(monkeypatch) -> None:

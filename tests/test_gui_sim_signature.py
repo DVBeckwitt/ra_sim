@@ -47,14 +47,17 @@ def _restore_runtime_session_globals():
         "MAX_RANDOM_SAMPLE_COUNT",
         "CUSTOM_SAMPLING_OPTION",
         "defaults",
+        "structure_model_state",
         "sampling_optics_controls_view_state",
         "simulation_runtime_state",
+        "two_theta_range",
         "resolution_var",
         "_debug_disable_ht_integer_bragg",
         "_debug_refraction_effects_disabled",
         "debug_integer_bragg_toggle_label_var",
         "debug_refraction_toggle_label_var",
         "optics_mode_var",
+        "parratt_low_q_stitch_var",
         "progress_label",
     )
     missing = object()
@@ -248,6 +251,66 @@ def test_debug_refraction_toggle_invalidates_optics_and_schedules(monkeypatch):
         ),
         "schedule",
     ]
+
+
+def test_parratt_low_q_stitch_toggle_updates_default_and_rebuilds(monkeypatch):
+    runtime_session.defaults = {"parratt_low_q_stitch": False}
+    runtime_session.sampling_optics_controls_view_state = SimpleNamespace(
+        parratt_low_q_stitch_var=_FakeVar(True),
+    )
+    calls = []
+
+    monkeypatch.setattr(runtime_session, "_refresh_resolution_display", lambda: calls.append("refresh"))
+    monkeypatch.setattr(runtime_session, "update_occupancies", lambda: calls.append("update"))
+
+    runtime_session._on_parratt_low_q_stitch_toggle()
+
+    assert runtime_session.defaults["parratt_low_q_stitch"] is True
+    assert calls == ["refresh", "update"]
+
+
+def test_rebuild_diffraction_inputs_passes_parratt_low_q_stitch(monkeypatch):
+    captured = {}
+    runtime_session.finite_stack_var = _FakeVar(True)
+    runtime_session.stack_layers_var = _FakeVar(74)
+    runtime_session.structure_model_state = SimpleNamespace()
+    runtime_session.two_theta_range = (0.0, 1.0)
+    runtime_session.atom_site_override_state = SimpleNamespace()
+    runtime_session.simulation_runtime_state = SimpleNamespace()
+    runtime_session.weight1_var = _FakeVar(1.0)
+    runtime_session.weight2_var = _FakeVar(0.0)
+
+    monkeypatch.setattr(runtime_session, "_current_phase_delta_expression", lambda: "0.0")
+    monkeypatch.setattr(runtime_session, "_current_phi_l_divisor", lambda: 1.0)
+    monkeypatch.setattr(runtime_session, "_current_atom_site_fractional_values", lambda: [])
+    monkeypatch.setattr(runtime_session, "_current_iodine_z", lambda: 0.0)
+    monkeypatch.setattr(runtime_session, "_current_rod_points_per_gz", lambda: 512)
+    monkeypatch.setattr(runtime_session, "_current_primary_source_mode", lambda: "ht")
+    monkeypatch.setattr(runtime_session, "_current_parratt_low_q_stitch_enabled", lambda: True)
+    monkeypatch.setattr(runtime_session, "_build_intensity_dataframes", lambda *_args: (None, None))
+    monkeypatch.setattr(
+        runtime_session,
+        "apply_bragg_qr_filters",
+        lambda **_kwargs: None,
+        raising=False,
+    )
+    monkeypatch.setattr(runtime_session, "_invalidate_and_schedule_update", lambda: None)
+    monkeypatch.setattr(runtime_session, "_sync_structure_model_aliases", lambda: None)
+    monkeypatch.setattr(
+        runtime_session.gui_structure_model,
+        "rebuild_diffraction_inputs",
+        lambda *_args, **kwargs: captured.update(kwargs),
+    )
+
+    runtime_session._rebuild_diffraction_inputs(
+        [1.0],
+        [0.1, 0.2, 0.3],
+        [1.0, 0.0, 0.0],
+        4.0,
+        7.0,
+    )
+
+    assert captured["parratt_low_q_stitch"] is True
 
 
 def test_apply_events_per_beam_phase_invalidates_simulation_without_regenerating_mosaic(

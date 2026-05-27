@@ -3153,6 +3153,8 @@ def create_sampling_optics_controls(
     on_commit_rod_points_per_gz: Callable[[object], None],
     events_per_phase_independent: bool = False,
     on_events_per_phase_independent_change: Callable[[], None] | None = None,
+    parratt_low_q_stitch: bool = False,
+    on_toggle_parratt_low_q_stitch: Callable[[], None] | None = None,
     **_ignored_legacy_sampling_kwargs,
 ) -> None:
     """Create the sample-count / optics controls and store their refs."""
@@ -3288,6 +3290,15 @@ def create_sampling_optics_controls(
         text="Complex-k DWBA slab optics only",
     ).pack(anchor=tk.W, padx=12)
 
+    parratt_low_q_stitch_var = tk.BooleanVar(value=bool(parratt_low_q_stitch))
+    parratt_low_q_stitch_checkbutton = ttk.Checkbutton(
+        optics_mode_frame,
+        text="Parratt low-Q stitch (00L)",
+        variable=parratt_low_q_stitch_var,
+        command=on_toggle_parratt_low_q_stitch,
+    )
+    parratt_low_q_stitch_checkbutton.pack(anchor=tk.W, padx=12, pady=(2, 0))
+
     view_state.sampling_method_frame = sampling_method_frame
     view_state.sampling_method_var = sampling_method_var
     view_state.random_gaussian_button = random_gaussian_button
@@ -3324,6 +3335,8 @@ def create_sampling_optics_controls(
     view_state.ray_warning_label = None
     view_state.optics_mode_frame = optics_mode_frame
     view_state.optics_mode_var = optics_mode_var
+    view_state.parratt_low_q_stitch_var = parratt_low_q_stitch_var
+    view_state.parratt_low_q_stitch_checkbutton = parratt_low_q_stitch_checkbutton
     _set_sampling_events_per_phase_scale_state(view_state, controls_enabled=True)
 
 

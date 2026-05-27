@@ -312,6 +312,8 @@ class SamplingOpticsControlsViewState:
     ray_warning_label: Any = None
     optics_mode_frame: Any = None
     optics_mode_var: Any = None
+    parratt_low_q_stitch_var: Any = None
+    parratt_low_q_stitch_checkbutton: Any = None
 
 
 @dataclass

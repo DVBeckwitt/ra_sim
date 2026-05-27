@@ -6,6 +6,7 @@
   - Set the active development version to `1.0.0.dev0`, documented the 1.0 release sequence, and surfaced the resolved package version in the simulation GUI title and Help tab.
 
 - **Simulation performance**
+  - Added an off-by-default Parratt low-Q stitch simulation option for finite-stack HT `00L` rods, using the active CIF-derived optical constants and lattice `c` spacing.
   - Made exact complex-`k` slab optics the supported path for new GUI, CLI, and headless simulation runs; non-exact optics selections are rejected before simulation or fitting work starts.
   - Removed stale fast-optics cleanup residue, legacy geometry/mosaic fitter dead paths, remaining uncalled mosaic-shape ROI scaffolding, generated geometry ladder artifacts, package-local zip output, and obsolete one-shot debug scripts; generated ladder output is now ignored and exact-only validation remains the supported path.
   - Fixed exact external exit projection so non-propagating air exits are rejected when `k_parallel > k0`, and changed zero sample thickness to disable explicit Beer-path attenuation instead of applying hidden evanescent penetration-depth factors.

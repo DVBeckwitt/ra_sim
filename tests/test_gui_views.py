@@ -2209,6 +2209,7 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
     events_events = []
     independent_events = []
     rod_commits = []
+    parratt_events = []
 
     views.create_sampling_optics_controls(
         parent=object(),
@@ -2235,6 +2236,8 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
         on_commit_rod_points_per_gz=lambda _event: rod_commits.append("commit"),
         events_per_phase_independent=False,
         on_events_per_phase_independent_change=lambda: independent_events.append("toggle"),
+        parratt_low_q_stitch=True,
+        on_toggle_parratt_low_q_stitch=lambda: parratt_events.append("toggle"),
     )
 
     assert isinstance(view_state.sample_count_frame, _FakeFrame)
@@ -2254,6 +2257,9 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
     assert view_state.rod_points_per_gz_value_var.get() == "480 / Gz"
     assert view_state.rod_point_total_var.get() == "Longest rod: 960 points"
     assert view_state.optics_mode_var.get() == "exact"
+    assert view_state.parratt_low_q_stitch_var.get() is True
+    assert view_state.parratt_low_q_stitch_checkbutton is _FakeCheckbutton.created[1]
+    assert _FakeCheckbutton.created[1].kwargs["text"] == "Parratt low-Q stitch (00L)"
     assert view_state.sample_count_scale is _FakeScale.created[0]
     assert view_state.sample_count_scale.variable is view_state.sample_count_var
     assert view_state.sample_count_scale.cget("from") == 1
@@ -2310,10 +2316,12 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
     view_state.events_per_phase_independent_checkbutton.command()
     view_state.rod_points_per_gz_scale.command(512)
     view_state.rod_points_per_gz_scale.bindings["<ButtonRelease-1>"][0](None)
+    view_state.parratt_low_q_stitch_checkbutton.command()
     assert sample_count_events == [("slide", "3600"), ("commit", None)]
     assert events_events == [("slide", "75"), ("commit", None)]
     assert independent_events == ["toggle"]
     assert rod_commits == ["slide", "commit"]
+    assert parratt_events == ["toggle"]
 
 
 def test_finite_stack_controls_store_vars_bindings_and_helper_updates(

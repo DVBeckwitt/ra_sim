@@ -14,6 +14,9 @@ from ra_sim.simulation.types import SimulationRequest
 from ra_sim.utils.calculations import (
     IndexofRefraction,
     _legacy_kernel_n2_sample_array_from_angstrom,
+    critical_qz_from_refractive_index,
+    parratt_air_film_air_reflectivity,
+    stitch_parratt_reflectivity_to_intensity,
     resolve_index_of_refraction,
 )
 from ra_sim.utils import stacking_fault
@@ -1808,6 +1811,84 @@ def test_resolve_index_of_refraction_uses_cif_when_available():
     cif_n2 = resolve_index_of_refraction(1.54e-10, cif_path="tests/Diffuse/PbI2_2H.cif")
     default_n2 = IndexofRefraction(1.54e-10)
     assert not np.isclose(cif_n2.real, default_n2.real, rtol=1e-9, atol=0.0)
+
+
+def test_critical_qz_from_refractive_index_tracks_material_delta():
+    lambda_angstrom = 1.54
+    weak_delta_n = 1.0 - 1.0e-6 + 0.0j
+    strong_delta_n = 1.0 - 4.0e-6 + 0.0j
+
+    weak_qc = critical_qz_from_refractive_index(weak_delta_n, lambda_angstrom)
+    strong_qc = critical_qz_from_refractive_index(strong_delta_n, lambda_angstrom)
+
+    assert weak_qc > 0.0
+    assert strong_qc == pytest.approx(2.0 * weak_qc, rel=2.0e-6)
+
+
+def test_parratt_air_film_air_reflectivity_is_bounded_and_finite():
+    qz = np.linspace(1.0e-5, 0.25, 300)
+    n_film = 1.0 - 2.0e-5 + 2.0e-6j
+
+    reflectivity = parratt_air_film_air_reflectivity(
+        qz,
+        lambda_angstrom=1.54,
+        refractive_index=n_film,
+        thickness_angstrom=500.0,
+    )
+
+    assert reflectivity.shape == qz.shape
+    assert np.all(np.isfinite(reflectivity))
+    assert np.all(reflectivity >= 0.0)
+    assert np.nanmax(reflectivity) <= 1.0 + 1.0e-10
+
+
+def test_parratt_stitch_disabled_returns_original_intensity():
+    L_vals = np.linspace(0.001, 1.0, 200)
+    intensity = 10.0 + np.sin(2.0 * np.pi * L_vals) ** 2
+
+    stitched, metadata = stitch_parratt_reflectivity_to_intensity(
+        L_vals,
+        intensity,
+        c_lattice_angstrom=6.78,
+        lambda_angstrom=1.54,
+        refractive_index=1.0 - 2.0e-5 + 2.0e-6j,
+        thickness_angstrom=500.0,
+        enabled=False,
+    )
+
+    np.testing.assert_array_equal(stitched, intensity)
+    assert metadata["active"] is False
+    assert metadata["reason"] == "disabled"
+
+
+def test_parratt_stitch_changes_low_q_and_preserves_high_q():
+    c_lattice = 6.78
+    lambda_angstrom = 1.54
+    n_film = 1.0 - 2.0e-5 + 2.0e-6j
+    qc = critical_qz_from_refractive_index(n_film, lambda_angstrom)
+    qz = np.linspace(0.15 * qc, 8.0 * qc, 500)
+    L_vals = qz * c_lattice / (2.0 * np.pi)
+    intensity = 10.0 + 0.25 * np.cos(8.0 * np.pi * L_vals)
+    high_q_indices = np.flatnonzero(qz > 5.2 * qc)
+    intensity[high_q_indices[-2]] = 0.0
+    intensity[high_q_indices[-1]] = -1.0
+
+    stitched, metadata = stitch_parratt_reflectivity_to_intensity(
+        L_vals,
+        intensity,
+        c_lattice_angstrom=c_lattice,
+        lambda_angstrom=lambda_angstrom,
+        refractive_index=n_film,
+        thickness_angstrom=500.0,
+        enabled=True,
+    )
+
+    assert metadata["active"] is True
+    assert metadata["critical_qz_angstrom_inv"] == pytest.approx(qc)
+    assert not np.allclose(stitched[qz < 2.5 * qc], intensity[qz < 2.5 * qc])
+    np.testing.assert_allclose(stitched[qz > 5.2 * qc], intensity[qz > 5.2 * qc])
+    assert np.all(np.isfinite(stitched))
+    assert np.all(stitched[qz < 5.2 * qc] >= 0.0)
 
 
 def test_debug_detector_paths_ignores_cor_angle_for_theta_i():

@@ -1890,6 +1890,7 @@ def _initialize_runtime_state_block_05() -> None:
             "finite_stack": finite_stack_default,
             "stack_layers": stack_layers_default,
             "optics_mode": "exact",
+            "parratt_low_q_stitch": False,
             "ordered_structure_scale": 1.0,
         }
     )
@@ -1937,6 +1938,7 @@ def _sync_structure_model_aliases() -> None:
     global _last_a_for_ht, _last_c_for_ht, _last_iodine_z_for_ht
     global _last_phi_l_divisor, _last_phase_delta_expression
     global _last_finite_stack, _last_stack_layers, _last_rod_points_per_gz
+    global _last_parratt_low_q_stitch
     global _last_atom_site_fractional_signature
 
     cf = structure_model_state.cf
@@ -1974,6 +1976,7 @@ def _sync_structure_model_aliases() -> None:
     _last_finite_stack = bool(structure_model_state.last_finite_stack)
     _last_stack_layers = int(structure_model_state.last_stack_layers)
     _last_rod_points_per_gz = int(structure_model_state.last_rod_points_per_gz)
+    _last_parratt_low_q_stitch = bool(structure_model_state.last_parratt_low_q_stitch)
     _last_atom_site_fractional_signature = tuple(
         structure_model_state.last_atom_site_fractional_signature
     )
@@ -24480,7 +24483,7 @@ def do_update():
 
     global two_theta_range, _last_a_for_ht, _last_c_for_ht, _last_iodine_z_for_ht
     global _last_phi_l_divisor, _last_phase_delta_expression
-    global _last_atom_site_fractional_signature
+    global _last_atom_site_fractional_signature, _last_parratt_low_q_stitch
     phase_delta_expression_current = _current_phase_delta_expression()
     phi_l_divisor_current = _current_phi_l_divisor()
     iodine_z_current = _current_iodine_z()
@@ -24505,6 +24508,8 @@ def do_update():
     if phase_delta_expression_current != _last_phase_delta_expression:
         need_rebuild = True
     if atom_site_signature != _last_atom_site_fractional_signature:
+        need_rebuild = True
+    if bool(_current_parratt_low_q_stitch_enabled()) != bool(_last_parratt_low_q_stitch):
         need_rebuild = True
 
     if need_rebuild:
@@ -28507,6 +28512,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
                 tk_variable_type=tk.Variable,
             )
         )
+        defaults["parratt_low_q_stitch"] = bool(_current_parratt_low_q_stitch_enabled())
         _apply_loaded_sample_count_default(variables)
     if bool(structure_model_state.has_second_cif):
         try:
@@ -34171,6 +34177,7 @@ def on_fit_ordered_structure_click():
             atom_site_values=[tuple(values) for values in local_atom_values],
             iodine_z_current=local_iodine_z,
             rod_points_per_gz=_current_rod_points_per_gz(),
+            parratt_low_q_stitch=_current_parratt_low_q_stitch_enabled(),
             atom_site_override_state=local_atom_site_override_state,
             simulation_runtime_state=local_simulation_state,
             combine_weighted_intensities=gui_controllers.combine_cif_weighted_intensities,
@@ -37916,6 +37923,24 @@ def _current_rod_points_per_gz(default=None):
     return _parse_rod_points_per_gz(raw_value, fallback)
 
 
+def _current_parratt_low_q_stitch_enabled(default=None) -> bool:
+    fallback = bool(default if default is not None else defaults.get("parratt_low_q_stitch", False))
+    view_var = getattr(
+        sampling_optics_controls_view_state,
+        "parratt_low_q_stitch_var",
+        None,
+    )
+    global_var = globals().get("parratt_low_q_stitch_var")
+    stitch_var = view_var if view_var is not None else global_var
+    getter = getattr(stitch_var, "get", None)
+    if not callable(getter):
+        return fallback
+    try:
+        return bool(getter())
+    except Exception:
+        return fallback
+
+
 def _current_random_sample_count(default=None):
     fallback = _parse_sample_count(
         default if default is not None else _default_random_sample_count(),
@@ -38071,6 +38096,8 @@ def _refresh_resolution_display():
         f"rods {rod_points_per_gz:,}/Gz",
         f"optics {optics_summary}",
     ]
+    if _current_parratt_low_q_stitch_enabled():
+        summary_parts.append("parratt 00L")
     if solve_q_mode_summary:
         summary_parts.append(f"arc {solve_q_mode_summary}")
     gui_views.set_collapsible_header_summary(
@@ -38171,6 +38198,12 @@ def _on_events_per_beam_phase_independent_change():
         simulation_runtime_state.last_simulation_signature = None
         simulation_runtime_state.worker_ready_result = None
         schedule_update()
+
+
+def _on_parratt_low_q_stitch_toggle():
+    defaults["parratt_low_q_stitch"] = bool(_current_parratt_low_q_stitch_enabled())
+    _refresh_resolution_display()
+    update_occupancies()
 
 
 def _current_structure_model_rebuild_inputs():
@@ -38280,7 +38313,8 @@ def _initialize_runtime_controls_block_46() -> None:
         sample_count_var, \
         sample_count_scale, \
         rod_points_per_gz_var, \
-        optics_mode_var
+        optics_mode_var, \
+        parratt_low_q_stitch_var
 
     if initial_resolution != CUSTOM_SAMPLING_OPTION:
         initial_sample_count = _parse_sample_count(
@@ -38330,6 +38364,8 @@ def _initialize_runtime_controls_block_46() -> None:
         on_commit_rod_points_per_gz=lambda _event: _apply_rod_points_per_gz(trigger_update=True),
         events_per_phase_independent=False,
         on_events_per_phase_independent_change=_on_events_per_beam_phase_independent_change,
+        parratt_low_q_stitch=bool(defaults.get("parratt_low_q_stitch", False)),
+        on_toggle_parratt_low_q_stitch=_on_parratt_low_q_stitch_toggle,
     )
     custom_samples_var = sampling_optics_controls_view_state.sample_count_var
     resolution_var = tk.StringVar(value=CUSTOM_SAMPLING_OPTION)
@@ -38337,6 +38373,7 @@ def _initialize_runtime_controls_block_46() -> None:
     sample_count_scale = sampling_optics_controls_view_state.sample_count_scale
     rod_points_per_gz_var = sampling_optics_controls_view_state.rod_points_per_gz_var
     optics_mode_var = sampling_optics_controls_view_state.optics_mode_var
+    parratt_low_q_stitch_var = sampling_optics_controls_view_state.parratt_low_q_stitch_var
 
 
 def on_resolution_option_change(*_):
@@ -44938,6 +44975,7 @@ def _rebuild_diffraction_inputs(
         atom_site_values=_current_atom_site_fractional_values(),
         iodine_z_current=_current_iodine_z(),
         rod_points_per_gz=_current_rod_points_per_gz(),
+        parratt_low_q_stitch=_current_parratt_low_q_stitch_enabled(),
         atom_site_override_state=atom_site_override_state,
         simulation_runtime_state=simulation_runtime_state,
         combine_weighted_intensities=gui_controllers.combine_cif_weighted_intensities,
@@ -45648,6 +45686,7 @@ def _apply_secondary_cif_path(raw_path):
         last_finite_stack=bool(structure_model_state.last_finite_stack),
         last_stack_layers=int(structure_model_state.last_stack_layers),
         last_rod_points_per_gz=int(structure_model_state.last_rod_points_per_gz),
+        last_parratt_low_q_stitch=bool(structure_model_state.last_parratt_low_q_stitch),
         last_atom_site_fractional_signature=tuple(
             structure_model_state.last_atom_site_fractional_signature
         ),
@@ -45754,6 +45793,7 @@ def _apply_secondary_cif_path(raw_path):
         structure_model_state.last_finite_stack = bool(snapshot.last_finite_stack)
         structure_model_state.last_stack_layers = int(snapshot.last_stack_layers)
         structure_model_state.last_rod_points_per_gz = int(snapshot.last_rod_points_per_gz)
+        structure_model_state.last_parratt_low_q_stitch = bool(snapshot.last_parratt_low_q_stitch)
         structure_model_state.last_atom_site_fractional_signature = tuple(
             snapshot.last_atom_site_fractional_signature
         )

@@ -545,6 +545,230 @@ def resolve_index_of_refraction(
         )[0]
     )
 
+
+def critical_qz_from_refractive_index(
+    refractive_index: complex,
+    lambda_angstrom: float,
+) -> float:
+    """Return the total-reflection critical Qz for ``n = 1 - delta + i beta``."""
+
+    try:
+        wavelength = float(lambda_angstrom)
+    except (TypeError, ValueError):
+        return 0.0
+    if not np.isfinite(wavelength) or wavelength <= 0.0:
+        return 0.0
+
+    n_value = complex(refractive_index)
+    delta = max(0.0, 1.0 - float(n_value.real))
+    if delta <= 0.0:
+        return 0.0
+    alpha_c = math.sqrt(2.0 * delta)
+    return float((4.0 * math.pi / wavelength) * math.sin(alpha_c))
+
+
+def _parratt_kz_for_layer(
+    qz_angstrom_inv,
+    *,
+    lambda_angstrom: float,
+    refractive_index: complex,
+):
+    qz = np.asarray(qz_angstrom_inv, dtype=np.float64)
+    wavelength = float(lambda_angstrom)
+    k0 = 2.0 * math.pi / wavelength
+    alpha = np.arcsin(np.clip(qz * wavelength / (4.0 * math.pi), 0.0, 1.0))
+    kz = k0 * np.sqrt(complex(refractive_index) ** 2 - np.cos(alpha) ** 2 + 0.0j)
+
+    # Use the branch that propagates/decays away from the interface.
+    flip = np.imag(kz) < 0.0
+    if np.any(flip):
+        kz[flip] *= -1.0
+    flip = (np.abs(np.imag(kz)) < 1.0e-15) & (np.real(kz) < 0.0)
+    if np.any(flip):
+        kz[flip] *= -1.0
+    return kz
+
+
+def parratt_air_film_air_reflectivity(
+    qz_angstrom_inv,
+    *,
+    lambda_angstrom: float,
+    refractive_index: complex,
+    thickness_angstrom: float,
+) -> np.ndarray:
+    """Return ideal specular Parratt reflectivity for an air/film/air slab."""
+
+    qz = np.asarray(qz_angstrom_inv, dtype=np.float64)
+    out_shape = qz.shape
+    qz_flat = np.ravel(qz)
+    try:
+        thickness = float(thickness_angstrom)
+        wavelength = float(lambda_angstrom)
+    except (TypeError, ValueError):
+        return np.zeros(out_shape, dtype=np.float64)
+    if (
+        qz_flat.size == 0
+        or not np.isfinite(wavelength)
+        or wavelength <= 0.0
+        or not np.isfinite(thickness)
+        or thickness <= 0.0
+    ):
+        return np.zeros(out_shape, dtype=np.float64)
+
+    kz_air = _parratt_kz_for_layer(
+        qz_flat,
+        lambda_angstrom=wavelength,
+        refractive_index=1.0 + 0.0j,
+    )
+    kz_film = _parratt_kz_for_layer(
+        qz_flat,
+        lambda_angstrom=wavelength,
+        refractive_index=complex(refractive_index),
+    )
+    tiny = np.finfo(np.float64).tiny
+    r01 = (kz_air - kz_film) / (kz_air + kz_film + tiny)
+    r12 = (kz_film - kz_air) / (kz_film + kz_air + tiny)
+    phase = np.exp(2.0j * kz_film * thickness)
+    amplitude = (r01 + r12 * phase) / (1.0 + r01 * r12 * phase + tiny)
+    reflectivity = np.abs(amplitude) ** 2
+    reflectivity = np.where(np.isfinite(reflectivity), reflectivity, 0.0)
+    return np.maximum(reflectivity, 0.0).reshape(out_shape)
+
+
+def _smoothstep01(values: np.ndarray) -> np.ndarray:
+    clipped = np.clip(values, 0.0, 1.0)
+    return clipped * clipped * (3.0 - 2.0 * clipped)
+
+
+def stitch_parratt_reflectivity_to_intensity(
+    L_values,
+    intensity_values,
+    *,
+    c_lattice_angstrom: float,
+    lambda_angstrom: float,
+    refractive_index: complex,
+    thickness_angstrom: float,
+    enabled: bool = True,
+    q_start_factor: float = 3.0,
+    q_end_factor: float = 5.0,
+) -> tuple[np.ndarray, dict[str, object]]:
+    """Blend scaled Parratt reflectivity into a kinematic rod intensity."""
+
+    intensity = np.asarray(intensity_values, dtype=np.float64)
+    metadata: dict[str, object] = {
+        "active": False,
+        "reason": "disabled" if not enabled else "inactive",
+    }
+    if not enabled:
+        return intensity.copy(), metadata
+
+    L_vals = np.asarray(L_values, dtype=np.float64)
+    if L_vals.shape != intensity.shape:
+        metadata["reason"] = "shape_mismatch"
+        return intensity.copy(), metadata
+
+    try:
+        c_value = float(c_lattice_angstrom)
+        wavelength = float(lambda_angstrom)
+        thickness = float(thickness_angstrom)
+        start_factor = float(q_start_factor)
+        end_factor = float(q_end_factor)
+    except (TypeError, ValueError):
+        metadata["reason"] = "invalid_inputs"
+        return intensity.copy(), metadata
+
+    if (
+        L_vals.size == 0
+        or not np.isfinite(c_value)
+        or c_value <= 0.0
+        or not np.isfinite(wavelength)
+        or wavelength <= 0.0
+        or not np.isfinite(thickness)
+        or thickness <= 0.0
+        or not np.isfinite(start_factor)
+        or not np.isfinite(end_factor)
+        or start_factor <= 0.0
+        or end_factor <= start_factor
+    ):
+        metadata["reason"] = "invalid_inputs"
+        return intensity.copy(), metadata
+
+    n_value = complex(refractive_index)
+    qc = critical_qz_from_refractive_index(n_value, wavelength)
+    if qc <= 0.0:
+        metadata["reason"] = "no_critical_edge"
+        return intensity.copy(), metadata
+
+    qz = (2.0 * math.pi / c_value) * L_vals
+    q_start = start_factor * qc
+    q_end = end_factor * qc
+    if not bool(np.any(qz < q_end)):
+        metadata["reason"] = "outside_stitch_window"
+        metadata.update(
+            {
+                "critical_qz_angstrom_inv": float(qc),
+                "critical_L": float(qc * c_value / (2.0 * math.pi)),
+                "q_start_angstrom_inv": float(q_start),
+                "q_end_angstrom_inv": float(q_end),
+            }
+        )
+        return intensity.copy(), metadata
+
+    parratt = parratt_air_film_air_reflectivity(
+        np.maximum(qz, 0.0),
+        lambda_angstrom=wavelength,
+        refractive_index=n_value,
+        thickness_angstrom=thickness,
+    )
+    positive = np.finfo(np.float64).tiny
+    finite_positive = np.isfinite(intensity) & np.isfinite(parratt) & (intensity > 0.0) & (
+        parratt > 0.0
+    )
+    overlap = finite_positive & (qz >= q_start) & (qz <= q_end)
+    if not np.any(overlap):
+        overlap = finite_positive & (qz >= q_end)
+    if not np.any(overlap):
+        overlap = finite_positive
+    if not np.any(overlap):
+        metadata["reason"] = "no_positive_overlap"
+        return intensity.copy(), metadata
+
+    log_scale = float(np.median(np.log(intensity[overlap]) - np.log(parratt[overlap])))
+    scale = float(np.exp(log_scale)) if np.isfinite(log_scale) else 1.0
+    scaled_parratt = np.maximum(parratt * scale, positive)
+    safe_intensity = np.maximum(np.where(np.isfinite(intensity), intensity, 0.0), positive)
+
+    stitched = intensity.copy()
+    low = qz <= q_start
+    blend = (qz > q_start) & (qz < q_end)
+    stitched[low] = np.where(np.isfinite(scaled_parratt[low]), scaled_parratt[low], 0.0)
+    if np.any(blend):
+        ht_weight = _smoothstep01((qz[blend] - q_start) / (q_end - q_start))
+        blended = np.exp(
+            (1.0 - ht_weight) * np.log(scaled_parratt[blend])
+            + ht_weight * np.log(safe_intensity[blend])
+        )
+        stitched[blend] = np.where(np.isfinite(blended), blended, 0.0)
+
+    metadata.update(
+        {
+            "active": True,
+            "reason": "applied",
+            "n_real": float(n_value.real),
+            "n_imag": float(n_value.imag),
+            "critical_qz_angstrom_inv": float(qc),
+            "critical_L": float(qc * c_value / (2.0 * math.pi)),
+            "q_start_factor": float(start_factor),
+            "q_end_factor": float(end_factor),
+            "q_start_angstrom_inv": float(q_start),
+            "q_end_angstrom_inv": float(q_end),
+            "scale_factor": float(scale),
+            "thickness_angstrom": float(thickness),
+        }
+    )
+    return stitched, metadata
+
+
 @njit
 def complex_sqrt(z):
     """

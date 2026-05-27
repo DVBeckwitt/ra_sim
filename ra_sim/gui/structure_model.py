@@ -16,6 +16,10 @@ from typing import Any
 import numpy as np
 
 from ra_sim.gui import controllers as gui_controllers
+from ra_sim.utils.calculations import (
+    resolve_index_of_refraction,
+    stitch_parratt_reflectivity_to_intensity,
+)
 from ra_sim.utils.stacking_fault import (
     _infer_iodine_z_like_diffuse,
     ht_Iinf_dict,
@@ -420,6 +424,7 @@ class StructureModelState:
     last_finite_stack: bool = False
     last_stack_layers: int = 1
     last_rod_points_per_gz: int = 0
+    last_parratt_low_q_stitch: bool = False
     last_atom_site_fractional_signature: tuple[float, ...] = field(default_factory=tuple)
     last_primary_source_mode: str = "ht"
     miller_generator: Callable[..., tuple[object, object, object, object]] | None = None
@@ -1173,6 +1178,69 @@ def build_ht_cache(
     }
 
 
+def apply_parratt_low_q_stitch_to_ht_curves(
+    curves,
+    *,
+    enabled: bool,
+    cif_path: str,
+    lambda_angstrom: float,
+    c_lattice_angstrom: float,
+    finite_stack: bool,
+    stack_layers: int,
+):
+    """Return HT curves with an optional Parratt low-Q stitch on the 00L rod."""
+
+    copied = {
+        hk: {
+            key: (np.asarray(value).copy() if key in {"L", "I"} else value)
+            for key, value in data.items()
+        }
+        for hk, data in dict(curves or {}).items()
+    }
+    metadata = {
+        "active": False,
+        "reason": "disabled" if not enabled else "inactive",
+        "target_hk": (0, 0),
+    }
+    if not bool(enabled):
+        return copied, metadata
+    if not bool(finite_stack):
+        metadata["reason"] = "finite_stack_disabled"
+        return copied, metadata
+    if (0, 0) not in copied:
+        metadata["reason"] = "target_curve_missing"
+        return copied, metadata
+
+    layers = int(max(1, stack_layers))
+    thickness_angstrom = float(c_lattice_angstrom) * float(layers)
+    try:
+        refractive_index = resolve_index_of_refraction(
+            float(lambda_angstrom) * 1.0e-10,
+            cif_path=str(cif_path),
+        )
+    except Exception as exc:
+        metadata["reason"] = "index_of_refraction_failed"
+        metadata["error"] = str(exc)
+        return copied, metadata
+
+    target = copied[(0, 0)]
+    stitched, stitch_metadata = stitch_parratt_reflectivity_to_intensity(
+        target.get("L", []),
+        target.get("I", []),
+        c_lattice_angstrom=float(c_lattice_angstrom),
+        lambda_angstrom=float(lambda_angstrom),
+        refractive_index=refractive_index,
+        thickness_angstrom=thickness_angstrom,
+        enabled=True,
+    )
+    target["I"] = stitched
+    metadata.update(stitch_metadata)
+    metadata["target_hk"] = (0, 0)
+    metadata["cif_path"] = str(cif_path)
+    metadata["stack_layers"] = layers
+    return copied, metadata
+
+
 def build_integer_bragg_inputs(
     state: StructureModelState,
     *,
@@ -1450,6 +1518,12 @@ def build_initial_structure_model_state(
         "finite_stack": bool(state.defaults["finite_stack"]),
         "stack_layers": int(max(1, state.defaults["stack_layers"])),
         "rod_points_per_gz": int(default_rod_points_per_gz),
+        "parratt_low_q_stitch": False,
+        "parratt_low_q_stitch_metadata": {
+            "active": False,
+            "reason": "disabled",
+            "target_hk": (0, 0),
+        },
         "primary_source_mode": "ht",
     }
     state.last_occ_for_ht = list(state.occ)
@@ -1467,6 +1541,7 @@ def build_initial_structure_model_state(
     state.last_finite_stack = bool(state.defaults["finite_stack"])
     state.last_stack_layers = int(max(1, state.defaults["stack_layers"]))
     state.last_rod_points_per_gz = int(default_rod_points_per_gz)
+    state.last_parratt_low_q_stitch = False
     state.last_atom_site_fractional_signature = atom_site_fractional_signature(
         atom_site_fractional_default_values(state)
     )
@@ -1623,6 +1698,7 @@ def rebuild_diffraction_inputs(
     force=False,
     trigger_update=True,
     primary_source_mode="ht",
+    parratt_low_q_stitch=False,
 ):
     """Refresh cached HT curves and peak lists for the current settings."""
 
@@ -1659,6 +1735,7 @@ def rebuild_diffraction_inputs(
         and state.last_finite_stack == bool(finite_stack_flag)
         and (not finite_stack_flag or state.last_stack_layers == int(layers))
         and int(rod_points_per_gz) == int(state.last_rod_points_per_gz)
+        and bool(state.last_parratt_low_q_stitch) == bool(parratt_low_q_stitch)
         and atom_site_signature == state.last_atom_site_fractional_signature
         and str(state.last_primary_source_mode) == primary_source_mode
     ):
@@ -1721,6 +1798,11 @@ def rebuild_diffraction_inputs(
         )
         combined_ht_local = {}
         combined_qr_local = {}
+        parratt_metadata = {
+            "active": False,
+            "reason": "integer_bragg_source",
+            "target_hk": (0, 0),
+        }
     else:
         active_ht_entries = active_weighted_ht_entries(p_vals, weights)
         caches = [get_cache(label, p_value) for label, p_value, _weight in active_ht_entries]
@@ -1729,6 +1811,22 @@ def rebuild_diffraction_inputs(
             caches,
             [weight for _label, _p_value, weight in active_ht_entries],
         )
+        if bool(parratt_low_q_stitch):
+            combined_ht_local, parratt_metadata = apply_parratt_low_q_stitch_to_ht_curves(
+                combined_ht_local,
+                enabled=True,
+                cif_path=active_cif,
+                lambda_angstrom=float(state.lambda_angstrom),
+                c_lattice_angstrom=float(c_axis),
+                finite_stack=bool(finite_stack_flag),
+                stack_layers=int(layers),
+            )
+        else:
+            parratt_metadata = {
+                "active": False,
+                "reason": "disabled",
+                "target_hk": (0, 0),
+            }
         combined_qr_local = ht_dict_to_qr_dict(combined_ht_local)
         arrays_local = ht_dict_to_arrays(combined_ht_local)
     state.ht_curves_cache = {
@@ -1743,6 +1841,8 @@ def rebuild_diffraction_inputs(
         "finite_stack": bool(finite_stack_flag),
         "stack_layers": int(layers),
         "rod_points_per_gz": int(rod_points_per_gz),
+        "parratt_low_q_stitch": bool(parratt_low_q_stitch),
+        "parratt_low_q_stitch_metadata": dict(parratt_metadata),
         "primary_source_mode": primary_source_mode,
     }
     state.last_occ_for_ht = list(new_occ)
@@ -1756,6 +1856,7 @@ def rebuild_diffraction_inputs(
     state.last_finite_stack = bool(finite_stack_flag)
     state.last_stack_layers = int(max(1, layers))
     state.last_rod_points_per_gz = int(rod_points_per_gz)
+    state.last_parratt_low_q_stitch = bool(parratt_low_q_stitch)
     state.last_atom_site_fractional_signature = atom_site_signature
     state.last_primary_source_mode = primary_source_mode
 
