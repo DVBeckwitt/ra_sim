@@ -7,7 +7,7 @@
 
 - **Simulation performance**
   - Made exact complex-`k` slab optics the supported path for new GUI, CLI, and headless simulation runs; non-exact optics selections are rejected before simulation or fitting work starts.
-  - Removed stale fast-optics cleanup residue, legacy geometry/mosaic fitter dead paths, generated geometry ladder artifacts, package-local zip output, and obsolete one-shot debug scripts; generated ladder output is now ignored and exact-only validation remains the supported path.
+  - Removed stale fast-optics cleanup residue, legacy geometry/mosaic fitter dead paths, remaining uncalled mosaic-shape ROI scaffolding, generated geometry ladder artifacts, package-local zip output, and obsolete one-shot debug scripts; generated ladder output is now ignored and exact-only validation remains the supported path.
   - Fixed exact external exit projection so non-propagating air exits are rejected when `k_parallel > k0`, and changed zero sample thickness to disable explicit Beer-path attenuation instead of applying hidden evanescent penetration-depth factors.
   - Added a Numba compatibility layer so simulation modules can import with Python fallbacks when Numba itself is unavailable or fails during import.
   - Clarified optional exact-cake Numba warmup failures so startup logs explain that exact-cake will use the Python fallback, including the reported `'Loc' object does not support the context manager protocol` compiler signature.

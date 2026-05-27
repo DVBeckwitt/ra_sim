@@ -32,6 +32,9 @@ also reproduces on clean `HEAD`, so it is tracked as pre-existing and not part
 of this cleanup. Shipping handoff: cleanup committed as `023f31e2`; the branch
 is ready for review after the documented validation gates, with rollback by
 reverting that single cleanup commit if a removed internal path proves active.
+Follow-up review cleanup removed the remaining uncalled legacy mosaic-shape ROI
+scaffolding from `optimization.py`; active mosaic profile fitting and the
+public `fit_mosaic_shape_parameters()` entry point remain unchanged.
 
 2026-05-27 exact-only locked Qr/Qz readiness gate update: non-exact optics
 modes are no longer supported for the fitter path, so the remaining operator
