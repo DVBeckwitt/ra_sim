@@ -1,8 +1,8 @@
 import tkinter as tk
 from types import SimpleNamespace
 
-
 from ra_sim.gui import state, views
+from tests.helpers.gui_fakes import RuntimeVar as _FakeVar
 
 
 class _FakeExistingChild:
@@ -605,17 +605,6 @@ class _FakeCheckbutton:
 
     def configure(self, **kwargs) -> None:
         self.config(**kwargs)
-
-
-class _FakeVar:
-    def __init__(self, value=None) -> None:
-        self._value = value
-
-    def get(self):
-        return self._value
-
-    def set(self, value) -> None:
-        self._value = value
 
 
 class _FakeStringVar:

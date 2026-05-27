@@ -2,7 +2,7 @@
 
 
 class DummyVar:
-    def __init__(self, value):
+    def __init__(self, value=None):
         self._value = value
 
     def get(self):
