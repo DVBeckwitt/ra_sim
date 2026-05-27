@@ -31,6 +31,8 @@ Last updated: 2026-05-27
   regression, caked/manual geometry subsets, compileall, `python -m
   ra_sim.dev check`, and `git diff --check` passed; the existing strict xfail
   for manual-vs-geometry caked projection comparability remains unchanged.
+  Commit status before this docs-status follow-up: source and regression patch
+  landed locally as `d46d34f6` on `codex/locked-qr-readiness-diagnostics`.
 - 2026-05-27 exact-only locked Qr/Qz readiness/dynamic-authority closeout:
   non-exact optics modes are no longer a supported path, so do not run or
   request any cross-mode optics comparison for this investigation. Run the
