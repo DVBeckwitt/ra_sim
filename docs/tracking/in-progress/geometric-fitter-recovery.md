@@ -9,6 +9,34 @@ Last updated: 2026-05-27
 
 ## Summary
 
+2026-05-27 phase 9 state/runtime test-helper simplification:
+`tests/test_gui_state_io.py` now reuses the shared `RuntimeVar` test fake
+instead of carrying four equivalent local `_FakeTkVar` classes, and the
+targeted integration-range tests in `tests/test_gui_runtime_import_safe.py`
+reuse the existing `_RuntimeVar` helper instead of local get/set `_Var`
+classes. Constant-return fakes, direct `.value` mutation fakes, widget fakes,
+and callback/call-recording fakes remain local. During the full runtime
+import-safe gate, `do_update()` exposed an existing `NameError` for the
+Parratt low-Q stitch cache sentinel when import-safe tests call the runtime
+before structure-model aliases are synced; `ra_sim/gui/_runtime/runtime_session.py`
+now defines the same safe default used by the structure-model state. Bug/error
+status: the import-safe Parratt sentinel crash is fixed; the helper work is
+maintenance-only and preserves behavior. Feature status: no new feature.
+UI/API/interface status: no GUI control, frontend state contract, public API,
+CLI flag, config key, saved-state schema, artifact schema, dependency, or
+public interface changed. CI/deprecation/migration status: no CI workflow,
+migration path, deprecation notice, compatibility shim, release/version change,
+new file, or new abstraction required. Review status: no correctness, bloat,
+security, performance, test-quality, new-file, or abstraction blockers were
+found. Shipping status: no rollout, feature flag, migration, or release bump
+is required; rollback is a normal git revert of the Phase 9 commit.
+Validation status:
+`python -m pytest tests/test_gui_state_io.py -ra`,
+targeted runtime helper tests, the isolated Parratt sentinel reproducer,
+`python -m pytest tests/test_gui_runtime_import_safe.py -ra`,
+`python -m pytest tests/test_gui_state_io.py tests/test_gui_runtime_import_safe.py -ra`,
+and `python -m ra_sim.dev check` pass locally.
+
 2026-05-27 phase 8 small test-helper simplification:
 `tests/test_gui_analysis_visibility.py`,
 `tests/test_gui_runtime_display_acceleration.py`,

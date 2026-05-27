@@ -16,6 +16,7 @@ from ra_sim.io.data_loading import (
 )
 from ra_sim.gui import state_io
 from ra_sim.gui.state import GeometryRuntimeState
+from tests.helpers.gui_fakes import RuntimeVar as _FakeTkVar
 
 
 def test_build_gui_state_payload_normalizes_numpy_and_path_values(tmp_path):
@@ -176,13 +177,6 @@ def test_load_gui_state_file_accepts_legacy_wrapper_without_type(tmp_path):
 
 
 def test_collect_snapshot_ignores_legacy_background_subtraction_vars() -> None:
-    class _FakeTkVar:
-        def __init__(self, value) -> None:
-            self.value = value
-
-        def get(self):
-            return self.value
-
     snapshot = state_io.collect_full_gui_state_snapshot(
         global_items={
             "background_subtraction_enabled_var": _FakeTkVar(True),
@@ -236,13 +230,6 @@ def test_saved_state_without_background_subtraction_fields_still_loads(tmp_path)
 
 
 def test_collect_snapshot_persists_6h_qr_reference_toggle(tmp_path) -> None:
-    class _FakeTkVar:
-        def __init__(self, value) -> None:
-            self.value = value
-
-        def get(self):
-            return self.value
-
     snapshot = state_io.collect_full_gui_state_snapshot(
         global_items={
             "geometry_include_6h_qr_reference_var": _FakeTkVar(True),
@@ -277,16 +264,6 @@ def test_collect_snapshot_persists_6h_qr_reference_toggle(tmp_path) -> None:
 
 
 def test_parratt_low_q_stitch_checkbox_persists_through_state_io(tmp_path) -> None:
-    class _FakeTkVar:
-        def __init__(self, value) -> None:
-            self.value = value
-
-        def get(self):
-            return self.value
-
-        def set(self, value) -> None:
-            self.value = value
-
     source_var = _FakeTkVar(True)
     target_var = _FakeTkVar(False)
     snapshot = state_io.collect_full_gui_state_snapshot(
@@ -330,16 +307,6 @@ def test_parratt_low_q_stitch_checkbox_persists_through_state_io(tmp_path) -> No
 
 
 def test_generated_disordered_checkbox_persists_through_state_io(tmp_path) -> None:
-    class _FakeTkVar:
-        def __init__(self, value) -> None:
-            self.value = value
-
-        def get(self):
-            return self.value
-
-        def set(self, value) -> None:
-            self.value = value
-
     source_var = _FakeTkVar(False)
     target_var = _FakeTkVar(True)
     snapshot = state_io.collect_full_gui_state_snapshot(

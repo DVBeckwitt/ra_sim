@@ -25391,24 +25391,14 @@ def test_runtime_session_analysis_range_snapshot_keeps_saved_qz_with_l_display(
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 
-    class _Var:
-        def __init__(self, value=0.0) -> None:
-            self._value = value
-
-        def get(self):
-            return self._value
-
-        def set(self, value) -> None:
-            self._value = value
-
     view_state = SimpleNamespace(
         qz_min_value=0.0,
         qz_max_value=0.0,
-        qz_min_var=_Var(0.0),
-        qz_max_var=_Var(0.0),
+        qz_min_var=_RuntimeVar(0.0),
+        qz_max_var=_RuntimeVar(0.0),
         qz_display_scale_value=2.0,
         delta_qr_value=0.25,
-        delta_qr_var=_Var(0.25),
+        delta_qr_var=_RuntimeVar(0.25),
     )
     monkeypatch.setattr(
         runtime_session,
@@ -25460,16 +25450,6 @@ def test_runtime_session_legacy_selected_qr_rod_key_migrates_to_key_list(
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 
-    class _Var:
-        def __init__(self, value="") -> None:
-            self._value = value
-
-        def get(self):
-            return self._value
-
-        def set(self, value) -> None:
-            self._value = value
-
     view_state = SimpleNamespace(
         tth_min_value=0.0,
         tth_max_value=80.0,
@@ -25481,8 +25461,8 @@ def test_runtime_session_legacy_selected_qr_rod_key_migrates_to_key_list(
         caked_intensity_mode_value="density",
         rod_profile_intensity_mode_value="density",
         selected_qr_rod_key_value="",
-        selected_qr_rod_key_var=_Var(""),
-        selected_qr_rod_display_var=_Var(""),
+        selected_qr_rod_key_var=_RuntimeVar(""),
+        selected_qr_rod_display_var=_RuntimeVar(""),
         selected_qr_rod_options=[],
         qz_min_value=0.0,
         qz_max_value=5.0,
@@ -25523,19 +25503,9 @@ def test_runtime_session_legacy_delta_qr_half_width_loads_as_full_width(
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 
-    class _Var:
-        def __init__(self, value=0.0) -> None:
-            self._value = value
-
-        def get(self):
-            return self._value
-
-        def set(self, value) -> None:
-            self._value = value
-
     view_state = SimpleNamespace(
         delta_qr_value=0.25,
-        delta_qr_var=_Var(0.25),
+        delta_qr_var=_RuntimeVar(0.25),
     )
     monkeypatch.setattr(
         runtime_session,
@@ -25556,19 +25526,9 @@ def test_runtime_session_full_width_delta_qr_loads_unchanged(
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 
-    class _Var:
-        def __init__(self, value=0.0) -> None:
-            self._value = value
-
-        def get(self):
-            return self._value
-
-        def set(self, value) -> None:
-            self._value = value
-
     view_state = SimpleNamespace(
         delta_qr_value=0.25,
-        delta_qr_var=_Var(0.25),
+        delta_qr_var=_RuntimeVar(0.25),
     )
     monkeypatch.setattr(
         runtime_session,
@@ -29181,16 +29141,6 @@ def test_runtime_session_sync_selected_qr_rod_controls_state_allows_detector_vie
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     encoded_key = runtime_session.gui_controllers.encode_bragg_qr_group_key(("phase-a", 1))
 
-    class _Var:
-        def __init__(self, value: object) -> None:
-            self._value = value
-
-        def get(self) -> object:
-            return self._value
-
-        def set(self, value: object) -> None:
-            self._value = value
-
     class _Widget:
         def __init__(self) -> None:
             self.state_value = "normal"
@@ -29227,7 +29177,7 @@ def test_runtime_session_sync_selected_qr_rod_controls_state_allows_detector_vie
     phi_min_entry = _Widget()
     phi_max_slider = _Widget()
     phi_max_entry = _Widget()
-    integrate_var = _Var(True)
+    integrate_var = _RuntimeVar(True)
     monkeypatch.setattr(
         runtime_session,
         "integration_range_controls_view_state",
@@ -29238,10 +29188,10 @@ def test_runtime_session_sync_selected_qr_rod_controls_state_allows_detector_vie
             mirror_selected_qr_phi_checkbutton=mirror_widget,
             include_selected_qr_rod_shape_checkbutton=include_shape_widget,
             selected_qr_rod_listbox=listbox,
-            selected_qr_rod_display_var=_Var(""),
-            selected_qr_rod_key_var=_Var(""),
-            qz_min_var=_Var(-2.0),
-            qz_max_var=_Var(2.0),
+            selected_qr_rod_display_var=_RuntimeVar(""),
+            selected_qr_rod_key_var=_RuntimeVar(""),
+            qz_min_var=_RuntimeVar(-2.0),
+            qz_max_var=_RuntimeVar(2.0),
             qz_min_value=-2.0,
             qz_max_value=2.0,
             qz_min_slider=qz_min_slider,

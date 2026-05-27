@@ -14,6 +14,7 @@ write_excel = False
 # functions in this module also run in import-safe and test contexts where
 # those inner assignments have not executed.
 defaults = {}
+_last_parratt_low_q_stitch = False
 DEFAULT_EVENTS_PER_BEAM_PHASE = 75
 DEFAULT_LINKED_EVENTS_PER_SAMPLE = 2
 MIN_EVENTS_PER_BEAM_PHASE = 1
