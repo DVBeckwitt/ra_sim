@@ -75,12 +75,6 @@ def _coord_edges(value: object) -> np.ndarray:
     return edges
 
 
-def _safe_sum(values: np.ndarray) -> float:
-    if values.size == 0:
-        return float("nan")
-    return float(np.nansum(values))
-
-
 def _fill_nan(size: int) -> np.ndarray:
     return np.full(size, np.nan, dtype=np.float64)
 

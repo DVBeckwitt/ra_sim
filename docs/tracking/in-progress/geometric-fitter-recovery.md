@@ -9,6 +9,28 @@ Last updated: 2026-05-27
 
 ## Summary
 
+2026-05-27 cleanup/status closeout: removed dead legacy fitter paths and
+generated payloads after the locked-Qr readiness/dynamic-authority fixes. The
+cleanup deleted the legacy GUI auto-match fit handler, the legacy mosaic-shape
+fitter implementation, unused private helpers, stale fast/exact optics GUI
+fields, the fast-only CTR attenuation helper/test, obsolete one-shot debug
+scripts, tracked generated geometry ladder reports, and a package-local zip.
+Generated geometry ladder output and package-local zip bundles are now ignored.
+Bug/error status: no new fitter behavior change; this is maintenance cleanup
+around already validated exact-only readiness and dynamic-authority diagnostics.
+Feature/API/migration status: no new CLI flag, GUI control, config key,
+saved-state schema, artifact schema, dependency, or public API. Deprecation
+status: non-exact optics compatibility and the deleted debug scripts are not
+supported paths. Validation status: `python -m compileall ra_sim tests scripts`,
+`python -m pytest tests/test_gui_runtime_import_safe.py -ra`, focused
+exact-optics, mosaic/cache, geometry authority/caked, background profile/rod,
+testing-index suites, `python -m ra_sim.dev test-fast`,
+`python -m ra_sim.dev check`, `python -m pytest --collect-only -q`, and
+`git diff --check` passed. Known residual: the dynamic reanchor
+`test_dynamic_reanchor_recovers_stale_peak_index_by_provider_branch` failure
+also reproduces on clean `HEAD`, so it is tracked as pre-existing and not part
+of this cleanup.
+
 2026-05-27 exact-only locked Qr/Qz readiness gate update: non-exact optics
 modes are no longer supported for the fitter path, so the remaining operator
 proof is exact-only. Run the exact-only GUI sequence. If exact readiness

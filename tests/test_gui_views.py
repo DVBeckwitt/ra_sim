@@ -2255,7 +2255,6 @@ def test_sampling_optics_controls_store_vars_bind_apply_and_toggle_custom_state(
     assert view_state.rod_points_per_gz_value_var.get() == "480 / Gz"
     assert view_state.rod_point_total_var.get() == "Longest rod: 960 points"
     assert view_state.optics_mode_var.get() == "exact"
-    assert view_state.fast_optics_button is None
     assert view_state.sample_count_scale is _FakeScale.created[0]
     assert view_state.sample_count_scale.variable is view_state.sample_count_var
     assert view_state.sample_count_scale.cget("from") == 1

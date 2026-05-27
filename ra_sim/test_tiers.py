@@ -12,7 +12,6 @@ FAST_TEST_FILES = (
     "test_cli_geometry_fit.py",
     "test_compare_intensity.py",
     "test_config_loader.py",
-    "test_ctr_fast_attenuation.py",
     "test_data_loading_parameters.py",
     "test_debug_controls.py",
     "test_debug_utils.py",

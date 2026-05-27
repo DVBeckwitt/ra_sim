@@ -1230,11 +1230,11 @@ def test_runtime_impl_lazy_allocates_job_result_images() -> None:
     assert "if img2 is None:" in block
 
 
-def test_runtime_impl_routes_legacy_fit_logs_through_debug_controls() -> None:
+def test_runtime_impl_routes_mosaic_fit_logs_through_debug_controls() -> None:
     source = RUNTIME_SESSION_SOURCE_PATH.read_text(encoding="utf-8")
 
     assert 'os.environ.setdefault("RA_SIM_DEBUG", "0")' not in source
-    assert "if gui_geometry_fit.geometry_fit_log_files_enabled():" in source
+    assert "if gui_geometry_fit.geometry_fit_log_files_enabled():" not in source
     assert "if mosaic_fit_log_files_enabled():" in source
     assert "log_file={log_path if log_path is not None else 'disabled'}" in source
 
@@ -15474,8 +15474,7 @@ def test_runtime_impl_gates_raw_hit_table_capture_by_job_kind() -> None:
     )
     assert "build_intersection_cache_enabled = bool(" in block
     assert (
-        'build_intersection_cache_for_job and job_kind_value in {"full", "primary_fill"}'
-        in block
+        'build_intersection_cache_for_job and job_kind_value in {"full", "primary_fill"}' in block
     )
     assert "(collect_hit_tables_enabled or build_intersection_cache_enabled)" in block
     assert "build_intersection_cache_enabled and collect_primary_hit_tables" in block
@@ -18272,8 +18271,7 @@ def _run_locked_qr_projection_missing_worker_case(
     if project_stored_rows or project_readiness_rows:
         projected_input_rows = projected_inputs if projected_inputs is not None else []
         outcome_by_reflection = {
-            7 + int(index): str(outcome)
-            for index, outcome in enumerate(outcome_list)
+            7 + int(index): str(outcome) for index, outcome in enumerate(outcome_list)
         }
 
         class _ProjectionCallbacks:
@@ -20150,7 +20148,9 @@ def test_worker_prebuild_times_out_plain_fresh_simulation_before_prepare(
         assert not worker.is_alive()
         assert "exception" not in result_box
         action_result = result_box["result"]
-        assert isinstance(action_result, runtime_session.gui_geometry_fit.GeometryFitRuntimeActionResult)
+        assert isinstance(
+            action_result, runtime_session.gui_geometry_fit.GeometryFitRuntimeActionResult
+        )
         assert action_result.error_text is not None
         assert "timed out" in str(action_result.error_text)
         events = _drain_geometry_fit_worker_events(job["event_queue"])

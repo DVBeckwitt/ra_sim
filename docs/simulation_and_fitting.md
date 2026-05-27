@@ -234,7 +234,7 @@ for every scattering experiment or every optics regime.
    how strongly the wave enters, decays within, and exits the sample, while
    `solve_q(...)` says which outgoing in-sample directions satisfy the
    scattering geometry. This separation is what lets RA-SIM keep one geometric
-   scattering core while swapping between fast and exact optics transport.
+   scattering core while using the exact optics transport path consistently.
 5. The reciprocal-space solve is a circle problem because the allowed `Q`
    vectors satisfy two sphere constraints with known radii and centers. Once
    that geometry is written down analytically, the code can integrate mosaic

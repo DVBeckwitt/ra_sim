@@ -3324,8 +3324,6 @@ def create_sampling_optics_controls(
     view_state.ray_warning_label = None
     view_state.optics_mode_frame = optics_mode_frame
     view_state.optics_mode_var = optics_mode_var
-    view_state.fast_optics_button = None
-    view_state.exact_optics_button = None
     _set_sampling_events_per_phase_scale_state(view_state, controls_enabled=True)
 
 

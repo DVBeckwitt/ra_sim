@@ -96,7 +96,7 @@ Passed:
 ```powershell
 python -m compileall -q ra_sim tests
 python -m pytest -q tests/test_numba_compat.py
-python -m pytest -q tests/test_diffraction_weighted_events.py tests/test_diffraction_inner_loop_optimizations.py tests/test_ctr_fast_attenuation.py
+python -m pytest -q tests/test_diffraction_weighted_events.py tests/test_diffraction_inner_loop_optimizations.py
 python -m pytest -q tests/test_parallel_utils.py tests/test_exact_cake_portable.py
 python -m ruff check .
 python -c "import ra_sim.simulation.diffraction; import ra_sim.simulation.exact_cake; import ra_sim.StructureFactor.StructureFactor; import ra_sim.utils.calculations; import ra_sim.utils.parallel; print('ok')"
@@ -116,9 +116,9 @@ Results:
 ```powershell
 python -m compileall -q ra_sim tests
 python -m pytest -q tests/test_numba_compat.py
-$env:NUMBA_DISABLE_JIT='1'; python -m pytest -q tests/test_diffraction_weighted_events.py tests/test_diffraction_inner_loop_optimizations.py tests/test_ctr_fast_attenuation.py
+$env:NUMBA_DISABLE_JIT='1'; python -m pytest -q tests/test_diffraction_weighted_events.py tests/test_diffraction_inner_loop_optimizations.py
 $env:NUMBA_DISABLE_JIT='1'; python -m pytest -q tests/test_parallel_utils.py
-python -m pytest -q tests/test_diffraction_weighted_events.py tests/test_diffraction_inner_loop_optimizations.py tests/test_ctr_fast_attenuation.py
+python -m pytest -q tests/test_diffraction_weighted_events.py tests/test_diffraction_inner_loop_optimizations.py
 python -m pytest -q tests/test_exact_cake_portable.py tests/test_parallel_utils.py
 python -m ruff check ra_sim/utils/numba_compat.py ra_sim/simulation/exact_cake.py ra_sim/dev_doctor.py tests/test_numba_compat.py
 rg -n "from numba|import numba" ra_sim tests
