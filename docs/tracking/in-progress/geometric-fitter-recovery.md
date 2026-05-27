@@ -9,6 +9,21 @@ Last updated: 2026-05-27
 
 ## Summary
 
+2026-05-27 phase 4 remaining test-helper audit closeout: the only remaining
+top-level local `_Var` helpers are in `tests/test_disordered_phase_ui_enable.py`
+and `tests/test_disordered_phase_state_io.py`. They intentionally remain local:
+the UI-enable helper preserves raw `.value` checkbox data with no `set()`, and
+the state-IO helper is a no-`set()` `tk_variable_type` fake backed by `_value`.
+Neither is equivalent to shared `RuntimeVar` or `FloatRuntimeVar`; adding a
+one-use shared helper would be unnecessary abstraction. Bug/error/feature
+status: no runtime behavior defect or feature change. UI/API/interface,
+CI/deprecation/migration, dependency, schema, config, CLI, artifact, and
+release/version status: unchanged. Review status: no correctness, bloat,
+security, performance, test-quality, new-file, or abstraction blockers were
+found. Shipping status: remaining-helper tests, ruff checks,
+`python -m ra_sim.dev check`, and `git diff --check` pass locally; rollback is
+a normal git revert of the docs-only closeout.
+
 2026-05-27 phase 3 float test-helper simplification follow-up:
 `tests/helpers/gui_fakes.py` now provides `FloatRuntimeVar` for tests that need
 float-coercing GUI variable fakes with mutable `.value` state and no `set()`
