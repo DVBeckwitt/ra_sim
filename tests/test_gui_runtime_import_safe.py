@@ -12991,18 +12991,8 @@ def test_toggle_caked_2d_legacy_path_overrides_stale_q_space_shell_mode(
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 
-    class _Var:
-        def __init__(self, value: object) -> None:
-            self._value = value
-
-        def get(self) -> object:
-            return self._value
-
-        def set(self, value: object) -> None:
-            self._value = value
-
-    shell_mode_var = _Var("q_space")
-    show_caked_var = _Var(True)
+    shell_mode_var = _RuntimeVar("q_space")
+    show_caked_var = _RuntimeVar(True)
     monkeypatch.setattr(
         runtime_session,
         "analysis_view_controls_view_state",
@@ -13047,18 +13037,8 @@ def test_toggle_caked_2d_skips_qr_overlay_invalidation_when_overlays_are_off(
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 
-    class _Var:
-        def __init__(self, value: object) -> None:
-            self._value = value
-
-        def get(self) -> object:
-            return self._value
-
-        def set(self, value: object) -> None:
-            self._value = value
-
-    shell_mode_var = _Var("detector")
-    show_caked_var = _Var(True)
+    shell_mode_var = _RuntimeVar("detector")
+    show_caked_var = _RuntimeVar(True)
     invalidations: list[dict[str, object]] = []
 
     monkeypatch.setattr(
@@ -13066,14 +13046,14 @@ def test_toggle_caked_2d_skips_qr_overlay_invalidation_when_overlays_are_off(
         "analysis_view_controls_view_state",
         SimpleNamespace(
             show_caked_2d_var=show_caked_var,
-            show_qz_rods_var=_Var(False),
+            show_qz_rods_var=_RuntimeVar(False),
         ),
         raising=False,
     )
     monkeypatch.setattr(
         runtime_session,
         "geometry_overlay_actions_view_state",
-        SimpleNamespace(show_geometry_overlays_var=_Var(False)),
+        SimpleNamespace(show_geometry_overlays_var=_RuntimeVar(False)),
         raising=False,
     )
     monkeypatch.setattr(
@@ -13125,18 +13105,8 @@ def test_toggle_caked_2d_reselects_current_hkl_peak_for_new_view(
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 
-    class _Var:
-        def __init__(self, value: object) -> None:
-            self._value = value
-
-        def get(self) -> object:
-            return self._value
-
-        def set(self, value: object) -> None:
-            self._value = value
-
-    shell_mode_var = _Var("detector")
-    show_caked_var = _Var(True)
+    shell_mode_var = _RuntimeVar("detector")
+    show_caked_var = _RuntimeVar(True)
     reselect_calls: list[str] = []
 
     monkeypatch.setattr(
@@ -13144,14 +13114,14 @@ def test_toggle_caked_2d_reselects_current_hkl_peak_for_new_view(
         "analysis_view_controls_view_state",
         SimpleNamespace(
             show_caked_2d_var=show_caked_var,
-            show_qz_rods_var=_Var(False),
+            show_qz_rods_var=_RuntimeVar(False),
         ),
         raising=False,
     )
     monkeypatch.setattr(
         runtime_session,
         "geometry_overlay_actions_view_state",
-        SimpleNamespace(show_geometry_overlays_var=_Var(False)),
+        SimpleNamespace(show_geometry_overlays_var=_RuntimeVar(False)),
         raising=False,
     )
     monkeypatch.setattr(
@@ -13209,16 +13179,6 @@ def test_toggle_caked_2d_hides_selected_peak_when_reselect_fails(
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 
-    class _Var:
-        def __init__(self, value: object) -> None:
-            self._value = value
-
-        def get(self) -> object:
-            return self._value
-
-        def set(self, value: object) -> None:
-            self._value = value
-
     class _Marker:
         def __init__(self) -> None:
             self.visible = True
@@ -13226,8 +13186,8 @@ def test_toggle_caked_2d_hides_selected_peak_when_reselect_fails(
         def set_visible(self, value: object) -> None:
             self.visible = bool(value)
 
-    shell_mode_var = _Var("detector")
-    show_caked_var = _Var(True)
+    shell_mode_var = _RuntimeVar("detector")
+    show_caked_var = _RuntimeVar(True)
     marker = _Marker()
     redraw_calls: list[bool] = []
 
@@ -13236,14 +13196,14 @@ def test_toggle_caked_2d_hides_selected_peak_when_reselect_fails(
         "analysis_view_controls_view_state",
         SimpleNamespace(
             show_caked_2d_var=show_caked_var,
-            show_qz_rods_var=_Var(False),
+            show_qz_rods_var=_RuntimeVar(False),
         ),
         raising=False,
     )
     monkeypatch.setattr(
         runtime_session,
         "geometry_overlay_actions_view_state",
-        SimpleNamespace(show_geometry_overlays_var=_Var(False)),
+        SimpleNamespace(show_geometry_overlays_var=_RuntimeVar(False)),
         raising=False,
     )
     monkeypatch.setattr(
@@ -13314,13 +13274,6 @@ def test_apply_main_caked_view_toggle_clears_manual_pick_artists_before_schedule
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 
-    class _Var:
-        def __init__(self, value: object) -> None:
-            self._value = value
-
-        def get(self) -> object:
-            return self._value
-
     calls: list[object] = []
     overlay_record = {
         "hkl": (1, 0, 0),
@@ -13337,7 +13290,7 @@ def test_apply_main_caked_view_toggle_clears_manual_pick_artists_before_schedule
     monkeypatch.setattr(
         runtime_session,
         "analysis_view_controls_view_state",
-        SimpleNamespace(show_caked_2d_var=_Var(True)),
+        SimpleNamespace(show_caked_2d_var=_RuntimeVar(True)),
         raising=False,
     )
     monkeypatch.setattr(
@@ -13399,13 +13352,6 @@ def test_apply_main_caked_view_toggle_clears_view_bound_overlay_state_before_det
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 
-    class _Var:
-        def __init__(self, value: object) -> None:
-            self._value = value
-
-        def get(self) -> object:
-            return self._value
-
     class _Axis:
         def set_aspect(self, _value: object) -> None:
             calls.append("set_aspect")
@@ -13422,7 +13368,7 @@ def test_apply_main_caked_view_toggle_clears_view_bound_overlay_state_before_det
     monkeypatch.setattr(
         runtime_session,
         "analysis_view_controls_view_state",
-        SimpleNamespace(show_caked_2d_var=_Var(False)),
+        SimpleNamespace(show_caked_2d_var=_RuntimeVar(False)),
         raising=False,
     )
     monkeypatch.setattr(
@@ -13903,18 +13849,8 @@ def test_set_persistent_view_mode_keeps_q_space_when_enabling_caked_data(
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 
-    class _Var:
-        def __init__(self, value: object) -> None:
-            self._value = value
-
-        def get(self) -> object:
-            return self._value
-
-        def set(self, value: object) -> None:
-            self._value = value
-
-    shell_mode_var = _Var("detector")
-    show_caked_var = _Var(False)
+    shell_mode_var = _RuntimeVar("detector")
+    show_caked_var = _RuntimeVar(False)
     schedule_calls: list[str] = []
     monkeypatch.setattr(
         runtime_session,
@@ -13972,16 +13908,6 @@ def test_apply_scale_factor_to_existing_results_can_force_canvas_redraw(
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     _install_idle_main_figure_preview_state(monkeypatch, runtime_session)
 
-    class _Var:
-        def __init__(self, value: float | bool) -> None:
-            self._value = value
-
-        def get(self):
-            return self._value
-
-        def set(self, value) -> None:
-            self._value = value
-
     redraw_calls: list[bool] = []
     synced_modes: list[str | None] = []
     stored_sources: list[np.ndarray] = []
@@ -14027,10 +13953,10 @@ def test_apply_scale_factor_to_existing_results_can_force_canvas_redraw(
         runtime_session,
         "display_controls_view_state",
         SimpleNamespace(
-            simulation_min_var=_Var(0.0),
-            simulation_max_var=_Var(10.0),
-            background_min_var=_Var(0.0),
-            background_max_var=_Var(1.0),
+            simulation_min_var=_RuntimeVar(0.0),
+            simulation_max_var=_RuntimeVar(10.0),
+            background_min_var=_RuntimeVar(0.0),
+            background_max_var=_RuntimeVar(1.0),
         ),
         raising=False,
     )
@@ -14046,11 +13972,11 @@ def test_apply_scale_factor_to_existing_results_can_force_canvas_redraw(
     monkeypatch.setattr(
         runtime_session,
         "analysis_view_controls_view_state",
-        SimpleNamespace(show_1d_var=_Var(False)),
+        SimpleNamespace(show_1d_var=_RuntimeVar(False)),
         raising=False,
     )
-    monkeypatch.setattr(runtime_session, "vmin_caked_var", _Var(0.0), raising=False)
-    monkeypatch.setattr(runtime_session, "vmax_caked_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "vmin_caked_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "vmax_caked_var", _RuntimeVar(0.0), raising=False)
     monkeypatch.setattr(
         runtime_session,
         "colorbar_main",
@@ -14154,16 +14080,6 @@ def test_apply_scale_factor_to_existing_results_uses_semantic_analysis_source_si
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     _install_idle_main_figure_preview_state(monkeypatch, runtime_session)
 
-    class _Var:
-        def __init__(self, value: float | bool) -> None:
-            self._value = value
-
-        def get(self):
-            return self._value
-
-        def set(self, value) -> None:
-            self._value = value
-
     stored_signatures: list[tuple[str, object | None]] = []
     fake_image_artist = SimpleNamespace(set_visible=lambda *_args, **_kwargs: None)
     fake_background_artist = SimpleNamespace(set_visible=lambda *_args, **_kwargs: None)
@@ -14216,10 +14132,10 @@ def test_apply_scale_factor_to_existing_results_uses_semantic_analysis_source_si
         runtime_session,
         "display_controls_view_state",
         SimpleNamespace(
-            simulation_min_var=_Var(0.0),
-            simulation_max_var=_Var(10.0),
-            background_min_var=_Var(0.0),
-            background_max_var=_Var(10.0),
+            simulation_min_var=_RuntimeVar(0.0),
+            simulation_max_var=_RuntimeVar(10.0),
+            background_min_var=_RuntimeVar(0.0),
+            background_max_var=_RuntimeVar(10.0),
         ),
         raising=False,
     )
@@ -14235,11 +14151,11 @@ def test_apply_scale_factor_to_existing_results_uses_semantic_analysis_source_si
     monkeypatch.setattr(
         runtime_session,
         "analysis_view_controls_view_state",
-        SimpleNamespace(show_1d_var=_Var(False)),
+        SimpleNamespace(show_1d_var=_RuntimeVar(False)),
         raising=False,
     )
-    monkeypatch.setattr(runtime_session, "vmin_caked_var", _Var(0.0), raising=False)
-    monkeypatch.setattr(runtime_session, "vmax_caked_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "vmin_caked_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "vmax_caked_var", _RuntimeVar(0.0), raising=False)
     monkeypatch.setattr(
         runtime_session,
         "colorbar_main",
@@ -14339,16 +14255,6 @@ def test_apply_scale_factor_to_existing_results_uses_runtime_image_signature_for
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     _install_idle_main_figure_preview_state(monkeypatch, runtime_session)
 
-    class _Var:
-        def __init__(self, value: float | bool) -> None:
-            self._value = value
-
-        def get(self):
-            return self._value
-
-        def set(self, value) -> None:
-            self._value = value
-
     chi_state = {"buffer_sig": ("stale",)}
     dirty_calls: list[str] = []
     runtime_signature = ("runtime-sig", 42)
@@ -14397,10 +14303,10 @@ def test_apply_scale_factor_to_existing_results_uses_runtime_image_signature_for
         runtime_session,
         "display_controls_view_state",
         SimpleNamespace(
-            simulation_min_var=_Var(0.0),
-            simulation_max_var=_Var(10.0),
-            background_min_var=_Var(0.0),
-            background_max_var=_Var(1.0),
+            simulation_min_var=_RuntimeVar(0.0),
+            simulation_max_var=_RuntimeVar(10.0),
+            background_min_var=_RuntimeVar(0.0),
+            background_max_var=_RuntimeVar(1.0),
         ),
         raising=False,
     )
@@ -14416,11 +14322,11 @@ def test_apply_scale_factor_to_existing_results_uses_runtime_image_signature_for
     monkeypatch.setattr(
         runtime_session,
         "analysis_view_controls_view_state",
-        SimpleNamespace(show_1d_var=_Var(False)),
+        SimpleNamespace(show_1d_var=_RuntimeVar(False)),
         raising=False,
     )
-    monkeypatch.setattr(runtime_session, "vmin_caked_var", _Var(0.0), raising=False)
-    monkeypatch.setattr(runtime_session, "vmax_caked_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "vmin_caked_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "vmax_caked_var", _RuntimeVar(0.0), raising=False)
     monkeypatch.setattr(
         runtime_session,
         "colorbar_main",
@@ -14517,16 +14423,6 @@ def test_apply_scale_factor_to_existing_results_clears_pending_preview_before_sy
 ) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 
-    class _Var:
-        def __init__(self, value: float | bool) -> None:
-            self._value = value
-
-        def get(self):
-            return self._value
-
-        def set(self, value) -> None:
-            self._value = value
-
     geometry_runtime_state = SimpleNamespace(
         _canvas_preview_limits=((4.0, 8.0), (9.0, 2.0)),
         _canvas_pan_session={"drag": True},
@@ -14605,10 +14501,10 @@ def test_apply_scale_factor_to_existing_results_clears_pending_preview_before_sy
         runtime_session,
         "display_controls_view_state",
         SimpleNamespace(
-            simulation_min_var=_Var(0.0),
-            simulation_max_var=_Var(10.0),
-            background_min_var=_Var(0.0),
-            background_max_var=_Var(1.0),
+            simulation_min_var=_RuntimeVar(0.0),
+            simulation_max_var=_RuntimeVar(10.0),
+            background_min_var=_RuntimeVar(0.0),
+            background_max_var=_RuntimeVar(1.0),
         ),
         raising=False,
     )
@@ -14624,11 +14520,11 @@ def test_apply_scale_factor_to_existing_results_clears_pending_preview_before_sy
     monkeypatch.setattr(
         runtime_session,
         "analysis_view_controls_view_state",
-        SimpleNamespace(show_1d_var=_Var(False)),
+        SimpleNamespace(show_1d_var=_RuntimeVar(False)),
         raising=False,
     )
-    monkeypatch.setattr(runtime_session, "vmin_caked_var", _Var(0.0), raising=False)
-    monkeypatch.setattr(runtime_session, "vmax_caked_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "vmin_caked_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "vmax_caked_var", _RuntimeVar(0.0), raising=False)
     monkeypatch.setattr(
         runtime_session,
         "colorbar_main",
@@ -14957,13 +14853,6 @@ def test_prepare_q_space_display_payload_chooses_safe_conversion_method(
 def test_restore_caked_payload_rebuilds_q_space_from_live_q_space_mode(monkeypatch) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
 
-    class _Var:
-        def __init__(self, value: float) -> None:
-            self._value = value
-
-        def get(self) -> float:
-            return float(self._value)
-
     background_native = np.arange(16, dtype=np.float64).reshape(4, 4)
     q_space_inputs: list[np.ndarray] = []
     stored_payloads: list[dict[str, object]] = []
@@ -15037,16 +14926,16 @@ def test_restore_caked_payload_rebuilds_q_space_from_live_q_space_mode(monkeypat
     monkeypatch.setattr(
         runtime_session, "_get_current_background_native", lambda: background_native
     )
-    monkeypatch.setattr(runtime_session, "center_x_var", _Var(2.0), raising=False)
-    monkeypatch.setattr(runtime_session, "center_y_var", _Var(2.0), raising=False)
-    monkeypatch.setattr(runtime_session, "corto_detector_var", _Var(0.5), raising=False)
-    monkeypatch.setattr(runtime_session, "gamma_var", _Var(0.0), raising=False)
-    monkeypatch.setattr(runtime_session, "Gamma_var", _Var(0.0), raising=False)
-    monkeypatch.setattr(runtime_session, "chi_var", _Var(0.0), raising=False)
-    monkeypatch.setattr(runtime_session, "psi_z_var", _Var(0.0), raising=False)
-    monkeypatch.setattr(runtime_session, "cor_angle_var", _Var(0.0), raising=False)
-    monkeypatch.setattr(runtime_session, "zs_var", _Var(0.0), raising=False)
-    monkeypatch.setattr(runtime_session, "zb_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "center_x_var", _RuntimeVar(2.0), raising=False)
+    monkeypatch.setattr(runtime_session, "center_y_var", _RuntimeVar(2.0), raising=False)
+    monkeypatch.setattr(runtime_session, "corto_detector_var", _RuntimeVar(0.5), raising=False)
+    monkeypatch.setattr(runtime_session, "gamma_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "Gamma_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "chi_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "psi_z_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "cor_angle_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "zs_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "zb_var", _RuntimeVar(0.0), raising=False)
     monkeypatch.setattr(runtime_session, "pixel_size_m", 1.0e-4, raising=False)
     monkeypatch.setattr(runtime_session, "lambda_", 1.24, raising=False)
     monkeypatch.setattr(runtime_session, "psi", 0.0, raising=False)
@@ -15072,13 +14961,6 @@ def test_restore_caked_payload_rebuilds_q_space_from_live_q_space_mode(monkeypat
 
 def test_restore_caked_payload_traps_live_q_space_rebuild_failures(monkeypatch) -> None:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
-
-    class _Var:
-        def __init__(self, value: float) -> None:
-            self._value = value
-
-        def get(self) -> float:
-            return float(self._value)
 
     stored_payloads: list[dict[str, object]] = []
     progress_updates: list[str] = []
@@ -15144,16 +15026,16 @@ def test_restore_caked_payload_traps_live_q_space_rebuild_failures(monkeypatch) 
         ),
         raising=False,
     )
-    monkeypatch.setattr(runtime_session, "center_x_var", _Var(2.0), raising=False)
-    monkeypatch.setattr(runtime_session, "center_y_var", _Var(2.0), raising=False)
-    monkeypatch.setattr(runtime_session, "corto_detector_var", _Var(0.5), raising=False)
-    monkeypatch.setattr(runtime_session, "gamma_var", _Var(0.0), raising=False)
-    monkeypatch.setattr(runtime_session, "Gamma_var", _Var(0.0), raising=False)
-    monkeypatch.setattr(runtime_session, "chi_var", _Var(0.0), raising=False)
-    monkeypatch.setattr(runtime_session, "psi_z_var", _Var(0.0), raising=False)
-    monkeypatch.setattr(runtime_session, "cor_angle_var", _Var(0.0), raising=False)
-    monkeypatch.setattr(runtime_session, "zs_var", _Var(0.0), raising=False)
-    monkeypatch.setattr(runtime_session, "zb_var", _Var(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "center_x_var", _RuntimeVar(2.0), raising=False)
+    monkeypatch.setattr(runtime_session, "center_y_var", _RuntimeVar(2.0), raising=False)
+    monkeypatch.setattr(runtime_session, "corto_detector_var", _RuntimeVar(0.5), raising=False)
+    monkeypatch.setattr(runtime_session, "gamma_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "Gamma_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "chi_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "psi_z_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "cor_angle_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "zs_var", _RuntimeVar(0.0), raising=False)
+    monkeypatch.setattr(runtime_session, "zb_var", _RuntimeVar(0.0), raising=False)
     monkeypatch.setattr(runtime_session, "pixel_size_m", 1.0e-4, raising=False)
     monkeypatch.setattr(runtime_session, "lambda_", 1.24, raising=False)
     monkeypatch.setattr(runtime_session, "psi", 0.0, raising=False)

@@ -9,6 +9,19 @@ Last updated: 2026-05-27
 
 ## Summary
 
+2026-05-27 runtime import-safe test-helper simplification follow-up:
+`tests/test_gui_runtime_import_safe.py` now reuses the shared `RuntimeVar`
+test fake instead of redefining equivalent local `_Var` classes in the touched
+runtime import-safe scenarios. Bug/error status: no behavior defect was found
+in review; this is maintenance-only test cleanup after the repo simplification
+audit. Feature/API/migration/deprecation status: no GUI control, CLI flag,
+config key, saved-state schema, artifact schema, dependency, public API, CI
+workflow, migration path, or deprecation notice changed. Review status: checked
+for correctness, bloat, security, performance, test quality, avoidable new
+files, and avoidable abstractions with no blockers found. Shipping status:
+focused runtime import-safe tests and ruff checks pass locally; rollback is a
+normal git revert of the test/doc cleanup commit.
+
 2026-05-27 cleanup/status closeout: removed dead legacy fitter paths and
 generated payloads after the locked-Qr readiness/dynamic-authority fixes. The
 cleanup deleted the legacy GUI auto-match fit handler, the legacy mosaic-shape
