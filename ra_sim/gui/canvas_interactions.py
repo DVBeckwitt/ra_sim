@@ -412,32 +412,26 @@ def _manual_pick_click_coords(
     *,
     prefer_pixel_anchor: bool = False,
 ) -> tuple[float, float] | None:
+    point: tuple[float, float] | None = None
     if prefer_pixel_anchor and _event_inside_axis_pixels(bindings.axis, event):
         limits = _current_live_limits(bindings)
         if limits is not None:
-            pixel_anchor = _event_axis_fraction_anchor(
+            point = _event_axis_fraction_anchor(
                 bindings.axis,
                 event,
                 xlim=limits[0],
                 ylim=limits[1],
             )
-            if pixel_anchor is not None:
-                col, row = bindings.clamp_to_axis_view(
-                    bindings.axis,
-                    float(pixel_anchor[0]),
-                    float(pixel_anchor[1]),
-                )
-                if _runtime_caked_view_enabled(bindings):
-                    phi_deg = float(row)
-                    two_theta_deg = float(col)
-                    return float(two_theta_deg), float(phi_deg)
-                return float(col), float(row)
-    if not _event_has_axis_data(bindings, event):
-        return None
+
+    if point is None:
+        if not _event_has_axis_data(bindings, event):
+            return None
+        point = (float(event.xdata), float(event.ydata))
+
     col, row = bindings.clamp_to_axis_view(
         bindings.axis,
-        float(event.xdata),
-        float(event.ydata),
+        float(point[0]),
+        float(point[1]),
     )
     if _runtime_caked_view_enabled(bindings):
         # The live caked view exposes angular coordinates; bind them explicitly
