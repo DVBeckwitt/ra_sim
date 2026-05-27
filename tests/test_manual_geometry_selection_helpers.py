@@ -15932,12 +15932,12 @@ def test_geometry_manual_toggle_selection_at_starts_single_active_group_from_bac
     assert handled is True
     assert suppress_drag is False
     assert next_session["group_key"] == group_key
-    assert next_session["place_current_release"] is True
     assert next_session["target_count"] == 2
     assert len(next_session["group_entries"]) == 2
-    assert set_sessions[-1]["place_current_release"] is True
+    assert "place_current_release" not in next_session
+    assert "place_current_release" not in set_sessions[-1]
     assert "only active Qr/Qz group" in status_messages[-1]
-    assert "Click or release on a background peak" in status_messages[-1]
+    assert "Click background peak" in status_messages[-1]
 
 
 def test_geometry_manual_toggle_selection_at_fallback_uses_single_listed_group() -> None:
@@ -16006,7 +16006,7 @@ def test_geometry_manual_toggle_selection_at_fallback_uses_single_listed_group()
     assert handled is True
     assert suppress_drag is False
     assert next_session["group_key"] == selected_key
-    assert next_session["place_current_release"] is True
+    assert "place_current_release" not in next_session
     assert set_sessions[-1]["group_key"] == selected_key
     assert "only active Qr/Qz group" in status_messages[-1]
 
@@ -16068,7 +16068,7 @@ def test_geometry_manual_single_group_background_click_uses_refined_peak_for_bra
 
     assert handled is True
     assert suppress_drag is False
-    assert pick_session["place_current_release"] is True
+    assert "place_current_release" not in pick_session
     assert selection_sessions[-1]["group_key"] == group_key
 
     handled_place, next_session = mg.geometry_manual_place_selection_at(

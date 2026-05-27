@@ -1021,7 +1021,7 @@ def test_canvas_first_manual_pick_click_does_not_immediately_place_background_po
     assert drag_callbacks.calls == []
 
 
-def test_canvas_detector_view_single_group_fallback_places_on_release() -> None:
+def test_canvas_detector_view_single_group_fallback_places_on_next_release() -> None:
     axis = _FakeAxis()
     peak_callbacks = _PeakCallbacks()
     drag_callbacks = _DragCallbacks()
@@ -1090,16 +1090,37 @@ def test_canvas_detector_view_single_group_fallback_places_on_release() -> None:
         inaxes=axis,
         xdata=121.0,
         ydata=131.0,
+        x=111.0,
+        y=71.0,
+    )
+    placement_press_event = _FakeEvent(
+        button=1,
+        inaxes=axis,
+        xdata=121.0,
+        ydata=131.0,
+        x=170.0,
+        y=50.0,
+    )
+    placement_release_event = _FakeEvent(
+        button=1,
+        inaxes=axis,
+        xdata=121.0,
+        ydata=131.0,
+        x=170.0,
+        y=50.0,
     )
 
     assert canvas_interactions.handle_runtime_canvas_click(bindings, click_event) is True
-    assert getattr(geometry_runtime, "_manual_pick_skip_release_once", False) is False
+    assert getattr(geometry_runtime, "_manual_pick_skip_release_once", False) is True
     assert canvas_interactions.handle_runtime_canvas_press(bindings, click_event) is True
     assert canvas_interactions.handle_runtime_canvas_release(bindings, release_event) is True
+    assert getattr(geometry_runtime, "_manual_pick_skip_release_once", False) is False
+    assert canvas_interactions.handle_runtime_canvas_press(bindings, placement_press_event) is True
+    assert canvas_interactions.handle_runtime_canvas_release(bindings, placement_release_event) is True
 
     assert calls == [
         ("toggle", 120.0, 130.0),
-        ("place", 121.0, 131.0),
+        ("place", 80.0, 70.0),
     ]
     assert drag_callbacks.calls == []
 

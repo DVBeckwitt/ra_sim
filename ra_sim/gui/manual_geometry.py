@@ -18026,8 +18026,6 @@ def geometry_manual_toggle_selection_at(
     if isinstance(tagged_candidate, dict):
         next_session["tagged_candidate"] = dict(tagged_candidate)
         next_session["_tagged_candidate_requires_identity"] = True
-    if background_click_fallback:
-        next_session["place_current_release"] = True
     set_pick_session_fn(next_session)
     if use_caked_space and geometry_manual_live_caked_trace_enabled():
         geometry_manual_trace_live_caked_visual_source_event(
@@ -18059,11 +18057,7 @@ def geometry_manual_toggle_selection_at(
             if background_click_fallback
             else f"Selected {q_label} (nearest Bragg seed {seed_dist:.1f}{' deg' if use_caked_space else 'px'}). "
         )
-        first_pick_status = (
-            f"Click or release on a background peak 1 of {max(1, int(target_count))}; "
-            if background_click_fallback
-            else f"Click background peak 1 of {max(1, int(target_count))}; "
-        )
+        first_pick_status = f"Click background peak 1 of {max(1, int(target_count))}; "
         set_status_text(
             caked_projection_fallback_note
             + selection_status
