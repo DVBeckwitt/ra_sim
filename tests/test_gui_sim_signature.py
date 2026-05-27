@@ -7,6 +7,7 @@ import pytest
 
 from ra_sim.gui import app as gui_app
 from ra_sim.gui._runtime import runtime_session
+from tests.helpers.gui_fakes import RuntimeVar as _FakeVar
 
 
 def test_packaged_gui_signature_includes_rounded_psi_z() -> None:
@@ -32,17 +33,6 @@ def test_packaged_gui_psi_z_slider_is_limited_and_clamped() -> None:
         assert float(gui_app.psi_z_var.get()) == -5.0
     finally:
         gui_app.psi_z_var.set(previous_value)
-
-
-class _FakeVar:
-    def __init__(self, value):
-        self.value = value
-
-    def get(self):
-        return self.value
-
-    def set(self, value):
-        self.value = value
 
 
 @pytest.fixture(autouse=True)
