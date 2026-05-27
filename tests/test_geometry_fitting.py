@@ -4336,9 +4336,9 @@ def test_simulate_and_compare_hkl_forwards_exact_optics_mode(monkeypatch):
     assert optics_seen == [diffraction.OPTICS_MODE_EXACT]
 
 
-def test_simulate_and_compare_hkl_rejects_fast_optics_before_runner(monkeypatch):
+def test_simulate_and_compare_hkl_rejects_non_exact_optics_before_runner(monkeypatch):
     def fake_process(*args, **kwargs):
-        raise AssertionError("fast optics should fail before process_peaks_parallel_safe")
+        raise AssertionError("non-exact optics should fail before process_peaks_parallel_safe")
 
     monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
 
@@ -5925,6 +5925,96 @@ def test_dynamic_angular_summary_flags_handoff_acceptance_residual_mismatch() ->
     assert trace_rows[0]["residual_norm_deg"] == pytest.approx(expected_branch_0)
     assert trace_rows[0]["units"] == "deg"
     assert trace_rows[0]["row_source"] == "pair_audit_and_acceptance_rows"
+
+
+def test_dynamic_angular_summary_reports_caked_authority_fields_for_drift() -> None:
+    pair_audit_norm = math.hypot(
+        32.744 - 33.063,
+        opt._wrap_phi_deg(132.750 - 130.754),
+    )
+
+    summary = opt._summarize_dynamic_angular_residual_rows(
+        [
+            {
+                "dataset_index": 0,
+                "dataset_label": "bg0",
+                "pair_index": 0,
+                "pair_id": "branch-0",
+                "source_branch_index": 0,
+                "hkl": [-1, 0, 10],
+                "observed_caked_deg": [33.063, 130.754],
+                "predicted_caked_deg": [135.373, 130.754],
+                "pair_audit_observed_caked_deg": [33.063, 130.754],
+                "pair_audit_predicted_caked_deg": [32.744, 132.750],
+                "pair_audit_observed_caked_source_field": "manual_qr_fit_target_caked_deg",
+                "pair_audit_predicted_caked_source_field": "manual_qr_fit_source_caked_deg",
+                "dynamic_row_observed_caked_source_field": "manual_target_caked_deg",
+                "dynamic_row_predicted_caked_source_field": "sim_refined_caked_deg",
+                "fit_residual_caked_norm_deg": pair_audit_norm,
+                "fit_prediction_source": "dynamic_trial_simulation:locked_manual_qr_fit_prediction",
+                "fit_prediction_is_dynamic": "yes",
+                "prediction_role": "objective_trial",
+            }
+        ]
+    )
+
+    trace_row = summary["caked_acceptance_metric_trace_rows"][0]
+    assert trace_row["pair_audit_observed_caked_deg"] == pytest.approx([33.063, 130.754])
+    assert trace_row["pair_audit_predicted_caked_deg"] == pytest.approx([32.744, 132.750])
+    assert trace_row["dynamic_row_observed_caked_deg"] == pytest.approx([33.063, 130.754])
+    assert trace_row["dynamic_row_predicted_caked_deg"] == pytest.approx([135.373, 130.754])
+    assert trace_row["pair_audit_predicted_caked_source_field"] == (
+        "manual_qr_fit_source_caked_deg"
+    )
+    assert trace_row["dynamic_row_predicted_caked_source_field"] == "sim_refined_caked_deg"
+    assert trace_row["handoff_audit_caked_residual_norm_deg"] == pytest.approx(pair_audit_norm)
+    assert trace_row["acceptance_caked_residual_norm_deg"] == pytest.approx(102.31)
+
+
+def test_dynamic_angular_rows_report_matching_preflight_authority() -> None:
+    rows = [
+        {
+            "dataset_index": 0,
+            "dataset_label": "bg0",
+            "pair_index": 0,
+            "pair_id": "branch-0",
+            "q_group_key": ["q_group", "primary", 1, 10],
+            "hkl": [-1, 0, 10],
+            "source_branch_index": 0,
+            "observed_caked_deg": [33.063, 130.754],
+            "predicted_caked_deg": [135.373, 130.754],
+        }
+    ]
+    preflight_rows = [
+        {
+            "dataset_index": 0,
+            "dataset_label": "bg0",
+            "pair_index": 0,
+            "pair_id": "branch-0",
+            "q_group_key": ["q_group", "primary", 1, 10],
+            "hkl": [-1, 0, 10],
+            "source_branch_index": 0,
+            "observed_caked_deg": [33.063, 130.754],
+            "predicted_caked_deg": [32.744, 132.750],
+            "observed_caked_source_field": "manual_target_caked_deg",
+            "predicted_caked_source_field": "sim_refined_caked_deg",
+            "fit_prediction_source": "dynamic_trial_simulation:locked_manual_qr_fit_prediction",
+            "fit_prediction_is_dynamic": "yes",
+            "prediction_role": "objective_trial",
+        }
+    ]
+
+    annotated = opt._annotate_dynamic_angular_rows_with_preflight_authority(
+        rows,
+        preflight_rows,
+    )
+
+    assert annotated[0]["preflight_observed_caked_deg"] == pytest.approx([33.063, 130.754])
+    assert annotated[0]["preflight_predicted_caked_deg"] == pytest.approx([32.744, 132.750])
+    assert annotated[0]["dynamic_row_observed_caked_deg"] == pytest.approx([33.063, 130.754])
+    assert annotated[0]["dynamic_row_predicted_caked_deg"] == pytest.approx([135.373, 130.754])
+    assert annotated[0]["preflight_fit_prediction_is_dynamic"] == "yes"
+    assert annotated[0]["preflight_prediction_role"] == "objective_trial"
 
 
 def test_dynamic_angular_summary_by_dataset_is_count_weighted() -> None:
@@ -7779,6 +7869,68 @@ def test_locked_qr_solver_does_not_select_worse_failed_candidate_than_identity(m
     assert result.point_match_summary.get("recommended_next_fix") != (
         "remove_or_repick_manual_outliers"
     )
+
+
+def test_locked_qr_dynamic_authority_mismatch_propagates_through_fit_result(monkeypatch):
+    def stale_authority_least_squares(residual_fn, x0, **_kwargs):
+        x = np.asarray(x0, dtype=float) + 1.0
+        baseline_fun = np.asarray(residual_fn(x0), dtype=float)
+        return opt.OptimizeResult(
+            x=x,
+            # Report a successful low-cost candidate so final validation must
+            # classify the candidate instead of selecting the identity baseline.
+            fun=np.zeros_like(baseline_fun, dtype=float),
+            success=True,
+            status=1,
+            message="synthetic accepted candidate",
+            nfev=1,
+            active_mask=np.zeros_like(x, dtype=int),
+            optimality=0.0,
+        )
+
+    result = _fit_locked_qr_two_group_dynamic(
+        monkeypatch,
+        least_squares_impl=stale_authority_least_squares,
+        projector_shift_on_theta=True,
+    )
+
+    summary = result.point_match_summary
+    assert result.success is False
+    assert result.status == -15
+    assert "locked_qr_dynamic_authority_mismatch" in str(result.message)
+    assert summary["dynamic_angular_failure_classification"] == (
+        "locked_qr_dynamic_authority_mismatch"
+    )
+    assert summary["recommended_next_fix"] == "repair_locked_qr_dynamic_authority"
+    assert summary["recommended_next_fix"] != "remove_or_repick_manual_outliers"
+    assert summary["raw_angular_rms_deg"] > 10.0
+    assert summary["identity_baseline_selected"] is False
+    assert summary["identity_baseline_point_rms_deg"] < 5.0
+    assert summary["identity_baseline_point_max_deg"] < 5.0
+
+    rows_with_authority_diff = []
+    for row in summary["worst_angular_residual_rows"]:
+        preflight = row.get("preflight_predicted_caked_deg")
+        dynamic = row.get("dynamic_row_predicted_caked_deg")
+        if preflight is None or dynamic is None:
+            continue
+        if not np.allclose(preflight, dynamic, atol=1.0e-9, rtol=0.0):
+            rows_with_authority_diff.append(row)
+            assert row["preflight_observed_caked_deg"] == pytest.approx(
+                row["dynamic_row_observed_caked_deg"]
+            )
+            assert row["fit_prediction_is_dynamic"] == "yes"
+    assert rows_with_authority_diff
+
+    rejection_reasons = gui_geometry_fit.build_geometry_fit_rejection_reason_lines(
+        result,
+        rms=float(summary["raw_angular_rms_deg"]),
+    )
+    rejection_text = "\n".join(rejection_reasons)
+    assert "internal projection-frame error" in rejection_text
+    assert "manual_outliers_or_physical_bad_fit" not in rejection_text
+    assert "remove_or_repick_manual_outliers" not in rejection_text
+    assert "repick" not in rejection_text.lower()
 
 
 def test_locked_qr_within_acceptance_optimizer_failure_accepts_baseline(monkeypatch):
@@ -11179,6 +11331,41 @@ def test_dynamic_angular_classifies_locked_qr_authority_mismatch_as_internal() -
             ],
             "raw_angular_rms_deg": 81.0,
             "raw_angular_max_deg": 81.0,
+        }
+    )
+
+    assert classification["dynamic_angular_failure_classification"] == (
+        "locked_qr_dynamic_authority_mismatch"
+    )
+    assert classification["recommended_next_fix"] == "repair_locked_qr_dynamic_authority"
+
+
+def test_dynamic_angular_authority_mismatch_overrides_aligned_acceptance() -> None:
+    classification = opt._classify_dynamic_angular_failure(
+        {
+            "raw_angular_summary_matches_array_audit": True,
+            "objective_param_sensitivity_status": "sensitive",
+            "worst_angular_residual_rows": [
+                {
+                    "pair_id": "branch-0",
+                    "source_branch_index": 0,
+                    "source_authority_match": False,
+                    "visual_objective_surface_match": False,
+                    "qr_fit_contract_status": "fail",
+                    "angular_residual_norm_deg": 0.1,
+                }
+            ],
+            "angular_residual_by_dataset": [
+                {
+                    "dataset_index": 0,
+                    "raw_angular_row_count": 1,
+                    "raw_angular_rms_deg": 0.1,
+                }
+            ],
+            "raw_angular_row_count": 1,
+            "missing_pair_count": 0,
+            "raw_angular_rms_deg": 0.1,
+            "raw_angular_max_deg": 0.1,
         }
     )
 

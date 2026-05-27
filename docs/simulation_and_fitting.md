@@ -789,7 +789,7 @@ Kernel-side hard limits from [`ra_sim/simulation/diffraction.py`](../ra_sim/simu
 | `save_flag` | int | `0` | [`ra_sim/simulation/engine.py`](../ra_sim/simulation/engine.py) | Legacy flag propagated into the kernel. |
 | `record_status` | bool | `False` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Enables per-sample status diagnostics. |
 | `thickness` | m | `0.0` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Supplied in metres and converted to Å inside the diffraction kernel. A positive value is interpreted as an effective normal optical depth. `thickness = 0` disables explicit Beer-path attenuation. |
-| `optics_mode` | enum or `None` | `None` | [`ra_sim/simulation/engine.py`](../ra_sim/simulation/engine.py) | Exact-only. `None` and exact values resolve to `OPTICS_MODE_EXACT`; fast optics values are rejected. |
+| `optics_mode` | enum or `None` | `None` | [`ra_sim/simulation/engine.py`](../ra_sim/simulation/engine.py) | Exact-only. `None` and exact values resolve to `OPTICS_MODE_EXACT`; non-exact values are rejected. |
 | `collect_hit_tables` | bool | `True` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Enables per-reflection subpixel hit tables. |
 | `exit_projection_mode` | enum string | `"external"` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Detector geometry uses the outgoing air wavevector by default (`"external"`). `"refracted"` is accepted as a compatibility alias; `"internal"` remains available only as an explicit legacy/debug mode. |
 | `single_sample_indices` | integer array or `None` | `None` | [`ra_sim/simulation/types.py`](../ra_sim/simulation/types.py) | Forces selected beam samples per reflection. |
@@ -883,7 +883,7 @@ The compatibility constants remain distinct:
 - `OPTICS_MODE_EXACT = COMPLEX_K_DWBA_SLAB`
 
 `optics_mode` is exact-only. `None` and exact values resolve to
-`OPTICS_MODE_EXACT`. Fast optics values are rejected. The old Fresnel/CTR damping
+`OPTICS_MODE_EXACT`. Non-exact values are rejected. The old Fresnel/CTR damping
 approximation is disabled.
 
 The active optics calculation has three stages:
@@ -1541,11 +1541,11 @@ boundary and projects the propagating air wavevector to the detector. If
 `k_parallel > k0`, the exit wave is evanescent in air and the candidate is
 rejected.
 
-### Obsolete fast exit optics
+### Obsolete lookup-table exit optics
 
-The fast optics lookup table is disabled and no runtime code builds or queries
-it. Dead helper definitions may remain temporarily for compatibility cleanup,
-but the active simulation path always computes exact exit Fresnel transport.
+The old lookup table is disabled and no runtime code builds or queries it. Dead
+helper definitions may remain temporarily for compatibility cleanup, but the
+active simulation path always computes exact exit Fresnel transport.
 
 ### Why the detector projection default changed
 

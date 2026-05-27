@@ -585,6 +585,22 @@ def _summarize_dynamic_angular_residual_rows(
         delta_phi: float,
         angular_norm: float,
     ) -> Dict[str, object]:
+        pair_audit_observed = record.get(
+            "pair_audit_observed_caked_deg",
+            record.get("manual_qr_fit_target_caked_deg"),
+        )
+        pair_audit_predicted = record.get(
+            "pair_audit_predicted_caked_deg",
+            record.get("manual_qr_fit_source_caked_deg"),
+        )
+        dynamic_row_observed = record.get(
+            "dynamic_row_observed_caked_deg",
+            record.get("observed_caked_deg"),
+        )
+        dynamic_row_predicted = record.get(
+            "dynamic_row_predicted_caked_deg",
+            record.get("predicted_caked_deg"),
+        )
         return {
             "dataset_index": int(record["dataset_index"]),
             "dataset_label": str(record["dataset_label"]),
@@ -594,11 +610,31 @@ def _summarize_dynamic_angular_residual_rows(
             "branch": record.get(
                 "branch", record.get("branch_index", record.get("source_branch_index"))
             ),
+            "q_group_key": _dynamic_reanchor_jsonable(record.get("q_group_key")),
             "hkl": _dynamic_reanchor_jsonable(record.get("hkl")),
             "observed_caked_deg": _dynamic_reanchor_jsonable(record.get("observed_caked_deg")),
             "predicted_caked_deg": _dynamic_reanchor_jsonable(record.get("predicted_caked_deg")),
             "observed_caked_source_field": record.get("observed_caked_source_field"),
             "predicted_caked_source_field": record.get("predicted_caked_source_field"),
+            "pair_audit_observed_caked_deg": _dynamic_reanchor_jsonable(pair_audit_observed),
+            "pair_audit_predicted_caked_deg": _dynamic_reanchor_jsonable(pair_audit_predicted),
+            "pair_audit_observed_caked_source_field": record.get(
+                "pair_audit_observed_caked_source_field"
+            ),
+            "pair_audit_predicted_caked_source_field": record.get(
+                "pair_audit_predicted_caked_source_field"
+            ),
+            "dynamic_row_observed_caked_deg": _dynamic_reanchor_jsonable(dynamic_row_observed),
+            "dynamic_row_predicted_caked_deg": _dynamic_reanchor_jsonable(dynamic_row_predicted),
+            "dynamic_row_observed_caked_source_field": record.get(
+                "dynamic_row_observed_caked_source_field",
+                record.get("observed_caked_source_field"),
+            ),
+            "dynamic_row_predicted_caked_source_field": record.get(
+                "dynamic_row_predicted_caked_source_field",
+                record.get("predicted_caked_source_field"),
+            ),
+            "caked_coordinate_authority_label": record.get("caked_coordinate_authority_label"),
             "fit_prediction_is_dynamic": record.get("fit_prediction_is_dynamic"),
             "fit_prediction_source": record.get(
                 "fit_prediction_source",
@@ -630,6 +666,7 @@ def _summarize_dynamic_angular_residual_rows(
         "pair_index",
         "pair_id",
         "source_branch_index",
+        "q_group_key",
         "hkl",
         "handoff_audit_caked_residual_norm_deg",
         "acceptance_caked_residual_norm_deg",
@@ -639,6 +676,15 @@ def _summarize_dynamic_angular_residual_rows(
         "predicted_caked_deg",
         "observed_caked_source_field",
         "predicted_caked_source_field",
+        "pair_audit_observed_caked_deg",
+        "pair_audit_predicted_caked_deg",
+        "pair_audit_observed_caked_source_field",
+        "pair_audit_predicted_caked_source_field",
+        "dynamic_row_observed_caked_deg",
+        "dynamic_row_predicted_caked_deg",
+        "dynamic_row_observed_caked_source_field",
+        "dynamic_row_predicted_caked_source_field",
+        "caked_coordinate_authority_label",
         "fit_prediction_source",
         "prediction_role",
         "fit_prediction_is_dynamic",
@@ -912,6 +958,60 @@ def _summarize_dynamic_angular_residual_rows(
     }
 
 
+def _annotate_dynamic_angular_rows_with_preflight_authority(
+    rows: Sequence[Mapping[str, object]],
+    preflight_rows: Sequence[Mapping[str, object]],
+) -> List[Dict[str, object]]:
+    def _row_key(row: Mapping[str, object]) -> str:
+        return repr(
+            _dynamic_reanchor_jsonable(
+                (
+                    row.get("dataset_index"),
+                    row.get("dataset_label"),
+                    row.get("pair_id", row.get("manual_pair_id")),
+                    row.get(
+                        "source_branch_index",
+                        row.get("branch_index", row.get("branch")),
+                    ),
+                    row.get("q_group_key"),
+                    row.get("hkl"),
+                )
+            )
+        )
+
+    preflight_by_key = {
+        _row_key(row): row for row in preflight_rows or () if isinstance(row, Mapping)
+    }
+    annotated_rows: List[Dict[str, object]] = []
+    for row in rows or ():
+        if not isinstance(row, Mapping):
+            continue
+        annotated = dict(row)
+        annotated.setdefault(
+            "dynamic_row_observed_caked_deg",
+            _dynamic_reanchor_jsonable(annotated.get("observed_caked_deg")),
+        )
+        annotated.setdefault(
+            "dynamic_row_predicted_caked_deg",
+            _dynamic_reanchor_jsonable(annotated.get("predicted_caked_deg")),
+        )
+        preflight = preflight_by_key.get(_row_key(annotated))
+        if preflight is not None:
+            for target_key, source_key in (
+                ("preflight_observed_caked_deg", "observed_caked_deg"),
+                ("preflight_predicted_caked_deg", "predicted_caked_deg"),
+                ("preflight_observed_caked_source_field", "observed_caked_source_field"),
+                ("preflight_predicted_caked_source_field", "predicted_caked_source_field"),
+                ("preflight_fit_prediction_source", "fit_prediction_source"),
+                ("preflight_fit_prediction_is_dynamic", "fit_prediction_is_dynamic"),
+                ("preflight_prediction_role", "prediction_role"),
+            ):
+                if source_key in preflight:
+                    annotated[target_key] = _dynamic_reanchor_jsonable(preflight.get(source_key))
+        annotated_rows.append(annotated)
+    return annotated_rows
+
+
 def _dynamic_angular_candidate_source_row_key(row: Mapping[str, object]) -> str:
     return repr(
         _dynamic_reanchor_jsonable(
@@ -1099,6 +1199,26 @@ def _classify_dynamic_angular_failure(summary: Mapping[str, object]) -> Dict[str
             "dynamic_angular_failure_classification": "summary_mismatch",
             "recommended_next_fix": "recompute_summary_from_row_records",
         }
+    worst_rows = [
+        row
+        for row in (summary.get("worst_angular_residual_rows", ()) or ())
+        if isinstance(row, Mapping)
+    ]
+    if any(
+        str(row.get("qr_fit_contract_status", "") or "") == "fail"
+        or bool(row.get("detector_projection_used_for_objective", False))
+        or row.get("source_authority_match") is False
+        or bool(row.get("used_sim_nominal_caked_for_objective", False))
+        or str(row.get("fit_prediction_caked_authority", "") or "")
+        in {"sim_nominal_caked", "saved_handoff_caked", "unknown"}
+        or str(row.get("locked_qr_prediction_caked_authority_reason", "") or "")
+        == "locked_qr_prediction_caked_authority_mismatch"
+        for row in worst_rows
+    ):
+        return {
+            "dynamic_angular_failure_classification": "locked_qr_dynamic_authority_mismatch",
+            "recommended_next_fix": "repair_locked_qr_dynamic_authority",
+        }
     if _dynamic_angular_objective_already_aligned(summary):
         return {
             "dynamic_angular_failure_classification": "already_aligned",
@@ -1116,30 +1236,7 @@ def _classify_dynamic_angular_failure(summary: Mapping[str, object]) -> Dict[str
             "dynamic_angular_failure_classification": "objective_param_insensitive",
             "recommended_next_fix": "thread_trial_params_to_projector",
         }
-    worst_rows = [
-        row
-        for row in (summary.get("worst_angular_residual_rows", ()) or ())
-        if isinstance(row, Mapping)
-    ]
-    if any(
-        str(row.get("qr_fit_contract_status", "") or "") == "fail"
-        or bool(row.get("detector_projection_used_for_objective", False))
-        or row.get("source_authority_match") is False
-        or row.get("visual_objective_surface_match") is False
-        for row in worst_rows
-    ):
-        return {
-            "dynamic_angular_failure_classification": "locked_qr_dynamic_authority_mismatch",
-            "recommended_next_fix": "repair_locked_qr_dynamic_authority",
-        }
-    if any(
-        bool(row.get("used_sim_nominal_caked_for_objective", False))
-        or str(row.get("fit_prediction_caked_authority", "") or "")
-        in {"sim_nominal_caked", "saved_handoff_caked", "unknown"}
-        or str(row.get("locked_qr_prediction_caked_authority_reason", "") or "")
-        == "locked_qr_prediction_caked_authority_mismatch"
-        for row in worst_rows
-    ):
+    if any(row.get("visual_objective_surface_match") is False for row in worst_rows):
         return {
             "dynamic_angular_failure_classification": "locked_qr_dynamic_authority_mismatch",
             "recommended_next_fix": "repair_locked_qr_dynamic_authority",
@@ -7731,6 +7828,21 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                 "observed_caked_source": measured_fit_space_source,
                 "predicted_caked_source_field": "sim_refined_caked_deg",
                 "predicted_caked_source": fit_prediction.get("sim_refined_caked_authority"),
+                "pair_audit_observed_caked_deg": [
+                    float(qr_fit_target_caked_deg[0]),
+                    float(qr_fit_target_caked_deg[1]),
+                ],
+                "pair_audit_predicted_caked_deg": [
+                    float(qr_fit_source_caked_deg[0]),
+                    float(qr_fit_source_caked_deg[1]),
+                ],
+                "pair_audit_observed_caked_source_field": "manual_qr_fit_target_caked_deg",
+                "pair_audit_predicted_caked_source_field": "manual_qr_fit_source_caked_deg",
+                "dynamic_row_observed_caked_deg": list(manual_target_caked_deg),
+                "dynamic_row_predicted_caked_deg": list(objective_sim_caked_deg),
+                "dynamic_row_observed_caked_source_field": str(measured_reason),
+                "dynamic_row_predicted_caked_source_field": "sim_refined_caked_deg",
+                "caked_coordinate_authority_label": "dynamic_acceptance_row",
                 "fit_prediction_caked_authority": fit_prediction.get(
                     "fit_prediction_caked_authority"
                 ),
@@ -37326,6 +37438,30 @@ def fit_geometry_parameters(
                         )
                 if locked_qr_identity_baseline_payload:
                     point_match_summary.update(copy.deepcopy(locked_qr_identity_baseline_payload))
+                    identity_baseline_rows = [
+                        row
+                        for row in (
+                            locked_qr_identity_baseline_payload.get(
+                                "identity_baseline_rows",
+                                (),
+                            )
+                            or ()
+                        )
+                        if isinstance(row, Mapping)
+                    ]
+                    for row_list_key in (
+                        "worst_angular_residual_rows",
+                        "caked_acceptance_metric_trace_rows",
+                        "caked_acceptance_metric_inconsistent_rows",
+                    ):
+                        row_list = point_match_summary.get(row_list_key)
+                        if isinstance(row_list, (list, tuple)):
+                            point_match_summary[row_list_key] = (
+                                _annotate_dynamic_angular_rows_with_preflight_authority(
+                                    row_list,
+                                    identity_baseline_rows,
+                                )
+                            )
                     point_match_summary["identity_baseline_selected"] = bool(
                         getattr(result, "identity_baseline_selected", False)
                     )
@@ -37334,7 +37470,14 @@ def fit_geometry_parameters(
                     )
                 point_match_summary.update(sensitivity_summary)
                 point_match_summary.update(_classify_dynamic_angular_failure(point_match_summary))
-                if (
+                dynamic_failure_classification = str(
+                    point_match_summary.get("dynamic_angular_failure_classification", "") or ""
+                )
+                if dynamic_failure_classification == "locked_qr_dynamic_authority_mismatch":
+                    result.success = False
+                    result.status = -15
+                    result.message = "locked_qr_dynamic_authority_mismatch"
+                elif (
                     point_match_summary.get("objective_param_sensitivity_status")
                     == "all_fit_vars_insensitive"
                 ):
@@ -38071,6 +38214,48 @@ def fit_geometry_parameters(
                         branch_swap=bool(row.get("branch_swap_would_help", False)),
                     )
                 )
+                if any(
+                    key in row
+                    for key in (
+                        "preflight_observed_caked_deg",
+                        "preflight_predicted_caked_deg",
+                        "pair_audit_observed_caked_deg",
+                        "pair_audit_predicted_caked_deg",
+                        "dynamic_row_observed_caked_deg",
+                        "dynamic_row_predicted_caked_deg",
+                    )
+                ):
+                    _emit_status(
+                        "rank={rank} caked authority fields: "
+                        "preflight_observed={preflight_observed} "
+                        "preflight_predicted={preflight_predicted} "
+                        "pair_audit_observed={pair_audit_observed} "
+                        "pair_audit_predicted={pair_audit_predicted} "
+                        "dynamic_observed={dynamic_observed} "
+                        "dynamic_predicted={dynamic_predicted} "
+                        "dynamic_observed_source={dynamic_observed_source} "
+                        "dynamic_predicted_source={dynamic_predicted_source} "
+                        "preflight_prediction_role={preflight_prediction_role} "
+                        "dynamic_prediction_role={dynamic_prediction_role}".format(
+                            rank=int(rank),
+                            preflight_observed=row.get("preflight_observed_caked_deg"),
+                            preflight_predicted=row.get("preflight_predicted_caked_deg"),
+                            pair_audit_observed=row.get("pair_audit_observed_caked_deg"),
+                            pair_audit_predicted=row.get("pair_audit_predicted_caked_deg"),
+                            dynamic_observed=row.get("dynamic_row_observed_caked_deg"),
+                            dynamic_predicted=row.get("dynamic_row_predicted_caked_deg"),
+                            dynamic_observed_source=row.get(
+                                "dynamic_row_observed_caked_source_field",
+                                row.get("observed_caked_source_field"),
+                            ),
+                            dynamic_predicted_source=row.get(
+                                "dynamic_row_predicted_caked_source_field",
+                                row.get("predicted_caked_source_field"),
+                            ),
+                            preflight_prediction_role=row.get("preflight_prediction_role"),
+                            dynamic_prediction_role=row.get("prediction_role"),
+                        )
+                    )
 
     return result
 

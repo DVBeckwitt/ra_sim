@@ -6,7 +6,7 @@
   - Set the active development version to `1.0.0.dev0`, documented the 1.0 release sequence, and surfaced the resolved package version in the simulation GUI title and Help tab.
 
 - **Simulation performance**
-  - Made exact complex-`k` slab optics the default for new GUI, CLI, and headless simulation runs while preserving explicit fast-mode selections.
+  - Made exact complex-`k` slab optics the supported path for new GUI, CLI, and headless simulation runs; non-exact optics selections are rejected before simulation or fitting work starts.
   - Fixed exact external exit projection so non-propagating air exits are rejected when `k_parallel > k0`, and changed zero sample thickness to disable explicit Beer-path attenuation instead of applying hidden evanescent penetration-depth factors.
   - Added a Numba compatibility layer so simulation modules can import with Python fallbacks when Numba itself is unavailable or fails during import.
   - Clarified optional exact-cake Numba warmup failures so startup logs explain that exact-cake will use the Python fallback, including the reported `'Loc' object does not support the context manager protocol` compiler signature.
@@ -62,6 +62,7 @@
   - Fixed detector-mode locked Qr/Qz geometry-fit preflight so selected detector rows generate exact caked projected rows for the worker locked-Qr readiness gate once a projection payload exists, without promoting detector fit-space or caked-objective flags; current saved manual pairs still replace unmatched stale live-preview source rows during fit job build.
   - Made locked Qr/Qz exact-caked projection readiness report source-row and projected-row identity separately, so caked view storage timeouts no longer appear as opaque zero-row projection failures when projected rows are present.
   - Fixed locked Qr/Qz projection-readiness failure details so nonfinite failures label nonfinite row keys, missing failures label missing row keys, and mixed failures preserve both sections.
+  - Fixed locked Qr/Qz dynamic-authority diagnostics so explicit source or caked-coordinate authority drift propagates through the GUI-consumed fit result with row-level preflight, pair-audit, and final dynamic caked-coordinate details instead of falling back to manual-outlier repick guidance.
   - Raised the default background max-intensity estimate for sparse bright peaks by using a higher robust percentile while keeping slider ceilings tied to the true finite image range.
   - Added Advanced/Debug GUI toggles to compare primary integer-Bragg peaks against Hendricks-Teller rods and to disable refraction effects by forcing vacuum `n2` with optics-cache invalidation.
 

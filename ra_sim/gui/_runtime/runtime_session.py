@@ -45997,51 +45997,64 @@ def _run_async_geometry_fit_worker_job(
                     locked_qr_readiness.get("fit_space_projection_ready", False)
                 )
 
-            def _locked_qr_projection_row_keys(
+            def _locked_qr_projection_list_row_keys(
                 readiness: Mapping[str, object],
-                *,
-                fallback_to_all: bool = False,
+                key_name: str,
             ) -> list[dict[str, object]]:
-                missing_keys = [
+                return [
                     dict(entry)
-                    for entry in readiness.get("missing_locked_qr_row_keys") or ()
+                    for entry in readiness.get(key_name) or ()
                     if isinstance(entry, Mapping)
                 ]
-                nonfinite_keys = [
-                    dict(entry)
-                    for entry in readiness.get("nonfinite_locked_qr_row_keys") or ()
-                    if isinstance(entry, Mapping)
-                ]
-                if fallback_to_all:
-                    issue_keys = [*missing_keys, *nonfinite_keys]
-                    if issue_keys:
-                        return issue_keys
-                    return [
-                        dict(entry)
-                        for entry in readiness.get("locked_qr_row_keys") or ()
-                        if isinstance(entry, Mapping)
-                    ]
+
+            def _locked_qr_projection_is_nonfinite_failure(
+                readiness: Mapping[str, object],
+            ) -> bool:
                 reason = str(readiness.get("failure_reason") or "").strip().lower()
-                normalized_reason = reason.replace("-", "_")
-                if normalized_reason in {
+                return reason.replace("-", "_") in {
                     "nonfinite",
                     "non_finite",
                     "locked_qr_fit_space_projection_nonfinite",
                     "locked_qr_fit_space_projection_non_finite",
-                }:
+                }
+
+            def _locked_qr_projection_issue_row_keys(
+                readiness: Mapping[str, object],
+            ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+                return (
+                    _locked_qr_projection_list_row_keys(
+                        readiness,
+                        "missing_locked_qr_row_keys",
+                    ),
+                    _locked_qr_projection_list_row_keys(
+                        readiness,
+                        "nonfinite_locked_qr_row_keys",
+                    ),
+                )
+
+            def _locked_qr_projection_primary_row_keys(
+                readiness: Mapping[str, object],
+            ) -> list[dict[str, object]]:
+                missing_keys, nonfinite_keys = _locked_qr_projection_issue_row_keys(readiness)
+                if _locked_qr_projection_is_nonfinite_failure(readiness):
                     return nonfinite_keys or missing_keys
                 return missing_keys or nonfinite_keys
 
+            def _locked_qr_projection_summary_row_keys(
+                readiness: Mapping[str, object],
+            ) -> list[dict[str, object]]:
+                missing_keys, nonfinite_keys = _locked_qr_projection_issue_row_keys(readiness)
+                issue_keys = [*missing_keys, *nonfinite_keys]
+                if issue_keys:
+                    return issue_keys
+                return _locked_qr_projection_list_row_keys(readiness, "locked_qr_row_keys")
+
             def _locked_qr_projection_row_key_text(
-                readiness: Mapping[str, object] | None = None,
-                *,
-                row_keys: Sequence[Mapping[str, object]] | None = None,
+                row_keys: Sequence[Mapping[str, object]],
             ) -> str:
-                resolved_row_keys = (
-                    [dict(entry) for entry in row_keys if isinstance(entry, Mapping)]
-                    if row_keys is not None
-                    else _locked_qr_projection_row_keys(readiness or {})
-                )
+                resolved_row_keys = [
+                    dict(entry) for entry in row_keys if isinstance(entry, Mapping)
+                ]
                 if not resolved_row_keys:
                     return "none"
                 labels: list[str] = []
@@ -46062,24 +46075,8 @@ def _run_async_geometry_fit_worker_job(
             def _locked_qr_projection_row_key_sections(
                 readiness: Mapping[str, object],
             ) -> str:
-                missing_keys = [
-                    dict(entry)
-                    for entry in readiness.get("missing_locked_qr_row_keys") or ()
-                    if isinstance(entry, Mapping)
-                ]
-                nonfinite_keys = [
-                    dict(entry)
-                    for entry in readiness.get("nonfinite_locked_qr_row_keys") or ()
-                    if isinstance(entry, Mapping)
-                ]
-                reason = str(readiness.get("failure_reason") or "").strip().lower()
-                normalized_reason = reason.replace("-", "_")
-                nonfinite_failure = normalized_reason in {
-                    "nonfinite",
-                    "non_finite",
-                    "locked_qr_fit_space_projection_nonfinite",
-                    "locked_qr_fit_space_projection_non_finite",
-                }
+                missing_keys, nonfinite_keys = _locked_qr_projection_issue_row_keys(readiness)
+                nonfinite_failure = _locked_qr_projection_is_nonfinite_failure(readiness)
                 if nonfinite_failure:
                     sections = [
                         ("Nonfinite row keys", nonfinite_keys),
@@ -46091,20 +46088,21 @@ def _run_async_geometry_fit_worker_job(
                         ("Nonfinite row keys", nonfinite_keys),
                     ]
                 labeled_sections = [
-                    f"{label}: {_locked_qr_projection_row_key_text(row_keys=row_keys)}."
+                    f"{label}: {_locked_qr_projection_row_key_text(row_keys)}."
                     for label, row_keys in sections
                     if row_keys
                 ]
                 if labeled_sections:
                     return " ".join(labeled_sections)
                 fallback_label = "Nonfinite row keys" if nonfinite_failure else "Missing row keys"
-                return f"{fallback_label}: {_locked_qr_projection_row_key_text(readiness)}."
+                fallback_keys = _locked_qr_projection_primary_row_keys(readiness)
+                return f"{fallback_label}: {_locked_qr_projection_row_key_text(fallback_keys)}."
 
             def _locked_qr_projection_yes_no_partial(
                 readiness: Mapping[str, object],
                 key_name: str,
             ) -> str:
-                row_keys = _locked_qr_projection_row_keys(readiness, fallback_to_all=True)
+                row_keys = _locked_qr_projection_summary_row_keys(readiness)
                 if not row_keys:
                     return "unknown"
                 values = [bool(entry.get(key_name, False)) for entry in row_keys]

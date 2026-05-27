@@ -5,10 +5,39 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-05-26
+Last updated: 2026-05-27
 
 ## Current status
 
+- 2026-05-27 exact-only locked Qr/Qz readiness/dynamic-authority closeout:
+  non-exact optics modes are no longer a supported path, so do not run or
+  request any cross-mode optics comparison for this investigation. Run the
+  exact-only GUI sequence. If exact readiness passes, proceed to the dynamic
+  authority mismatch. If exact readiness fails, classify
+  missing/nonfinite/storage using row-key diagnostics. The current exact-only
+  reference has
+  `expected_rows=2`, `projected_rows=2`, `finite_rows=2`,
+  `projection_ready=true`, `storage_required_for_fit=false`,
+  `storage_timeout_fatal=false`, and `optics=exact`, so readiness is considered
+  passed for this failure path unless a future exact-only run fails readiness.
+  The fit-level regression now proves `fit_geometry_parameters()` carries
+  `locked_qr_dynamic_authority_mismatch` through the GUI-consumed
+  `OptimizeResult` with `success=False`, `status=-15`, row-level preflight,
+  pair-audit, and final dynamic caked-coordinate authority diagnostics, and GUI
+  rejection text that does not imply bad manual picks or recommend repicking.
+  Bug/error status: fixed in source and targeted regression coverage for the
+  readiness diagnostic and dynamic-authority propagation layers. Feature/API
+  status: no GUI control, CLI flag, config key, saved-state field, artifact
+  schema, dependency, CI workflow, version bump, ADR, deprecation, or migration.
+  Validation status: focused authority/dynamic/caked tests passed, locked-Qr
+  readiness tests passed, runtime import-safe tests passed, `python -m
+  ra_sim.dev check` passed, and `git diff --check` passed with line-ending
+  warnings only. Shipping status: commit-ready as a bug-fix diagnostic slice
+  with rollback by git revert. Remaining operator proof before closing the live
+  investigation: rerun the exact Tk GUI workflow once and require either a real
+  dynamic fit, `manual_qr_dynamic_prediction_unavailable`,
+  `objective_insensitive_to_active_params`, or
+  `locked_qr_dynamic_authority_mismatch` with row-level authority diff.
 - 2026-05-26 caked acceptance metric-source fix completed. The reported manual
   run shape is now pinned by regression coverage: pair-audit branch residuals
   of about `1.70 deg` and `0.75 deg` no longer allow stale final caked delta

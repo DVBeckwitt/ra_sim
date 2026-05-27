@@ -92,9 +92,9 @@ def test_simulate_diffraction_reuses_supplied_profile_samples(monkeypatch):
     np.testing.assert_allclose(seen["n2_sample_array_override"], expected_n2)
 
 
-def test_simulate_diffraction_rejects_explicit_fast_optics_mode(monkeypatch):
+def test_simulate_diffraction_rejects_explicit_non_exact_optics_mode(monkeypatch):
     def fake_process_peaks_parallel_safe(*args, **kwargs):
-        raise AssertionError("fast optics should fail before the diffraction runner")
+        raise AssertionError("non-exact optics should fail before the diffraction runner")
 
     monkeypatch.setattr(
         sim_mod,

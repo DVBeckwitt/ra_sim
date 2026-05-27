@@ -155,12 +155,12 @@ def test_simulate_defaults_to_exact_optics_when_request_omits_mode() -> None:
     assert seen["optics_mode"] == diffraction.OPTICS_MODE_EXACT
 
 
-def test_simulate_rejects_explicit_fast_optics_mode() -> None:
+def test_simulate_rejects_explicit_non_exact_optics_mode() -> None:
     request = _build_request()
     request.optics_mode = diffraction.OPTICS_MODE_FAST
 
     def fake_runner(*args, **kwargs):
-        raise AssertionError("fast optics should fail before the peak runner")
+        raise AssertionError("non-exact optics should fail before the peak runner")
 
     with pytest.raises(diffraction.FastOpticsDisabledError):
         simulate(request, peak_runner=fake_runner)
@@ -1209,13 +1209,13 @@ def test_simulate_qr_rods_defaults_to_exact_optics_when_request_omits_mode() -> 
     assert seen["optics_mode"] == diffraction.OPTICS_MODE_EXACT
 
 
-def test_simulate_qr_rods_rejects_explicit_fast_optics_mode() -> None:
+def test_simulate_qr_rods_rejects_explicit_non_exact_optics_mode() -> None:
     request = _build_request()
     request.optics_mode = diffraction.OPTICS_MODE_FAST
     qr_dict = {1: {"hk": (1, 0), "L": np.array([0.0]), "I": np.array([1.0]), "deg": 1}}
 
     def fake_runner(*args, **kwargs):
-        raise AssertionError("fast optics should fail before the rod runner")
+        raise AssertionError("non-exact optics should fail before the rod runner")
 
     with pytest.raises(diffraction.FastOpticsDisabledError):
         simulate_qr_rods(qr_dict, request, peak_runner=fake_runner)

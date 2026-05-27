@@ -9,6 +9,36 @@ Last updated: 2026-05-27
 
 ## Summary
 
+2026-05-27 exact-only locked Qr/Qz readiness gate update: non-exact optics
+modes are no longer supported for the fitter path, so the remaining operator
+proof is exact-only. Run the exact-only GUI sequence. If exact readiness
+passes, proceed to the dynamic authority mismatch. If exact readiness fails,
+classify missing/nonfinite/storage using row-key diagnostics. The latest
+exact-only manual run is the current reference for this failure path:
+`expected_rows=2`, `projected_rows=2`, `finite_rows=2`,
+`projection_ready=true`, `storage_required_for_fit=false`,
+`storage_timeout_fatal=false`, and `optics=exact`; readiness is considered
+passed for this path unless a future exact-only run fails readiness. Runtime
+behavior, optics defaults, optimizer behavior, QR handoff precedence, caked
+route selection, overlay drawing, acceptance metrics, solver logic, and
+gamma/Gamma logic remain unchanged.
+
+2026-05-27 locked Qr/Qz dynamic-authority integration closeout: final dynamic
+acceptance now fails closed as `locked_qr_dynamic_authority_mismatch` when
+explicit source or caked-coordinate authority drift is present, and the
+GUI-consumed `fit_geometry_parameters()` result preserves `success=False`,
+`status=-15`, and the mismatch message. Row-level diagnostics carry preflight,
+pair-audit, and final dynamic caked-coordinate fields through the point-match
+summary and rejection text, so hidden large caked RMS values no longer fall
+back to `manual_outliers_or_physical_bad_fit` or manual repick guidance.
+Bug/error status: fixed in source and covered by fit-level regression.
+Feature, migration, deprecation, API, solver, optimizer, route-selection,
+overlay, acceptance-metric, optics-default, gamma/Gamma, CI workflow, version,
+and dependency status: unchanged. Shipping status: targeted geometry
+authority/dynamic/caked tests, locked-Qr readiness tests, runtime import-safe
+tests, `python -m ra_sim.dev check`, and `git diff --check` pass; the remaining
+operator proof is one exact-only GUI sequence.
+
 2026-05-27 locked Qr/Qz projection-readiness diagnostics fix: the worker now
 passes stored source rows into the locked-Qr exact-caked readiness gate so
 preflight can distinguish source-cache loss from projected-row loss. Missing
