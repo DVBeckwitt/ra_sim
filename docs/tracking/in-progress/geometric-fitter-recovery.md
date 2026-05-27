@@ -9,6 +9,24 @@ Last updated: 2026-05-27
 
 ## Summary
 
+2026-05-27 phase 10 remaining runtime fake-var closeout:
+all remaining local `_Var` helpers in `tests/test_gui_runtime_import_safe.py`
+were audited against `RuntimeVar`; none are exact constructor + `get()` +
+`set()` duplicates. They remain local because they intentionally cover
+constant-return values, direct `.value` mutation, or get-only profile/peak-fit
+test doubles. Bug/error/feature status: no runtime behavior defect or feature
+change; maintenance closeout only. UI/API/interface status: no GUI control,
+frontend state contract, public API, CLI flag, config key, saved-state schema,
+artifact schema, dependency, or public interface changed. CI/deprecation/
+migration status: no CI workflow, migration path, deprecation notice,
+compatibility shim, release/version change, new file, or new abstraction
+required. Review status: no correctness, bloat, security, performance,
+test-quality, new-file, or abstraction blockers were found. Shipping status:
+no rollout, feature flag, migration, or release bump is required; rollback is
+a normal git revert of the Phase 10 docs commit. Validation status:
+`python -m pytest tests/test_gui_runtime_import_safe.py -ra` and
+`python -m ra_sim.dev check` pass locally.
+
 2026-05-27 phase 9 state/runtime test-helper simplification:
 `tests/test_gui_state_io.py` now reuses the shared `RuntimeVar` test fake
 instead of carrying four equivalent local `_FakeTkVar` classes, and the
