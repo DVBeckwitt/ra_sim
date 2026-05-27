@@ -23,8 +23,8 @@ new file, or new abstraction required. Review status: no correctness, bloat,
 security, performance, test-quality, new-file, or abstraction blockers were
 found. Shipping status: `python -m pytest
 tests/test_gui_structure_factor_pruning.py -ra`, `python -m ra_sim.dev check`,
-and `git diff --check` pass locally. Rollback is a normal git revert of the
-test/doc cleanup.
+and `git diff --check` pass locally; cleanup committed as `45b8b0b7`.
+Rollback is a normal git revert of the test/doc cleanup.
 
 2026-05-27 phase 5 GUI signature test-helper simplification:
 `tests/test_gui_sim_signature.py` now reuses the shared `RuntimeVar` test fake
