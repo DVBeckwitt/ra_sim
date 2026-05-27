@@ -3072,6 +3072,81 @@ def _background_subtraction_phi_block_overrides_from_args(
     return overrides
 
 
+_LEGACY_BACKGROUND_SUBTRACTION_CHOICES = (
+    "saved",
+    "off",
+    "radial",
+    "radial-plus-caked-2d",
+    "radial-plus-phi-blocks",
+    "radial-plus-phi-blocks-plus-caked-2d",
+)
+
+
+def _add_legacy_background_subtraction_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--background-subtraction",
+        choices=_LEGACY_BACKGROUND_SUBTRACTION_CHOICES,
+        default="saved",
+        help="Legacy no-op background-subtraction override; accepted for compatibility.",
+    )
+    parser.add_argument(
+        "--background-subtraction-scale",
+        type=float,
+        default=None,
+        help="Legacy no-op diffuse-background scale override.",
+    )
+    parser.add_argument(
+        "--background-subtraction-diagnostics",
+        action="store_true",
+        default=None,
+        help="Legacy no-op diagnostics flag; no artifacts are written.",
+    )
+    parser.add_argument(
+        "--background-phi-block-theta-bin-width-deg",
+        type=float,
+        default=None,
+        help="Legacy no-op phi-block 2theta bin width override.",
+    )
+    parser.add_argument(
+        "--background-phi-block-phi-bin-width-deg",
+        type=float,
+        default=None,
+        help="Legacy no-op phi-block phi bin width override.",
+    )
+    parser.add_argument(
+        "--background-phi-block-quantile",
+        type=float,
+        default=None,
+        help="Legacy no-op phi-block quantile override.",
+    )
+    parser.add_argument(
+        "--background-phi-block-scale",
+        type=float,
+        default=None,
+        help="Legacy no-op phi-block component scale.",
+    )
+    parser.add_argument(
+        "--background-phi-block-interpolation",
+        choices=("nearest", "linear"),
+        default=None,
+        help="Legacy no-op phi-block upsampling interpolation.",
+    )
+    parser.add_argument(
+        "--background-phi-block-preserve-block-edges",
+        dest="background_phi_block_preserve_block_edges",
+        action="store_true",
+        default=None,
+        help="Legacy no-op nearest-neighbor phi-block upsampling flag.",
+    )
+    parser.add_argument(
+        "--background-no-phi-block-preserve-block-edges",
+        dest="background_phi_block_preserve_block_edges",
+        action="store_false",
+        default=None,
+        help="Legacy no-op linear phi-block upsampling flag.",
+    )
+
+
 def _cmd_fit_geometry(args: argparse.Namespace) -> None:
     """Run geometry fitting from a saved GUI state without launching the GUI."""
 
@@ -3142,9 +3217,7 @@ def _cmd_fit_geometry(args: argparse.Namespace) -> None:
     except Exception as exc:
         if getattr(args, "apply_sweep_result", None) is not None:
             raise SystemExit(
-                "Geometry fit was not applied.\n"
-                f"Reason: {exc}\n"
-                "Geometry was left unchanged."
+                f"Geometry fit was not applied.\nReason: {exc}\nGeometry was left unchanged."
             ) from exc
         raise SystemExit(str(exc)) from exc
 
@@ -3353,75 +3426,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Inner weighted-event worker count for headless geometry fitting.",
     )
-    fit_geometry_parser.add_argument(
-        "--background-subtraction",
-        choices=(
-            "saved",
-            "off",
-            "radial",
-            "radial-plus-caked-2d",
-            "radial-plus-phi-blocks",
-            "radial-plus-phi-blocks-plus-caked-2d",
-        ),
-        default="saved",
-        help="Legacy no-op background-subtraction override; accepted for compatibility.",
-    )
-    fit_geometry_parser.add_argument(
-        "--background-subtraction-scale",
-        type=float,
-        default=None,
-        help="Legacy no-op diffuse-background scale override.",
-    )
-    fit_geometry_parser.add_argument(
-        "--background-subtraction-diagnostics",
-        action="store_true",
-        default=None,
-        help="Legacy no-op diagnostics flag; no artifacts are written.",
-    )
-    fit_geometry_parser.add_argument(
-        "--background-phi-block-theta-bin-width-deg",
-        type=float,
-        default=None,
-        help="Legacy no-op phi-block 2theta bin width override.",
-    )
-    fit_geometry_parser.add_argument(
-        "--background-phi-block-phi-bin-width-deg",
-        type=float,
-        default=None,
-        help="Legacy no-op phi-block phi bin width override.",
-    )
-    fit_geometry_parser.add_argument(
-        "--background-phi-block-quantile",
-        type=float,
-        default=None,
-        help="Legacy no-op phi-block quantile override.",
-    )
-    fit_geometry_parser.add_argument(
-        "--background-phi-block-scale",
-        type=float,
-        default=None,
-        help="Legacy no-op phi-block component scale.",
-    )
-    fit_geometry_parser.add_argument(
-        "--background-phi-block-interpolation",
-        choices=("nearest", "linear"),
-        default=None,
-        help="Legacy no-op phi-block upsampling interpolation.",
-    )
-    fit_geometry_parser.add_argument(
-        "--background-phi-block-preserve-block-edges",
-        dest="background_phi_block_preserve_block_edges",
-        action="store_true",
-        default=None,
-        help="Legacy no-op nearest-neighbor phi-block upsampling flag.",
-    )
-    fit_geometry_parser.add_argument(
-        "--background-no-phi-block-preserve-block-edges",
-        dest="background_phi_block_preserve_block_edges",
-        action="store_false",
-        default=None,
-        help="Legacy no-op linear phi-block upsampling flag.",
-    )
+    _add_legacy_background_subtraction_args(fit_geometry_parser)
     fit_geometry_parser.set_defaults(func=_cmd_fit_geometry)
 
     fit_geometry_correlation_parser = subparsers.add_parser(
@@ -3486,75 +3491,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Overwrite the input GUI state instead of writing a new file.",
     )
-    fit_mosaic_shape_parser.add_argument(
-        "--background-subtraction",
-        choices=(
-            "saved",
-            "off",
-            "radial",
-            "radial-plus-caked-2d",
-            "radial-plus-phi-blocks",
-            "radial-plus-phi-blocks-plus-caked-2d",
-        ),
-        default="saved",
-        help="Legacy no-op background-subtraction override; accepted for compatibility.",
-    )
-    fit_mosaic_shape_parser.add_argument(
-        "--background-subtraction-scale",
-        type=float,
-        default=None,
-        help="Legacy no-op diffuse-background scale override.",
-    )
-    fit_mosaic_shape_parser.add_argument(
-        "--background-subtraction-diagnostics",
-        action="store_true",
-        default=None,
-        help="Legacy no-op diagnostics flag; no artifacts are written.",
-    )
-    fit_mosaic_shape_parser.add_argument(
-        "--background-phi-block-theta-bin-width-deg",
-        type=float,
-        default=None,
-        help="Legacy no-op phi-block 2theta bin width override.",
-    )
-    fit_mosaic_shape_parser.add_argument(
-        "--background-phi-block-phi-bin-width-deg",
-        type=float,
-        default=None,
-        help="Legacy no-op phi-block phi bin width override.",
-    )
-    fit_mosaic_shape_parser.add_argument(
-        "--background-phi-block-quantile",
-        type=float,
-        default=None,
-        help="Legacy no-op phi-block quantile override.",
-    )
-    fit_mosaic_shape_parser.add_argument(
-        "--background-phi-block-scale",
-        type=float,
-        default=None,
-        help="Legacy no-op phi-block component scale.",
-    )
-    fit_mosaic_shape_parser.add_argument(
-        "--background-phi-block-interpolation",
-        choices=("nearest", "linear"),
-        default=None,
-        help="Legacy no-op phi-block upsampling interpolation.",
-    )
-    fit_mosaic_shape_parser.add_argument(
-        "--background-phi-block-preserve-block-edges",
-        dest="background_phi_block_preserve_block_edges",
-        action="store_true",
-        default=None,
-        help="Legacy no-op nearest-neighbor phi-block upsampling flag.",
-    )
-    fit_mosaic_shape_parser.add_argument(
-        "--background-no-phi-block-preserve-block-edges",
-        dest="background_phi_block_preserve_block_edges",
-        action="store_false",
-        default=None,
-        help="Legacy no-op linear phi-block upsampling flag.",
-    )
+    _add_legacy_background_subtraction_args(fit_mosaic_shape_parser)
     fit_mosaic_shape_parser.set_defaults(func=_cmd_fit_mosaic_shape)
 
     hbn_parser = subparsers.add_parser(

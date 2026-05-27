@@ -69,6 +69,20 @@ def _fake_process_peaks(*args, **kwargs):
     return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
 
 
+def _fake_least_squares_result(residual_fn, x0):
+    x = np.asarray(x0, dtype=float)
+    return opt.OptimizeResult(
+        x=x,
+        fun=np.asarray(residual_fn(x), dtype=float),
+        success=True,
+        status=1,
+        message="ok",
+        nfev=1,
+        active_mask=np.zeros_like(x, dtype=int),
+        optimality=0.0,
+    )
+
+
 def test_initial_pair_construction_audit_flags_provider_overwrite_and_bad_native() -> None:
     audit = gui_geometry_fit._geometry_fit_initial_pair_construction_audit(
         pair_id="pair-0",
@@ -3248,17 +3262,7 @@ def test_fit_geometry_parameters_pixel_path_uses_central_geometry_ray(monkeypatc
         return _fake_process_peaks(*args, **kwargs)
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
@@ -3596,17 +3600,7 @@ def test_fit_geometry_parameters_pixel_path_restricts_simulation_to_selected_ref
         return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
@@ -4102,17 +4096,7 @@ def test_fit_geometry_parameters_manual_point_fit_with_cached_sources_defaults_t
         return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
@@ -6324,17 +6308,7 @@ def test_dynamic_point_match_summary_merges_row_records_across_datasets(
         )
 
     def fake_least_squares(residual_fn, x0, **_kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
@@ -7816,17 +7790,7 @@ def _fit_locked_qr_two_group_dynamic(
 
 def test_locked_qr_two_group_identity_baseline_recorded_before_optimizer(monkeypatch):
     def fake_least_squares(residual_fn, x0, **_kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     result = _fit_locked_qr_two_group_dynamic(
         monkeypatch,
@@ -8712,17 +8676,7 @@ def test_fit_geometry_parameters_point_only_caked_objective_skips_locked_refinem
         )
 
     def fake_least_squares(residual_fn, x0, **_kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     def source_rows_builder(*, local_params=None):
         two_theta, phi = _point_only_source_from_params(local_params)
@@ -8812,17 +8766,7 @@ def test_fit_geometry_parameters_live_caked_objective_skips_locked_refinement_pr
         )
 
     def fake_least_squares(residual_fn, x0, **_kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     def source_rows_builder(*, local_params=None):
         theta_initial = (
@@ -8899,17 +8843,7 @@ def test_fit_geometry_parameters_already_aligned_live_caked_objective_can_be_ins
         )
 
     def fake_least_squares(residual_fn, x0, **_kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     def source_rows_builder(*, local_params=None):
         del local_params
@@ -8985,17 +8919,7 @@ def test_fit_geometry_parameters_acceptable_live_caked_objective_can_be_insensit
         )
 
     def fake_least_squares(residual_fn, x0, **_kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     def source_rows_builder(*, local_params=None):
         del local_params
@@ -9369,17 +9293,7 @@ def _dynamic_point_only_fit_result_for_metric_tests(
         )
 
     def fake_least_squares(residual_fn, x0, **_kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     def source_rows_builder(*, local_params=None):
         two_theta, phi = _point_only_source_from_params(local_params)
@@ -9477,17 +9391,7 @@ def _dynamic_point_only_sensitivity_result(
         )
 
     def fake_least_squares(residual_fn, x0, **_kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     def predicted_from_params(local_params: Mapping[str, object] | None) -> tuple[float, float]:
         params = local_params if isinstance(local_params, Mapping) else {}
@@ -9849,17 +9753,7 @@ def test_same_hkl_two_branch_detector_origin_locked_qr_fit_uses_two_pairs(
         )
 
     def fake_least_squares(residual_fn, x0, **_kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     live_pairs = [
         {
@@ -10539,17 +10433,7 @@ def test_locked_qr_final_validation_requires_all_fixed_pairs(monkeypatch) -> Non
         )
 
     def fake_least_squares(residual_fn, x0, **_kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
@@ -13162,17 +13046,7 @@ def _install_identity_bridge_solver_stubs(monkeypatch) -> None:
         return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
@@ -13528,17 +13402,7 @@ def test_full_beam_polish_freezes_trusted_row_locator_for_row_bound_fits(
         return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
@@ -14002,17 +13866,7 @@ def test_fit_geometry_parameters_pixel_path_falls_back_from_stale_in_range_sourc
         return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
@@ -14245,17 +14099,7 @@ def test_fit_geometry_parameters_pixel_path_keeps_fixed_source_row_assignments(
     )
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
 
@@ -15082,17 +14926,7 @@ def test_fit_geometry_parameters_reports_unweighted_peak_rms(monkeypatch):
         return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
@@ -15140,17 +14974,7 @@ def test_fit_geometry_parameters_seed_status_reports_missing_pair_counts(monkeyp
         return image, [], np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
@@ -16863,17 +16687,7 @@ def test_full_beam_polish_rejection_preserves_central_point_match_result(monkeyp
         return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
@@ -17013,17 +16827,7 @@ def test_full_beam_polish_keeps_resolved_fixed_correspondence_outside_match_radi
         return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
@@ -17116,17 +16920,7 @@ def test_fit_geometry_parameters_uses_manual_peak_sigma_by_default(monkeypatch):
         return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
@@ -17194,17 +16988,7 @@ def test_fit_geometry_parameters_can_ignore_manual_peak_sigma_when_disabled(monk
         return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
@@ -17561,17 +17345,7 @@ def test_fit_geometry_parameters_can_accept_roi_image_refinement(monkeypatch):
     captured_cfg = {}
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     def fake_stage_two(
         experimental_image,
@@ -17662,17 +17436,7 @@ def test_fit_geometry_parameters_defaults_to_point_only_fit_without_image_stages
     monkeypatch,
 ):
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     def fail_stage_one(*args, **kwargs):
         raise AssertionError("ridge refinement should be disabled by default")
@@ -17716,17 +17480,7 @@ def test_fit_geometry_parameters_manual_point_fit_mode_uses_lean_defaults(
     monkeypatch,
 ):
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     monkeypatch.setattr(opt, "_process_peaks_parallel_safe", _fake_process_peaks)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
@@ -17996,17 +17750,7 @@ def test_fit_geometry_parameters_manual_point_fit_guardrail_aborts_bound_hugging
 
 def test_fit_geometry_parameters_can_accept_ridge_refinement(monkeypatch):
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     def fake_stage_one_initialize(
         experimental_image,
@@ -18083,17 +17827,7 @@ def test_fit_geometry_parameters_supports_anisotropic_measurement_weighting(monk
         return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
@@ -18157,17 +17891,7 @@ def test_fit_geometry_parameters_reports_solver_and_data_only_identifiability(
         return np.array([gamma - 1.0], dtype=np.float64)
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     monkeypatch.setattr(opt, "compute_peak_position_error_geometry_local", fake_compute)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
@@ -18231,17 +17955,7 @@ def test_fit_geometry_parameters_correlated_inactive_block_is_recommended_togeth
         return np.array([coupled, 2.0 * coupled], dtype=np.float64)
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     monkeypatch.setattr(opt, "compute_peak_position_error_geometry_local", fake_compute)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
@@ -18296,17 +18010,7 @@ def test_fit_geometry_parameters_weak_inactive_parameter_is_not_recommended(
         return np.array([gamma - 1.0], dtype=np.float64)
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     monkeypatch.setattr(opt, "compute_peak_position_error_geometry_local", fake_compute)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
@@ -18348,17 +18052,7 @@ def test_fit_geometry_parameters_reports_retired_stage_placeholders(monkeypatch)
         return np.array([gamma - 1.0, Gamma - 2.0, dist - 3.0], dtype=np.float64)
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     monkeypatch.setattr(opt, "compute_peak_position_error_geometry_local", fake_compute)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
@@ -18418,17 +18112,7 @@ def test_fit_geometry_parameters_selects_best_discrete_mode(monkeypatch):
         return image, hit_tables, np.empty((0, 0, 0)), np.empty(0), np.empty(0), []
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     monkeypatch.setattr(opt, "_process_peaks_parallel_safe", fake_process)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)
@@ -18490,17 +18174,7 @@ def test_fit_geometry_parameters_emits_normalized_multistart_status_updates(
         return np.array([gamma - 1.0, Gamma - 2.0, dist - 3.0], dtype=np.float64)
 
     def fake_least_squares(residual_fn, x0, **kwargs):
-        x = np.asarray(x0, dtype=float)
-        return opt.OptimizeResult(
-            x=x,
-            fun=np.asarray(residual_fn(x), dtype=float),
-            success=True,
-            status=1,
-            message="ok",
-            nfev=1,
-            active_mask=np.zeros_like(x, dtype=int),
-            optimality=0.0,
-        )
+        return _fake_least_squares_result(residual_fn, x0)
 
     monkeypatch.setattr(opt, "compute_peak_position_error_geometry_local", fake_compute)
     monkeypatch.setattr(opt, "least_squares", fake_least_squares)

@@ -303,7 +303,8 @@ Primary reference: the uploaded trace described in the task text.
 Repo-local supplemental artifacts:
 
 - `artifacts/geometry_fit_gui_states/new4.json`
-- `artifacts/geometry_fit_gui_states/new4_local_15pair_1DA4EFD243BD4CC537B58641E61262E5F95E63CCB943834E0D6B257D01799253.json`
+- local 15-pair New4 saved-state snapshot from the user data root; local
+  variants are intentionally ignored rather than tracked.
 - `temp/geometry_overlay_inspection/new4_visual_backend_baseline/coordinate_transform_diagnosis.json`
 - `temp/geometry_overlay_inspection/new4_visual_backend_optimizer_request/coordinate_transform_diagnosis.json`
 - `temp/geometry_overlay_inspection/new4_local15_visual_backend_optimizer_request/coordinate_transform_diagnosis.json`
@@ -407,7 +408,7 @@ Supplemental non-GUI runs:
 | --- | --- | --- | --- |
 | Saved-state visual/backend baseline | `python scripts/debug/diagnose_new4_visual_backend_coordinates.py --state artifacts/geometry_fit_gui_states/new4.json --background-index 0 --output-dir temp/geometry_overlay_inspection/new4_visual_backend_baseline` | `temp/geometry_overlay_inspection/new4_visual_backend_baseline/coordinate_transform_diagnosis.json` | `visual_backend_parity_ok`; visual surfaces agree before optimizer request capture. |
 | Saved-state optimizer-request capture | Same state with `--include-optimizer-request` | `temp/geometry_overlay_inspection/new4_visual_backend_optimizer_request/coordinate_transform_diagnosis.json` | `frame_mismatch_detected`; first mismatch is `optimizer_request.measured_peaks`, where simulated endpoint frame changes from display to `caked_2theta_phi`. |
-| Local 15-pair optimizer-request capture | Same diagnostic on `new4_local_15pair...json` with `--include-optimizer-request` | `temp/geometry_overlay_inspection/new4_local15_visual_backend_optimizer_request/coordinate_transform_diagnosis.json` | Optimizer request capture blocked before solve by `locked_qr_caked_projection_frame_mismatch`, including `hkl=(-1,0,10)` branch 1. |
+| Local 15-pair optimizer-request capture | Same diagnostic on an untracked local 15-pair New4 saved-state snapshot with `--include-optimizer-request` | `temp/geometry_overlay_inspection/new4_local15_visual_backend_optimizer_request/coordinate_transform_diagnosis.json` | Optimizer request capture blocked before solve by `locked_qr_caked_projection_frame_mismatch`, including `hkl=(-1,0,10)` branch 1. |
 | Q-group sensitivity probe | `python scripts/debug/run_q_group_peak_sensitivity.py --state artifacts/geometry_fit_gui_states/new4.json --group-key q_group,primary,1,10 --params gamma,Gamma --outdir temp/geometry_overlay_inspection/q_group_primary_1_10_sensitivity` | No output artifacts | Aborted with `Baseline evaluation returned no observations`; useful as an abort reason, not sensitivity evidence. |
 
 Shared headless `fit-geometry` A/B surrogate:

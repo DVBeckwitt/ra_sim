@@ -1,6 +1,7 @@
 import ast
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, replace
+from functools import cache
 import hashlib
 import json
 import math
@@ -41,6 +42,13 @@ PARALLEL_SCRIPT_PATH = Path(
 )
 RUNNER_PATH = Path("scripts/diagnostics/run_all_background_peak_fits.py")
 COMPARISON_SCRIPT_PATH = Path("scripts/diagnostics/comparison.py")
+
+
+@cache
+def _parallel_script_source() -> str:
+    if not PARALLEL_SCRIPT_PATH.exists():
+        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
+    return PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
 
 
 def _notebook_source() -> str:
@@ -91,8 +99,6 @@ def _notebook_functions(*names: str) -> dict[str, object]:
 
 
 def _script_functions(*names: str) -> dict[str, object]:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
     wanted = set(names)
     if "show_qr_rod_peak_marker_popup" in wanted:
         wanted.add("hk0_qz_marker_count")
@@ -200,9 +206,7 @@ def _script_functions(*names: str) -> dict[str, object]:
         wanted.add("as_float")
         wanted.add("nearest_detector_angles_from_entry")
         wanted.add("detector_xy_from_entry")
-    tree = ast.parse(
-        PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8"), filename=str(PARALLEL_SCRIPT_PATH)
-    )
+    tree = ast.parse(_parallel_script_source(), filename=str(PARALLEL_SCRIPT_PATH))
     selected = [
         node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in wanted
     ]
@@ -358,7 +362,7 @@ def test_detector_region_labels_use_m_not_hk_or_material() -> None:
         "detector_rod_label",
         "detector_specular_label",
     )
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     rod_label = namespace["detector_rod_label"]
     specular_label = namespace["detector_specular_label"]
@@ -371,7 +375,7 @@ def test_detector_region_labels_use_m_not_hk_or_material() -> None:
 
 
 def test_detector_region_delta_q_boundaries_use_dashed_contours() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     assert "detector_region_boundary_linestyle" in source
     assert "ax.contour(" in source
@@ -381,7 +385,7 @@ def test_detector_region_delta_q_boundaries_use_dashed_contours() -> None:
 
 
 def test_detector_region_note_describes_white_m_labels_and_dashed_boundaries() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     assert "dashed boundary strokes" in source
     assert "solid-white m labels" in source
@@ -391,7 +395,7 @@ def test_detector_region_note_describes_white_m_labels_and_dashed_boundaries() -
 
 
 def test_detector_region_saves_intensity_scale_as_separate_file() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     detector_figure_start = source.index(
         "fig, ax = plt.subplots(figsize=(JOURNAL_FULL_WIDTH_IN, fig_height)"
     )
@@ -409,7 +413,7 @@ def test_detector_region_saves_intensity_scale_as_separate_file() -> None:
 
 
 def test_parallel_script_single_background_figures_keep_row_column_axes() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     detector_start = source.index(
         "fig, axes = plt.subplots(\n    len(ordered_backgrounds),\n    2,"
@@ -613,7 +617,7 @@ def test_parallel_script_qr_rod_final_cache_key_accepts_reference_signature() ->
 
 
 def test_parallel_script_wires_lattice_and_q_groups_into_cache_keys() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     assert "ACTIVE_LATTICE = active_lattice_constants_from_state(state)" in source
     assert '"active_lattice": ACTIVE_LATTICE_CACHE_SIGNATURE' in source
@@ -689,7 +693,7 @@ def test_parallel_script_generated_primary_rod_entries_require_explicit_gate() -
 
 
 def test_parallel_script_build_profile_rods_disables_generated_fallback_by_default() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     assert "ALLOW_GENERATED_ROD_REFERENCES = _truthy_setting" in source
     assert "allow_generated=ALLOW_GENERATED_ROD_REFERENCES" in source
@@ -722,7 +726,7 @@ def test_parallel_script_detector_overlay_filters_generated_rods_by_default() ->
         for row in overlay_rods(rods, region_overlays=region_overlays, allow_generated=True)
     ] == [1, 4]
 
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     detector_figure_source = source[
         source.index("rod_label_entries: list[dict[str, object]] = []") : source.index(
             "specular_color = OKABE_ITO"
@@ -747,7 +751,7 @@ def test_parallel_script_final_rod_plot_filters_incomplete_detector_branch_suppo
 
     assert [int(row["m"]) for row in complete_rods(rods, region_overlays)] == [1]
 
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     final_profile_source = source[
         source.index("drawable_profile_keys = drawable_rod_profile_keys(") : source.index(
             "\nif not plot_rod_entries:"
@@ -773,14 +777,14 @@ def test_parallel_script_pbi2_hidden_rods_are_final_visibility_only() -> None:
     assert hidden_values("pbi2", hidden_hk=(7,)) == {7}
     assert hidden_values("Bi2Se3", hidden_hk=(7,)) == set()
 
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     assert '"pbi2_hidden_hk":' in source
     assert "def filter_hidden_qr_rod_entries(" not in source
     assert "def filter_hidden_qr_rod_table(" not in source
     pre_editor_source = source[
-        source.index("rod_candidate_m_values = fit_result_m_values_for_rod_entries(") : source.index(
-            "\nrod_reference_summary = rod_reference_source_summary("
-        )
+        source.index(
+            "rod_candidate_m_values = fit_result_m_values_for_rod_entries("
+        ) : source.index("\nrod_reference_summary = rod_reference_source_summary(")
     ]
     assert "filter_hidden_qr_rod_entries(" not in pre_editor_source
     assert "excluded PbI2 configured-hidden Qr rods before artifacts" not in pre_editor_source
@@ -831,7 +835,7 @@ def test_final_m_visibility_filters_only_final_plot_entries() -> None:
 
 
 def test_parallel_script_final_plot_uses_gui_m_visibility_state() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     assert "qr_rod_final_hidden_m_values = final_qr_rod_hidden_m_values(" in source
     assert 'gui_hidden_m_values=qr_rod_region_editor_result.get("final_hidden_m_values")' in source
     final_profile_source = source[
@@ -841,7 +845,7 @@ def test_parallel_script_final_plot_uses_gui_m_visibility_state() -> None:
     ]
     assert "hidden_plot_hk = set(qr_rod_final_hidden_m_values)" in final_profile_source
     assert "filter_final_qr_rod_plot_entries(" in final_profile_source
-    assert "if (0, \"qz\") in drawable_profile_keys:" not in final_profile_source
+    assert 'if (0, "qz") in drawable_profile_keys:' not in final_profile_source
     assert "0 not in hidden_plot_hk" in final_profile_source
 
 
@@ -1006,7 +1010,7 @@ def test_parallel_script_reports_rod_reference_sources_and_skipped_generated_rod
         "allow_generated": False,
     }
 
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     assert "rod references: saved=" in source
     assert "Rod reference policy:" in source
     assert "| HK | source | generated | saved Qr |" in source
@@ -1035,7 +1039,7 @@ def test_parallel_script_requires_broad_anchor_coverage_before_detector_qr_refit
     assert has_coverage(broad_points) is True
     assert has_coverage(broad_points, active_mask=[True, True, False, False]) is False
 
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     assert "insufficient detector-rotation anchor coverage" in source
     assert 'if bool(rod_qspace_calibration.get("success", False)):' in source
 
@@ -1069,7 +1073,7 @@ def test_parallel_script_qr_sideband_helpers_bin_same_qz_background() -> None:
 def test_parallel_script_qr_sideband_profiles_bypass_fast_accumulators_and_keep_raw_columns() -> (
     None
 ):
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     profile_source = source[
         source.index("def profile_from_detector_qr_qz(") : source.index(
             "\n# Rod-profile baselines are added"
@@ -1085,7 +1089,7 @@ def test_parallel_script_qr_sideband_profiles_bypass_fast_accumulators_and_keep_
 
 
 def test_parallel_script_background_image_debug_flag_disables_qr_sideband_subtraction() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     settings_source = source[
         source.index("BACKGROUND_IMAGE_SUBTRACTION_DISABLED =") : source.index(
             "\nQR_ROD_BG_SIDE_BAND_INNER_SCALE"
@@ -1111,7 +1115,7 @@ def test_parallel_script_background_image_debug_flag_disables_qr_sideband_subtra
 
 
 def test_parallel_script_background_image_subtraction_outputs_raw_images_when_disabled() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     assembly_source = source[
         source.index("detector_peak_model = render_detector_peak_model(") : source.index(
             '\n    np.save(OUT_DIR / f"background_{bg_idx:02d}_caked_peak_fit_model.npy"'
@@ -1435,7 +1439,7 @@ def test_apply_radial_background_subtraction_uses_caked_phi_plane_when_available
 
 
 def test_parallel_script_radial_background_popup_is_before_background_preps() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     popup_call = "radial_background_subtraction_config = show_radial_background_subtraction_popup("
     assert popup_call in source
@@ -1476,7 +1480,7 @@ def test_parallel_script_radial_background_popup_is_before_background_preps() ->
 
 
 def test_parallel_script_radial_background_popup_displays_caked_not_raw_detector() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     popup_source = source[
         source.index("def show_radial_background_subtraction_popup(") : source.index(
             "\n@njit(fastmath=True, nogil=True)"
@@ -1509,7 +1513,7 @@ def test_parallel_script_radial_background_popup_displays_caked_not_raw_detector
 
 
 def test_parallel_script_radial_background_popup_reuses_model_on_scale_updates() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     popup_source = source[
         source.index("def show_radial_background_subtraction_popup(") : source.index(
             "\n@njit(fastmath=True, nogil=True)"
@@ -1528,7 +1532,7 @@ def test_parallel_script_radial_background_popup_reuses_model_on_scale_updates()
 
 
 def test_parallel_script_applies_radial_subtraction_before_integrate2d() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     prep_loop_source = source[
         source.index("for bg_idx, bg_path_text in enumerate(background_files):") : source.index(
             "\nprep_elapsed = time.perf_counter() - prep_total_start"
@@ -1550,7 +1554,7 @@ def test_parallel_script_applies_radial_subtraction_before_integrate2d() -> None
 
 
 def test_parallel_script_fit_one_peak_uses_corrected_caked_image() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     fit_source = source[
         source.index("def _fit_global_peak_job(") : source.index("\ndef _run_local_peak_jobs(")
     ]
@@ -1562,7 +1566,7 @@ def test_parallel_script_fit_one_peak_uses_corrected_caked_image() -> None:
 
 
 def test_parallel_script_qr_rod_profiles_use_corrected_detector_image() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     profile_source = source[
         source.index("def profile_from_detector_qr_qz(") : source.index(
             "\n# Rod-profile baselines are added"
@@ -1576,7 +1580,7 @@ def test_parallel_script_qr_rod_profiles_use_corrected_detector_image() -> None:
 
 
 def test_parallel_script_raw_detector_image_is_preserved() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     assert "raw_detector_image = detector_image.copy()" in source
     assert '"raw_detector_image": raw_detector_image' in source
@@ -1596,7 +1600,7 @@ def test_parallel_script_radial_background_policy_changes_pre_editor_cache_key()
         "state.json", input_signature=changed
     )
 
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     signature_source = source[
         source.index("PRE_EDITOR_CACHE_INPUT_SIGNATURE =") : source.index(
             "\nPRE_EDITOR_CACHE_KEY ="
@@ -1623,7 +1627,7 @@ def test_parallel_script_radial_background_policy_changes_final_qr_rod_cache_key
     )
 
     assert enabled_key != disabled_key
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     signature_source = source[
         source.index("ROD_PROFILE_BACKGROUND_POLICY_SIGNATURE =") : source.index(
             "\nQR_ROD_PEAK_EDIT_CONTEXT_SIGNATURE ="
@@ -1654,7 +1658,7 @@ def test_radial_background_policy_signature_records_auto_scale_metadata() -> Non
     assert policy["scale_source"] == "auto_sideband"
     assert policy["scale_algorithm"] == "sideband_scale_v1"
 
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     assert "RADIAL_BACKGROUND_AUTO_SCALE_SIGNATURE" in source
     assert '"scale_source": str(normalized.get("scale_source", "manual_or_legacy"))' in source
     assert (
@@ -1668,7 +1672,7 @@ def test_radial_background_policy_signature_records_auto_scale_metadata() -> Non
 
 
 def test_parallel_script_auto_radial_scale_runs_after_peak_entries_before_popup() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     entries_call = source.index("entries_by_bg, background_peak_entry_source =")
     override_text = source.index("scale_override_text = _setting_text(", entries_call)
     auto_call = source.index(
@@ -1687,7 +1691,7 @@ def test_parallel_script_auto_radial_scale_runs_after_peak_entries_before_popup(
 
 
 def test_parallel_script_radial_background_prints_auto_scale_metadata() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     print_source = source[
         source.index('"central-phi caked plane background subtraction: "') : source.index(
             "\nROD_PROFILE_BACKGROUND_POLICY_SIGNATURE ="
@@ -1759,7 +1763,7 @@ def test_parallel_script_qr_rod_peak_edits_validate_background_policy(tmp_path: 
 
 
 def test_parallel_script_qr_rod_peak_editor_rejects_stale_background_policy_edits() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     load_section = source[
         source.index("if qr_rod_peak_edits_path:") : source.index(
             "\nqr_rod_region_editor_result = edit_qr_rod_region_editor("
@@ -1778,7 +1782,7 @@ def test_parallel_script_qr_rod_peak_editor_rejects_stale_background_policy_edit
 
 
 def test_parallel_script_radial_background_cache_signatures_reject_old_prefit_caches() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     assert "QR_ROD_FINAL_FIT_CACHE_SIGNATURE = (" in source
     assert "joint_qz_labeled_marker_fit_specular_roi_v18_caked_phi_m90_90_plane" in source
@@ -1817,7 +1821,7 @@ def test_parallel_script_qr_rod_final_cache_key_changes_with_background_debug_po
 
 
 def test_parallel_script_qr_sideband_plot_data_can_use_explicit_data_column() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     helper_source = source[
         source.index("def rod_profile_normalized_payload_for_plot_decision(") : source.index(
             "\ndef positive_log_plot_values("
@@ -2239,9 +2243,7 @@ def test_parallel_script_qr_rod_profile_adaptive_smoothing_prefers_flat_regions(
 
     x = np.linspace(-1.0, 1.0, 121)
     values = (
-        0.25 * x
-        + 0.7 * np.exp(-((x + 0.45) / 0.28) ** 2)
-        + 5.0 * np.exp(-(x / 0.035) ** 2)
+        0.25 * x + 0.7 * np.exp(-(((x + 0.45) / 0.28) ** 2)) + 5.0 * np.exp(-((x / 0.035) ** 2))
     )
     base = smooth_profile(values, sigma_bins=1.0)
     strong = smooth_profile(values, sigma_bins=4.0)
@@ -2265,9 +2267,7 @@ def test_parallel_script_qr_rod_profile_adaptive_smoothing_prefers_flat_regions(
     assert abs(adaptive[low_curvature_index] - strong[low_curvature_index]) < abs(
         base[low_curvature_index] - strong[low_curvature_index]
     )
-    assert abs(adaptive[peak_index] - base[peak_index]) < abs(
-        strong[peak_index] - base[peak_index]
-    )
+    assert abs(adaptive[peak_index] - base[peak_index]) < abs(strong[peak_index] - base[peak_index])
 
 
 def test_final_qr_rod_profile_plot_payload_matches_headless_gui_selection() -> None:
@@ -2426,7 +2426,7 @@ def test_final_qr_rod_profile_plot_payload_applies_adaptive_smoothing_to_gui_tra
 
 
 def test_parallel_script_final_profile_plot_uses_gui_data_and_smoothed_copy() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     plot_payload_source = source[
         source.index("def final_qr_rod_profile_plot_payload(") : source.index(
             "\ndef rod_profile_panel_label("
@@ -2470,7 +2470,7 @@ def test_parallel_script_pbi2_rod_profile_l_axis_limits_cap_at_three() -> None:
 
 
 def test_parallel_script_pbi2_final_profile_plots_log_only_hk0_and_caps_nonzero_l() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     figure_start = source.index("rod_profile_l_axis_limits = shared_rod_profile_l_axis_limits(")
     figure_source = source[figure_start : source.index("\nlegend_handles = [", figure_start)]
     hk0_profile_source = figure_source[
@@ -2507,7 +2507,7 @@ def test_parallel_script_pbi2_final_profile_plots_log_only_hk0_and_caps_nonzero_
 
 
 def test_parallel_script_pbi2_specular_hk0_uses_l15_and_caked_roi() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     specular_profile_source = source[
         source.index("initial_specular_profile = build_specular_qr_rod_profile(") : source.index(
             "\nfor rod in [] if qr_rod_pre_editor_cache_hit else rod_entries:"
@@ -2537,7 +2537,7 @@ def test_parallel_script_pbi2_specular_hk0_uses_l15_and_caked_roi() -> None:
 
 
 def test_parallel_script_pbi2_qr_rod_delta_qr_defaults_to_013() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     delta_qr_source = source[
         source.index("DEFAULT_QR_ROD_DELTA_QR_SOURCE =") : source.index(
             "\nPBI2_DISABLE_BACKGROUND_SUBTRACTION ="
@@ -2592,7 +2592,7 @@ def test_parallel_script_pbi2_nonzero_branches_share_qz_bounds() -> None:
 
 
 def test_parallel_script_nonzero_profile_loop_uses_pbi2_shared_branch_bounds() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     profile_loop_source = source[
         source.index(
             "for rod in [] if qr_rod_pre_editor_cache_hit else rod_entries:"
@@ -2697,7 +2697,7 @@ def test_parallel_script_pbi2_specular_markers_filter_above_active_l_window() ->
 
 
 def test_parallel_script_logs_active_lattice_and_records_it_in_notes() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     assert "active lattice:" in source
     assert "ACTIVE_LATTICE_A" in source
@@ -2706,7 +2706,7 @@ def test_parallel_script_logs_active_lattice_and_records_it_in_notes() -> None:
 
 
 def test_detector_region_label_initial_placement_uses_default_geometry() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     low_l_source = source[
         source.index("def place_low_l_rod_label(") : source.index("\ndef place_rod_label(")
     ]
@@ -2763,7 +2763,7 @@ def test_detector_qspace_config_with_theta_initial_preserves_other_fields() -> N
 
 
 def test_detector_region_specular_label_defaults_to_low_l_geometry() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     detector_figure_source = source[
         source.index("specular_color = OKABE_ITO") : source.index(
             "\ndisplay_detector_rotation_fit_debug("
@@ -2791,7 +2791,7 @@ def test_detector_region_label_editor_runtime_mode_respects_headless() -> None:
 
 
 def test_detector_region_label_renderer_uses_white_text_from_label_xy() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     function_source = source[
         source.index("def draw_detector_region_label_artists(") : source.index(
             "\ndef detector_label_edit_runtime_mode("
@@ -2856,7 +2856,7 @@ def test_detector_region_label_settings_round_trip_by_label_id() -> None:
 
 
 def test_detector_region_label_editor_uses_tk_canvas_controls() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     function_source = source[
         source.index("def show_detector_region_label_position_popup(") : source.index(
             "\ndef edit_detector_region_label_positions("
@@ -2893,7 +2893,7 @@ def test_detector_region_label_editor_uses_tk_canvas_controls() -> None:
 
 
 def test_detector_region_label_editor_selects_labels_with_tk_canvas_items() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     function_source = source[
         source.index("def show_detector_region_label_position_popup(") : source.index(
             "\ndef edit_detector_region_label_positions("
@@ -2917,7 +2917,7 @@ def test_detector_region_label_editor_selects_labels_with_tk_canvas_items() -> N
 
 
 def test_detector_region_label_editor_tunes_pixel_locations_in_data_space() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     function_source = source[
         source.index("def show_detector_region_label_position_popup(") : source.index(
             "\ndef edit_detector_region_label_positions("
@@ -2944,7 +2944,7 @@ def test_detector_region_label_editor_tunes_pixel_locations_in_data_space() -> N
 
 
 def test_detector_region_label_editor_drags_labels_on_tk_canvas() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     function_source = source[
         source.index("def show_detector_region_label_position_popup(") : source.index(
             "\ndef edit_detector_region_label_positions("
@@ -2967,7 +2967,7 @@ def test_detector_region_label_editor_drags_labels_on_tk_canvas() -> None:
 
 
 def test_detector_region_label_editor_uses_tk_mainloop_without_matplotlib_event_loop() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     function_source = source[
         source.index("def show_detector_region_label_position_popup(") : source.index(
             "\ndef edit_detector_region_label_positions("
@@ -2992,7 +2992,7 @@ def test_detector_region_label_editor_uses_tk_mainloop_without_matplotlib_event_
 def test_detector_region_label_editor_removes_temporary_in_figure_artifacts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     function_source = source[
         source.index("def show_detector_region_label_position_popup(") : source.index(
             "\ndef edit_detector_region_label_positions("
@@ -3006,7 +3006,7 @@ def test_detector_region_label_editor_removes_temporary_in_figure_artifacts(
 
 
 def test_detector_region_label_editor_wires_before_final_save() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     detector_figure_start = source.index("rod_label_entries: list[dict[str, object]] = []")
     unified_label_call = source.index(
         "apply_unified_qr_rod_region_editor_labels(", detector_figure_start
@@ -3029,7 +3029,7 @@ def test_detector_region_label_editor_wires_before_final_save() -> None:
 
 
 def test_detector_region_label_editor_does_not_auto_import_settings_before_popup() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     function_source = source[
         source.index("def edit_detector_region_label_positions(") : source.index(
             "\ndetector_region_display_width ="
@@ -3045,7 +3045,7 @@ def test_detector_region_label_editor_does_not_auto_import_settings_before_popup
 
 
 def test_detector_region_specular_visual_uses_integrated_qz_region() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     qmap_setup_source = source[
         source.index("profile_detector_q_maps = notebook_detector_qr_qz_maps(") : source.index(
             "\ndef bilinear_sample_detector_map("
@@ -3314,7 +3314,7 @@ def test_parallel_script_hk0_profile_keeps_negative_qr_detector_pixels() -> None
 
 
 def test_parallel_script_hk0_profile_matches_detector_visual_phi_two_theta_roi() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     profile_source = source[
         source.index("def profile_from_detector_phi_two_theta_roi(") : source.index(
             "\n# Rod-profile baselines are added"
@@ -3776,14 +3776,14 @@ def test_parallel_script_specular_qz_bounds_falls_back_to_lattice_window() -> No
 
 
 def test_parallel_script_specular_qz_bounds_do_not_use_fallback_decision() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     assert "def specular_qz_bounds_need_fallback(" not in source
     assert "specular_use_fallback_qz_bounds" not in source
 
 
 def test_parallel_script_specular_profile_uses_strict_qr_band_without_fallback_mask() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     specular_profile_start = source.index(
         "initial_specular_profile = build_specular_qr_rod_profile("
     )
@@ -3820,7 +3820,7 @@ def test_detector_region_centerlines_clip_to_visual_qz_bounds() -> None:
     np.testing.assert_allclose(clipped_x[1:3], np.array([2.0, 3.0]))
     np.testing.assert_allclose(clipped_y[1:3], np.array([20.0, 30.0]))
 
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     detector_figure_source = source[
         source.index("rod_label_entries: list[dict[str, object]] = []") : source.index(
             "specular_color = OKABE_ITO"
@@ -3838,7 +3838,7 @@ def test_detector_region_centerlines_clip_to_visual_qz_bounds() -> None:
 
 
 def test_detector_region_labels_are_not_dropped_when_branch_overlay_bounds_are_missing() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     detector_figure_source = source[
         source.index("rod_label_entries: list[dict[str, object]] = []") : source.index(
             "specular_color = OKABE_ITO"
@@ -3855,7 +3855,7 @@ def test_detector_region_labels_are_not_dropped_when_branch_overlay_bounds_are_m
 
 
 def test_detector_region_labels_fallback_to_drawn_band_centerlines() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     detector_figure_source = source[
         source.index("rod_label_entries: list[dict[str, object]] = []") : source.index(
             "specular_color = OKABE_ITO"
@@ -3887,7 +3887,7 @@ def test_detector_region_axis_tick_labels_use_bottom_left_origin() -> None:
     assert x_labels == ["0", "50", "100"]
     assert y_labels == ["100", "50", "0"]
 
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     detector_region_source = source[
         source.index('ax.set_xlabel("Detector x pixel') : source.index(
             "\nrod_label_entries = apply_unified_qr_rod_region_editor_labels("
@@ -3912,7 +3912,7 @@ def test_detector_region_specular_label_can_use_visual_mask_centerline() -> None
     np.testing.assert_allclose(lines[0][0], np.array([3.0, 3.5]))
     np.testing.assert_allclose(lines[0][1], np.array([1.0, 2.0]))
 
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     detector_figure_source = source[
         source.index("specular_color = OKABE_ITO") : source.index(
             "\ndisplay_detector_rotation_fit_debug("
@@ -4375,7 +4375,7 @@ def test_background_peak_fits_notebook_handles_background_reference_labels() -> 
 
 
 def test_parallel_script_has_sample_name_override_parameter() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     for token in (
         'SAMPLE_NAME_OVERRIDE = ""',
@@ -4744,10 +4744,8 @@ def test_choose_final_output_dir_uses_directory_dialog_and_current_figure_dir(
     assert destroyed == [True]
 
 
-def test_parallel_script_save_folder_chooser_updates_figure_dir_at_final_save_boundary() -> (
-    None
-):
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+def test_parallel_script_save_folder_chooser_updates_figure_dir_at_final_save_boundary() -> None:
+    source = _parallel_script_source()
 
     assert 'SAVE_OUTPUT_DIR_EDIT_MODE_OVERRIDE = ""' in source
     assert "RA_SIM_ALL_BACKGROUND_SAVE_DIR_EDIT_MODE" in source
@@ -4767,15 +4765,21 @@ def test_parallel_script_save_folder_chooser_updates_figure_dir_at_final_save_bo
         chooser_block,
         re.M,
     )
-    assert re.search(r"^\s*OUT_DIR\.mkdir\(parents=True, exist_ok=True\)", chooser_block, re.M) is None
-    assert re.search(r"^\s*FIGURE_OUT_DIR\.mkdir\(parents=True, exist_ok=True\)", chooser_block, re.M)
-    assert re.search(r"^\s*PROFILE_OUT_DIR\.mkdir\(parents=True, exist_ok=True\)", chooser_block, re.M)
+    assert (
+        re.search(r"^\s*OUT_DIR\.mkdir\(parents=True, exist_ok=True\)", chooser_block, re.M) is None
+    )
+    assert re.search(
+        r"^\s*FIGURE_OUT_DIR\.mkdir\(parents=True, exist_ok=True\)", chooser_block, re.M
+    )
+    assert re.search(
+        r"^\s*PROFILE_OUT_DIR\.mkdir\(parents=True, exist_ok=True\)", chooser_block, re.M
+    )
     assert 'csv_path = FIGURE_OUT_DIR / f"{USED_PEAKS_STEM}.csv"' in source
     assert 'md_path = FIGURE_OUT_DIR / f"{USED_PEAKS_STEM}.md"' in source
 
 
 def test_parallel_script_refreshes_figure_output_after_state_sample_detection() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     sample_detection = source.index("detected_sample_name = (")
     refresh_stems = source.index("refresh_figure_stems()", sample_detection)
@@ -4786,7 +4790,7 @@ def test_parallel_script_refreshes_figure_output_after_state_sample_detection() 
 
 
 def test_parallel_script_prints_state_load_progress_before_output_chooser() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     loading_print = source.index('print(f"loading state={STATE_PATH}", flush=True)')
     state_load = source.index('state_doc = json.loads(STATE_PATH.read_text(encoding="utf-8"))')
@@ -4985,9 +4989,7 @@ def test_parallel_script_guarded_process_runner_command_forwards_run_contract() 
 
 
 def test_parallel_script_direct_process_reentry_is_before_backend_normalization_and_prep() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     reentry_call = source.index("if should_reenter_guarded_process_runner(")
     normalize_call = source.index("FIT_BACKEND = normalize_fit_backend(")
@@ -5080,9 +5082,7 @@ def test_parallel_script_00l_region_save_writes_vertical_and_horizontal_png(tmp_
 
 
 def test_parallel_script_00l_region_save_uses_detector_log_color() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     function_source = source[
         source.index("def save_hk0_00l_region_crop(") : source.index("\ndef label_from_entry(")
     ]
@@ -5095,9 +5095,7 @@ def test_parallel_script_00l_region_save_uses_detector_log_color() -> None:
 
 
 def test_parallel_script_00l_region_output_is_wired() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     for token in (
         '"00L_region.png"',
@@ -5121,9 +5119,7 @@ def test_parallel_script_00l_region_output_is_wired() -> None:
 
 
 def test_parallel_script_00l_region_uses_specular_two_theta_roi_for_visual() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     detector_export = source[
         source.index("specular_color = OKABE_ITO") : source.index(
             "hk0_00l_region_path = FIGURE_OUT_DIR"
@@ -5140,9 +5136,7 @@ def test_parallel_script_00l_region_uses_specular_two_theta_roi_for_visual() -> 
 
 
 def test_parallel_script_00l_visual_uses_strict_hk0_roi_not_override_mask() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     detector_export = source[
         source.index("specular_color = OKABE_ITO") : source.index(
             "hk0_00l_region_path = FIGURE_OUT_DIR"
@@ -5159,9 +5153,7 @@ def test_parallel_script_00l_visual_uses_strict_hk0_roi_not_override_mask() -> N
 
 
 def test_parallel_script_detector_hk0_region_uses_prominent_specular_style() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     assert 'specular_color = OKABE_ITO["sky"]' in source
     assert "detector_region_specular_centerline_lw = detector_region_centerline_lw" in source
@@ -5173,9 +5165,7 @@ def test_parallel_script_detector_hk0_region_uses_prominent_specular_style() -> 
 
 
 def test_parallel_script_detector_hk0_delta_q_draw_uses_specular_style() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     specular_draw_start = source.index(
         "draw_detector_delta_q_region(\n        specular_delta_q_visual"
@@ -5196,9 +5186,7 @@ def test_parallel_script_detector_hk0_delta_q_draw_uses_specular_style() -> None
 
 
 def test_parallel_script_detector_export_clips_nonzero_rods_to_accepted_l_window() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     detector_export = source[
         source.index("detector_overlay_rods = detector_overlay_rod_entries(") : source.index(
             "specular_color = OKABE_ITO"
@@ -5217,9 +5205,7 @@ def test_parallel_script_detector_export_clips_nonzero_rods_to_accepted_l_window
 
 
 def test_final_qr_rod_region_overlays_are_rebuilt_after_gui_editor() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     combined_call = source.index("qr_rod_region_editor_result = edit_qr_rod_region_editor(")
     window_filter = source.index(
         "rod_profile_table = rod_profile_table_for_l_window(",
@@ -5264,9 +5250,7 @@ def test_final_qr_rod_region_overlays_are_rebuilt_after_gui_editor() -> None:
 
 
 def test_final_region_overlays_are_rebuilt_after_final_no_fit_policy() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     fitting_disabled = source.index("Qr-rod peak fitting disabled")
     post_cache_marker_table = source.index(
         "marker_table = marker_table_with_specular_l_markers(marker_table, specular_l_marker_table)",
@@ -5640,9 +5624,7 @@ def test_final_output_state_records_gui_controls_when_profile_rows_need_fallback
 
 
 def test_final_detector_figure_does_not_use_pre_editor_region_overlays_after_editor() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     detector_export = source[
         source.index("detector_overlay_rods = detector_overlay_rod_entries(") : source.index(
             "specular_color = OKABE_ITO"
@@ -5658,9 +5640,7 @@ def test_final_detector_figure_does_not_use_pre_editor_region_overlays_after_edi
 
 
 def test_final_region_overlay_signature_is_in_final_fit_cache_key() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     accepted_overlay_rebuild = source.index(
         "accepted_region_overlays = final_qr_rod_region_overlays_from_profile_table("
     )
@@ -5677,9 +5657,7 @@ def test_final_region_overlay_signature_is_in_final_fit_cache_key() -> None:
 
 
 def test_final_qr_rod_region_specs_are_saved_with_gui_fields() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     specs_function = source[
         source.index("def final_qr_rod_region_specs_table(") : source.index(
             "\ndef build_final_qr_rod_output_state("
@@ -5711,9 +5689,7 @@ def test_final_qr_rod_region_specs_are_saved_with_gui_fields() -> None:
 
 
 def test_final_peak_edits_save_when_either_editor_phase_accepts() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     combined_result = source.index("qr_rod_region_editor_result = {")
     save_section = source[
         combined_result : source.index(
@@ -5730,9 +5706,7 @@ def test_final_peak_edits_save_when_either_editor_phase_accepts() -> None:
 
 
 def test_parallel_script_hk0_delta_qr_does_not_replace_nonzero_delta_qr() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     editor_call = source.index("qr_rod_region_editor_result = edit_qr_rod_region_editor(")
     combined_result = source.index("qr_rod_region_editor_result = {", editor_call)
     editor_section = source[
@@ -5960,9 +5934,7 @@ def test_parallel_script_final_rod_profile_entries_exclude_empty_hk_rows() -> No
 
 
 def test_parallel_script_final_rod_profile_figure_filters_empty_entries() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     helper_def = source.index("def drawable_rod_profile_keys(")
     plot_keys = source.index("drawable_profile_keys = drawable_rod_profile_keys(", helper_def)
@@ -6134,7 +6106,7 @@ def test_parallel_script_shared_nonzero_rod_profile_y_axis_limits_fallback_witho
 
 
 def test_parallel_script_final_rod_profile_axes_use_shared_l_limits_except_hk0() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     helper_def = source.index("def shared_rod_profile_l_axis_limits(")
     nonzero_entries = source.index("nonzero_plot_rod_entries =", helper_def)
@@ -6218,9 +6190,7 @@ def test_parallel_script_specular_export_markers_follow_edited_qz_positions() ->
 
 
 def test_parallel_script_specular_exports_are_rebuilt_from_final_markers_before_saving() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     final_cache_marker_merge = source.index(
         "marker_table = marker_table_with_specular_l_markers(marker_table, specular_l_marker_table)",
         source.index("Qr-rod peak fitting disabled"),
@@ -6307,9 +6277,7 @@ def test_final_l_axis_uses_gui_accepted_coefficients() -> None:
 
 
 def test_gui_l_axis_coefficients_are_exported_on_accept() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     popup_source = source[
         source.index("def show_qr_rod_peak_marker_popup(") : source.index(
             "\ndef edit_qr_rod_region_editor("
@@ -6357,9 +6325,7 @@ def test_final_profile_l_filter_uses_gui_accepted_coefficients() -> None:
 
 
 def test_final_figure_threads_gui_l_axis_coefficients_to_plot_helpers() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     final_state = source[
         source.index("accepted_l_axis_coefficients = merge_l_axis_coefficients(") : source.index(
             "profile_audit_csv ="
@@ -6385,9 +6351,7 @@ def test_final_figure_threads_gui_l_axis_coefficients_to_plot_helpers() -> None:
 
 
 def test_marker_only_edits_invalidate_editor_profile_cache() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     recompute_source = source[
         source.index("def recompute_qr_rod_region_profiles(") : source.index(
             "\ndef build_qr_rod_detector_region_preview_figure("
@@ -6403,9 +6367,7 @@ def test_marker_only_edits_invalidate_editor_profile_cache() -> None:
 
 
 def test_final_profile_recompute_bypasses_editor_cache_after_gui_accept() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     final_state = source[
         source.index("accepted_l_axis_coefficients = merge_l_axis_coefficients(") : source.index(
             "qr_rod_region_editor_result = {"
@@ -6448,9 +6410,7 @@ def test_final_profile_data_column_matches_gui_background_density() -> None:
 
 
 def test_final_hk0_axis_autoscales_from_gui_specular_trace() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     assignment_section = source[
         source.index("qr_rod_specular_phi_min_deg = as_float(") : source.index(
             "if np.isfinite(qr_rod_specular_phi_min_deg):"
@@ -6558,9 +6518,7 @@ def test_final_profile_audit_compares_gui_rows_to_post_cache_final_rows() -> Non
 
 
 def test_final_profile_audit_call_receives_accepted_gui_rows() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     accepted_profile_snapshot = source.index("accepted_profile_table = rod_profile_table.copy()")
     final_output_state_call = source.index(
         "final_qr_rod_output_state = build_final_qr_rod_output_state("
@@ -7155,7 +7113,7 @@ def test_parallel_script_background_entries_fallback_filters_excluded_records() 
 
 
 def test_parallel_script_empty_background_peak_entries_are_noop_fit_stage() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     assert "backgrounds={len(background_files)} points={expected_fit_count}" in source
     assert "entry_source={background_peak_entry_source}" in source
@@ -7168,7 +7126,9 @@ def test_parallel_script_empty_background_peak_entries_are_noop_fit_stage() -> N
         "if expected_fit_count == 0:\n    raise RuntimeError(NO_BACKGROUND_PEAK_ENTRIES_MESSAGE)"
         not in source
     )
-    assert "if not fit_jobs:\n    raise RuntimeError(NO_BACKGROUND_PEAK_ENTRIES_MESSAGE)" not in source
+    assert (
+        "if not fit_jobs:\n    raise RuntimeError(NO_BACKGROUND_PEAK_ENTRIES_MESSAGE)" not in source
+    )
 
 
 def test_parallel_script_used_peaks_note_handles_empty_fit_table(tmp_path: Path) -> None:
@@ -7273,9 +7233,7 @@ def test_parallel_script_marker_row_title_keeps_peak_editor_labels() -> None:
 
 
 def test_parallel_script_final_rod_profiles_do_not_draw_peak_l_labels_or_arrows() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     final_profile_source = source[
         source.index(
             "rod_profile_l_axis_limits = shared_rod_profile_l_axis_limits("
@@ -7290,9 +7248,7 @@ def test_parallel_script_final_rod_profiles_do_not_draw_peak_l_labels_or_arrows(
 
 
 def test_parallel_script_rod_profile_panels_use_centered_m_labels() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     final_profile_source = source[
         source.index(
             "rod_profile_l_axis_limits = shared_rod_profile_l_axis_limits("
@@ -7317,9 +7273,7 @@ def test_parallel_script_rod_profile_panels_use_centered_m_labels() -> None:
 
 
 def test_parallel_script_nonzero_rod_profile_grid_removes_inner_spacing() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     final_profile_source = source[
         source.index(
             "rod_profile_l_axis_limits = shared_rod_profile_l_axis_limits("
@@ -7333,9 +7287,7 @@ def test_parallel_script_nonzero_rod_profile_grid_removes_inner_spacing() -> Non
 
 
 def test_parallel_script_qr_rod_peak_editor_is_wired_before_final_no_fit_policy() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     profile_rows_index = source.index("profile_rows = []")
     marker_table_index = source.index(
         "\nmarker_table = pd.DataFrame(marker_rows)",
@@ -7370,9 +7322,7 @@ def test_parallel_script_qr_rod_peak_editor_is_wired_before_final_no_fit_policy(
 
 
 def test_parallel_script_uses_unified_qr_rod_region_editor_before_final_fit() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     marker_table_index = source.index(
         "\nmarker_table = pd.DataFrame(marker_rows)",
         source.index("if not profile_rows:"),
@@ -7391,9 +7341,7 @@ def test_parallel_script_uses_unified_qr_rod_region_editor_before_final_fit() ->
 
 
 def test_parallel_script_unified_editor_restores_late_detector_label_popup() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     detector_figure_start = source.index("rod_label_entries: list[dict[str, object]] = []")
     save_call = source.index(
         "detector_region_png, detector_region_pdf = save_manuscript_figure",
@@ -7409,9 +7357,7 @@ def test_parallel_script_unified_editor_restores_late_detector_label_popup() -> 
 
 
 def test_parallel_script_unified_editor_has_region_controls() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     function_source = source[
         source.index("def show_qr_rod_peak_marker_popup(") : source.index(
             "\ndef edit_qr_rod_region_editor("
@@ -9838,7 +9784,7 @@ def test_parallel_script_qr_rod_peak_editor_export_writes_phase_parameters(
 
 
 def test_parallel_script_qr_rod_peak_editor_marks_hk0_marker_changes_dirty() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     function_source = source[
         source.index("def show_qr_rod_peak_marker_popup(") : source.index(
             "\ndef edit_qr_rod_region_editor("
@@ -9857,7 +9803,7 @@ def test_parallel_script_qr_rod_peak_editor_marks_hk0_marker_changes_dirty() -> 
 
 
 def test_parallel_script_qr_rod_peak_editor_freezes_panel_l_axis_mapping() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     function_source = source[
         source.index("def show_qr_rod_peak_marker_popup(") : source.index(
             "\ndef edit_qr_rod_region_editor("
@@ -10081,9 +10027,7 @@ def test_parallel_script_unified_editor_accept_flushes_pending_profile_refresh(
 
 
 def test_parallel_script_unified_editor_result_updates_final_profile_table() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     editor_call = source.index("qr_rod_region_editor_result = edit_qr_rod_region_editor(")
     combined_result = source.index("qr_rod_region_editor_result = {", editor_call)
     cache_key_call = source.index("qr_rod_peak_edit_cache_key(", combined_result)
@@ -10111,9 +10055,7 @@ def test_parallel_script_unified_editor_result_updates_final_profile_table() -> 
 
 
 def test_parallel_script_combined_editor_starts_from_current_profiles() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     editor_call = source.index("qr_rod_region_editor_result = edit_qr_rod_region_editor(")
     editor_section = source[
         editor_call : source.index(")\nmarker_table = pd.DataFrame", editor_call)
@@ -10126,9 +10068,7 @@ def test_parallel_script_combined_editor_starts_from_current_profiles() -> None:
 
 
 def test_parallel_script_qr_rod_marker_editor_runs_nonzero_then_specular_phases() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     combined_call = source.index("qr_rod_region_editor_result = edit_qr_rod_region_editor(")
     label_editor_call = source.index("rod_label_entries = edit_detector_region_label_positions(")
     combined_section = source[
@@ -10150,9 +10090,7 @@ def test_parallel_script_qr_rod_marker_editor_runs_nonzero_then_specular_phases(
 
 
 def test_parallel_script_combined_qr_rod_editor_shows_nonzero_and_hk0_controls() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     function_source = source[
         source.index("def show_qr_rod_peak_marker_popup(") : source.index(
             "\ndef edit_qr_rod_region_editor("
@@ -10168,9 +10106,7 @@ def test_parallel_script_combined_qr_rod_editor_shows_nonzero_and_hk0_controls()
 
 
 def test_parallel_script_qr_rod_peak_editor_titles_include_phase() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     function_source = source[
         source.index("def show_qr_rod_peak_marker_popup(") : source.index(
             "\ndef edit_qr_rod_region_editor("
@@ -10184,9 +10120,7 @@ def test_parallel_script_qr_rod_peak_editor_titles_include_phase() -> None:
 
 
 def test_parallel_script_detector_qr_preview_is_passed_to_unified_editor() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     helper_def = source.index("def build_qr_rod_detector_region_preview_figure(")
     preview_setup = source.index("qr_rod_detector_region_preview_figures = []")
     preview_create = source.index("build_qr_rod_detector_region_preview_figure(", preview_setup)
@@ -10226,9 +10160,7 @@ def test_parallel_script_detector_qr_preview_is_passed_to_unified_editor() -> No
 
 
 def test_parallel_script_qr_rod_refresh_callbacks_filter_editor_phase() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     recompute_source = source[
         source.index("def recompute_qr_rod_region_profiles(") : source.index(
             "\ndef build_qr_rod_detector_region_preview_figure("
@@ -10263,9 +10195,7 @@ def test_parallel_script_qr_rod_refresh_callbacks_filter_editor_phase() -> None:
 
 
 def test_parallel_script_pre_editor_cache_is_checked_before_expensive_stages() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     background_cache_lookup = source.index(
         '"background_peak_fits", PRE_EDITOR_BACKGROUND_FIT_STAGE_SIGNATURE'
@@ -10289,9 +10219,7 @@ def test_parallel_script_pre_editor_cache_is_checked_before_expensive_stages() -
 
 
 def test_parallel_script_qz_l_axis_helper_is_defined_before_editor_l_window_setup() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     helper_def = source.index("def qz_values_to_l_axis(")
     editor_l_window_setup = source.index("qr_rod_editor_initial_l_min =")
@@ -10310,9 +10238,7 @@ def test_parallel_script_qz_l_axis_helper_is_defined_before_editor_l_window_setu
 
 
 def test_parallel_script_qr_rod_peak_editor_uses_l_axis() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     function_source = source[
         source.index("def show_qr_rod_peak_marker_popup(") : source.index(
             "\ndef qr_rod_profile_cache_with_final_fit("
@@ -10329,9 +10255,7 @@ def test_parallel_script_qr_rod_peak_editor_uses_l_axis() -> None:
 
 
 def test_parallel_script_qr_rod_peak_editor_caches_plot_inputs() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     function_source = source[
         source.index("def show_qr_rod_peak_marker_popup(") : source.index(
             "\ndef qr_rod_profile_cache_with_final_fit("
@@ -10345,9 +10269,7 @@ def test_parallel_script_qr_rod_peak_editor_caches_plot_inputs() -> None:
 
 
 def test_parallel_script_qr_rod_peak_editor_has_import_export_buttons() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     function_source = source[
         source.index("def show_qr_rod_peak_marker_popup(") : source.index(
             "\ndef qr_rod_profile_cache_with_final_fit("
@@ -10367,9 +10289,7 @@ def test_parallel_script_qr_rod_peak_editor_has_import_export_buttons() -> None:
 
 
 def test_parallel_script_qr_rod_peak_editor_shows_hk0_in_log_view() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     function_source = source[
         source.index("def show_qr_rod_peak_marker_popup(") : source.index(
             "\ndef qr_rod_profile_cache_with_final_fit("
@@ -11007,9 +10927,7 @@ def test_parallel_script_qr_rod_peak_editor_hk4_minus_drag_preserves_panel_limit
 
 
 def test_parallel_script_qr_rod_plots_hide_hk7() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     editor_source = source[
         source.index("def show_qr_rod_peak_marker_popup(") : source.index(
             "\ndef qr_rod_profile_cache_with_final_fit("
@@ -11035,9 +10953,7 @@ def test_parallel_script_qr_rod_plots_hide_hk7() -> None:
 
 
 def test_parallel_script_saved_figures_do_not_include_panel_letters() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     panel_labels_source = source[
         source.index("def add_panel_labels(") : source.index("\ndef maybe_suptitle(")
     ]
@@ -11055,11 +10971,7 @@ def test_parallel_script_saved_figures_do_not_include_panel_letters() -> None:
 
 
 def test_parallel_script_has_no_final_rod_marker_label_helper() -> None:
-    if not PARALLEL_SCRIPT_PATH.exists():
-        pytest.skip(f"{PARALLEL_SCRIPT_PATH} is not present in this checkout")
-    tree = ast.parse(
-        PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8"), filename=str(PARALLEL_SCRIPT_PATH)
-    )
+    tree = ast.parse(_parallel_script_source(), filename=str(PARALLEL_SCRIPT_PATH))
     names = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
     call_names = {
         node.func.id
@@ -11350,21 +11262,21 @@ def test_parallel_script_profile_output_dir_uses_state_filename(tmp_path: Path) 
     assert profile_output_dir_for_state(shared_output, state_path) == (
         shared_output / "New_4_fitted_state" / "profiles"
     )
-    assert profile_output_dir_for_state(
-        shared_output / "New_4_fitted_state", state_path
-    ) == (shared_output / "New_4_fitted_state" / "profiles")
+    assert profile_output_dir_for_state(shared_output / "New_4_fitted_state", state_path) == (
+        shared_output / "New_4_fitted_state" / "profiles"
+    )
     assert profile_output_dir_for_state(shared_output, tmp_path / "!!!.json") == (
         shared_output / "state_state" / "profiles"
     )
 
 
 def test_parallel_script_routes_profile_tables_to_profile_output_dir() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     for token in (
         'phi_profile_fit_csv = PROFILE_OUT_DIR / f"{FIGURE7C_PHI_PROFILE_FIT_STEM}.csv"',
         (
-            'phi_profile_fit_summary_csv = PROFILE_OUT_DIR / '
+            "phi_profile_fit_summary_csv = PROFILE_OUT_DIR / "
             'f"{FIGURE7C_PHI_PROFILE_FIT_STEM}_summary.csv"'
         ),
         'phi_profile_fit_note = PROFILE_OUT_DIR / f"{FIGURE7C_PHI_PROFILE_FIT_STEM}.md"',
@@ -11375,7 +11287,7 @@ def test_parallel_script_routes_profile_tables_to_profile_output_dir() -> None:
         'region_specs_csv = PROFILE_OUT_DIR / f"{region_specs_stem}.csv"',
         'region_specs_json = PROFILE_OUT_DIR / f"{region_specs_stem}.json"',
         (
-            'profile_audit_csv = PROFILE_OUT_DIR / '
+            "profile_audit_csv = PROFILE_OUT_DIR / "
             'f"figure7_{SAMPLE_STEM}_gui_vs_final_profile_audit.csv"'
         ),
         'rod_profile_note = PROFILE_OUT_DIR / f"{ROD_PROFILE_STEM}.md"',
@@ -11387,7 +11299,7 @@ def test_parallel_script_routes_profile_tables_to_profile_output_dir() -> None:
 
 
 def test_parallel_script_routes_profile_figures_to_profile_output_dir() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
 
     assert "def save_manuscript_figure(fig, stem: str, *, output_dir: Path | None = None)" in source
     assert "base_dir = FIGURE_OUT_DIR if output_dir is None else Path(output_dir)" in source
@@ -11400,14 +11312,15 @@ def test_parallel_script_routes_profile_figures_to_profile_output_dir() -> None:
         ),
     ):
         assert call_start in source
-        assert "output_dir=PROFILE_OUT_DIR" in source[
-            source.index(call_start) : source.index(next_token)
-        ]
+        assert (
+            "output_dir=PROFILE_OUT_DIR"
+            in source[source.index(call_start) : source.index(next_token)]
+        )
 
     detector_region_call = source[
-        source.index("detector_region_png, detector_region_pdf = save_manuscript_figure(") : source.index(
-            "detector_region_scale_png, detector_region_scale_pdf ="
-        )
+        source.index(
+            "detector_region_png, detector_region_pdf = save_manuscript_figure("
+        ) : source.index("detector_region_scale_png, detector_region_scale_pdf =")
     ]
     assert "output_dir=PROFILE_OUT_DIR" not in detector_region_call
 
@@ -11430,8 +11343,8 @@ def test_parallel_script_routes_profile_figures_to_profile_output_dir() -> None:
         in rod_profile_call
     )
     assert "finally:\n    plt.close(fig)" in rod_profile_call
-    assert "print(f\"saved={rod_profile_png}\")" in rod_profile_call
-    assert "print(f\"saved={published_rod_profile_png}\")" in rod_profile_call
+    assert 'print(f"saved={rod_profile_png}")' in rod_profile_call
+    assert 'print(f"saved={published_rod_profile_png}")' in rod_profile_call
 
 
 def test_save_manuscript_figure_creates_output_dir_and_skips_vector_when_disabled(
@@ -11479,15 +11392,15 @@ def test_require_saved_figure_accepts_nonempty_file_and_rejects_missing_or_empty
 
 
 def test_parallel_script_reports_detector_region_svg_only_when_vector_file_is_written() -> None:
-    source = PARALLEL_SCRIPT_PATH.read_text(encoding="utf-8")
+    source = _parallel_script_source()
     block = source[
-        source.index("detector_region_png, detector_region_pdf = save_manuscript_figure(") : source.index(
-            "display(Image(filename=str(detector_region_png)))"
-        )
+        source.index(
+            "detector_region_png, detector_region_pdf = save_manuscript_figure("
+        ) : source.index("display(Image(filename=str(detector_region_png)))")
     ]
 
     assert 'detector_region_svg = FIGURE_OUT_DIR / f"{ROD_PROFILE_REGION_STEM}.svg"' in block
-    assert 'print(f"saved={FIGURE_OUT_DIR / f\'{ROD_PROFILE_REGION_STEM}.svg\'}")' not in block
+    assert "print(f\"saved={FIGURE_OUT_DIR / f'{ROD_PROFILE_REGION_STEM}.svg'}\")" not in block
     assert re.search(
         r"if bool\(SAVE_VECTOR_FIGURES\) and detector_region_svg\.exists\(\):\n"
         r"\s+print\(f\"saved=\{detector_region_svg\}\"\)",

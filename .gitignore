@@ -62,6 +62,7 @@ ra_sim/simulation/output.png
 /artifacts/geometry_fit_caked_snapshots/
 /artifacts/geometry_fit_recovery/
 /artifacts/geometry_fit_ladder/
+/artifacts/geometry_fit_gui_states/new4_local_*.json
 /artifacts/geometry_fit_gui_states/new4_point_provider_report_after*.json
 /artifacts/geometry_fit_gui_states/new4_point_provider_report_rung7*.json
 /artifacts/geometry_fit_worker_test.log
