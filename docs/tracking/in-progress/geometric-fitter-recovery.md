@@ -22,8 +22,9 @@ deprecation notice, compatibility shim, release/version change, new file, or
 new abstraction required. Review status: no correctness, bloat, security,
 performance, test-quality, new-file, or abstraction blockers were found.
 Shipping status: `python -m pytest tests/test_gui_sim_signature.py -ra`,
-`python -m ra_sim.dev check`, and `git diff --check` pass locally. Rollback is
-a normal git revert of the test/doc cleanup.
+`python -m ra_sim.dev check`, and `git diff --check` pass locally; cleanup
+committed as `0190e648`. Rollback is a normal git revert of the test/doc
+cleanup.
 
 2026-05-27 phase 4 remaining test-helper audit closeout: the only remaining
 top-level local `_Var` helpers are in `tests/test_disordered_phase_ui_enable.py`
