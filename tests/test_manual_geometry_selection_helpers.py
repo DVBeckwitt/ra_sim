@@ -22901,9 +22901,6 @@ _QR_PICKER_DIAG_LOCAL_STATE_PATH = Path.home() / ".local" / "share" / "ra_sim" /
 _QR_PICKER_DIAG_ARTIFACT_STATE_PATH = (
     Path(__file__).resolve().parents[1] / "artifacts" / "geometry_fit_gui_states" / "new4.json"
 )
-_BI2SE3_CANONICAL_STATE_PATH = (
-    Path(__file__).resolve().parents[1] / "artifacts" / "geometry_fit_gui_states" / "Bi2Se3.json"
-)
 _QR_PICKER_DIAG_STATE_OVERRIDE = os.environ.get("RA_SIM_QR_PICKER_DIAG_STATE")
 _QR_PICKER_DIAG_STATE_PATH = (
     Path(_QR_PICKER_DIAG_STATE_OVERRIDE)
@@ -22940,8 +22937,8 @@ _NEW4_FIRST_IMAGE_PAIRED_INVENTORY = tuple(
     item for item in _NEW4_FIRST_IMAGE_EXPECTED_INVENTORY if item[1] != (0, 0, 3)
 )
 _BI2SE3_ACCEPTED_FIRST_IMAGE_INVENTORY = (
-    (("q_group", "primary", 1, 10), (-1, 0, 10), 160, 42, 0, 0),
-    (("q_group", "primary", 1, 10), (-1, 0, 10), 160, 120, 1, 1),
+    (("q_group", "primary", 1, 10), (-1, 0, 10), 160, 24, 0, 0),
+    (("q_group", "primary", 1, 10), (-1, 0, 10), 167, 24, 1, 1),
 )
 
 
@@ -23104,13 +23101,49 @@ def _diag_load_saved_state():
     return dict(loaded)
 
 
-def _diag_load_bi2se3_canonical_state():
-    if not _BI2SE3_CANONICAL_STATE_PATH.exists():
-        pytest.fail(f"Bi2Se3 canonical fixture missing: {_BI2SE3_CANONICAL_STATE_PATH}")
-    loaded = load_gui_state_file(_BI2SE3_CANONICAL_STATE_PATH)
+def _diag_load_new4_artifact_state():
+    if not _QR_PICKER_DIAG_ARTIFACT_STATE_PATH.exists():
+        pytest.fail(f"new4 artifact fixture missing: {_QR_PICKER_DIAG_ARTIFACT_STATE_PATH}")
+    loaded = load_gui_state_file(_QR_PICKER_DIAG_ARTIFACT_STATE_PATH)
     if isinstance(loaded, Mapping) and isinstance(loaded.get("state"), Mapping):
         return dict(loaded["state"])
     return dict(loaded)
+
+
+def _diag_build_bi2se3_canonical_state(
+    *,
+    background_path: str = "artifacts/geometry_fit_gui_states/Bi2Se3_5m_5d.osc",
+) -> dict[str, object]:
+    saved_state = _diag_load_new4_artifact_state()
+    selected_rows = _diag_bi2se3_target_rows(_diag_manual_entries_for_background(saved_state, 0))
+    if len(selected_rows) != 2:
+        pytest.fail("new4 artifact fixture no longer contains the Bi2Se3 target branch pair")
+
+    files = dict(saved_state.get("files", {}) if isinstance(saved_state, Mapping) else {})
+    files["background_files"] = [str(background_path)]
+    files["current_background_index"] = 0
+    files["primary_cif_path"] = "tests/fixtures/Bi2Se3.cif"
+    files["secondary_cif_path"] = None
+
+    variables = dict(saved_state.get("variables", {}) if isinstance(saved_state, Mapping) else {})
+    variables["optics_mode_var"] = "exact"
+    variables["fit_gamma_var"] = True
+    variables["fit_Gamma_var"] = True
+
+    result = dict(saved_state)
+    result["files"] = files
+    result["variables"] = variables
+    result["geometry"] = {
+        "manual_pairs": [
+            {
+                "background_index": 0,
+                "background_name": _NEW4_FIRST_IMAGE_BACKGROUND_NAME,
+                "background_path": str(background_path),
+                "entries": [dict(entry) for entry in selected_rows],
+            }
+        ]
+    }
+    return result
 
 
 def _diag_state_current_background_index(saved_state):
@@ -23206,24 +23239,18 @@ def _diag_new4_expected_inventory(*, include_003=True):
     return sorted(expected, key=repr)
 
 
-def test_bi2se3_canonical_regression_fixture_is_repo_relative() -> None:
-    fixture_text = _BI2SE3_CANONICAL_STATE_PATH.read_text(encoding="utf-8")
-    local_path_needles = (
-        "C:" + "\\" + "Users" + "\\",
-        "C:" + "/" + "Users" + "/",
-        "." + "cache",
-        "." + "local" + "/share/" + "ra_sim",
-        "App" + "Data",
-    )
-    for needle in local_path_needles:
-        assert needle not in fixture_text
-
-    saved_state = _diag_load_bi2se3_canonical_state()
+def test_bi2se3_canonical_regression_state_is_synthesized_repo_relative() -> None:
+    saved_state = _diag_build_bi2se3_canonical_state()
     assert _diag_state_background_name(saved_state, 0) == _NEW4_FIRST_IMAGE_BACKGROUND_NAME
     assert _diag_state_current_background_index(saved_state) == 0
     variables = saved_state.get("variables", {})
     assert isinstance(variables, Mapping)
     assert variables.get("optics_mode_var") == "exact"
+    files = saved_state.get("files", {})
+    assert isinstance(files, Mapping)
+    assert files.get("background_files") == [
+        "artifacts/geometry_fit_gui_states/Bi2Se3_5m_5d.osc"
+    ]
     entries = [
         entry
         for entry in _diag_manual_entries_for_background(saved_state, 0)
@@ -23237,7 +23264,12 @@ def test_bi2se3_canonical_regression_fixture_is_repo_relative() -> None:
     assert inventory == sorted(_BI2SE3_ACCEPTED_FIRST_IMAGE_INVENTORY, key=repr)
 
 
-def _diag_write_bi2se3_headless_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _diag_write_bi2se3_headless_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    background_path: Path,
+) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     config_dir = tmp_path / "config"
     config_dir.mkdir()
@@ -23264,21 +23296,12 @@ def _diag_write_bi2se3_headless_config(tmp_path: Path, monkeypatch: pytest.Monke
                 "cif_file": str(repo_root / "tests" / "fixtures" / "Bi2Se3.cif"),
                 "debug_log_csv": str(tmp_path / "logs" / "mosaic_full_debug_log.csv"),
                 "geometry_poni": str(repo_root / "tests" / "local_geometry.poni"),
-                "gui_background_image": str(
-                    repo_root / "artifacts" / "geometry_fit_gui_states" / "Bi2Se3_5m_5d.osc"
-                ),
+                "gui_background_image": str(background_path),
                 "gui_geometry_poni": str(repo_root / "tests" / "local_geometry.poni"),
                 "measured_peaks": str(tmp_path / "measured_peaks.npy"),
                 "overlay_output": str(tmp_path / "overlays" / "overlay.png"),
                 "parameters_file": str(tmp_path / "parameters.npy"),
-                "simulation_background_osc_files": [
-                    str(
-                        repo_root
-                        / "artifacts"
-                        / "geometry_fit_gui_states"
-                        / "Bi2Se3_5m_5d.osc"
-                    )
-                ],
+                "simulation_background_osc_files": [str(background_path)],
                 "simulation_dark_osc_file": str(tmp_path / "dark.osc"),
             },
             indent=2,
@@ -23312,11 +23335,23 @@ def test_bi2se3_exact_gamma_gamma_fit_accepts_dynamic_caked_regression(
     tmp_path,
     monkeypatch,
 ) -> None:
-    _diag_write_bi2se3_headless_config(tmp_path, monkeypatch)
+    background_path = tmp_path / "Bi2Se3_5m_5d.osc"
+    _diag_write_bi2se3_headless_config(
+        tmp_path,
+        monkeypatch,
+        background_path=background_path,
+    )
     from ra_sim.config import clear_config_cache
 
     try:
-        saved_state = _diag_load_bi2se3_canonical_state()
+        saved_state = _diag_build_bi2se3_canonical_state(
+            background_path=str(background_path),
+        )
+        state_path = tmp_path / "Bi2Se3.json"
+        state_path.write_text(
+            json.dumps({"state": saved_state}, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
         selected_rows = _diag_bi2se3_target_rows(
             _diag_manual_entries_for_background(saved_state, 0)
         )
@@ -23330,7 +23365,7 @@ def test_bi2se3_exact_gamma_gamma_fit_accepts_dynamic_caked_regression(
         progress_path = tmp_path / "bi2se3_gamma_Gamma_progress.json"
         result = hgf.run_headless_geometry_fit(
             saved_state,
-            state_path=_BI2SE3_CANONICAL_STATE_PATH,
+            state_path=state_path,
             downloads_dir=tmp_path / "downloads",
             stamp="bi2se3_gamma_Gamma_accepted_regression",
             active_var_names=["gamma", "Gamma"],

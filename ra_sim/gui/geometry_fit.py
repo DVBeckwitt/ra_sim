@@ -23665,8 +23665,6 @@ def _geometry_fit_dynamic_objective_trial_locked_qr_coverage(
         return [row for row in value if isinstance(row, Mapping)]
 
     expected = _geometry_fit_sweep_int(payload, "expected_locked_qr_rows")
-    if expected is None:
-        expected = _geometry_fit_sweep_int(payload, "qr_fit_expected_count")
 
     candidate_rows: list[Mapping[str, object]] = []
     for row_key in (
@@ -23679,8 +23677,6 @@ def _geometry_fit_dynamic_objective_trial_locked_qr_coverage(
     if isinstance(summary, Mapping):
         if expected is None:
             expected = _geometry_fit_sweep_int(summary, "expected_locked_qr_rows")
-        if expected is None:
-            expected = _geometry_fit_sweep_int(summary, "qr_fit_expected_count")
         for row_key in (
             "caked_acceptance_metric_trace_rows",
             "manual_caked_residual_rows",
@@ -23702,7 +23698,7 @@ def _geometry_fit_dynamic_objective_trial_locked_qr_coverage(
         dynamic = _geometry_fit_sweep_dynamic_value_is_yes(
             row.get("fit_prediction_is_dynamic")
         ) and source.startswith(("dynamic_trial_simulation", "dynamic_current_simulation"))
-        locked = "locked_manual_qr" in source or row.get("source_branch_index") in {0, 1}
+        locked = "locked_manual_qr" in source
         if dynamic and locked:
             dynamic_row_keys.add(row_key)
 

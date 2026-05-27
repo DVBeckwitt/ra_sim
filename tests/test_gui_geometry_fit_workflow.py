@@ -19581,6 +19581,7 @@ def _dynamic_objective_trial_locked_qr_rows(
     count: int,
     *,
     saved_source_index: int | None = None,
+    dynamic_source: str = "dynamic_trial_simulation:locked_manual_qr_fit_prediction",
 ) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for idx in range(int(count)):
@@ -19595,7 +19596,7 @@ def _dynamic_objective_trial_locked_qr_rows(
                 "fit_prediction_source": (
                     "locked_manual_qr:saved_display_px"
                     if saved_source
-                    else "dynamic_trial_simulation:locked_manual_qr_fit_prediction"
+                    else dynamic_source
                 ),
                 "prediction_role": "objective_trial",
             }
@@ -19608,6 +19609,7 @@ def _visual_mismatch_dynamic_combo_contract(
     expected_locked_qr_rows: int,
     dynamic_locked_qr_rows: int,
     saved_source_index: int | None = None,
+    dynamic_source: str = "dynamic_trial_simulation:locked_manual_qr_fit_prediction",
 ) -> dict[str, object]:
     return {
         "status": "accepted",
@@ -19620,6 +19622,7 @@ def _visual_mismatch_dynamic_combo_contract(
         "caked_acceptance_metric_trace_rows": _dynamic_objective_trial_locked_qr_rows(
             dynamic_locked_qr_rows,
             saved_source_index=saved_source_index,
+            dynamic_source=dynamic_source,
         ),
     }
 
@@ -20475,6 +20478,22 @@ def test_parameter_combo_result_allows_visual_mismatch_for_dynamic_authority_cle
     assert result["failure_reasons"] == []
     assert result["would_update_geometry"] is True
     assert result["visual_objective_surface_mismatch_diagnostic_only"] is True
+
+
+def test_parameter_combo_result_rejects_visual_mismatch_without_locked_qr_source() -> None:
+    from ra_sim import headless_geometry_fit
+
+    result = headless_geometry_fit._headless_geometry_fit_classify_combo_result(
+        _visual_mismatch_dynamic_combo_contract(
+            expected_locked_qr_rows=2,
+            dynamic_locked_qr_rows=2,
+            dynamic_source="dynamic_trial_simulation:ordinary",
+        )
+    )
+
+    assert result["status"] == "rejected"
+    assert "visual_objective_surface_mismatch" in result["failure_reasons"]
+    assert result["would_update_geometry"] is False
 
 
 def test_parameter_combo_result_rejects_visual_mismatch_with_partial_dynamic_coverage() -> None:
@@ -33128,6 +33147,31 @@ def test_apply_sweep_result_allows_visual_mismatch_for_dynamic_authority_clean_f
 
     assert result.applied is True
     assert gamma_var.get() == 1.2
+
+
+def test_apply_sweep_result_rejects_visual_mismatch_without_locked_qr_source(
+    tmp_path,
+) -> None:
+    state_path, combo_result_path, _accepted_overlay_path = (
+        _write_apply_sweep_combo_for_atomic_tests(
+            tmp_path,
+            active_vars=["gamma"],
+            result_variables={"gamma": 1.2},
+            result_overrides=_visual_mismatch_dynamic_combo_contract(
+                expected_locked_qr_rows=2,
+                dynamic_locked_qr_rows=2,
+                dynamic_source="dynamic_trial_simulation:ordinary",
+            ),
+        )
+    )
+
+    with pytest.raises(ValueError, match="sweep_result_visual_objective_mismatch"):
+        geometry_fit.apply_geometry_fit_sweep_result(
+            combo_result_path=combo_result_path,
+            current_state_path=state_path,
+            approved_excluded_pair_ids=["bg0:pair20"],
+            var_map={"gamma": _DummyVar(0.0)},
+        )
 
 
 def test_apply_sweep_result_rejects_visual_mismatch_with_partial_dynamic_coverage(

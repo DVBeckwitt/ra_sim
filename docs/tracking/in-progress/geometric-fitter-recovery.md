@@ -9,24 +9,27 @@ Last updated: 2026-05-27
 
 ## Summary
 
-2026-05-27 Bi2Se3 canonical regression fixture update:
-`artifacts/geometry_fit_gui_states/Bi2Se3.json` is now the canonical
-repo-relative fixture for the accepted exact-only dynamic caked geometry-fit
-path. The regression loads that fixture, isolates
-`('q_group','primary',1,10)` on the first background, fits `gamma,Gamma`, and
-asserts an accepted caked-degree result with dynamic `objective_trial` locked
-rows plus runtime progress readiness `expected/projected/finite = 2/2/2`,
-`source_authority_mismatch_count=0`, no recommended next fix, no
-repick/outlier text, no rejection notice, and finite RMS below the acceptance
-threshold. `new4.json` remains historical investigation context, not the
-canonical regression fixture. `visual_objective_surface_mismatch_count=1` is
-diagnostic-only only for an otherwise accepted caked fit where source authority
-is clean, expected locked rows are known, every expected row has a unique
-dynamic `objective_trial` prediction, no objective-trial source starts from
-saved locked handoff, and no failure class is present. This visual/objective
-surface mismatch remains pending investigation. This does not claim the full
-geometric fitter is solved, and no repo cleanup audit was run as part of this
-update.
+2026-05-27 Bi2Se3 dynamic-caked regression update:
+the accepted exact-only dynamic caked geometry-fit regression now synthesizes
+its two-row Bi2Se3 state from the existing repo `new4.json` fixture instead of
+committing a second saved-state artifact that referenced an unavailable OSC
+image. The regression isolates `('q_group','primary',1,10)` on the first
+background, writes a temporary state path/background path for the headless
+worker, fits `gamma,Gamma`, and asserts an accepted caked-degree result with
+dynamic `objective_trial` locked rows plus runtime progress readiness
+`expected/projected/finite = 2/2/2`, `source_authority_mismatch_count=0`, no
+recommended next fix, no repick/outlier text, no rejection notice, and finite
+RMS below the acceptance threshold. `new4.json` remains historical
+investigation context and the source fixture for this synthesized regression
+state. `visual_objective_surface_mismatch_count=1` is diagnostic-only only for
+an otherwise accepted caked fit where source authority is clean, expected
+locked rows are known, every expected row has a unique explicitly
+`locked_manual_qr` dynamic `objective_trial` prediction, no objective-trial
+source starts from saved locked handoff, and no failure class is present.
+Ordinary dynamic branch rows can no longer satisfy this exception. This
+visual/objective surface mismatch remains pending investigation. This does not
+claim the full geometric fitter is solved, and no repo cleanup audit was run as
+part of this update.
 
 2026-05-27 exact-only locked Qr/Qz readiness gate update: non-exact optics
 modes are no longer supported for the fitter path, so the remaining operator

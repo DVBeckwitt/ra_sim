@@ -63,6 +63,11 @@ pickable without falling back to primary or packaged 6H rows.
   current cursor pixels when backend `xdata`/`ydata` still reflect an older
   view. The refiner now receives the actual release position while normal
   data-coordinate events continue to use the existing fallback path.
+- 2026-05-27 shipping review follow-up: tightened the geometry-fit apply gate
+  so the diagnostic-only visual/objective mismatch bypass requires explicit
+  locked-manual-Qr dynamic rows, and removed the incomplete committed Bi2Se3
+  saved-state artifact in favor of synthesizing that regression state from the
+  existing repo `new4.json` fixture.
 - Bug status: fixed for saved GUI states that contain nonempty
   `state.geometry.q_group_rows` and empty `state.geometry.peak_records`,
   including PbI2 `disordered_phase` rows produced by the modified-CIF disorder
@@ -75,6 +80,13 @@ pickable without falling back to primary or packaged 6H rows.
 - Error status: clicked background points are no longer expected to refine from
   the repeated zoom anchor when release pixels are available after the view
   changes.
+- Error status: ordinary dynamic branch rows are no longer allowed to mask a
+  `visual_objective_surface_mismatch_count` apply failure; only explicit
+  locked-manual-Qr dynamic objective rows can mark that mismatch
+  diagnostic-only.
+- Artifact status: no new Bi2Se3 saved-state JSON is tracked; the regression
+  builds the minimal state at test time to avoid stale or unavailable
+  background-image paths.
 - Error status: the specific no-detector-source-rows warning is no longer
   expected for those imported states after restore when source rows or stored
   generated-disordered hit tables are available.
