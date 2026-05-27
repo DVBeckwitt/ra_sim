@@ -26,8 +26,8 @@ test-quality, new-file, or abstraction blockers were found. Shipping status:
 `python -m pytest tests/test_gui_views.py -ra`,
 `python -m pytest tests/test_gui_views.py tests/test_gui_structure_factor_pruning.py
 tests/test_gui_sim_signature.py -ra`, `python -m ra_sim.dev check`, and
-`git diff --check` pass locally. Rollback is a normal git revert of the
-test/doc cleanup.
+`git diff --check` pass locally; cleanup committed as `4e84b837`. Rollback is
+a normal git revert of the test/doc cleanup commit.
 
 2026-05-27 phase 6 structure-factor pruning test-helper simplification:
 `tests/test_gui_structure_factor_pruning.py` now reuses the shared
