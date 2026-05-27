@@ -28,8 +28,8 @@ deprecation notice, compatibility shim, release/version change, new file, or
 new abstraction required. Review status: no correctness, bloat, security,
 performance, test-quality, new-file, or abstraction blockers were found.
 Shipping status: targeted Phase 8 tests, `python -m ra_sim.dev check`, and
-`git diff --check` pass locally. Rollback is a normal git revert of the
-test/doc cleanup.
+`git diff --check` pass locally; cleanup committed as `5316d8f4`. Rollback is
+a normal git revert of the test/doc cleanup commit.
 
 2026-05-27 phase 7 GUI views test-helper simplification:
 `tests/test_gui_views.py` now reuses the shared `RuntimeVar` test fake instead
