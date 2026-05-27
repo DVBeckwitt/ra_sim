@@ -29,7 +29,9 @@ testing-index suites, `python -m ra_sim.dev test-fast`,
 `git diff --check` passed. Known residual: the dynamic reanchor
 `test_dynamic_reanchor_recovers_stale_peak_index_by_provider_branch` failure
 also reproduces on clean `HEAD`, so it is tracked as pre-existing and not part
-of this cleanup.
+of this cleanup. Shipping handoff: cleanup committed as `023f31e2`; the branch
+is ready for review after the documented validation gates, with rollback by
+reverting that single cleanup commit if a removed internal path proves active.
 
 2026-05-27 exact-only locked Qr/Qz readiness gate update: non-exact optics
 modes are no longer supported for the fitter path, so the remaining operator
