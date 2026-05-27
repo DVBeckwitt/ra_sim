@@ -27746,6 +27746,254 @@ def test_locked_qr_fit_space_projection_readiness_rejects_missing_row() -> None:
     assert readiness["missing_locked_qr_rows"] == ["bg0:g1:branch1"]
 
 
+def _locked_qr_projection_required_pair(
+    *,
+    pair_id: str | None,
+    branch_index: int = 1,
+    overlay_match_index: int | None = None,
+) -> dict[str, object]:
+    extra = {
+        "background_index": 0,
+        "source_reflection_index": 10,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_row_index": int(branch_index),
+        "source_peak_index": int(branch_index),
+        "fit_source_resolution_kind": "provider_fixed_source_local",
+        "optimizer_request_has_fixed_source": True,
+    }
+    if overlay_match_index is not None:
+        extra["overlay_match_index"] = int(overlay_match_index)
+    pair = _targeted_required_pair(
+        pair_id=str(pair_id or ""),
+        hkl=(-1, 0, 10),
+        branch_index=int(branch_index),
+        q_group_key=("q_group", "primary", 1, 10),
+        extra=extra,
+    )
+    if pair_id is None:
+        pair.pop("pair_id", None)
+    return pair
+
+
+def test_locked_qr_projection_readiness_reports_missing_projected_row_key() -> None:
+    required_pairs = [
+        _locked_qr_projection_required_pair(
+            pair_id=f"bg0:g1:branch{branch}",
+            branch_index=branch,
+        )
+        for branch in (0, 1)
+    ]
+    source_rows = [
+        {
+            **pair,
+            "sim_col": 100.0 + idx,
+            "sim_row": 200.0 + idx,
+        }
+        for idx, pair in enumerate(required_pairs)
+    ]
+    projected_rows = [
+        {
+            **source_rows[0],
+            "background_two_theta_deg": 30.0,
+            "background_phi_deg": 40.0,
+        }
+    ]
+
+    readiness = geometry_fit._locked_qr_fit_space_projection_readiness(
+        projected_rows,
+        required_pairs=required_pairs,
+        source_rows=source_rows,
+    )
+
+    assert readiness["fit_space_projection_ready"] is False
+    assert readiness["missing_locked_qr_rows"] == ["bg0:g1:branch1"]
+    assert readiness["missing_locked_qr_row_keys"] == [
+        {
+            "pair_id": "bg0:g1:branch1",
+            "background_index": 0,
+            "q_group_key": ["q_group", "primary", 1, 10],
+            "branch": 1,
+            "hkl": [-1, 0, 10],
+            "table": 10,
+            "row": 1,
+            "peak": 1,
+            "source": "primary",
+            "source_table_index": 10,
+            "source_reflection_index": 10,
+            "source_row_index": 1,
+            "source_peak_index": 1,
+            "source_exists": True,
+            "projected_exists": False,
+            "first_missing_stage": "projected_rows",
+        }
+    ]
+
+
+def test_locked_qr_projection_readiness_uses_overlay_match_fallback_pair_id() -> None:
+    required_pair = _locked_qr_projection_required_pair(
+        pair_id=None,
+        branch_index=1,
+        overlay_match_index=7,
+    )
+    source_rows = [
+        {
+            **required_pair,
+            "sim_col": 101.0,
+            "sim_row": 201.0,
+        }
+    ]
+
+    readiness = geometry_fit._locked_qr_fit_space_projection_readiness(
+        [],
+        required_pairs=[required_pair],
+        source_rows=source_rows,
+    )
+
+    assert readiness["expected_locked_qr_rows"] == 1
+    assert readiness["projected_locked_qr_rows"] == 0
+    assert readiness["finite_locked_qr_rows"] == 0
+    assert readiness["missing_locked_qr_rows"] == ["pair[7]"]
+    assert readiness["missing_locked_qr_row_keys"][0]["pair_id"] == "pair[7]"
+    assert readiness["missing_locked_qr_row_keys"][0]["first_missing_stage"] == "projected_rows"
+
+
+def test_locked_qr_projection_readiness_reports_missing_source_row_key() -> None:
+    required_pair = _locked_qr_projection_required_pair(
+        pair_id="bg0:g1:branch1",
+        branch_index=1,
+    )
+
+    readiness = geometry_fit._locked_qr_fit_space_projection_readiness(
+        [],
+        required_pairs=[required_pair],
+        source_rows=[],
+    )
+
+    assert readiness["fit_space_projection_ready"] is False
+    assert readiness["missing_locked_qr_rows"] == ["bg0:g1:branch1"]
+    assert readiness["missing_locked_qr_row_keys"][0]["source_exists"] is False
+    assert readiness["missing_locked_qr_row_keys"][0]["projected_exists"] is False
+    assert readiness["missing_locked_qr_row_keys"][0]["first_missing_stage"] == "source_cache_rows"
+
+
+def test_locked_qr_projection_readiness_uses_source_coverage_alias_for_source_exists() -> None:
+    required_pair = _locked_qr_projection_required_pair(
+        pair_id="bg0:g1:branch1",
+        branch_index=1,
+    )
+    coverage_payload = geometry_fit._geometry_fit_source_coverage_key_payload(
+        geometry_fit.normalize_new4_source_coverage_key(required_pair)
+    )
+    source_row = {
+        **required_pair,
+        "source_reflection_index": 99,
+        "source_row_index": 99,
+        "source_coverage_aliases": [coverage_payload],
+        "sim_col": 101.0,
+        "sim_row": 201.0,
+    }
+    validator = geometry_fit.validate_geometry_fit_live_source_rows(
+        [source_row],
+        required_pairs=[required_pair],
+        require_canonical_required_pairs=True,
+    )
+    assert validator["valid"] is True
+
+    readiness = geometry_fit._locked_qr_fit_space_projection_readiness(
+        [],
+        required_pairs=[required_pair],
+        source_rows=[source_row],
+    )
+
+    assert readiness["fit_space_projection_ready"] is False
+    assert readiness["missing_locked_qr_row_keys"][0]["source_exists"] is True
+    assert readiness["missing_locked_qr_row_keys"][0]["projected_exists"] is False
+    assert readiness["missing_locked_qr_row_keys"][0]["first_missing_stage"] == "projected_rows"
+
+
+def test_locked_qr_projection_readiness_rejects_direct_coverage_trusted_row_mismatch() -> None:
+    required_pair = _locked_qr_projection_required_pair(
+        pair_id="bg0:g1:branch1",
+        branch_index=1,
+    )
+    source_row = {
+        **required_pair,
+        "source_reflection_index": 99,
+        "source_row_index": 99,
+        "sim_col": 101.0,
+        "sim_row": 201.0,
+    }
+
+    assert geometry_fit.normalize_new4_source_coverage_key(
+        source_row
+    ) == geometry_fit.normalize_new4_source_coverage_key(required_pair)
+    assert (
+        geometry_fit._geometry_fit_source_reflection_row_key(source_row)
+        != geometry_fit._geometry_fit_source_reflection_row_key(required_pair)
+    )
+    assert (
+        geometry_fit._geometry_fit_candidate_matches_required_reflection_row(
+            required_pair,
+            source_row,
+        )
+        is False
+    )
+
+    readiness = geometry_fit._locked_qr_fit_space_projection_readiness(
+        [],
+        required_pairs=[required_pair],
+        source_rows=[source_row],
+    )
+
+    assert readiness["fit_space_projection_ready"] is False
+    missing_key = readiness["missing_locked_qr_row_keys"][0]
+    assert missing_key["source_exists"] is False
+    assert missing_key["projected_exists"] is False
+    assert missing_key["first_missing_stage"] == "source_cache_rows"
+
+
+def test_locked_qr_projection_readiness_preserves_alias_backed_nonfinite_projection() -> None:
+    required_pair = _locked_qr_projection_required_pair(
+        pair_id="bg0:g1:branch1",
+        branch_index=1,
+    )
+    coverage_payload = geometry_fit._geometry_fit_source_coverage_key_payload(
+        geometry_fit.normalize_new4_source_coverage_key(required_pair)
+    )
+    projected_row = {
+        **required_pair,
+        "source_reflection_index": 99,
+        "source_row_index": 99,
+        "source_coverage_aliases": [coverage_payload],
+        "sim_col": 101.0,
+        "sim_row": 201.0,
+        "background_two_theta_deg": float("nan"),
+        "background_phi_deg": 2.0,
+    }
+    validator = geometry_fit.validate_geometry_fit_live_source_rows(
+        [projected_row],
+        required_pairs=[required_pair],
+        require_canonical_required_pairs=True,
+    )
+    assert validator["valid"] is True
+
+    readiness = geometry_fit._locked_qr_fit_space_projection_readiness(
+        [projected_row],
+        required_pairs=[required_pair],
+        source_rows=[projected_row],
+    )
+
+    assert readiness["fit_space_projection_ready"] is False
+    assert readiness["failure_reason"] == "locked_qr_fit_space_projection_nonfinite"
+    assert readiness["nonfinite_locked_qr_row_keys"][0]["source_exists"] is True
+    assert readiness["nonfinite_locked_qr_row_keys"][0]["projected_exists"] is True
+    assert (
+        readiness["nonfinite_locked_qr_row_keys"][0]["first_missing_stage"]
+        == "projected_caked_values"
+    )
+
+
 def test_locked_qr_projection_readiness_flags_degenerate_projected_rows() -> None:
     required_pairs = [
         _targeted_required_pair(

@@ -60,6 +60,8 @@
   - Fixed saved Qr/Qz ghost-representative placements so changing simulation parameters refreshes their simulated marker positions from current source rows or current simulated-peak rows even when the saved placed row no longer carries ghost provenance, rejects stale warm-cache simulated pixels when the current ghost is missing, and preserves measured background clicks.
   - Fixed settled geometry-overlay redraw so view-bound Qr/Qz initial square markers are rebuilt from the current simulation instead of replayed from stale remembered display coordinates.
   - Fixed detector-mode locked Qr/Qz geometry-fit preflight so selected detector rows generate exact caked projected rows for the worker locked-Qr readiness gate once a projection payload exists, without promoting detector fit-space or caked-objective flags; current saved manual pairs still replace unmatched stale live-preview source rows during fit job build.
+  - Made locked Qr/Qz exact-caked projection readiness report source-row and projected-row identity separately, so caked view storage timeouts no longer appear as opaque zero-row projection failures when projected rows are present.
+  - Fixed locked Qr/Qz projection-readiness failure details so nonfinite failures label nonfinite row keys, missing failures label missing row keys, and mixed failures preserve both sections.
   - Raised the default background max-intensity estimate for sparse bright peaks by using a higher robust percentile while keeping slider ceilings tied to the true finite image range.
   - Added Advanced/Debug GUI toggles to compare primary integer-Bragg peaks against Hendricks-Teller rods and to disable refraction effects by forcing vacuum `n2` with optics-cache invalidation.
 

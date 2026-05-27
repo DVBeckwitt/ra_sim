@@ -17979,20 +17979,36 @@ def test_runtime_session_locked_qr_projection_ready_storage_timeout_does_not_fai
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     dataset_calls: list[int] = []
     job = _make_geometry_fit_worker_job(runtime_session)
-    caked_row = dict(
-        _geometry_fit_worker_live_row(),
-        background_index=0,
-        background_two_theta_deg=1.0,
-        background_phi_deg=2.0,
-        caked_x=1.0,
-        caked_y=2.0,
-    )
-    locked_pair = dict(
-        _geometry_fit_worker_required_pair(),
-        background_index=0,
-        fit_source_resolution_kind="provider_fixed_source_local",
-        optimizer_request_has_fixed_source=True,
-    )
+    caked_rows = []
+    locked_pairs = []
+    for branch in (0, 1):
+        caked_rows.append(
+            dict(
+                _geometry_fit_worker_live_row(),
+                background_index=0,
+                source_row_index=branch,
+                source_branch_index=branch,
+                source_peak_index=branch,
+                sim_col=10.0 + branch,
+                sim_row=20.0 + branch,
+                background_two_theta_deg=1.0 + branch,
+                background_phi_deg=2.0 + branch,
+                caked_x=1.0 + branch,
+                caked_y=2.0 + branch,
+            )
+        )
+        locked_pairs.append(
+            dict(
+                _geometry_fit_worker_required_pair(),
+                pair_id=f"bg0:pair{branch}",
+                background_index=0,
+                source_row_index=branch,
+                source_branch_index=branch,
+                source_peak_index=branch,
+                fit_source_resolution_kind="provider_fixed_source_local",
+                optimizer_request_has_fixed_source=True,
+            )
+        )
     perf_lock = threading.Lock()
     perf_state = {"value": 0.0}
 
@@ -18021,8 +18037,8 @@ def test_runtime_session_locked_qr_projection_ready_storage_timeout_does_not_fai
     }
     job["manual_caked_fit_space_required_by_background"] = {0: True}
     job["manual_fit_space_by_background"] = {0: "detector"}
-    job["manual_pairs_by_background"] = {0: [locked_pair]}
-    job["live_rows_by_background"] = {0: [caked_row]}
+    job["manual_pairs_by_background"] = {0: locked_pairs}
+    job["live_rows_by_background"] = {0: caked_rows}
     job["live_rows_signature_by_background"] = {0: ("sig", 0)}
 
     monkeypatch.setattr(runtime_session, "perf_counter", _fake_perf_counter)
@@ -18058,15 +18074,17 @@ def test_runtime_session_locked_qr_projection_ready_storage_timeout_does_not_fai
     monkeypatch.setattr(
         runtime_session.gui_geometry_fit,
         "rebuild_geometry_fit_source_rows",
-        lambda background_index, **_kwargs: runtime_session.gui_geometry_fit.GeometryFitSourceRowRebuildResult(
-            background_index=int(background_index),
-            requested_signature=("sig", int(background_index)),
-            requested_signature_summary="sig-summary",
-            projected_rows=[caked_row],
-            stored_rows=[caked_row],
-            rebuild_source="peak_records",
-            rebuild_attempts=[],
-            diagnostics={},
+        lambda background_index, **_kwargs: (
+            runtime_session.gui_geometry_fit.GeometryFitSourceRowRebuildResult(
+                background_index=int(background_index),
+                requested_signature=("sig", int(background_index)),
+                requested_signature_summary="sig-summary",
+                projected_rows=caked_rows,
+                stored_rows=caked_rows,
+                rebuild_source="peak_records",
+                rebuild_attempts=[],
+                diagnostics={},
+            )
         ),
     )
     monkeypatch.setattr(
@@ -18110,9 +18128,16 @@ def test_runtime_session_locked_qr_projection_ready_storage_timeout_does_not_fai
     assert dataset_calls == [0]
     assert "source_cache_caked_view_timeout" in kinds
     assert readiness_events
+    assert readiness_events[-1]["expected_locked_qr_rows"] == 2
+    assert readiness_events[-1]["projected_locked_qr_rows"] == 2
+    assert readiness_events[-1]["finite_locked_qr_rows"] == 2
     assert readiness_events[-1]["fit_space_projection_ready"] is True
     assert readiness_events[-1]["storage_timeout_fatal"] is False
     assert readiness_events[-1]["caked_view_storage_status"] == "deferred"
+    assert readiness_events[-1]["source_rows_existed_for_locked_qr"] == "yes"
+    assert readiness_events[-1]["projected_rows_existed_for_locked_qr"] == "yes"
+    assert readiness_events[-1]["exact_caked_projection_payload_status"] == "ready"
+    assert readiness_events[-1]["optics_mode"] == "exact"
 
 
 def _run_locked_qr_projection_missing_worker_case(
@@ -18125,22 +18150,58 @@ def _run_locked_qr_projection_missing_worker_case(
     project_stored_rows: bool = False,
     project_readiness_rows: bool = False,
     projected_inputs: list[dict[str, object]] | None = None,
+    projection_outcomes: Sequence[str] | None = None,
 ) -> tuple[object, list[int], list[dict[str, object]]]:
     runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
     dataset_calls: list[int] = []
     job = _make_geometry_fit_worker_job(runtime_session)
-    live_row = dict(_geometry_fit_worker_live_row(), background_index=0)
-    locked_pair = dict(
-        _geometry_fit_worker_required_pair(),
-        background_index=0,
-    )
+    outcome_list = list(projection_outcomes or ())
+    if outcome_list:
+        live_rows = []
+        locked_pairs = []
+        for index, _outcome in enumerate(outcome_list):
+            identity = {
+                "pair_id": f"bg0:pair{index}",
+                "hkl": (1, int(index), 0),
+                "q_group_key": ("q", int(index) + 1),
+                "source_reflection_index": 7 + int(index),
+                "source_row_index": int(index),
+            }
+            live_rows.append(
+                dict(
+                    _geometry_fit_worker_live_row(),
+                    **identity,
+                    background_index=0,
+                    sim_col=10.0 + float(index),
+                    sim_row=20.0 + float(index),
+                )
+            )
+            locked_pairs.append(
+                dict(
+                    _geometry_fit_worker_required_pair(),
+                    **identity,
+                    background_index=0,
+                    overlay_match_index=int(index),
+                )
+            )
+    else:
+        live_rows = [dict(_geometry_fit_worker_live_row(), background_index=0)]
+        locked_pairs = [
+            dict(
+                _geometry_fit_worker_required_pair(),
+                background_index=0,
+            )
+        ]
     if project_stored_rows or project_readiness_rows:
-        locked_pair["manual_background_input_origin"] = "detector"
+        for locked_pair in locked_pairs:
+            locked_pair["manual_background_input_origin"] = "detector"
     if include_optimizer_flags:
-        locked_pair.update(
-            fit_source_resolution_kind="provider_fixed_source_local",
-            optimizer_request_has_fixed_source=True,
-        )
+        for locked_pair in locked_pairs:
+            locked_pair.update(
+                fit_source_resolution_kind="provider_fixed_source_local",
+                optimizer_request_has_fixed_source=True,
+            )
+    live_row = live_rows[0]
     perf_lock = threading.Lock()
     perf_state = {"value": 0.0}
 
@@ -18151,8 +18212,8 @@ def _run_locked_qr_projection_missing_worker_case(
 
     job["manual_caked_fit_space_required_by_background"] = {0: bool(manual_caked_required)}
     job["manual_fit_space_by_background"] = {0: manual_fit_space}
-    job["manual_pairs_by_background"] = {0: [locked_pair]}
-    job["live_rows_by_background"] = {0: [live_row]}
+    job["manual_pairs_by_background"] = {0: list(locked_pairs)}
+    job["live_rows_by_background"] = {0: list(live_rows)}
     job["live_rows_signature_by_background"] = {0: ("sig", 0)}
     if manual_fit_space == "caked":
         job["pick_uses_caked_space"] = True
@@ -18210,6 +18271,10 @@ def _run_locked_qr_projection_missing_worker_case(
     )
     if project_stored_rows or project_readiness_rows:
         projected_input_rows = projected_inputs if projected_inputs is not None else []
+        outcome_by_reflection = {
+            7 + int(index): str(outcome)
+            for index, outcome in enumerate(outcome_list)
+        }
 
         class _ProjectionCallbacks:
             def __init__(self, caked_view_enabled):
@@ -18228,13 +18293,21 @@ def _run_locked_qr_projection_missing_worker_case(
                     if not caked_enabled:
                         projected.append(dict(row))
                         continue
+                    try:
+                        reflection_index = int(row.get("source_reflection_index", -1))
+                    except Exception:
+                        reflection_index = -1
+                    projection_outcome = outcome_by_reflection.get(reflection_index, "finite")
+                    if projection_outcome == "missing":
+                        continue
                     projected_input_rows.append(dict(row))
+                    caked_x = float("nan") if projection_outcome == "nonfinite" else 1.0
                     projected.append(
                         dict(
                             row,
-                            background_two_theta_deg=1.0,
+                            background_two_theta_deg=caked_x,
                             background_phi_deg=2.0,
-                            caked_x=1.0,
+                            caked_x=caked_x,
                             caked_y=2.0,
                         )
                     )
@@ -18248,15 +18321,17 @@ def _run_locked_qr_projection_missing_worker_case(
         monkeypatch.setattr(
             runtime_session.gui_geometry_fit,
             "rebuild_geometry_fit_source_rows",
-            lambda background_index, **_kwargs: runtime_session.gui_geometry_fit.GeometryFitSourceRowRebuildResult(
-                background_index=int(background_index),
-                requested_signature=("sig", int(background_index)),
-                requested_signature_summary="sig-summary",
-                projected_rows=[],
-                stored_rows=[live_row],
-                rebuild_source="peak_records",
-                rebuild_attempts=[],
-                diagnostics={},
+            lambda background_index, **_kwargs: (
+                runtime_session.gui_geometry_fit.GeometryFitSourceRowRebuildResult(
+                    background_index=int(background_index),
+                    requested_signature=("sig", int(background_index)),
+                    requested_signature_summary="sig-summary",
+                    projected_rows=[],
+                    stored_rows=list(live_rows),
+                    rebuild_source="peak_records",
+                    rebuild_attempts=[],
+                    diagnostics={},
+                )
             ),
         )
     if force_stored_caked_rows_only:
@@ -18271,15 +18346,17 @@ def _run_locked_qr_projection_missing_worker_case(
         monkeypatch.setattr(
             runtime_session.gui_geometry_fit,
             "rebuild_geometry_fit_source_rows",
-            lambda background_index, **_kwargs: runtime_session.gui_geometry_fit.GeometryFitSourceRowRebuildResult(
-                background_index=int(background_index),
-                requested_signature=("sig", int(background_index)),
-                requested_signature_summary="sig-summary",
-                projected_rows=[],
-                stored_rows=[stored_row],
-                rebuild_source="peak_records",
-                rebuild_attempts=[],
-                diagnostics={},
+            lambda background_index, **_kwargs: (
+                runtime_session.gui_geometry_fit.GeometryFitSourceRowRebuildResult(
+                    background_index=int(background_index),
+                    requested_signature=("sig", int(background_index)),
+                    requested_signature_summary="sig-summary",
+                    projected_rows=[],
+                    stored_rows=[stored_row],
+                    rebuild_source="peak_records",
+                    rebuild_attempts=[],
+                    diagnostics={},
+                )
             ),
         )
     monkeypatch.setattr(
@@ -18339,11 +18416,90 @@ def test_runtime_session_locked_qr_projection_missing_stops_before_dataset_build
     assert dataset_calls == []
     assert action_result.error_text is not None
     assert "exact caked fit-space projection is missing" in action_result.error_text
+    assert "Source rows existed: yes" in action_result.error_text
+    assert "Projected caked rows existed: no" in action_result.error_text
+    assert "Caked view storage: timeout" in action_result.error_text
+    assert "Missing row keys: pair_id=bg0:pair0" in action_result.error_text
+    assert "Nonfinite row keys:" not in action_result.error_text
+    assert "repick" not in action_result.error_text.lower()
     assert readiness_events
     assert readiness_events[-1]["expected_locked_qr_rows"] == 1
     assert readiness_events[-1]["projected_locked_qr_rows"] == 0
     assert readiness_events[-1]["fit_space_projection_ready"] is False
     assert readiness_events[-1]["failure_reason"] == "locked_qr_fit_space_projection_missing"
+    assert readiness_events[-1]["missing_locked_qr_row_keys"][0]["pair_id"] == "bg0:pair0"
+    assert readiness_events[-1]["missing_locked_qr_row_keys"][0]["source_exists"] is True
+    assert readiness_events[-1]["missing_locked_qr_row_keys"][0]["projected_exists"] is False
+    assert (
+        readiness_events[-1]["missing_locked_qr_row_keys"][0]["first_missing_stage"]
+        == "projected_rows"
+    )
+    assert readiness_events[-1]["source_rows_existed_for_locked_qr"] == "yes"
+    assert readiness_events[-1]["projected_rows_existed_for_locked_qr"] == "no"
+    assert readiness_events[-1]["exact_caked_projection_payload_status"] == "missing"
+    assert readiness_events[-1]["optics_mode"] == "exact"
+
+
+def test_runtime_session_locked_qr_projection_nonfinite_reports_nonfinite_rows(
+    monkeypatch,
+) -> None:
+    (
+        action_result,
+        dataset_calls,
+        readiness_events,
+    ) = _run_locked_qr_projection_missing_worker_case(
+        monkeypatch,
+        manual_fit_space="detector",
+        project_readiness_rows=True,
+        projection_outcomes=["nonfinite"],
+    )
+
+    assert dataset_calls == []
+    assert action_result.error_text is not None
+    assert "exact caked fit-space projection has non-finite" in action_result.error_text
+    assert "Nonfinite row keys: pair_id=bg0:pair0" in action_result.error_text
+    assert "Missing row keys:" not in action_result.error_text
+    assert "repick" not in action_result.error_text.lower()
+    assert readiness_events
+    assert readiness_events[-1]["failure_reason"] == "locked_qr_fit_space_projection_nonfinite"
+    assert readiness_events[-1]["missing_locked_qr_row_keys"] == []
+    assert readiness_events[-1]["nonfinite_locked_qr_row_keys"][0]["pair_id"] == "bg0:pair0"
+    assert readiness_events[-1]["nonfinite_locked_qr_row_keys"][0]["source_exists"] is True
+    assert readiness_events[-1]["nonfinite_locked_qr_row_keys"][0]["projected_exists"] is True
+    assert (
+        readiness_events[-1]["nonfinite_locked_qr_row_keys"][0]["first_missing_stage"]
+        == "projected_caked_values"
+    )
+
+
+def test_runtime_session_locked_qr_projection_mixed_failure_labels_row_sections(
+    monkeypatch,
+) -> None:
+    (
+        action_result,
+        dataset_calls,
+        readiness_events,
+    ) = _run_locked_qr_projection_missing_worker_case(
+        monkeypatch,
+        manual_fit_space="detector",
+        project_readiness_rows=True,
+        projection_outcomes=["missing", "nonfinite"],
+    )
+
+    assert dataset_calls == []
+    assert action_result.error_text is not None
+    assert "exact caked fit-space projection has non-finite" in action_result.error_text
+    nonfinite_label_index = action_result.error_text.find("Nonfinite row keys:")
+    missing_label_index = action_result.error_text.find("Missing row keys:")
+    assert nonfinite_label_index >= 0
+    assert missing_label_index > nonfinite_label_index
+    assert "Nonfinite row keys: pair_id=bg0:pair1" in action_result.error_text
+    assert "Missing row keys: pair_id=bg0:pair0" in action_result.error_text
+    assert "repick" not in action_result.error_text.lower()
+    assert readiness_events
+    assert readiness_events[-1]["failure_reason"] == "locked_qr_fit_space_projection_nonfinite"
+    assert readiness_events[-1]["missing_locked_qr_row_keys"][0]["pair_id"] == "bg0:pair0"
+    assert readiness_events[-1]["nonfinite_locked_qr_row_keys"][0]["pair_id"] == "bg0:pair1"
 
 
 def test_locked_qr_projection_missing_stops_before_dataset_build_without_optimizer_flags(
@@ -18369,6 +18525,11 @@ def test_locked_qr_projection_missing_stops_before_dataset_build_without_optimiz
     assert readiness_events[-1]["fit_space_projection_ready"] is False
     assert readiness_events[-1]["storage_timeout_fatal"] is True
     assert readiness_events[-1]["failure_reason"] == "locked_qr_fit_space_projection_missing"
+    assert readiness_events[-1]["missing_locked_qr_row_keys"][0]["source_exists"] is True
+    assert (
+        readiness_events[-1]["missing_locked_qr_row_keys"][0]["first_missing_stage"]
+        == "projected_rows"
+    )
 
 
 def test_locked_qr_readiness_uses_projected_rows_not_stored_fallback(
@@ -18397,6 +18558,8 @@ def test_locked_qr_readiness_uses_projected_rows_not_stored_fallback(
     assert readiness_events[-1]["projected_locked_qr_rows"] == 0
     assert readiness_events[-1]["fit_space_projection_ready"] is False
     assert readiness_events[-1]["failure_reason"] == "locked_qr_fit_space_projection_missing"
+    assert readiness_events[-1]["missing_locked_qr_row_keys"][0]["source_exists"] is True
+    assert readiness_events[-1]["missing_locked_qr_row_keys"][0]["projected_exists"] is False
 
 
 def test_detector_origin_locked_qr_preflight_generates_selected_projected_rows(

@@ -5,9 +5,25 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-05-25
+Last updated: 2026-05-27
 
 ## Summary
+
+2026-05-27 locked Qr/Qz projection-readiness diagnostics fix: the worker now
+passes stored source rows into the locked-Qr exact-caked readiness gate so
+preflight can distinguish source-cache loss from projected-row loss. Missing
+readiness failures include compact row keys (`pair_id`, hkl, branch, table, row,
+peak, source, and first missing stage), event payloads distinguish source rows,
+projected rows, exact projection payload, storage status, timeout fatality, and
+optics mode, and caked view storage timeouts no longer appear as opaque
+zero-projected-row failures when projected rows are already present. Follow-up
+closeout: runtime failure text now chooses its primary row-key section from
+`failure_reason`, so nonfinite failures show nonfinite row keys, missing
+failures show missing row keys, and mixed failures preserve separately labeled
+nonfinite and missing sections. Bug/error status: fixed for the remaining
+locked-Qr readiness diagnostic mismatch. Feature, migration, deprecation, API,
+solver, optimizer, route-selection, overlay, acceptance-metric, optics-default,
+and gamma/Gamma status: unchanged.
 
 2026-05-25 detector-mode locked Qr/Qz readiness projection fix: the live
 `8f68fe5c` trace no longer froze, but the worker still failed after caked

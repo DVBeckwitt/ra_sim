@@ -2071,6 +2071,17 @@ def _geometry_fit_entry_source_label(entry: Mapping[str, object] | None) -> str:
     return "primary"
 
 
+def _geometry_fit_pair_id(entry: Mapping[str, object], fallback_index: int) -> str:
+    raw_pair_id = entry.get("pair_id")
+    if raw_pair_id:
+        return str(raw_pair_id)
+    try:
+        overlay_match_index = int(entry.get("overlay_match_index", fallback_index))
+    except Exception:
+        overlay_match_index = int(fallback_index)
+    return f"pair[{overlay_match_index}]"
+
+
 def _geometry_fit_branch_constraint_status(
     entry: Mapping[str, object] | None,
 ) -> str:
@@ -2247,10 +2258,17 @@ def _geometry_fit_apply_source_coverage_identity(row: dict[str, object]) -> None
 def _geometry_fit_source_coverage_alias_keys(
     entry: Mapping[str, object] | None,
 ) -> set[tuple[tuple[int, int, int], object | None, object | None]]:
-    keys: set[tuple[tuple[int, int, int], object | None, object | None]] = set()
+    keys = _geometry_fit_explicit_source_coverage_alias_keys(entry)
     direct_key = normalize_new4_source_coverage_key(entry)
     if direct_key is not None:
         keys.add(direct_key)
+    return keys
+
+
+def _geometry_fit_explicit_source_coverage_alias_keys(
+    entry: Mapping[str, object] | None,
+) -> set[tuple[tuple[int, int, int], object | None, object | None]]:
+    keys: set[tuple[tuple[int, int, int], object | None, object | None]] = set()
     if not isinstance(entry, Mapping):
         return keys
     for field_name in _GEOMETRY_FIT_SOURCE_COVERAGE_ALIAS_FIELDS:
@@ -2269,6 +2287,21 @@ def _geometry_fit_source_coverage_alias_keys(
             if alias_key is not None:
                 keys.add(alias_key)
     return keys
+
+
+def _geometry_fit_candidate_matches_required_reflection_row(
+    entry: Mapping[str, object],
+    candidate: Mapping[str, object],
+) -> bool:
+    entry_reflection_row_key = _geometry_fit_source_reflection_row_key(entry)
+    if entry_reflection_row_key is None:
+        return True
+    if _geometry_fit_source_reflection_row_key(candidate) == entry_reflection_row_key:
+        return True
+    target_coverage_key = normalize_new4_source_coverage_key(entry)
+    if target_coverage_key is None:
+        return False
+    return target_coverage_key in _geometry_fit_explicit_source_coverage_alias_keys(candidate)
 
 
 def _geometry_fit_required_branch_group_keys(
@@ -6586,33 +6619,6 @@ def validate_geometry_fit_live_source_rows(
                 kept.append(dict(candidate))
         return kept, bool(saw_comparable and candidates and not kept)
 
-    def _candidate_matches_required_reflection_row(
-        entry: Mapping[str, object],
-        candidate: Mapping[str, object],
-    ) -> bool:
-        entry_reflection_row_key = _geometry_fit_source_reflection_row_key(entry)
-        if entry_reflection_row_key is None:
-            return True
-        if _geometry_fit_source_reflection_row_key(candidate) == entry_reflection_row_key:
-            return True
-        target_coverage_key = normalize_new4_source_coverage_key(entry)
-        if target_coverage_key is None:
-            return False
-        for field_name in _GEOMETRY_FIT_SOURCE_COVERAGE_ALIAS_FIELDS:
-            raw_aliases = candidate.get(field_name)
-            if raw_aliases is None:
-                continue
-            if isinstance(raw_aliases, Mapping):
-                alias_items: Sequence[object] = [raw_aliases]
-            elif isinstance(raw_aliases, Sequence) and not isinstance(raw_aliases, (str, bytes)):
-                alias_items = list(raw_aliases)
-            else:
-                continue
-            for raw_alias in alias_items:
-                if normalize_new4_source_coverage_key(raw_alias) == target_coverage_key:  # type: ignore[arg-type]
-                    return True
-        return False
-
     def _failure_payload(
         entry: Mapping[str, object],
         *,
@@ -6725,9 +6731,7 @@ def validate_geometry_fit_live_source_rows(
             continue
         validated_pair_count += 1
         entry = dict(raw_entry)
-        pair_id = str(
-            entry.get("pair_id") or f"pair[{int(entry.get('overlay_match_index', fallback_index))}]"
-        )
+        pair_id = _geometry_fit_pair_id(entry, fallback_index)
         source_label = _source_label(entry)
         group_key = _geometry_fit_group_identity(entry)
         hkl_key = _hkl_tuple(entry)
@@ -6863,7 +6867,7 @@ def validate_geometry_fit_live_source_rows(
             trusted_row_candidates = [
                 dict(candidate)
                 for candidate in branch_filtered
-                if _candidate_matches_required_reflection_row(entry, candidate)
+                if _geometry_fit_candidate_matches_required_reflection_row(entry, candidate)
             ]
             if not trusted_row_candidates:
                 pair_failures.append(
@@ -19161,11 +19165,17 @@ def _locked_qr_fit_space_projection_readiness(
     projected_rows: Sequence[object] | None,
     *,
     required_pairs: Sequence[Mapping[str, object]] | None,
+    source_rows: Sequence[object] | None = None,
 ) -> dict[str, object]:
     """Summarize whether locked Qr/Qz rows have finite caked fit-space anchors."""
 
     def _with_effective_locked_qr_identity(entry: Mapping[str, object]) -> dict[str, object]:
         row = dict(entry)
+        explicit_alias_fields = {
+            field_name: copy.deepcopy(row[field_name])
+            for field_name in _GEOMETRY_FIT_SOURCE_COVERAGE_ALIAS_FIELDS
+            if field_name in row
+        }
         sources = (
             row,
             row.get("provider_selected_source_identity_canonical"),
@@ -19229,6 +19239,11 @@ def _locked_qr_fit_space_projection_readiness(
         if source_label is not None and row.get("source_label") is None:
             row["source_label"] = str(source_label)
         _geometry_fit_apply_source_coverage_identity(row)
+        for field_name in _GEOMETRY_FIT_SOURCE_COVERAGE_ALIAS_FIELDS:
+            if field_name in explicit_alias_fields:
+                row[field_name] = explicit_alias_fields[field_name]
+            else:
+                row.pop(field_name, None)
         return row
 
     locked_required_pairs = [
@@ -19246,8 +19261,11 @@ def _locked_qr_fit_space_projection_readiness(
             "expected_locked_qr_rows": 0,
             "projected_locked_qr_rows": 0,
             "finite_locked_qr_rows": 0,
+            "locked_qr_row_keys": [],
             "missing_locked_qr_rows": [],
+            "missing_locked_qr_row_keys": [],
             "nonfinite_locked_qr_rows": [],
+            "nonfinite_locked_qr_row_keys": [],
             "projection_degenerate": False,
             "projection_degeneracy_reason": None,
             "projection_distinct_detector_point_count": 0,
@@ -19261,6 +19279,12 @@ def _locked_qr_fit_space_projection_readiness(
     rows = [
         _with_effective_locked_qr_identity(entry)
         for entry in (projected_rows or ())
+        if isinstance(entry, Mapping)
+    ]
+    source_lookup_available = source_rows is not None
+    source_lookup_rows = [
+        _with_effective_locked_qr_identity(entry)
+        for entry in (source_rows or ())
         if isinstance(entry, Mapping)
     ]
     validation = validate_geometry_fit_live_source_rows(
@@ -19295,11 +19319,7 @@ def _locked_qr_fit_space_projection_readiness(
         row_branch = _geometry_fit_source_branch_index(row)
         if pair_branch in {0, 1} and row_branch in {0, 1} and int(row_branch) != int(pair_branch):
             return False
-        pair_reflection_row_key = _geometry_fit_source_reflection_row_key(pair)
-        if (
-            pair_reflection_row_key is not None
-            and _geometry_fit_source_reflection_row_key(row) != pair_reflection_row_key
-        ):
+        if not _geometry_fit_candidate_matches_required_reflection_row(pair, row):
             return False
         return True
 
@@ -19356,6 +19376,58 @@ def _locked_qr_fit_space_projection_readiness(
     def _rounded_point(point: tuple[float, float]) -> tuple[float, float]:
         return round(float(point[0]), 6), round(float(point[1]), 6)
 
+    def _row_key_payload(pair: Mapping[str, object], pair_id: str) -> dict[str, object]:
+        branch_idx = _geometry_fit_source_branch_index(pair)
+        hkl_key = _geometry_fit_normalized_hkl(pair.get("hkl"))
+        source_reflection_idx = _geometry_fit_coerce_nonnegative_index(
+            pair.get("source_reflection_index")
+        )
+        source_table_idx = _geometry_fit_coerce_nonnegative_index(pair.get("source_table_index"))
+        source_row_idx = _geometry_fit_coerce_nonnegative_index(pair.get("source_row_index"))
+        source_peak_idx = _geometry_fit_coerce_nonnegative_index(pair.get("source_peak_index"))
+        source_table_or_reflection_idx = (
+            int(source_table_idx)
+            if source_table_idx is not None
+            else (int(source_reflection_idx) if source_reflection_idx is not None else None)
+        )
+        projected_matches = [row for row in rows if _row_matches_pair(row, pair)]
+        source_matches = (
+            [row for row in source_lookup_rows if _row_matches_pair(row, pair)]
+            if source_lookup_available
+            else []
+        )
+        source_exists = bool(source_matches) if source_lookup_available else bool(projected_matches)
+        projected_exists = bool(projected_matches)
+        projected_finite = any(_caked_point(row) is not None for row in projected_matches)
+        if source_lookup_available and not source_exists:
+            first_missing_stage = "source_cache_rows"
+        elif not projected_exists:
+            first_missing_stage = "projected_rows"
+        elif not projected_finite:
+            first_missing_stage = "projected_caked_values"
+        else:
+            first_missing_stage = None
+        return {
+            "pair_id": pair_id,
+            "background_index": pair.get("background_index"),
+            "q_group_key": _geometry_fit_cache_jsonable(_geometry_fit_group_identity(pair)),
+            "branch": int(branch_idx) if branch_idx is not None else None,
+            "hkl": _geometry_fit_cache_jsonable(hkl_key),
+            "table": source_table_or_reflection_idx,
+            "row": int(source_row_idx) if source_row_idx is not None else None,
+            "peak": int(source_peak_idx) if source_peak_idx is not None else None,
+            "source": _geometry_fit_entry_source_label(pair),
+            "source_table_index": source_table_or_reflection_idx,
+            "source_reflection_index": (
+                int(source_reflection_idx) if source_reflection_idx is not None else None
+            ),
+            "source_row_index": int(source_row_idx) if source_row_idx is not None else None,
+            "source_peak_index": int(source_peak_idx) if source_peak_idx is not None else None,
+            "source_exists": bool(source_exists),
+            "projected_exists": bool(projected_exists),
+            "first_missing_stage": first_missing_stage,
+        }
+
     selected_rows = [
         row for row in rows if any(_row_matches_pair(row, pair) for pair in locked_required_pairs)
     ]
@@ -19373,9 +19445,14 @@ def _locked_qr_fit_space_projection_readiness(
         and len(distinct_caked_points) < len(distinct_detector_points)
     )
 
-    locked_pairs_by_id = {
-        str(entry.get("pair_id") or f"pair[{idx}]"): entry
+    locked_pairs_with_ids = [
+        (_geometry_fit_pair_id(entry, idx), entry)
         for idx, entry in enumerate(locked_required_pairs)
+    ]
+    locked_pairs_by_id = dict(locked_pairs_with_ids)
+    row_keys_by_id = {
+        pair_id: _row_key_payload(entry, pair_id)
+        for pair_id, entry in locked_pairs_with_ids
     }
     missing_pair_ids: list[str] = []
     nonfinite_pair_ids: list[str] = []
@@ -19403,12 +19480,21 @@ def _locked_qr_fit_space_projection_readiness(
         failure_reason = "locked_qr_fit_space_projection_nonfinite"
     else:
         failure_reason = "locked_qr_fit_space_projection_missing"
+    missing_row_keys = [
+        dict(row_keys_by_id[pair_id]) for pair_id in missing_pair_ids if pair_id in row_keys_by_id
+    ]
+    nonfinite_row_keys = [
+        dict(row_keys_by_id[pair_id]) for pair_id in nonfinite_pair_ids if pair_id in row_keys_by_id
+    ]
     return {
         "expected_locked_qr_rows": int(expected_count),
         "projected_locked_qr_rows": int(projected_count),
         "finite_locked_qr_rows": int(projected_count),
+        "locked_qr_row_keys": list(row_keys_by_id.values()),
         "missing_locked_qr_rows": missing_pair_ids,
+        "missing_locked_qr_row_keys": missing_row_keys,
         "nonfinite_locked_qr_rows": nonfinite_pair_ids,
+        "nonfinite_locked_qr_row_keys": nonfinite_row_keys,
         "projection_degenerate": bool(projection_degenerate),
         "projection_degeneracy_reason": (
             "locked_qr_projection_degenerate" if projection_degenerate else None
