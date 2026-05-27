@@ -105,6 +105,13 @@ _GEOMETRY_FIT_RECOVERY_ARTIFACT_KEYS = (
     "worst_rows_json",
     "worst_rows_png",
 )
+_HEADLESS_GEOMETRY_FIT_DYNAMIC_OBJECTIVE_TRIAL_COVERAGE_KEYS = (
+    "dynamic_objective_trial_locked_qr_row_count",
+    "dynamic_objective_trial_locked_qr_row_keys",
+    "dynamic_objective_trial_saved_source_count",
+    "dynamic_objective_trial_saved_source_row_keys",
+    "dynamic_objective_trial_coverage_complete",
+)
 _HEADLESS_GEOMETRY_FIT_COMBO_PROGRESS_KEYS = (
     "excluded_pair_ids",
     "excluded_pair_count",
@@ -116,6 +123,13 @@ _HEADLESS_GEOMETRY_FIT_COMBO_PROGRESS_KEYS = (
     "qr_fit_resolved_count",
     "qr_fit_expected_count",
     "qr_fit_missing_pairs",
+    "expected_locked_qr_rows",
+    "projected_locked_qr_rows",
+    "finite_locked_qr_rows",
+    "projection_ready",
+    "storage_required_for_fit",
+    "storage_timeout_fatal",
+    *_HEADLESS_GEOMETRY_FIT_DYNAMIC_OBJECTIVE_TRIAL_COVERAGE_KEYS,
     "source_authority_mismatch_count",
     "visual_objective_surface_mismatch_count",
     "objective_param_sensitivity_status",
@@ -1303,6 +1317,46 @@ def _headless_geometry_fit_combo_int(value: object) -> int | None:
         return None
 
 
+def _headless_geometry_fit_locked_qr_runtime_readiness(
+    summary: Mapping[str, object],
+) -> dict[str, object]:
+    expected = _headless_geometry_fit_combo_int(summary.get("expected_locked_qr_rows"))
+    if expected is None:
+        expected = _headless_geometry_fit_combo_int(summary.get("qr_fit_expected_count"))
+    projected = _headless_geometry_fit_combo_int(summary.get("projected_locked_qr_rows"))
+    if projected is None:
+        projected = _headless_geometry_fit_combo_int(summary.get("qr_fit_resolved_count"))
+    finite = _headless_geometry_fit_combo_int(summary.get("finite_locked_qr_rows"))
+    if finite is None:
+        finite = _headless_geometry_fit_combo_int(summary.get("manual_caked_residual_row_count"))
+    if finite is None:
+        finite = _headless_geometry_fit_combo_int(summary.get("raw_angular_row_count"))
+    if expected is None or projected is None or finite is None or int(expected) <= 0:
+        return {}
+
+    missing_pairs = summary.get("qr_fit_missing_pairs")
+    missing_pair_count = (
+        len(missing_pairs)
+        if isinstance(missing_pairs, Sequence) and not isinstance(missing_pairs, (str, bytes))
+        else 0
+    )
+    projection_ready = bool(
+        int(expected) == int(projected) == int(finite)
+        and int(missing_pair_count) == 0
+        and not bool(summary.get("qr_fit_objective_incomplete", False))
+    )
+    storage_required = bool(summary.get("caked_view_storage_required_for_fit", False))
+    storage_timeout_fatal = bool(summary.get("storage_timeout_fatal", False))
+    return {
+        "expected_locked_qr_rows": int(expected),
+        "projected_locked_qr_rows": int(projected),
+        "finite_locked_qr_rows": int(finite),
+        "projection_ready": bool(projection_ready),
+        "storage_required_for_fit": bool(storage_required),
+        "storage_timeout_fatal": bool(storage_timeout_fatal),
+    }
+
+
 def _headless_geometry_fit_classify_combo_result(
     combo_result: Mapping[str, object],
 ) -> dict[str, object]:
@@ -1344,7 +1398,10 @@ def _headless_geometry_fit_classify_combo_result(
     if surface_mismatch is None:
         failure_reasons.append("visual_objective_surface_mismatch_missing")
     elif surface_mismatch != 0:
-        failure_reasons.append("visual_objective_surface_mismatch")
+        if gui_geometry_fit._geometry_fit_visual_surface_mismatch_diagnostic_only(result):
+            result["visual_objective_surface_mismatch_diagnostic_only"] = True
+        else:
+            failure_reasons.append("visual_objective_surface_mismatch")
     sensitivity = str(result.get("objective_param_sensitivity_status") or "").strip()
     if not sensitivity:
         failure_reasons.append("objective_param_sensitivity_missing")
@@ -1623,6 +1680,12 @@ def _headless_geometry_fit_copy_combo_progress_fields(
             combo_result[key] = progress.get(key)
         elif key in summary_map:
             combo_result[key] = summary_map.get(key)
+    coverage = gui_geometry_fit._geometry_fit_dynamic_objective_trial_locked_qr_coverage(
+        summary_map
+    )
+    for key in _HEADLESS_GEOMETRY_FIT_DYNAMIC_OBJECTIVE_TRIAL_COVERAGE_KEYS:
+        if key in coverage:
+            combo_result.setdefault(key, coverage.get(key))
     combo_result.setdefault("saved_sim_refined_caked_used", False)
     combo_result.setdefault("pixel_residual_used_for_objective", False)
 
@@ -3059,6 +3122,13 @@ class _HeadlessGeometryFitProgressWriter:
 
     def _merge_point_match_summary(self, summary: Mapping[str, object]) -> dict[str, object]:
         updates: dict[str, object] = {}
+        updates.update(_headless_geometry_fit_locked_qr_runtime_readiness(summary))
+        coverage = gui_geometry_fit._geometry_fit_dynamic_objective_trial_locked_qr_coverage(
+            summary
+        )
+        for key in _HEADLESS_GEOMETRY_FIT_DYNAMIC_OBJECTIVE_TRIAL_COVERAGE_KEYS:
+            if key in coverage:
+                updates[key] = coverage.get(key)
         for key in (
             "fixed_source_resolved_count",
             "matched_pair_count",

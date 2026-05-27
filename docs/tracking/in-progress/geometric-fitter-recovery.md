@@ -9,6 +9,25 @@ Last updated: 2026-05-27
 
 ## Summary
 
+2026-05-27 Bi2Se3 canonical regression fixture update:
+`artifacts/geometry_fit_gui_states/Bi2Se3.json` is now the canonical
+repo-relative fixture for the accepted exact-only dynamic caked geometry-fit
+path. The regression loads that fixture, isolates
+`('q_group','primary',1,10)` on the first background, fits `gamma,Gamma`, and
+asserts an accepted caked-degree result with dynamic `objective_trial` locked
+rows plus runtime progress readiness `expected/projected/finite = 2/2/2`,
+`source_authority_mismatch_count=0`, no recommended next fix, no
+repick/outlier text, no rejection notice, and finite RMS below the acceptance
+threshold. `new4.json` remains historical investigation context, not the
+canonical regression fixture. `visual_objective_surface_mismatch_count=1` is
+diagnostic-only only for an otherwise accepted caked fit where source authority
+is clean, expected locked rows are known, every expected row has a unique
+dynamic `objective_trial` prediction, no objective-trial source starts from
+saved locked handoff, and no failure class is present. This visual/objective
+surface mismatch remains pending investigation. This does not claim the full
+geometric fitter is solved, and no repo cleanup audit was run as part of this
+update.
+
 2026-05-27 exact-only locked Qr/Qz readiness gate update: non-exact optics
 modes are no longer supported for the fitter path, so the remaining operator
 proof is exact-only. Run the exact-only GUI sequence. If exact readiness
@@ -280,8 +299,8 @@ targeted ghost filtering is unavailable. GUI and headless paths both keep
 required-branch filtering for trial source-row rebuilds.
 
 New4 Mode A dynamic/refined Qr fitting is now guarded at the actual optimizer
-prediction path. For saved state `C:\Users\Kenpo\.local\share\ra_sim\new4.json`
-and background index `0`, all 14 first-image paired Qr branches resolve to
+prediction path. For the user-local `new4.json` saved state and background
+index `0`, all 14 first-image paired Qr branches resolve to
 locked dynamic identities, produce 28/28 caked residual components, and compute
 residuals as `refined_sim_caked - observed_caked` in weighted caked degrees.
 Baseline dynamic predictions now reproduce the saved refined sim centers before
@@ -354,7 +373,7 @@ fits were run for the user-root Bi2Se3 and Bi2Te3 saved states with
 rotation variables and no peak-position refinement. Bi2Se3 matched 82/82 fixed
 pairs with zero missing pairs and zero branch mismatches; Bi2Te3 matched 84/84
 fixed pairs with zero missing pairs and zero branch mismatches. Generated
-output states were written under `C:\Users\Kenpo\.local\share\ra_sim\` as
+output states were written under the user-local ra_sim data directory as
 `Bi2Se3_gamma_Gamma_fit.json` and `Bi2Te3_gamma_Gamma_fit.json`. Feature
 status: this is an enabling bug fix for an existing CLI workflow, not a new GUI
 feature. Shipping status: targeted CLI geometry-fit tests, compile, Ruff, and
@@ -369,7 +388,7 @@ migration is required.
 states can be validated with
 `--active-vars gamma,Gamma --seed-policy direct` through the same report/gate
 path used by other quality baselines. A real headless run wrote reports under
-`C:\Users\Kenpo\.local\share\ra_sim\fit_quality_baseline\codex_gamma_Gamma_20260510_000000`.
+`%LOCALAPPDATA%\ra_sim\fit_quality_baseline\codex_gamma_Gamma_20260510_000000`.
 Bi2Se3 matched 82/82 fixed pairs with zero missing pairs and zero branch
 mismatches, reducing direct RMS from 34.5307 px to 15.701942 px. Bi2Te3
 matched 84/84 fixed pairs with zero missing pairs and zero branch mismatches,

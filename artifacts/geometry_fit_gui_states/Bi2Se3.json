@@ -1,0 +1,217 @@
+{
+  "metadata": {
+    "canonical_fixture": "accepted_exact_only_dynamic_caked_fit",
+    "source_context": "Bi2Se3 operator proof, first background, q_group primary 1 10"
+  },
+  "saved_at": "2026-05-27T00:00:00",
+  "state": {
+    "dynamic_lists": {
+      "atom_site_fractional_values": [
+        {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.4008
+        },
+        {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.0
+        },
+        {
+          "x": 0.0,
+          "y": 0.0,
+          "z": 0.2117
+        }
+      ],
+      "occupancy_values": [
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    "files": {
+      "background_files": [
+        "artifacts/geometry_fit_gui_states/Bi2Se3_5m_5d.osc"
+      ],
+      "current_background_index": 0,
+      "primary_cif_path": "tests/fixtures/Bi2Se3.cif",
+      "secondary_cif_path": null
+    },
+    "flags": {
+      "background_backend_flip_x": false,
+      "background_backend_flip_y": false,
+      "background_backend_rotation_k": 3,
+      "background_visible": true
+    },
+    "geometry": {
+      "manual_pairs": [
+        {
+          "background_index": 0,
+          "background_name": "Bi2Se3_5m_5d.osc",
+          "background_path": "artifacts/geometry_fit_gui_states/Bi2Se3_5m_5d.osc",
+          "entries": [
+            {
+              "background_detector_x": 1081.4190956439036,
+              "background_detector_y": 1914.2781176331991,
+              "background_phi_deg": 35.566836371696525,
+              "background_two_theta_deg": 40.14250893640562,
+              "branch_id": "unknown:((q_group,primary,1,10),source_branch,0)",
+              "branch_source": "unknown",
+              "caked_x": 40.14250893640562,
+              "caked_y": 35.566836371696525,
+              "detector_x": 1081.4190956439036,
+              "detector_y": 1914.2781176331991,
+              "hkl": [
+                -1,
+                0,
+                10
+              ],
+              "label": "-1,0,10",
+              "placement_error_px": 0.3390312041891439,
+              "q_group_key": [
+                "q_group",
+                "primary",
+                1,
+                10
+              ],
+              "raw_caked_x": 40.317805853525876,
+              "raw_caked_y": 35.85703138933479,
+              "raw_x": 1084.7218823668009,
+              "raw_y": 1081.4190956439036,
+              "refined_sim_caked_x": 40.22007440152061,
+              "refined_sim_caked_y": 36.20597050169732,
+              "refined_sim_native_x": 1084.1507779633876,
+              "refined_sim_native_y": 1921.02105765745,
+              "refined_sim_x": 1077.97894234255,
+              "refined_sim_y": 1084.1507779633876,
+              "selection_reason": "mosaic_top_per_branch",
+              "sigma_px": 0.8230687440390024,
+              "source_branch_index": 0,
+              "source_label": "primary",
+              "source_peak_index": 0,
+              "source_reflection_index": 160,
+              "source_reflection_is_full": true,
+              "source_reflection_namespace": "full_reflection",
+              "source_row_index": 42,
+              "source_table_index": 160,
+              "x": 1084.7218823668009,
+              "y": 1081.4190956439036
+            },
+            {
+              "background_detector_x": 1081.8160780416092,
+              "background_detector_y": 1150.953982918554,
+              "background_phi_deg": -37.56585135680683,
+              "background_two_theta_deg": 40.85298314015308,
+              "branch_id": "unknown:((q_group,primary,1,10),source_branch,1)",
+              "branch_source": "unknown",
+              "caked_x": 40.85298314015308,
+              "caked_y": -37.56585135680683,
+              "detector_x": 1081.8160780416092,
+              "detector_y": 1150.953982918554,
+              "hkl": [
+                -1,
+                0,
+                10
+              ],
+              "label": "-1,0,10",
+              "placement_error_px": 1.7352318954227905,
+              "q_group_key": [
+                "q_group",
+                "primary",
+                1,
+                10
+              ],
+              "raw_caked_x": 40.212355256997284,
+              "raw_caked_y": -35.95320581416087,
+              "raw_x": 1848.046017081446,
+              "raw_y": 1081.8160780416092,
+              "refined_sim_caked_x": 40.25266919937837,
+              "refined_sim_caked_y": -37.05522431186071,
+              "refined_sim_native_x": 1089.176000007316,
+              "refined_sim_native_y": 1163.753725892518,
+              "refined_sim_x": 1835.246274107482,
+              "refined_sim_y": 1089.176000007316,
+              "selection_reason": "mosaic_top_per_branch",
+              "sigma_px": 1.8903781978462855,
+              "source_branch_index": 1,
+              "source_label": "primary",
+              "source_peak_index": 1,
+              "source_reflection_index": 160,
+              "source_reflection_is_full": true,
+              "source_reflection_namespace": "full_reflection",
+              "source_row_index": 120,
+              "source_table_index": 160,
+              "x": 1848.046017081446,
+              "y": 1081.8160780416092
+            }
+          ]
+        }
+      ]
+    },
+    "variables": {
+      "Gamma_var": 0.0,
+      "a_var": 4.143,
+      "background_theta_list_var": "5",
+      "bandwidth_percent_var": 0.7000000000000001,
+      "c_var": 28.64,
+      "center_x_var": 1596.422,
+      "center_y_var": 1453.12,
+      "chi_var": 0.0,
+      "cor_angle_var": 0.0,
+      "corto_detector_var": 0.075,
+      "delta_qr_var": 0.25,
+      "eta_var": 0.0,
+      "finite_stack_var": true,
+      "fit_Gamma_var": true,
+      "fit_a_var": false,
+      "fit_c_var": false,
+      "fit_center_x_var": false,
+      "fit_center_y_var": false,
+      "fit_chi_var": false,
+      "fit_cor_var": false,
+      "fit_dist_var": false,
+      "fit_gamma_var": true,
+      "fit_psi_z_var": false,
+      "fit_theta_var": false,
+      "fit_zb_var": false,
+      "fit_zs_var": false,
+      "gamma_mosaic_var": 0.5,
+      "gamma_var": 0.0,
+      "geometry_fit_background_selection_var": "current",
+      "geometry_fit_caked_roi_enabled_var": false,
+      "geometry_fit_caked_roi_preview_var": false,
+      "geometry_theta_offset_var": "0.0",
+      "integrate_selected_qr_rod_var": false,
+      "live_geometry_preview_var": false,
+      "optics_mode_var": "exact",
+      "p0_var": 0.01,
+      "p1_var": 0.99,
+      "p2_var": 0.5,
+      "phase_delta_expr_var": "2*pi*((2*h + k)/3)",
+      "phi_l_divisor_var": 1.0,
+      "phi_max_var": 15.0,
+      "phi_min_var": -15.0,
+      "psi_z_var": 0.0,
+      "qz_max_var": 4.7570287472698505,
+      "qz_min_var": 0.0,
+      "sample_count_var": 25,
+      "sigma_mosaic_var": 1.0,
+      "solve_q_mode_var": "adaptive",
+      "solve_q_rel_tol_var": 0.0005,
+      "solve_q_steps_var": 1000.0,
+      "stack_layers_var": 50,
+      "theta_initial_var": 5.0,
+      "tth_max_var": 80.0,
+      "tth_min_var": 0.0,
+      "w0_var": 100.0,
+      "w1_var": 0.0,
+      "w2_var": 0.0,
+      "weight1_var": 1.0,
+      "weight2_var": 0.0,
+      "zb_var": 0.0,
+      "zs_var": 0.0
+    }
+  },
+  "type": "ra_sim.gui_state",
+  "version": 1
+}

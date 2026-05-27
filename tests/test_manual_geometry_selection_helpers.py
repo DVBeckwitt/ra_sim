@@ -22522,6 +22522,9 @@ _QR_PICKER_DIAG_LOCAL_STATE_PATH = Path.home() / ".local" / "share" / "ra_sim" /
 _QR_PICKER_DIAG_ARTIFACT_STATE_PATH = (
     Path(__file__).resolve().parents[1] / "artifacts" / "geometry_fit_gui_states" / "new4.json"
 )
+_BI2SE3_CANONICAL_STATE_PATH = (
+    Path(__file__).resolve().parents[1] / "artifacts" / "geometry_fit_gui_states" / "Bi2Se3.json"
+)
 _QR_PICKER_DIAG_STATE_OVERRIDE = os.environ.get("RA_SIM_QR_PICKER_DIAG_STATE")
 _QR_PICKER_DIAG_STATE_PATH = (
     Path(_QR_PICKER_DIAG_STATE_OVERRIDE)
@@ -22556,6 +22559,10 @@ _NEW4_FIRST_IMAGE_EXPECTED_INVENTORY = (
 )
 _NEW4_FIRST_IMAGE_PAIRED_INVENTORY = tuple(
     item for item in _NEW4_FIRST_IMAGE_EXPECTED_INVENTORY if item[1] != (0, 0, 3)
+)
+_BI2SE3_ACCEPTED_FIRST_IMAGE_INVENTORY = (
+    (("q_group", "primary", 1, 10), (-1, 0, 10), 160, 42, 0, 0),
+    (("q_group", "primary", 1, 10), (-1, 0, 10), 160, 120, 1, 1),
 )
 
 
@@ -22718,6 +22725,15 @@ def _diag_load_saved_state():
     return dict(loaded)
 
 
+def _diag_load_bi2se3_canonical_state():
+    if not _BI2SE3_CANONICAL_STATE_PATH.exists():
+        pytest.fail(f"Bi2Se3 canonical fixture missing: {_BI2SE3_CANONICAL_STATE_PATH}")
+    loaded = load_gui_state_file(_BI2SE3_CANONICAL_STATE_PATH)
+    if isinstance(loaded, Mapping) and isinstance(loaded.get("state"), Mapping):
+        return dict(loaded["state"])
+    return dict(loaded)
+
+
 def _diag_state_current_background_index(saved_state):
     files = saved_state.get("files", {}) if isinstance(saved_state, Mapping) else {}
     if isinstance(files, Mapping) and files.get("current_background_index") is not None:
@@ -22809,6 +22825,211 @@ def _diag_new4_expected_inventory(*, include_003=True):
         _NEW4_FIRST_IMAGE_EXPECTED_INVENTORY if include_003 else _NEW4_FIRST_IMAGE_PAIRED_INVENTORY
     )
     return sorted(expected, key=repr)
+
+
+def test_bi2se3_canonical_regression_fixture_is_repo_relative() -> None:
+    fixture_text = _BI2SE3_CANONICAL_STATE_PATH.read_text(encoding="utf-8")
+    local_path_needles = (
+        "C:" + "\\" + "Users" + "\\",
+        "C:" + "/" + "Users" + "/",
+        "." + "cache",
+        "." + "local" + "/share/" + "ra_sim",
+        "App" + "Data",
+    )
+    for needle in local_path_needles:
+        assert needle not in fixture_text
+
+    saved_state = _diag_load_bi2se3_canonical_state()
+    assert _diag_state_background_name(saved_state, 0) == _NEW4_FIRST_IMAGE_BACKGROUND_NAME
+    assert _diag_state_current_background_index(saved_state) == 0
+    variables = saved_state.get("variables", {})
+    assert isinstance(variables, Mapping)
+    assert variables.get("optics_mode_var") == "exact"
+    entries = [
+        entry
+        for entry in _diag_manual_entries_for_background(saved_state, 0)
+        if _diag_q_group_key(entry) == _QR_PICKER_TARGET_Q_GROUP_KEY
+    ]
+    inventory = sorted(
+        (_diag_new4_inventory_key(entry) for entry in entries),
+        key=repr,
+    )
+
+    assert inventory == sorted(_BI2SE3_ACCEPTED_FIRST_IMAGE_INVENTORY, key=repr)
+
+
+def _diag_write_bi2se3_headless_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    for filename in ("debug.yaml", "instrument.yaml", "materials.yaml"):
+        source = repo_root / "config" / filename
+        (config_dir / filename).write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    (config_dir / "dir_paths.yaml").write_text(
+        json.dumps(
+            {
+                "debug_log_dir": str(tmp_path / "logs"),
+                "downloads": str(tmp_path / "downloads"),
+                "file_dialog_dir": str(tmp_path / "file_dialog"),
+                "overlay_dir": str(tmp_path / "overlays"),
+                "temp_root": str(tmp_path / "temp"),
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    (config_dir / "file_paths.yaml").write_text(
+        json.dumps(
+            {
+                "cif_file": str(repo_root / "tests" / "fixtures" / "Bi2Se3.cif"),
+                "debug_log_csv": str(tmp_path / "logs" / "mosaic_full_debug_log.csv"),
+                "geometry_poni": str(repo_root / "tests" / "local_geometry.poni"),
+                "gui_background_image": str(
+                    repo_root / "artifacts" / "geometry_fit_gui_states" / "Bi2Se3_5m_5d.osc"
+                ),
+                "gui_geometry_poni": str(repo_root / "tests" / "local_geometry.poni"),
+                "measured_peaks": str(tmp_path / "measured_peaks.npy"),
+                "overlay_output": str(tmp_path / "overlays" / "overlay.png"),
+                "parameters_file": str(tmp_path / "parameters.npy"),
+                "simulation_background_osc_files": [
+                    str(
+                        repo_root
+                        / "artifacts"
+                        / "geometry_fit_gui_states"
+                        / "Bi2Se3_5m_5d.osc"
+                    )
+                ],
+                "simulation_dark_osc_file": str(tmp_path / "dark.osc"),
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("RA_SIM_CONFIG_DIR", str(config_dir))
+    from ra_sim.config import clear_config_cache
+
+    clear_config_cache()
+
+
+def _diag_bi2se3_target_rows(rows):
+    return [
+        dict(row)
+        for row in (rows or ())
+        if isinstance(row, Mapping)
+        and _diag_q_group_key(row) == _QR_PICKER_TARGET_Q_GROUP_KEY
+        and _diag_hkl(row) == _QR_PICKER_TARGET_HKL
+    ]
+
+
+def _diag_bool_yes(value) -> bool:
+    if value is True:
+        return True
+    return str(value).strip().lower() in {"1", "true", "yes"}
+
+
+def test_bi2se3_exact_gamma_gamma_fit_accepts_dynamic_caked_regression(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    _diag_write_bi2se3_headless_config(tmp_path, monkeypatch)
+    from ra_sim.config import clear_config_cache
+
+    try:
+        saved_state = _diag_load_bi2se3_canonical_state()
+        selected_rows = _diag_bi2se3_target_rows(
+            _diag_manual_entries_for_background(saved_state, 0)
+        )
+        assert len(selected_rows) == 2
+
+        monkeypatch.setattr(
+            hgf,
+            "read_osc",
+            lambda _path: np.zeros((3000, 3000), dtype=np.int32),
+        )
+        progress_path = tmp_path / "bi2se3_gamma_Gamma_progress.json"
+        result = hgf.run_headless_geometry_fit(
+            saved_state,
+            state_path=_BI2SE3_CANONICAL_STATE_PATH,
+            downloads_dir=tmp_path / "downloads",
+            stamp="bi2se3_gamma_Gamma_accepted_regression",
+            active_var_names=["gamma", "Gamma"],
+            seed_policy=hgf.HEADLESS_GEOMETRY_FIT_SEED_POLICY_DIRECT,
+            progress_path=progress_path,
+        )
+
+        assert result.accepted is True
+        assert result.rejection_reason is None
+        progress = json.loads(progress_path.read_text(encoding="utf-8"))
+        assert not str(progress.get("rejection_reason") or "").strip()
+        assert progress["expected_locked_qr_rows"] == 2
+        assert progress["projected_locked_qr_rows"] == 2
+        assert progress["finite_locked_qr_rows"] == 2
+        assert progress["projection_ready"] is True
+        assert progress["storage_required_for_fit"] is False
+        assert progress["storage_timeout_fatal"] is False
+        summary = progress.get("point_match_summary")
+        assert isinstance(summary, Mapping)
+        objective_space = str(
+            summary.get("acceptance_metric_space")
+            or summary.get("objective_space")
+            or progress.get("acceptance_metric_space")
+            or ""
+        )
+        assert objective_space == "caked_deg"
+
+        dynamic_rows = _diag_bi2se3_target_rows(
+            summary.get("caked_acceptance_metric_trace_rows")
+        )
+        assert len(dynamic_rows) == 2
+        for row in dynamic_rows:
+            assert _diag_bool_yes(row.get("fit_prediction_is_dynamic"))
+            assert row.get("prediction_role") == "objective_trial"
+            source = str(row.get("fit_prediction_source") or "")
+            assert source.startswith(("dynamic_trial_simulation", "dynamic_current_simulation"))
+            assert not source.startswith("locked_manual_qr:saved")
+
+        assert summary.get("source_authority_mismatch_count") == 0
+        assert not summary.get("source_authority_mismatch_rows")
+        assert not summary.get("source_authority_mismatch_pair_ids")
+        assert not str(summary.get("recommended_next_fix") or "").strip()
+        assert str(summary.get("dynamic_angular_failure_classification") or "") in {
+            "",
+            "accepted",
+            "within_acceptance",
+        }
+
+        rms = float(summary.get("raw_angular_rms_deg"))
+        assert np.isfinite(rms)
+        assert rms < 5.0
+
+        combined_text = json.dumps(progress, sort_keys=True) + "\n"
+        if result.log_path.exists():
+            combined_text += result.log_path.read_text(encoding="utf-8", errors="replace")
+        assert "remove_or_repick_manual_outliers" not in combined_text
+        assert "manual_outliers_or_physical_bad_fit" not in combined_text
+
+        notice = gf.build_geometry_fit_action_notice(
+            gf.GeometryFitRuntimeActionResult(
+                params={},
+                var_names=["gamma", "Gamma"],
+                preserve_live_theta=True,
+                execution_result=gf.GeometryFitRuntimeExecutionResult(
+                    log_path=result.log_path,
+                    apply_result=gf.GeometryFitRuntimeApplyResult(
+                        accepted=True,
+                        rejection_reason=None,
+                        rms=rms,
+                        fitted_params={},
+                        postprocess=None,
+                    ),
+                ),
+            )
+        )
+        assert notice is None
+    finally:
+        clear_config_cache()
 
 
 def _diag_print_new4_inventory_table(entries, *, title="new4_first_image_manual_branch_inventory"):
