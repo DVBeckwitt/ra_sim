@@ -9,6 +9,28 @@ Last updated: 2026-05-27
 
 ## Current status
 
+- 2026-05-27 detector-origin simulated caked-anchor handoff patch completed.
+  Bug/error status: fixed for caked-required detector-origin manual Qr/Qz
+  datasets whose current source row has finite detector-native simulated
+  coordinates but also carries stale saved/display caked aliases. Dataset build
+  now keeps saved simulated caked aliases diagnostic only when a live simulated
+  native anchor exists, projects that native anchor through the exact caked
+  fit-space projector, and carries the projected caked prediction through
+  provider, measured, initial, `manual_point_pairs`, and
+  `spec["manual_point_pairs"]` handoff rows. Review follow-up removed the
+  avoidable unconsumed `simulated_caked_projection_*` metadata, so no new
+  artifact schema fields were added. Feature/API status: no GUI control, CLI
+  flag, config key, saved-state schema field, dependency, version bump, CI
+  workflow, or public API change. Deprecation/migration status: retired
+  behavior is internal promotion of stale saved simulated caked aliases when
+  exact projector authority is available; no user migration is required.
+  CI/CD status: no workflow change; local project gates remain the release
+  signal. Documentation/ADR status: tracking note and changelog updated; no ADR
+  needed for this private validation-boundary fix. Shipping status: safe
+  bug-fix slice, rollback by git revert. Validation status: focused dataset
+  regression, caked/manual geometry subsets, compileall, `python -m
+  ra_sim.dev check`, and `git diff --check` passed; the existing strict xfail
+  for manual-vs-geometry caked projection comparability remains unchanged.
 - 2026-05-27 exact-only locked Qr/Qz readiness/dynamic-authority closeout:
   non-exact optics modes are no longer a supported path, so do not run or
   request any cross-mode optics comparison for this investigation. Run the

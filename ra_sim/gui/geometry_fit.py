@@ -16491,7 +16491,11 @@ def build_geometry_manual_fit_dataset(
                     initial_entry["sim_native_raw_live_source"] = bool(
                         isinstance(strict_source_entry, Mapping)
                     )
-            if use_caked_display and not bool(initial_entry.get("sim_native_raw_live_source")):
+            if (
+                use_caked_display
+                and sim_native_point is None
+                and not bool(initial_entry.get("sim_native_raw_live_source"))
+            ):
                 saved_caked_simulated_point = _entry_point(
                     saved_entry_for_diag,
                     "refined_sim_caked_x",
@@ -16517,7 +16521,11 @@ def build_geometry_manual_fit_dataset(
             provider_simulated_point_source,
             overwrite_existing=provider_overwrites_existing_sim,
         )
-        if use_caked_display and not bool(initial_entry.get("sim_native_raw_live_source")):
+        if (
+            use_caked_display
+            and _geometry_fit_point_list(initial_entry.get("sim_native")) is None
+            and not bool(initial_entry.get("sim_native_raw_live_source"))
+        ):
             saved_caked_simulated_point = _entry_point(
                 saved_entry_for_diag,
                 "refined_sim_caked_x",
@@ -17705,14 +17713,78 @@ def build_geometry_manual_fit_dataset(
             return detector_anchor, "fit_detector", "detector_fit_frame"
         return None
 
-    def _project_observed_detector_anchors_to_caked_fit_space() -> None:
-        if not bool(manual_fit_requires_caked_space):
-            return
-        if (
-            not callable(fit_space_projector)
-            or str(fit_space_projector_kind or "") != "exact_caked_bundle"
+    def _simulated_detector_anchor_for_caked_projection(
+        entry: Mapping[str, object] | None,
+    ) -> tuple[tuple[float, float], str, str] | None:
+        if not isinstance(entry, Mapping):
+            return None
+        native_point = _geometry_fit_point_list(entry.get("sim_native"))
+        if native_point is not None:
+            native_x = _finite_float(native_point[0])
+            native_y = _finite_float(native_point[1])
+            if native_x is not None and native_y is not None:
+                return (
+                    (float(native_x), float(native_y)),
+                    "native_detector",
+                    str(entry.get("sim_native_source") or "sim_native"),
+                )
+        for x_key, y_key, provenance in (
+            ("refined_sim_native_x", "refined_sim_native_y", "refined_sim_native_px"),
+            ("sim_native_x", "sim_native_y", "sim_native_xy"),
+            ("sim_col_raw", "sim_row_raw", "sim_col_raw_row_raw"),
         ):
-            return
+            anchor = _finite_pair(entry, x_key, y_key)
+            if anchor is not None:
+                return anchor, "native_detector", provenance
+        return None
+
+    caked_fit_space_projector_ready = bool(
+        manual_fit_requires_caked_space
+        and callable(fit_space_projector)
+        and str(fit_space_projector_kind or "") == "exact_caked_bundle"
+    )
+
+    def _project_detector_anchor_to_caked_fit_space(
+        detector_col: float,
+        detector_row: float,
+        *,
+        input_frame: str,
+        anchor_kind: str,
+        source_fallback: str,
+    ) -> tuple[tuple[float, float] | None, str | None, str | None]:
+        try:
+            projected = fit_space_projector(
+                np.asarray([float(detector_col)], dtype=np.float64),
+                np.asarray([float(detector_row)], dtype=np.float64),
+                local_params=dict(params_i),
+                anchor_kind=str(anchor_kind),
+                input_frame=str(input_frame),
+            )
+        except Exception as exc:
+            return None, None, f"fit_space_projector_exception:{type(exc).__name__}"
+        if not isinstance(projected, Mapping):
+            return None, None, "fit_space_projector_returned_non_mapping"
+        try:
+            two_theta_values = np.asarray(
+                projected.get("two_theta_deg", []),
+                dtype=np.float64,
+            ).reshape(-1)
+            phi_values = np.asarray(projected.get("phi_deg", []), dtype=np.float64).reshape(-1)
+            two_theta = float(two_theta_values[0])
+            phi = float(phi_values[0])
+        except Exception:
+            return None, None, "fit_space_projector_returned_no_caked_point"
+        if (
+            projected.get("valid") is False
+            or not np.isfinite(two_theta)
+            or not np.isfinite(phi)
+        ):
+            default_reason = f"nonfinite_{str(anchor_kind)}_caked_projection"
+            return None, None, str(projected.get("invalid_reason") or default_reason)
+        source = str(projected.get("caked_projection_source") or source_fallback)
+        return (float(two_theta), float(phi)), source, None
+
+    def _project_observed_detector_anchors_to_caked_fit_space() -> None:
         for measured_entry in measured_for_fit:
             if not isinstance(measured_entry, dict):
                 continue
@@ -17725,53 +17797,24 @@ def build_geometry_manual_fit_dataset(
                 )
                 continue
             (detector_col, detector_row), input_frame, provenance = anchor_payload
-            try:
-                projected = fit_space_projector(
-                    np.asarray([float(detector_col)], dtype=np.float64),
-                    np.asarray([float(detector_row)], dtype=np.float64),
-                    local_params=dict(params_i),
-                    anchor_kind="measured",
-                    input_frame=str(input_frame),
-                )
-            except Exception as exc:
+            point, source, unavailable_reason = _project_detector_anchor_to_caked_fit_space(
+                float(detector_col),
+                float(detector_row),
+                input_frame=str(input_frame),
+                anchor_kind="measured",
+                source_fallback="fit_space_projector_native_detector",
+            )
+            if point is None:
                 measured_entry["observed_caked_projection_unavailable_reason"] = (
-                    f"fit_space_projector_exception:{type(exc).__name__}"
+                    str(unavailable_reason or "nonfinite_observed_caked_projection")
                 )
                 continue
-            if not isinstance(projected, Mapping):
-                measured_entry["observed_caked_projection_unavailable_reason"] = (
-                    "fit_space_projector_returned_non_mapping"
-                )
-                continue
-            try:
-                two_theta_values = np.asarray(
-                    projected.get("two_theta_deg", []),
-                    dtype=np.float64,
-                ).reshape(-1)
-                phi_values = np.asarray(projected.get("phi_deg", []), dtype=np.float64).reshape(-1)
-                two_theta = float(two_theta_values[0])
-                phi = float(phi_values[0])
-            except Exception:
-                measured_entry["observed_caked_projection_unavailable_reason"] = (
-                    "fit_space_projector_returned_no_caked_point"
-                )
-                continue
-            if (
-                projected.get("valid") is False
-                or not np.isfinite(two_theta)
-                or not np.isfinite(phi)
-            ):
-                measured_entry["observed_caked_projection_unavailable_reason"] = str(
-                    projected.get("invalid_reason") or "nonfinite_observed_caked_projection"
-                )
-                continue
+            two_theta, phi = point
             measured_entry["background_two_theta_deg"] = float(two_theta)
             measured_entry["background_phi_deg"] = float(phi)
             measured_entry["caked_x"] = float(two_theta)
             measured_entry["caked_y"] = float(phi)
-            measured_entry["caked_projection_source"] = str(
-                projected.get("caked_projection_source") or "fit_space_projector_native_detector"
-            )
+            measured_entry["caked_projection_source"] = str(source)
             measured_entry["observed_caked_projection_source"] = (
                 "fit_space_projector_native_detector"
             )
@@ -17781,7 +17824,57 @@ def build_geometry_manual_fit_dataset(
             measured_entry.pop("fit_space_anchor_override", None)
             measured_entry.pop("fit_space_anchor_source", None)
 
-    _project_observed_detector_anchors_to_caked_fit_space()
+    def _project_simulated_detector_anchors_to_caked_fit_space() -> None:
+        def _put_projected_simulated_anchor(
+            entry: dict[str, object],
+            point: tuple[float, float],
+            source: str,
+        ) -> None:
+            _geometry_fit_put_simulated_point_fields(entry, point, "caked_2theta_phi")
+            entry["sim_display"] = (float(point[0]), float(point[1]))
+            entry["provider_simulated_frame"] = "caked_2theta_phi"
+            entry["provider_simulated_point_source"] = str(source)
+
+        for pair_idx, initial_entry in enumerate(initial_pairs_display):
+            if not isinstance(initial_entry, dict):
+                continue
+            measured_entry = (
+                measured_for_fit[pair_idx]
+                if pair_idx < len(measured_for_fit) and isinstance(measured_for_fit[pair_idx], dict)
+                else None
+            )
+            anchor_payload = _simulated_detector_anchor_for_caked_projection(initial_entry)
+            if anchor_payload is None:
+                continue
+            (detector_col, detector_row), input_frame, _provenance = anchor_payload
+            point, source, _unavailable_reason = _project_detector_anchor_to_caked_fit_space(
+                float(detector_col),
+                float(detector_row),
+                input_frame=str(input_frame),
+                anchor_kind="simulated",
+                source_fallback=f"fit_space_projector_{str(input_frame)}",
+            )
+            if point is None:
+                continue
+            _put_projected_simulated_anchor(
+                initial_entry,
+                point,
+                source=source,
+            )
+            if isinstance(measured_entry, dict):
+                _put_projected_simulated_anchor(
+                    measured_entry,
+                    point,
+                    source=source,
+                )
+            if pair_idx < len(provider_pairs) and isinstance(provider_pairs[pair_idx], dict):
+                provider_pairs[pair_idx]["simulated_point"] = point
+                provider_pairs[pair_idx]["simulated_frame"] = "caked_2theta_phi"
+                provider_pairs[pair_idx]["simulated_point_source"] = source
+
+    if caked_fit_space_projector_ready:
+        _project_observed_detector_anchors_to_caked_fit_space()
+        _project_simulated_detector_anchors_to_caked_fit_space()
 
     label = (
         Path(str(manual_dataset_bindings.osc_files[background_idx])).name

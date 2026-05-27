@@ -25164,6 +25164,10 @@ def test_build_geometry_manual_fit_dataset_projects_detector_origin_observed_anc
             {
                 "sim_col_raw": 5.0,
                 "sim_row_raw": 6.0,
+                "two_theta_deg": 39.777,
+                "phi_deg": 37.250,
+                "caked_x": 39.777,
+                "caked_y": 37.250,
                 "hkl": (-1, 0, 10),
                 "q_group_key": ("q_group", "primary", 1, 10),
                 "source_table_index": 160,
@@ -25226,7 +25230,29 @@ def test_build_geometry_manual_fit_dataset_projects_detector_origin_observed_anc
     assert measured["caked_projection_source"] == "fit_space_projector_native_detector"
     assert measured.get("fit_space_anchor_override") is not True
     assert dataset["spec"]["measured_peaks"][0]["background_two_theta_deg"] == pytest.approx(33.063)
+    assert measured["simulated_two_theta_deg"] == pytest.approx(37.935)
+    assert measured["simulated_phi_deg"] == pytest.approx(41.130)
+    assert measured["sim_refined_caked_deg"] == pytest.approx((37.935, 41.130))
+    assert measured["provider_simulated_point_source"] == "fit_space_projector_native_detector"
+    initial = dataset["initial_pairs_display"][0]
+    assert initial["simulated_two_theta_deg"] == pytest.approx(37.935)
+    assert initial["simulated_phi_deg"] == pytest.approx(41.130)
+    assert initial["sim_refined_caked_deg"] == pytest.approx((37.935, 41.130))
+    assert initial["provider_simulated_point_source"] == "fit_space_projector_native_detector"
+    provider_pair = dataset["provider_pairs"][0]
+    assert provider_pair["simulated_point"] == pytest.approx((37.935, 41.130))
+    assert provider_pair["simulated_frame"] == "caked_2theta_phi"
+    assert provider_pair["simulated_point_source"] == "fit_space_projector_native_detector"
+    manual_pair = dataset["manual_point_pairs"][0]
+    assert manual_pair["simulated_point"] == pytest.approx((37.935, 41.130))
+    assert manual_pair["simulated_frame"] == "caked_2theta_phi"
+    assert manual_pair["simulated_point_source"] == "fit_space_projector_native_detector"
+    spec_pair = dataset["spec"]["manual_point_pairs"][0]
+    assert spec_pair["simulated_point"] == pytest.approx((37.935, 41.130))
+    assert spec_pair["simulated_frame"] == "caked_2theta_phi"
+    assert spec_pair["simulated_point_source"] == "fit_space_projector_native_detector"
     assert (3.0, 4.0) in detector_calls
+    assert (5.0, 6.0) in detector_calls
 
 
 def test_build_geometry_manual_fit_dataset_exact_projector_converts_fit_detector_once(
