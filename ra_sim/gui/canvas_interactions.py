@@ -412,8 +412,8 @@ def _manual_pick_click_coords(
     *,
     prefer_pixel_anchor: bool = False,
 ) -> tuple[float, float] | None:
-    point: tuple[float, float] | None = None
-    if prefer_pixel_anchor and _event_inside_axis_pixels(bindings.axis, event):
+    point = _event_axis_data_anchor(bindings.axis, event)
+    if point is None and prefer_pixel_anchor and _event_inside_axis_pixels(bindings.axis, event):
         limits = _current_live_limits(bindings)
         if limits is not None:
             point = _event_axis_fraction_anchor(
@@ -424,9 +424,7 @@ def _manual_pick_click_coords(
             )
 
     if point is None:
-        if not _event_has_axis_data(bindings, event):
-            return None
-        point = (float(event.xdata), float(event.ydata))
+        return None
 
     col, row = bindings.clamp_to_axis_view(
         bindings.axis,

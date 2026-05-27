@@ -1096,16 +1096,16 @@ def test_canvas_detector_view_single_group_fallback_places_on_next_release() -> 
     placement_press_event = _FakeEvent(
         button=1,
         inaxes=axis,
-        xdata=121.0,
-        ydata=131.0,
+        xdata=140.0,
+        ydata=150.0,
         x=170.0,
         y=50.0,
     )
     placement_release_event = _FakeEvent(
         button=1,
         inaxes=axis,
-        xdata=121.0,
-        ydata=131.0,
+        xdata=140.0,
+        ydata=150.0,
         x=170.0,
         y=50.0,
     )
@@ -1120,7 +1120,7 @@ def test_canvas_detector_view_single_group_fallback_places_on_next_release() -> 
 
     assert calls == [
         ("toggle", 120.0, 130.0),
-        ("place", 80.0, 70.0),
+        ("place", 140.0, 150.0),
     ]
     assert drag_callbacks.calls == []
 
@@ -1369,7 +1369,7 @@ def test_canvas_drag_move_saved_manual_peak_places_refined_release() -> None:
     assert drag_callbacks.calls == []
 
 
-def test_canvas_drag_move_saved_manual_peak_uses_cursor_pixels_after_zoom() -> None:
+def test_canvas_drag_move_saved_manual_peak_uses_event_data_coordinates() -> None:
     axis = _FakeAxis(xlim=(100.0, 200.0), ylim=(300.0, 100.0))
     peak_callbacks = _PeakCallbacks()
     drag_callbacks = _DragCallbacks()
@@ -1411,6 +1411,7 @@ def test_canvas_drag_move_saved_manual_peak_uses_cursor_pixels_after_zoom() -> N
     release_event = _FakeEvent(
         button=1,
         inaxes=axis,
+        # Fast-viewer proxy events already map viewport pixels into data coords.
         xdata=111.0,
         ydata=222.0,
         x=160.0,
@@ -1418,7 +1419,7 @@ def test_canvas_drag_move_saved_manual_peak_uses_cursor_pixels_after_zoom() -> N
     )
 
     assert canvas_interactions.handle_runtime_canvas_release(bindings, release_event) is True
-    assert calls == [("place", 175.0, 200.0), ("end",)]
+    assert calls == [("place", 111.0, 222.0), ("end",)]
     assert getattr(geometry_runtime, "_manual_drag_move_active", False) is False
     assert drag_callbacks.calls == []
 
@@ -1483,7 +1484,7 @@ def test_canvas_click_places_manual_qr_pick_session_in_caked_space() -> None:
     assert calls[2] == ("place", 19.0, -4.0)
 
 
-def test_canvas_caked_manual_release_uses_cursor_pixels_after_zoom() -> None:
+def test_canvas_caked_manual_release_uses_event_data_coordinates() -> None:
     axis = _FakeAxis(xlim=(10.0, 20.0), ylim=(-10.0, 0.0))
     manual_state = state.ManualGeometryState(
         pick_session={"group_key": ("q", 1), "zoom_active": True}
@@ -1517,7 +1518,6 @@ def test_canvas_caked_manual_release_uses_cursor_pixels_after_zoom() -> None:
     release_event = _FakeEvent(
         button=1,
         inaxes=axis,
-        # The backend can leave xdata/ydata at the pre-zoom anchor until redraw.
         xdata=19.0,
         ydata=-4.0,
         x=160.0,
@@ -1525,10 +1525,10 @@ def test_canvas_caked_manual_release_uses_cursor_pixels_after_zoom() -> None:
     )
 
     assert canvas_interactions.handle_runtime_canvas_release(bindings, release_event) is True
-    assert calls == [("place", 17.5, -5.0)]
+    assert calls == [("place", 19.0, -4.0)]
 
 
-def test_canvas_detector_manual_release_uses_cursor_pixels_after_zoom() -> None:
+def test_canvas_detector_manual_release_uses_event_data_coordinates() -> None:
     axis = _FakeAxis(xlim=(100.0, 200.0), ylim=(300.0, 100.0))
     manual_state = state.ManualGeometryState(
         pick_session={"group_key": ("q", 1), "zoom_active": True}
@@ -1562,6 +1562,7 @@ def test_canvas_detector_manual_release_uses_cursor_pixels_after_zoom() -> None:
     release_event = _FakeEvent(
         button=1,
         inaxes=axis,
+        # Fast-viewer proxy events already map viewport pixels into data coords.
         xdata=111.0,
         ydata=222.0,
         x=160.0,
@@ -1569,7 +1570,7 @@ def test_canvas_detector_manual_release_uses_cursor_pixels_after_zoom() -> None:
     )
 
     assert canvas_interactions.handle_runtime_canvas_release(bindings, release_event) is True
-    assert calls == [("place", 175.0, 200.0)]
+    assert calls == [("place", 111.0, 222.0)]
     assert manual_state.pick_session["zoom_active"] is False
 
 
