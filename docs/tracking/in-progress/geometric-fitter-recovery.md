@@ -9,6 +9,23 @@ Last updated: 2026-05-27
 
 ## Summary
 
+2026-05-27 phase 6 structure-factor pruning test-helper simplification:
+`tests/test_gui_structure_factor_pruning.py` now reuses the shared
+`RuntimeVar` test fake instead of carrying an equivalent local `_FakeVar`
+class. The local `_TraceVar` remains because it adds trace-recording behavior
+for callback-binding tests. Bug/error/feature status: no runtime behavior
+defect or feature change; this is maintenance-only test cleanup.
+UI/API/interface status: no GUI control, frontend state contract, public API,
+CLI flag, config key, saved-state schema, artifact schema, dependency, or
+production interface changed. CI/deprecation/migration status: no CI workflow,
+migration path, deprecation notice, compatibility shim, release/version change,
+new file, or new abstraction required. Review status: no correctness, bloat,
+security, performance, test-quality, new-file, or abstraction blockers were
+found. Shipping status: `python -m pytest
+tests/test_gui_structure_factor_pruning.py -ra`, `python -m ra_sim.dev check`,
+and `git diff --check` pass locally. Rollback is a normal git revert of the
+test/doc cleanup.
+
 2026-05-27 phase 5 GUI signature test-helper simplification:
 `tests/test_gui_sim_signature.py` now reuses the shared `RuntimeVar` test fake
 instead of carrying an equivalent local `_FakeVar` class. The helper contract

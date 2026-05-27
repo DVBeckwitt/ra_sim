@@ -1,17 +1,7 @@
 import numpy as np
 
 from ra_sim.gui import controllers, state, structure_factor_pruning
-
-
-class _FakeVar:
-    def __init__(self, value=None):
-        self._value = value
-
-    def get(self):
-        return self._value
-
-    def set(self, value):
-        self._value = value
+from tests.helpers.gui_fakes import RuntimeVar as _FakeVar
 
 
 def _bindings(
