@@ -58,6 +58,11 @@ pickable without falling back to primary or packaged 6H rows.
   all candidates in the selected group, so clicking near an already-pending
   branch replaces that branch and keeps the session open until the operator
   clicks the other branch.
+- 2026-05-27 stale-release coordinate patch: fixed manual point placement
+  after Qr/Qz selection zoom so detector and caked release events prefer the
+  current cursor pixels when backend `xdata`/`ydata` still reflect an older
+  view. The refiner now receives the actual release position while normal
+  data-coordinate events continue to use the existing fallback path.
 - Bug status: fixed for saved GUI states that contain nonempty
   `state.geometry.q_group_rows` and empty `state.geometry.peak_records`,
   including PbI2 `disordered_phase` rows produced by the modified-CIF disorder
@@ -67,6 +72,9 @@ pickable without falling back to primary or packaged 6H rows.
   groups are present.
 - Error status: repeat clicks near the same selected branch are no longer
   expected to auto-complete the group by assigning the unclicked branch.
+- Error status: clicked background points are no longer expected to refine from
+  the repeated zoom anchor when release pixels are available after the view
+  changes.
 - Error status: the specific no-detector-source-rows warning is no longer
   expected for those imported states after restore when source rows or stored
   generated-disordered hit tables are available.
@@ -93,6 +101,9 @@ pickable without falling back to primary or packaged 6H rows.
 - `pytest -q tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_auto_add_q_group_peaks_refines_enabled_groups tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_auto_add_q_group_peaks_uses_refined_sim_seed tests/test_manual_geometry_selection_helpers.py::test_auto_add_branch_pair_restraint_does_not_change_manual_click_behavior tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_auto_add_q_group_peaks_discards_incomplete_groups`:
   4 passed.
 - `pytest -q tests/test_gui_canvas_interactions.py`: 52 passed.
+- `pytest -q tests/test_gui_canvas_interactions.py`: 55 passed.
+- `ruff check ra_sim/gui/canvas_interactions.py tests/test_gui_canvas_interactions.py`:
+  passed.
 - `ruff check ra_sim/gui/manual_geometry.py tests/test_manual_geometry_selection_helpers.py tests/test_gui_canvas_interactions.py`:
   passed.
 - `python -m pytest tests/test_manual_geometry_selection_helpers.py::test_build_geometry_manual_pick_cache_rebuilds_detector_rows_for_listed_sf_groups tests/test_manual_geometry_selection_helpers.py::test_caked_qr_picker_starts_sf_detector_fallback_group_with_variable_count -ra`:
