@@ -21,8 +21,9 @@ CI/deprecation/migration, dependency, schema, config, CLI, artifact, and
 release/version status: unchanged. Review status: no correctness, bloat,
 security, performance, test-quality, new-file, or abstraction blockers were
 found. Shipping status: remaining-helper tests, ruff checks,
-`python -m ra_sim.dev check`, and `git diff --check` pass locally; rollback is
-a normal git revert of the docs-only closeout.
+`python -m ra_sim.dev check`, and `git diff --check` pass locally; closeout
+committed as `1d53af22`. Rollback is a normal git revert of the docs-only
+closeout.
 
 2026-05-27 phase 3 float test-helper simplification follow-up:
 `tests/helpers/gui_fakes.py` now provides `FloatRuntimeVar` for tests that need
