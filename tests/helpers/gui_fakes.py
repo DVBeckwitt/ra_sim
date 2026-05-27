@@ -12,6 +12,14 @@ class DummyVar:
         self._value = value
 
 
+class FloatRuntimeVar:
+    def __init__(self, value):
+        self.value = float(value)
+
+    def get(self):
+        return float(self.value)
+
+
 class DummyAxis:
     def __init__(self, xlim=(0.0, 1.0), ylim=(0.0, 1.0)):
         self._xlim = tuple(float(v) for v in xlim)

@@ -9,6 +9,28 @@ Last updated: 2026-05-27
 
 ## Summary
 
+2026-05-27 phase 3 float test-helper simplification follow-up:
+`tests/helpers/gui_fakes.py` now provides `FloatRuntimeVar` for tests that need
+float-coercing GUI variable fakes with mutable `.value` state and no `set()`
+method. The duplicated float `_Var` classes in
+`tests/test_disordered_phase_q_group_cache.py`,
+`tests/test_disordered_phase_logging.py`,
+`tests/test_disordered_phase_inventory.py`,
+`tests/test_disordered_phase_end_to_end.py`, and
+`tests/test_disordered_phase_invalidation.py` now reuse that helper. Raw-value
+and state-IO helpers with different semantics remain local. Bug/error/feature
+status: no runtime behavior defect or feature change; this is test-only
+maintenance cleanup. UI/API/interface status: no GUI control, frontend state
+contract, public API, CLI flag, config key, saved-state schema, artifact
+schema, or dependency changed. CI/deprecation/migration status: no CI workflow,
+migration path, deprecation notice, compatibility shim, or release/version
+change required. Shipping status: targeted disordered-phase helper tests and
+ruff checks pass locally. Review status: checked for correctness, bloat,
+security, performance, test quality, avoidable new files, and avoidable
+abstractions with no blockers found. Final shipping gate:
+`python -m ra_sim.dev check` and `git diff --check` pass locally; rollback is a
+normal git revert of the cleanup/doc commit.
+
 2026-05-27 phase 2 test-helper simplification follow-up:
 `tests/test_background_theta_helpers.py`, `tests/test_data_loading_parameters.py`,
 `tests/test_gui_state_restore_helpers.py`, `tests/test_gui_structure_model.py`,

@@ -7,14 +7,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from ra_sim.gui.state import SimulationRuntimeState
-
-
-class _Var:
-    def __init__(self, value: float) -> None:
-        self.value = float(value)
-
-    def get(self) -> float:
-        return float(self.value)
+from tests.helpers.gui_fakes import FloatRuntimeVar as _Var
 
 
 def _write_source(path: Path, marker: str) -> Path:

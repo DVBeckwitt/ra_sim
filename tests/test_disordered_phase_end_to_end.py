@@ -12,17 +12,10 @@ from ra_sim.utils.pbi2_ht_shift_cif import (
     DISORDERED_PHASE_DISPLAY_LABEL,
     DISORDERED_PHASE_SOURCE_LABEL,
 )
+from tests.helpers.gui_fakes import FloatRuntimeVar as _Var
 
 
 SOURCE_2H = Path(__file__).resolve().parents[1] / "tests" / "Diffuse" / "PbI2_2H.cif"
-
-
-class _Var:
-    def __init__(self, value: float) -> None:
-        self.value = float(value)
-
-    def get(self) -> float:
-        return float(self.value)
 
 
 def _patch_runtime(monkeypatch, tmp_path):

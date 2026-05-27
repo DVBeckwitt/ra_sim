@@ -10,14 +10,7 @@ from ra_sim.utils.pbi2_ht_shift_cif import (
     DISORDERED_PHASE_DISPLAY_LABEL,
     DISORDERED_PHASE_SOURCE_LABEL,
 )
-
-
-class _Var:
-    def __init__(self, value: float) -> None:
-        self.value = float(value)
-
-    def get(self) -> float:
-        return float(self.value)
+from tests.helpers.gui_fakes import FloatRuntimeVar as _Var
 
 
 def _runtime_session():
