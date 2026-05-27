@@ -16996,7 +16996,7 @@ def render_current_geometry_manual_pairs(
                 + (
                     "It will attach to the tagged central-beam seed."
                     if tagged_candidate is not None
-                    else "It will attach to the nearest remaining simulated peak."
+                    else "It will attach to the nearest selected simulated branch."
                 )
             )
         else:
@@ -18439,6 +18439,18 @@ def geometry_manual_place_selection_at(
         if callable(set_status_text):
             set_status_text("Manual geometry picking had no remaining simulated peaks to place.")
         return False, {}
+    assignment_candidates = remaining_candidates
+    if (
+        not bool(use_candidate_refinement_context)
+        and not bool(current_session.get("moving_saved_pair"))
+    ):
+        assignment_candidates = (
+            _geometry_manual_filter_candidates_for_selected_group_source(
+                current_session.get("group_entries", []),
+                group_key=selected_group_key,
+            )
+            or remaining_candidates
+        )
 
     cache_data = get_cache_data(
         background_image=display_background,
@@ -18534,7 +18546,7 @@ def geometry_manual_place_selection_at(
         candidate_entry, _dist = _geometry_manual_candidate_for_refined_background_point(
             float(peak_col_value),
             float(peak_row_value),
-            remaining_candidates,
+            assignment_candidates,
             group_key=selected_group_key,
             use_caked_display=bool(use_caked_space),
             nearest_candidate_to_point_fn=nearest_candidate_to_point_fn,
@@ -18542,7 +18554,7 @@ def geometry_manual_place_selection_at(
         )
         if candidate_entry is None and callable(set_status_text):
             set_status_text(
-                "Manual geometry picking could not find an unassigned simulated branch near that refined background point."
+                "Manual geometry picking could not find a simulated branch near that refined background point."
             )
         return candidate_entry
 
@@ -19210,7 +19222,7 @@ def geometry_manual_place_selection_at(
             )
             + " "
             + f"Placement error={float(placement_error_px_value):.2f}px, sigma={float(sigma_px_value):.2f}px. "
-            + f"Click background peak {next_index} of {total_count}; it will be assigned to the nearest remaining simulated peak."
+            + f"Click background peak {next_index} of {total_count}; it will attach to whichever selected branch is nearest the refined point."
         )
     return True, next_session
 

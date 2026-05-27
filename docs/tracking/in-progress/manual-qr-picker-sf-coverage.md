@@ -52,6 +52,12 @@ pickable without falling back to primary or packaged 6H rows.
   listed Qr/Qz group keys if no active grouped scope is available. The same
   detector-view release is preserved for local background-peak refinement, and
   branch assignment remains based on the refined background point.
+- 2026-05-27 same-branch replacement patch: fixed the follow-up regression
+  where the second manual background click could be forced onto the remaining
+  Qr/Qz branch. Normal manual placement now assigns the refined click against
+  all candidates in the selected group, so clicking near an already-pending
+  branch replaces that branch and keeps the session open until the operator
+  clicks the other branch.
 - Bug status: fixed for saved GUI states that contain nonempty
   `state.geometry.q_group_rows` and empty `state.geometry.peak_records`,
   including PbI2 `disordered_phase` rows produced by the modified-CIF disorder
@@ -59,6 +65,8 @@ pickable without falling back to primary or packaged 6H rows.
 - Error status: the specific "No Qr/Qz set found" miss is no longer expected
   for one active selected Qr/Qz group when extra stale detector-picker cache
   groups are present.
+- Error status: repeat clicks near the same selected branch are no longer
+  expected to auto-complete the group by assigning the unclicked branch.
 - Error status: the specific no-detector-source-rows warning is no longer
   expected for those imported states after restore when source rows or stored
   generated-disordered hit tables are available.
@@ -80,6 +88,13 @@ pickable without falling back to primary or packaged 6H rows.
 
 - `pytest -q tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_toggle_selection_at_starts_single_active_group_from_background_click tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_toggle_selection_at_fallback_uses_single_listed_group tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_single_group_background_click_uses_refined_peak_for_branch_assignment tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_toggle_selection_at_rejects_background_click_with_multiple_active_groups tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_toggle_selection_at_starts_two_branch_session_for_qr_qz_group tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_toggle_selection_at_tags_clicked_seed_within_group tests/test_gui_canvas_interactions.py::test_canvas_detector_view_single_group_fallback_places_on_release tests/test_gui_canvas_interactions.py::test_canvas_first_manual_pick_click_does_not_immediately_place_background_point tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_place_selection_at_uses_refined_click_nearest_candidate tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_place_selection_at_uses_refined_click_branch_representative tests/test_manual_geometry_selection_helpers.py::test_caked_background_branch_association_uses_refined_peak_before_save`:
   11 passed.
+- `pytest -q tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_place_selection_at_same_branch_click_replaces_pending_entry tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_single_group_background_click_uses_refined_peak_for_branch_assignment tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_place_selection_at_uses_refined_click_nearest_candidate tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_place_selection_at_uses_refined_click_branch_representative tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_place_selection_at_refines_with_background_click_seed tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_toggle_selection_at_starts_saved_background_peak_move_mode tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_place_selection_at_applies_saved_pair_refinement_callback tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_toggle_selection_at_starts_single_active_group_from_background_click tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_toggle_selection_at_fallback_uses_single_listed_group tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_toggle_selection_at_rejects_background_click_with_multiple_active_groups`:
+  10 passed.
+- `pytest -q tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_auto_add_q_group_peaks_refines_enabled_groups tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_auto_add_q_group_peaks_uses_refined_sim_seed tests/test_manual_geometry_selection_helpers.py::test_auto_add_branch_pair_restraint_does_not_change_manual_click_behavior tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_auto_add_q_group_peaks_discards_incomplete_groups`:
+  4 passed.
+- `pytest -q tests/test_gui_canvas_interactions.py`: 52 passed.
+- `ruff check ra_sim/gui/manual_geometry.py tests/test_manual_geometry_selection_helpers.py tests/test_gui_canvas_interactions.py`:
+  passed.
 - `python -m pytest tests/test_manual_geometry_selection_helpers.py::test_build_geometry_manual_pick_cache_rebuilds_detector_rows_for_listed_sf_groups tests/test_manual_geometry_selection_helpers.py::test_caked_qr_picker_starts_sf_detector_fallback_group_with_variable_count -ra`:
   passed.
 - `python -m pytest tests/test_gui_runtime_import_safe.py::test_manual_pick_cache_coverage_rebuild_bypasses_partial_snapshot tests/test_gui_runtime_import_safe.py::test_geometry_source_snapshot_signature_tracks_sf_picker_inventory -ra`:

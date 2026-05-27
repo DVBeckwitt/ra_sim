@@ -16097,6 +16097,106 @@ def test_geometry_manual_single_group_background_click_uses_refined_peak_for_bra
     assert "Assigned to right" in status_messages[-1]
 
 
+def test_geometry_manual_place_selection_at_same_branch_click_replaces_pending_entry() -> None:
+    set_sessions: list[dict[str, object]] = []
+    saved_entry_sets: list[list[dict[str, object]]] = []
+    status_messages: list[str] = []
+    refined_calls: list[tuple[dict[str, object] | None, float, float]] = []
+    group_key = ("q_group", "primary", 1, 2)
+    left_entry = {
+        "label": "left",
+        "hkl": (1, 0, 2),
+        "q_group_key": group_key,
+        "branch_id": "+x",
+        "source_branch_index": 0,
+        "source_reflection_index": 20,
+        "sim_col": 100.0,
+        "sim_row": 100.0,
+        "source_table_index": 1,
+        "source_row_index": 2,
+    }
+    right_entry = {
+        "label": "right",
+        "hkl": (-1, 0, 2),
+        "q_group_key": group_key,
+        "branch_id": "-x",
+        "source_branch_index": 1,
+        "source_reflection_index": 21,
+        "sim_col": 300.0,
+        "sim_row": 300.0,
+        "source_table_index": 1,
+        "source_row_index": 3,
+    }
+    pending_left = {
+        **left_entry,
+        "x": 95.0,
+        "y": 96.0,
+        "raw_x": 94.0,
+        "raw_y": 95.0,
+    }
+
+    def _refine_preview_point(source_entry, raw_col, raw_row, **_kwargs):
+        refined_calls.append(
+            (
+                dict(source_entry) if isinstance(source_entry, dict) else None,
+                float(raw_col),
+                float(raw_row),
+            )
+        )
+        return 101.0, 102.0
+
+    handled, next_session = mg.geometry_manual_place_selection_at(
+        100.5,
+        101.5,
+        pick_session={
+            "group_key": group_key,
+            "group_entries": [dict(left_entry), dict(right_entry)],
+            "pending_entries": [dict(pending_left)],
+            "target_count": 2,
+            "base_entries": [],
+            "q_label": "selected group",
+            "background_index": 0,
+        },
+        current_background_index=0,
+        display_background=np.zeros((512, 512), dtype=float),
+        get_cache_data=lambda **_kwargs: {},
+        refine_preview_point=_refine_preview_point,
+        set_pairs_for_index_fn=lambda _idx, rows: (
+            saved_entry_sets.append([dict(row) for row in (rows or [])]) or list(rows or [])
+        ),
+        set_pick_session_fn=lambda session: set_sessions.append(dict(session)),
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+    )
+
+    assert handled is True
+    assert saved_entry_sets == []
+    assert len(next_session["pending_entries"]) == 1
+    replaced = next_session["pending_entries"][0]
+    assert replaced["label"] == "left"
+    assert replaced["source_row_index"] == 2
+    assert replaced["x"] == 101.0
+    assert replaced["y"] == 102.0
+    assert set_sessions[-1]["pending_entries"][0]["branch_id"] == "+x"
+    assert len(refined_calls) == 1
+    source_entry, raw_col, raw_row = refined_calls[0]
+    assert source_entry == {
+        "manual_background_click_seed": True,
+        "manual_background_click_frame": "detector",
+        "sim_col": 100.5,
+        "sim_row": 101.5,
+        "sim_col_global": 100.5,
+        "sim_row_global": 101.5,
+    }
+    assert (raw_col, raw_row) == (100.5, 101.5)
+    assert "Assigned to left" in status_messages[-1]
+
+
 def test_geometry_manual_toggle_selection_at_rejects_background_click_with_multiple_active_groups() -> None:
     status_messages: list[str] = []
     left_key = ("q_group", "primary", 1, 2)
