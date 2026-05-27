@@ -19,8 +19,9 @@ config key, saved-state schema, artifact schema, dependency, public API, CI
 workflow, migration path, or deprecation notice changed. Review status: checked
 for correctness, bloat, security, performance, test quality, avoidable new
 files, and avoidable abstractions with no blockers found. Shipping status:
-focused runtime import-safe tests and ruff checks pass locally; rollback is a
-normal git revert of the test/doc cleanup commit.
+focused runtime import-safe tests, ruff checks, and the local dev check pass;
+cleanup committed as `98ac0743`. Rollback is a normal git revert of the
+test/doc cleanup commit.
 
 2026-05-27 cleanup/status closeout: removed dead legacy fitter paths and
 generated payloads after the locked-Qr readiness/dynamic-authority fixes. The
