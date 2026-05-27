@@ -5,7 +5,7 @@ Type: bug
 Owner: -
 Issue: none
 Priority: p1
-Last updated: 2026-05-07
+Last updated: 2026-05-27
 
 ## Summary
 
@@ -45,17 +45,29 @@ pickable without falling back to primary or packaged 6H rows.
 
 ## Bug / error / feature status
 
+- 2026-05-27 detector background-click patch: fixed the regression where a
+  selected single Qr/Qz group could fail to start manual placement when warm
+  detector-picker cache rows still contained additional groups. Fallback
+  selection now scopes candidates to the active grouped cache first, then the
+  listed Qr/Qz group keys if no active grouped scope is available. The same
+  detector-view release is preserved for local background-peak refinement, and
+  branch assignment remains based on the refined background point.
 - Bug status: fixed for saved GUI states that contain nonempty
   `state.geometry.q_group_rows` and empty `state.geometry.peak_records`,
   including PbI2 `disordered_phase` rows produced by the modified-CIF disorder
   technique.
+- Error status: the specific "No Qr/Qz set found" miss is no longer expected
+  for one active selected Qr/Qz group when extra stale detector-picker cache
+  groups are present.
 - Error status: the specific no-detector-source-rows warning is no longer
   expected for those imported states after restore when source rows or stored
   generated-disordered hit tables are available.
-- Feature status: no new operator-facing feature, schema migration, or public
-  API. This is compatibility hardening for existing saved GUI states.
+- Feature status: no new operator-facing feature, schema migration, public API,
+  dependency, CI workflow, or deprecation/migration path. This is compatibility
+  hardening for existing manual Qr/Qz background picking and saved GUI states.
 - Launch status: focused runtime/import gates passed locally. Rollback is a
-  normal revert of the source-row restore fix.
+  normal revert of the source-row restore fix or this detector background-click
+  patch.
 
 ## Next actions
 
@@ -66,6 +78,8 @@ pickable without falling back to primary or packaged 6H rows.
 
 ## Validation
 
+- `pytest -q tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_toggle_selection_at_starts_single_active_group_from_background_click tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_toggle_selection_at_fallback_uses_single_listed_group tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_single_group_background_click_uses_refined_peak_for_branch_assignment tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_toggle_selection_at_rejects_background_click_with_multiple_active_groups tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_toggle_selection_at_starts_two_branch_session_for_qr_qz_group tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_toggle_selection_at_tags_clicked_seed_within_group tests/test_gui_canvas_interactions.py::test_canvas_detector_view_single_group_fallback_places_on_release tests/test_gui_canvas_interactions.py::test_canvas_first_manual_pick_click_does_not_immediately_place_background_point tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_place_selection_at_uses_refined_click_nearest_candidate tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_place_selection_at_uses_refined_click_branch_representative tests/test_manual_geometry_selection_helpers.py::test_caked_background_branch_association_uses_refined_peak_before_save`:
+  11 passed.
 - `python -m pytest tests/test_manual_geometry_selection_helpers.py::test_build_geometry_manual_pick_cache_rebuilds_detector_rows_for_listed_sf_groups tests/test_manual_geometry_selection_helpers.py::test_caked_qr_picker_starts_sf_detector_fallback_group_with_variable_count -ra`:
   passed.
 - `python -m pytest tests/test_gui_runtime_import_safe.py::test_manual_pick_cache_coverage_rebuild_bypasses_partial_snapshot tests/test_gui_runtime_import_safe.py::test_geometry_source_snapshot_signature_tracks_sf_picker_inventory -ra`:

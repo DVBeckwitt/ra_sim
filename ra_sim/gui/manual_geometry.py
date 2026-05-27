@@ -17808,28 +17808,96 @@ def geometry_manual_toggle_selection_at(
         best_group_key = nearest_group_key
         best_group_entries = list(nearest_group_entries)
         best_dist = float(nearest_dist)
+    background_click_fallback = False
+    raw_best_group_entries: list[dict[str, object]] = []
     if best_group_key is None:
-        if callable(set_status_text):
-            set_status_text(
-                caked_projection_fallback_note
-                + (
-                    "No Qr/Qz set found within a "
-                    f"{group_window:.1f}x"
-                    f"{group_window:.1f}{' deg' if use_caked_space else 'px'} "
-                    "window around the clicked position."
-                )
+        fallback_allowed_group_keys: set[tuple[object, ...]] = set()
+        if isinstance(cache_data, Mapping):
+            active_grouped = cache_data.get(
+                "caked_qr_projection_grouped_candidates"
+                if use_caked_space
+                else "grouped_candidates"
             )
-        return False, current_session, False
-
-    raw_best_group_entries = [
-        {**dict(entry), "q_group_key": best_group_key}
-        for entry in best_group_entries
-        if isinstance(entry, dict)
-    ]
-    best_group_entries = _geometry_manual_collapse_q_group_representatives(
-        raw_best_group_entries,
-        profile_cache=profile_cache,
-    )
+            if isinstance(active_grouped, Mapping):
+                for raw_key, raw_entries in active_grouped.items():
+                    group_key = _geometry_manual_real_q_group_key(raw_key)
+                    try:
+                        entry_count = len(raw_entries)
+                    except Exception:
+                        entry_count = 0
+                    if group_key is not None and entry_count > 0:
+                        fallback_allowed_group_keys.add(group_key)
+        if not fallback_allowed_group_keys:
+            listed_entries = (
+                listed_q_group_entries()
+                if callable(listed_q_group_entries)
+                else listed_q_group_entries
+            )
+            for raw_entry in listed_entries or ():
+                if not isinstance(raw_entry, Mapping):
+                    continue
+                group_key = _geometry_manual_real_q_group_key(
+                    raw_entry.get("key", raw_entry.get("q_group_key"))
+                )
+                if group_key is None:
+                    group_key = _geometry_manual_real_q_group_key(raw_entry)
+                if group_key is not None:
+                    fallback_allowed_group_keys.add(group_key)
+        fallback_group_count = 0
+        fallback_group_key: tuple[object, ...] | None = None
+        fallback_raw_entries: list[dict[str, object]] = []
+        fallback_group_entries: list[dict[str, object]] = []
+        for candidate_group_key, candidate_group_entries in (grouped_candidates or {}).items():
+            candidate_real_key = _geometry_manual_real_q_group_key(candidate_group_key)
+            if (
+                fallback_allowed_group_keys
+                and candidate_real_key not in fallback_allowed_group_keys
+            ):
+                continue
+            raw_entries = [
+                {**dict(entry), "q_group_key": candidate_group_key}
+                for entry in candidate_group_entries
+                if isinstance(entry, dict)
+            ]
+            collapsed_entries = _geometry_manual_collapse_q_group_representatives(
+                raw_entries,
+                profile_cache=profile_cache,
+            )
+            if collapsed_entries and isinstance(candidate_group_key, tuple):
+                fallback_group_count += 1
+                fallback_group_key = candidate_group_key
+                fallback_raw_entries = raw_entries
+                fallback_group_entries = collapsed_entries
+                if fallback_group_count > 1:
+                    break
+        if fallback_group_count == 1 and fallback_group_key is not None:
+            best_group_key = fallback_group_key
+            raw_best_group_entries = fallback_raw_entries
+            best_group_entries = fallback_group_entries
+            background_click_fallback = True
+            best_dist = float("nan")
+        else:
+            if callable(set_status_text):
+                set_status_text(
+                    caked_projection_fallback_note
+                    + (
+                        "No Qr/Qz set found within a "
+                        f"{group_window:.1f}x"
+                        f"{group_window:.1f}{' deg' if use_caked_space else 'px'} "
+                        "window around the clicked position."
+                    )
+                )
+            return False, current_session, False
+    else:
+        raw_best_group_entries = [
+            {**dict(entry), "q_group_key": best_group_key}
+            for entry in best_group_entries
+            if isinstance(entry, dict)
+        ]
+        best_group_entries = _geometry_manual_collapse_q_group_representatives(
+            raw_best_group_entries,
+            profile_cache=profile_cache,
+        )
     if not best_group_entries:
         if callable(set_status_text):
             set_status_text(
@@ -17877,22 +17945,23 @@ def geometry_manual_toggle_selection_at(
     )
     seed_candidate: dict[str, object] | None = None
     seed_dist = float("nan")
-    if isinstance(shared_tagged_candidate, dict):
-        seed_candidate = dict(shared_tagged_candidate)
-        seed_dist = float(shared_seed_dist)
-    elif nearest_candidate_to_point_fn is geometry_manual_nearest_candidate_to_point:
-        seed_candidate, seed_dist = nearest_candidate_to_point_fn(
-            float(col),
-            float(row),
-            raw_best_group_entries,
-            use_caked_display=use_caked_space,
-        )
-    else:
-        seed_candidate, seed_dist = nearest_candidate_to_point_fn(
-            float(col),
-            float(row),
-            raw_best_group_entries,
-        )
+    if not background_click_fallback:
+        if isinstance(shared_tagged_candidate, dict):
+            seed_candidate = dict(shared_tagged_candidate)
+            seed_dist = float(shared_seed_dist)
+        elif nearest_candidate_to_point_fn is geometry_manual_nearest_candidate_to_point:
+            seed_candidate, seed_dist = nearest_candidate_to_point_fn(
+                float(col),
+                float(row),
+                raw_best_group_entries,
+                use_caked_display=use_caked_space,
+            )
+        else:
+            seed_candidate, seed_dist = nearest_candidate_to_point_fn(
+                float(col),
+                float(row),
+                raw_best_group_entries,
+            )
     tagged_candidate = dict(seed_candidate) if isinstance(seed_candidate, dict) else None
     if isinstance(seed_candidate, dict):
         selected_candidate = _geometry_manual_select_q_group_representative(
@@ -17957,6 +18026,8 @@ def geometry_manual_toggle_selection_at(
     if isinstance(tagged_candidate, dict):
         next_session["tagged_candidate"] = dict(tagged_candidate)
         next_session["_tagged_candidate_requires_identity"] = True
+    if background_click_fallback:
+        next_session["place_current_release"] = True
     set_pick_session_fn(next_session)
     if use_caked_space and geometry_manual_live_caked_trace_enabled():
         geometry_manual_trace_live_caked_visual_source_event(
@@ -17983,9 +18054,19 @@ def geometry_manual_toggle_selection_at(
             if np.isfinite(tagged_dist)
             else best_dist
         )
+        selection_status = (
+            f"Selected {q_label} as the only active Qr/Qz group. "
+            if background_click_fallback
+            else f"Selected {q_label} (nearest Bragg seed {seed_dist:.1f}{' deg' if use_caked_space else 'px'}). "
+        )
+        first_pick_status = (
+            f"Click or release on a background peak 1 of {max(1, int(target_count))}; "
+            if background_click_fallback
+            else f"Click background peak 1 of {max(1, int(target_count))}; "
+        )
         set_status_text(
             caked_projection_fallback_note
-            + f"Selected {q_label} (nearest Bragg seed {seed_dist:.1f}{' deg' if use_caked_space else 'px'}). "
+            + selection_status
             + geometry_manual_cmd_provenance_text(
                 run_id=manual_run_id,
                 emitter="geometry_manual_toggle_selection_at",
@@ -18008,14 +18089,14 @@ def geometry_manual_toggle_selection_at(
             )
             + " "
             + (f"Tagged seed [{tagged_label}]. " if tagged_label else "")
-            + f"Click background peak 1 of {max(1, int(target_count))}; "
+            + first_pick_status
             + (
                 "it will attach to that tagged simulated peak."
                 if tagged_label
                 else "it will be assigned to the nearest simulated peak."
             )
         )
-    return True, next_session, True
+    return True, next_session, not bool(background_click_fallback)
 
 
 def geometry_manual_place_selection_at(

@@ -15874,6 +15874,285 @@ def test_geometry_manual_toggle_selection_at_starts_two_branch_session_for_qr_qz
     assert "Click background peak 1 of 2" in status_messages[-1]
 
 
+def test_geometry_manual_toggle_selection_at_starts_single_active_group_from_background_click() -> None:
+    set_sessions: list[dict[str, object]] = []
+    status_messages: list[str] = []
+    group_key = ("q_group", "primary", 1, 2)
+    entries = [
+        {
+            "label": "left",
+            "hkl": (1, 0, 2),
+            "branch_id": "+x",
+            "source_branch_index": 0,
+            "source_reflection_index": 20,
+            "sim_col": 10.0,
+            "sim_row": 20.0,
+            "mosaic_weight": 0.2,
+            "source_table_index": 1,
+            "source_row_index": 2,
+        },
+        {
+            "label": "right",
+            "hkl": (-1, 0, 2),
+            "branch_id": "-x",
+            "source_branch_index": 1,
+            "source_reflection_index": 21,
+            "sim_col": 30.0,
+            "sim_row": 40.0,
+            "mosaic_weight": 0.9,
+            "source_table_index": 1,
+            "source_row_index": 3,
+        },
+    ]
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        180.0,
+        190.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((256, 256), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "grouped_candidates": {group_key: [dict(entry) for entry in entries]},
+        },
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, rows: list(rows or []),
+        set_pick_session_fn=lambda session: set_sessions.append(dict(session)),
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is False
+    assert next_session["group_key"] == group_key
+    assert next_session["place_current_release"] is True
+    assert next_session["target_count"] == 2
+    assert len(next_session["group_entries"]) == 2
+    assert set_sessions[-1]["place_current_release"] is True
+    assert "only active Qr/Qz group" in status_messages[-1]
+    assert "Click or release on a background peak" in status_messages[-1]
+
+
+def test_geometry_manual_toggle_selection_at_fallback_uses_single_listed_group() -> None:
+    set_sessions: list[dict[str, object]] = []
+    status_messages: list[str] = []
+    selected_key = ("q_group", "primary", 1, 2)
+    extra_key = ("q_group", "primary", 1, 5)
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        180.0,
+        190.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((256, 256), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "grouped_candidates": {
+                selected_key: [
+                    {
+                        "label": "selected",
+                        "hkl": (1, 0, 2),
+                        "sim_col": 10.0,
+                        "sim_row": 20.0,
+                        "source_table_index": 1,
+                        "source_row_index": 2,
+                    }
+                ],
+            },
+            "detector_picker_grouped_candidates": {
+                selected_key: [
+                    {
+                        "label": "selected",
+                        "hkl": (1, 0, 2),
+                        "sim_col": 10.0,
+                        "sim_row": 20.0,
+                        "source_table_index": 1,
+                        "source_row_index": 2,
+                    }
+                ],
+                extra_key: [
+                    {
+                        "label": "extra",
+                        "hkl": (1, 0, 5),
+                        "sim_col": 30.0,
+                        "sim_row": 40.0,
+                        "source_table_index": 1,
+                        "source_row_index": 5,
+                    }
+                ],
+            },
+        },
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, rows: list(rows or []),
+        set_pick_session_fn=lambda session: set_sessions.append(dict(session)),
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [{"key": selected_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is False
+    assert next_session["group_key"] == selected_key
+    assert next_session["place_current_release"] is True
+    assert set_sessions[-1]["group_key"] == selected_key
+    assert "only active Qr/Qz group" in status_messages[-1]
+
+
+def test_geometry_manual_single_group_background_click_uses_refined_peak_for_branch_assignment() -> None:
+    selection_sessions: list[dict[str, object]] = []
+    placement_sessions: list[dict[str, object]] = []
+    status_messages: list[str] = []
+    group_key = ("q_group", "primary", 1, 2)
+    left_entry = {
+        "label": "left",
+        "hkl": (1, 0, 2),
+        "branch_id": "+x",
+        "source_branch_index": 0,
+        "source_reflection_index": 20,
+        "sim_col": 120.0,
+        "sim_row": 130.0,
+        "mosaic_weight": 0.2,
+        "source_table_index": 1,
+        "source_row_index": 2,
+    }
+    right_entry = {
+        "label": "right",
+        "hkl": (-1, 0, 2),
+        "branch_id": "-x",
+        "source_branch_index": 1,
+        "source_reflection_index": 21,
+        "sim_col": 300.0,
+        "sim_row": 300.0,
+        "mosaic_weight": 0.9,
+        "source_table_index": 1,
+        "source_row_index": 3,
+    }
+    background = np.zeros((512, 512), dtype=float)
+
+    handled, pick_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        165.0,
+        130.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=background,
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "grouped_candidates": {group_key: [dict(left_entry), dict(right_entry)]},
+        },
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, rows: list(rows or []),
+        set_pick_session_fn=lambda session: selection_sessions.append(dict(session)),
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [{"key": group_key}],
+        format_q_group_line=lambda _entry: "selected group",
+        use_caked_space=False,
+        pick_search_window_px=20.0,
+    )
+
+    assert handled is True
+    assert suppress_drag is False
+    assert pick_session["place_current_release"] is True
+    assert selection_sessions[-1]["group_key"] == group_key
+
+    handled_place, next_session = mg.geometry_manual_place_selection_at(
+        165.0,
+        130.0,
+        pick_session=pick_session,
+        current_background_index=0,
+        display_background=background,
+        get_cache_data=lambda **_kwargs: {},
+        refine_preview_point=lambda *_args, **_kwargs: (300.0, 300.0),
+        set_pairs_for_index_fn=lambda _idx, rows: list(rows or []),
+        set_pick_session_fn=lambda session: placement_sessions.append(dict(session)),
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        restore_view_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        push_undo_state_fn=lambda: None,
+        use_caked_space=False,
+    )
+
+    assert handled_place is True
+    assert next_session["pending_entries"][0]["label"] == "right"
+    assert next_session["pending_entries"][0]["source_row_index"] == 3
+    assert placement_sessions[-1]["pending_entries"][0]["branch_id"] == "-x"
+    assert "Assigned to right" in status_messages[-1]
+
+
+def test_geometry_manual_toggle_selection_at_rejects_background_click_with_multiple_active_groups() -> None:
+    status_messages: list[str] = []
+    left_key = ("q_group", "primary", 1, 2)
+    right_key = ("q_group", "primary", 1, 5)
+
+    handled, next_session, suppress_drag = mg.geometry_manual_toggle_selection_at(
+        180.0,
+        190.0,
+        pick_session={},
+        current_background_index=0,
+        display_background=np.zeros((256, 256), dtype=float),
+        get_cache_data=lambda **_kwargs: {
+            "signature": ("cache",),
+            "grouped_candidates": {
+                left_key: [
+                    {
+                        "label": "left",
+                        "hkl": (1, 0, 2),
+                        "sim_col": 10.0,
+                        "sim_row": 20.0,
+                        "source_table_index": 1,
+                        "source_row_index": 2,
+                    }
+                ],
+                right_key: [
+                    {
+                        "label": "right",
+                        "hkl": (1, 0, 5),
+                        "sim_col": 30.0,
+                        "sim_row": 40.0,
+                        "source_table_index": 1,
+                        "source_row_index": 5,
+                    }
+                ],
+            },
+        },
+        pairs_for_index=lambda _idx: [],
+        set_pairs_for_index_fn=lambda _idx, rows: list(rows or []),
+        set_pick_session_fn=lambda _session: None,
+        restore_view_fn=lambda **_kwargs: None,
+        clear_preview_artists_fn=lambda **_kwargs: None,
+        render_current_pairs_fn=lambda **_kwargs: None,
+        update_button_label_fn=lambda: None,
+        set_status_text=status_messages.append,
+        listed_q_group_entries=lambda: [{"key": left_key}, {"key": right_key}],
+        format_q_group_line=lambda entry: f"group={entry['key']}",
+        use_caked_space=False,
+        pick_search_window_px=50.0,
+    )
+
+    assert handled is False
+    assert next_session == {}
+    assert suppress_drag is False
+    assert "No Qr/Qz set found within a 50.0x50.0px window" in status_messages[-1]
+
+
 def test_geometry_manual_toggle_selection_at_tags_clicked_seed_within_group() -> None:
     set_sessions: list[dict[str, object]] = []
     status_messages: list[str] = []

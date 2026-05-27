@@ -431,6 +431,11 @@ def _manual_pick_zoom_active(bindings: CanvasInteractionBindings) -> bool:
     return bool(isinstance(session, dict) and session.get("zoom_active", False))
 
 
+def _manual_pick_place_current_release(bindings: CanvasInteractionBindings) -> bool:
+    session = getattr(bindings.geometry_manual_state, "pick_session", None)
+    return bool(isinstance(session, dict) and session.get("place_current_release", False))
+
+
 def _manual_pick_skip_release_once(bindings: CanvasInteractionBindings) -> bool:
     return bool(
         getattr(
@@ -994,7 +999,10 @@ def handle_runtime_canvas_click(
         if not _runtime_caked_view_enabled(bindings) and bool(
             bindings.manual_pick_session_active()
         ):
-            _set_manual_pick_skip_release_once(bindings, True)
+            _set_manual_pick_skip_release_once(
+                bindings,
+                not _manual_pick_place_current_release(bindings),
+            )
         return True
 
     analysis_peak_state = getattr(bindings, "analysis_peak_state", None)
