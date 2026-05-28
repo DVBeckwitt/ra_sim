@@ -23,7 +23,8 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 
 ## Current patch status
 
-- 2026-05-28: Repository debt-report Phase 1 is implemented locally. The new
+- 2026-05-28: Repository debt-report Phase 1 is committed as `ccb07a5f`; this
+  docs follow-up records the committed state only. The new
   `tools/repo_debt_report.py --json` gate reports top Python files/functions,
   test-tier coverage, diagnostic-script classification, duplicate diagnostic
   functions, and observed `RA_SIM_*` flags without importing GUI/runtime-heavy
@@ -35,9 +36,10 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
   Migration/deprecation status: no migration required; `comparison.py` is only
   documented as a diagnostic delete candidate pending external-workflow review.
   Shipping status: no release, rollout, or version bump required, rollback is a
-  normal git revert. Validation status: targeted repo-debt, tier-completeness,
+  normal git revert of `ccb07a5f` plus this docs-only status commit if needed.
+  Validation status: targeted repo-debt, tier-completeness,
   diagnostics-classification, docs-index, ruff, compileall, JSON smoke, and
-  diff-whitespace checks passed locally.
+  diff-whitespace checks passed before the source commit.
 - 2026-05-28: Manual Qr/Qz caked fit-space review patch completed. The runtime
   fallback helper now restores the explicit `manual_space == "caked"` fast path
   before manual-pair materialization, while keeping the shared
