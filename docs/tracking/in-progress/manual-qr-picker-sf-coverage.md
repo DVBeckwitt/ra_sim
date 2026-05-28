@@ -73,6 +73,11 @@ pickable without falling back to primary or packaged 6H rows.
   regression. Production already uses `_manual_pick_skip_release_once` and
   release-event coordinates for this flow, so no behavior, public API, saved
   state, config, or operator workflow changed.
+- 2026-05-28 workflow/shipping closure: the review cleanup is committed on
+  `codex/manual-qr-background-fallback` as `686b1711`, with this docs-only
+  status follow-up recording the final rollout posture. CI automation was not
+  changed; local `python -m ra_sim.dev check` remains the gate for this patch
+  class.
 - Bug status: fixed for saved GUI states that contain nonempty
   `state.geometry.q_group_rows` and empty `state.geometry.peak_records`,
   including PbI2 `disordered_phase` rows produced by the modified-CIF disorder
@@ -104,6 +109,11 @@ pickable without falling back to primary or packaged 6H rows.
 - Review cleanup status: complete. The manual-pick coordinate fix and
   single-group fallback regression remain covered without legacy
   `place_current_release` fixture state.
+- Migration/deprecation status: no active consumer migration is required. The
+  removed field was test-only dead fixture state, not saved data or a public
+  runtime contract.
+- Rollback status: revert the review-cleanup docs/test commits if needed; no
+  database, artifact schema, or feature-flag rollback is involved.
 
 ## Next actions
 
