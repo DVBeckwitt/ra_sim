@@ -854,6 +854,19 @@ before dataset build when required projected rows are unavailable or nonfinite.
 This separates provenance from fit-space selection while preserving fail-closed
 locked-Qr validation.
 
+Status as of 2026-05-28: review follow-up kept the manual Qr/Qz caked
+fit-space behavior unchanged and only simplified the GUI preflight expression.
+The dead `ensure_geometry_fit_caked_view` self-assignment was removed, and the
+mixed-provenance preflight error remains scoped to the no-explicit-caked-
+requirement path. Regression coverage now also asserts that an explicit caked
+objective marks every prepared dataset spec with
+`solver_requested_objective_space == "caked_deg"` even when detector-origin and
+caked-origin pick provenance are mixed. Bug/error status: fixed and guarded.
+Migration/deprecation status: no saved-state schema, CLI flag, config key,
+artifact field, dependency, or public workflow changed. Shipping status: local
+quality gates pass; no CI workflow, feature flag, staged rollout, or release
+version bump is required, and rollback is a normal git revert.
+
 Status as of 2026-05-21: `objective_space=caked_deg` is now the fit-space
 requirement source of truth for manual Qr/Qz geometry fits, even when the manual
 pick provenance remains detector-origin. If every manual pair has finite

@@ -18163,7 +18163,6 @@ def prepare_geometry_fit_run(
 ) -> GeometryFitPreparationResult:
     """Validate and assemble the manual-pair geometry-fit runtime inputs."""
 
-    _ = ensure_geometry_fit_caked_view
     selected_var_names = [str(name) for name in (var_names or ())]
     fit_params = dict(params or {})
     geometry_refine_cfg = fit_config.get("geometry", {}) if isinstance(fit_config, Mapping) else {}
@@ -18378,18 +18377,17 @@ def prepare_geometry_fit_run(
             if bool(explicit_caked_required_by_background.get(int(idx), False))
         }
     )
-    fit_space_error = None
     if not selected_caked_required_indices:
         fit_space_error = manual_geometry_fit_space_preflight_error(
             selected_manual_fit_space_by_background,
             osc_files=osc_files,
         )
-    if fit_space_error:
-        return _failure_result(
-            fit_space_error,
-            selected_background_indices=selected_background_indices,
-            joint_background_mode=joint_background_mode,
-        )
+        if fit_space_error:
+            return _failure_result(
+                fit_space_error,
+                selected_background_indices=selected_background_indices,
+                joint_background_mode=joint_background_mode,
+            )
     selected_caked_background_indices = sorted(
         {
             int(idx)

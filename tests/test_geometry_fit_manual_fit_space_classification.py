@@ -277,6 +277,10 @@ def test_caked_requirement_overrides_mixed_pick_provenance_for_preflight() -> No
         spec["_manual_caked_fit_space_required"] is True
         for spec in result.prepared_run.dataset_specs
     )
+    assert all(
+        spec["solver_requested_objective_space"] == "caked_deg"
+        for spec in result.prepared_run.dataset_specs
+    )
 
 
 def test_detector_origin_pair_does_not_call_ensure_caked_view() -> None:
