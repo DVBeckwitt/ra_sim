@@ -27,6 +27,7 @@ from ra_sim.simulation.exact_cake import DetectorCakeLUT
 from ra_sim.simulation.exact_cake_portable import CakeTransformBundle
 from tests.helpers.gui_fakes import DummySlider as _DummySlider
 from tests.helpers.gui_fakes import DummyVar as _DummyVar
+from tests.helpers.geometry_fit_snapshots import normalize_geometry_fit_snapshot
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -2249,6 +2250,130 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
         (4, 5),
         {"mode": "auto"},
     )
+    snapshot = normalize_geometry_fit_snapshot(
+        {
+            "dataset_index": dataset["dataset_index"],
+            "label": dataset["label"],
+            "theta_base": dataset["theta_base"],
+            "theta_effective": dataset["theta_effective"],
+            "pair_count": dataset["pair_count"],
+            "group_count": dataset["group_count"],
+            "resolved_source_pair_count": dataset["resolved_source_pair_count"],
+            "initial_pair_contract": [
+                {
+                    "bg_display": pair.get("bg_display"),
+                    "bg_native": pair.get("bg_native"),
+                    "hkl": pair.get("hkl"),
+                    "overlay_match_index": pair.get("overlay_match_index"),
+                    "pair_id": pair.get("pair_id"),
+                    "q_group_key": pair.get("q_group_key"),
+                    "selected_source_identity_canonical": pair.get(
+                        "selected_source_identity_canonical"
+                    ),
+                    "sim_display": pair.get("sim_display"),
+                    "sim_native": pair.get("sim_native"),
+                    "source_row_index": pair.get("source_row_index"),
+                    "source_table_index": pair.get("source_table_index"),
+                }
+                for pair in dataset["initial_pairs_display"]
+            ],
+            "measured_for_fit_contract": [
+                {
+                    "detector_input_frame": pair.get("detector_input_frame"),
+                    "detector_input_frame_reason": pair.get("detector_input_frame_reason"),
+                    "detector_x": pair.get("detector_x"),
+                    "detector_y": pair.get("detector_y"),
+                    "display_col": pair.get("display_col"),
+                    "display_row": pair.get("display_row"),
+                    "fit_detector_x": pair.get("fit_detector_x"),
+                    "fit_detector_y": pair.get("fit_detector_y"),
+                    "fit_source_identity_only": pair.get("fit_source_identity_only"),
+                    "hkl": pair.get("hkl"),
+                    "overlay_match_index": pair.get("overlay_match_index"),
+                    "pair_id": pair.get("pair_id"),
+                    "q_group_key": pair.get("q_group_key"),
+                    "source_row_index": pair.get("source_row_index"),
+                    "source_table_index": pair.get("source_table_index"),
+                    "x": pair.get("x"),
+                    "y": pair.get("y"),
+                }
+                for pair in dataset["measured_for_fit"]
+            ],
+            "spec_contract": {
+                "dataset_index": dataset["spec"]["dataset_index"],
+                "label": dataset["spec"]["label"],
+                "theta_initial": dataset["spec"]["theta_initial"],
+                "dynamic_reanchor_enabled": dataset["spec"]["dynamic_reanchor_enabled"],
+                "fit_space_projector_kind": dataset["spec"]["fit_space_projector_kind"],
+                "fit_space_projector_unavailable_reason": dataset["spec"][
+                    "fit_space_projector_unavailable_reason"
+                ],
+                "qr_fit_trial_source_rows_builder_kind": dataset["spec"][
+                    "qr_fit_trial_source_rows_builder_kind"
+                ],
+            },
+        }
+    )
+
+    assert snapshot == {
+        "dataset_index": 0,
+        "group_count": 1,
+        "label": "bg0.osc",
+        "initial_pair_contract": [
+            {
+                "bg_display": [50.0, 60.0],
+                "bg_native": [30.0, 40.0],
+                "hkl": [1, 1, 0],
+                "overlay_match_index": 0,
+                "pair_id": "bg0:pair0",
+                "q_group_key": ["q", 1],
+                "selected_source_identity_canonical": {
+                    "normalized_hkl": [1, 1, 0],
+                    "q_group_key": ["q", 1],
+                    "source_row_index": 2,
+                    "source_table_index": 1,
+                },
+                "sim_display": [9.0, 8.0],
+                "sim_native": [1.0, 2.0],
+                "source_row_index": 2,
+                "source_table_index": 1,
+            },
+        ],
+        "measured_for_fit_contract": [
+            {
+                "detector_input_frame": "fit_detector",
+                "detector_input_frame_reason": "apply_orientation_to_entries",
+                "detector_x": 31.0,
+                "detector_y": 41.0,
+                "display_col": 31.0,
+                "display_row": 41.0,
+                "fit_detector_x": 31.0,
+                "fit_detector_y": 41.0,
+                "fit_source_identity_only": True,
+                "hkl": [1, 1, 0],
+                "overlay_match_index": 0,
+                "pair_id": "bg0:pair0",
+                "q_group_key": ["q", 1],
+                "source_row_index": 2,
+                "source_table_index": 1,
+                "x": 31.0,
+                "y": 41.0,
+            },
+        ],
+        "pair_count": 1,
+        "resolved_source_pair_count": 1,
+        "spec_contract": {
+            "dataset_index": 0,
+            "dynamic_reanchor_enabled": False,
+            "fit_space_projector_kind": None,
+            "fit_space_projector_unavailable_reason": "exact_caked_view_unavailable",
+            "label": "bg0.osc",
+            "qr_fit_trial_source_rows_builder_kind": "geometry_manual_trial_source_rows",
+            "theta_initial": 1.5,
+        },
+        "theta_base": 1.5,
+        "theta_effective": 1.75,
+    }
 
 
 def test_build_geometry_manual_fit_dataset_preserves_multiple_entries_per_q_group() -> None:
@@ -39571,6 +39696,123 @@ def test_caked_point_reprojection_uses_detector_pixel_path(tmp_path) -> None:
     assert first_pair["exact_projector_used"] is True
     assert projector_calls[0]["cols"] == pytest.approx([100.0 + i for i in range(7)])
     assert projector_calls[0]["rows"] == pytest.approx([200.0 + 2.0 * i for i in range(7)])
+    snapshot = normalize_geometry_fit_snapshot(
+        {
+            "status": report["status"],
+            "point_only_reprojection_called": report["point_only_reprojection_called"],
+            "exact_projector_available": report["exact_projector_available"],
+            "all_exact_projector_used": report["all_exact_projector_used"],
+            "all_projection_projector_kinds_exact": report[
+                "all_projection_projector_kinds_exact"
+            ],
+            "all_projection_signatures_present": report[
+                "all_projection_signatures_present"
+            ],
+            "all_projection_input_frames_native": report[
+                "all_projection_input_frames_native"
+            ],
+            "all_projection_sources_native": report["all_projection_sources_native"],
+            "stale_alias_guard_installed": report["stale_alias_guard_installed"],
+            "stale_caked_field_read_count": report["stale_caked_field_read_count"],
+            "full_background_recake_called": report["full_background_recake_called"],
+            "full_background_recake_call_count": report["full_background_recake_call_count"],
+            "pair_count": len(report["pairs"]),
+            "projection_metadata": report["projection_metadata"],
+            "first_pair": {
+                "q_group_key": first_pair["q_group_key"],
+                "hkl": first_pair["hkl"],
+                "detector_point": first_pair["detector_point"],
+                "detector_point_frame": first_pair["detector_point_frame"],
+                "base_caked_point": first_pair["base_caked_point"],
+                "theta_perturbed_caked_point": first_pair["theta_perturbed_caked_point"],
+                "distance_perturbed_caked_point": first_pair[
+                    "distance_perturbed_caked_point"
+                ],
+                "stale_caked_fields_present": first_pair["stale_caked_fields_present"],
+                "stale_caked_fields_used": first_pair["stale_caked_fields_used"],
+                "projection_input_frame": first_pair["projection_input_frame"],
+                "caked_projection_source": first_pair["caked_projection_source"],
+                "fit_space_projector_kind": first_pair["fit_space_projector_kind"],
+                "exact_projector_used": first_pair["exact_projector_used"],
+            },
+            "projector_call_contract": {
+                "count": len(projector_calls),
+                "first": {
+                    "anchor_kind": projector_calls[0]["anchor_kind"],
+                    "input_frame": projector_calls[0]["input_frame"],
+                    "theta_initial": projector_calls[0]["theta_initial"],
+                    "corto_detector": projector_calls[0]["corto_detector"],
+                    "cols": projector_calls[0]["cols"],
+                    "rows": projector_calls[0]["rows"],
+                },
+            },
+        }
+    )
+
+    assert snapshot == {
+        "all_exact_projector_used": True,
+        "all_projection_input_frames_native": True,
+        "all_projection_projector_kinds_exact": True,
+        "all_projection_signatures_present": True,
+        "all_projection_sources_native": True,
+        "exact_projector_available": True,
+        "first_pair": {
+            "base_caked_point": [2.1, 2.12],
+            "caked_projection_source": "fit_space_projector_native_detector",
+            "detector_point": [100.0, 200.0],
+            "detector_point_frame": "native_detector",
+            "distance_perturbed_caked_point": [2.10001, 2.120002],
+            "exact_projector_used": True,
+            "fit_space_projector_kind": "exact_caked_bundle",
+            "hkl": [0, 0, 1],
+            "projection_input_frame": "native_detector",
+            "q_group_key": ["q_group", "primary", 0, 1],
+            "stale_caked_fields_present": True,
+            "stale_caked_fields_used": False,
+            "theta_perturbed_caked_point": [2.1001, 2.12001],
+        },
+        "full_background_recake_call_count": 0,
+        "full_background_recake_called": False,
+        "pair_count": 7,
+        "point_only_reprojection_called": True,
+        "projection_metadata": {
+            "base": {
+                "caked_projection_source": "fit_space_projector_native_detector",
+                "exact_projector_used": True,
+                "fit_space_projector_kind": "exact_caked_bundle",
+                "projection_input_frame": "native_detector",
+                "valid": True,
+            },
+            "distance": {
+                "caked_projection_source": "fit_space_projector_native_detector",
+                "exact_projector_used": True,
+                "fit_space_projector_kind": "exact_caked_bundle",
+                "projection_input_frame": "native_detector",
+                "valid": True,
+            },
+            "theta": {
+                "caked_projection_source": "fit_space_projector_native_detector",
+                "exact_projector_used": True,
+                "fit_space_projector_kind": "exact_caked_bundle",
+                "projection_input_frame": "native_detector",
+                "valid": True,
+            },
+        },
+        "projector_call_contract": {
+            "count": 3,
+            "first": {
+                "anchor_kind": "measured",
+                "cols": [100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0],
+                "corto_detector": 100.0,
+                "input_frame": "native_detector",
+                "rows": [200.0, 202.0, 204.0, 206.0, 208.0, 210.0, 212.0],
+                "theta_initial": 2.0,
+            },
+        },
+        "stale_alias_guard_installed": True,
+        "stale_caked_field_read_count": 0,
+        "status": "pass",
+    }
 
 
 def test_caked_point_reprojection_does_not_recake_background_image(tmp_path) -> None:

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from ra_sim.gui import geometry_fit
+from tests.helpers.geometry_fit_snapshots import normalize_geometry_fit_snapshot
 
 
 def _live_row(source_label: str = "primary", *, x: float = 10.0) -> dict[str, object]:
@@ -321,6 +322,81 @@ def test_geometry_fit_job_logs_live_rows_build_counts(monkeypatch, tmp_path) -> 
     assert fields["live_rows_by_background_keys"] == [0]
     assert fields["requested_signature_keys"] == [0]
     assert fields["live_rows_signature_by_background_keys"] == [0]
+
+
+def test_geometry_fit_job_canonical_snapshot_pins_live_row_handoff_contract(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    runtime_session = importlib.import_module("ra_sim.gui._runtime.runtime_session")
+    _patch_job_build(monkeypatch, runtime_session, live_rows=[_live_row("primary")])
+
+    job = runtime_session._build_geometry_fit_async_job(
+        _bindings(monkeypatch, runtime_session, tmp_path)
+    )
+
+    snapshot = normalize_geometry_fit_snapshot(
+        {
+            "current_background_index": job["current_background_index"],
+            "selected_background_indices": job["selected_background_indices"],
+            "required_indices": job["required_indices"],
+            "requested_signature_summaries": job["requested_signature_summaries"],
+            "live_rows_by_background_counts": {
+                idx: len(rows) for idx, rows in job["live_rows_by_background"].items()
+            },
+            "live_rows_signature_by_background": job["live_rows_signature_by_background"],
+            "live_rows_handoff_diagnostics": job["live_rows_handoff_diagnostics"],
+            "projection_payload_by_background_keys": sorted(
+                job["projection_payload_by_background"]
+            ),
+            "projection_view_signature_by_background": job[
+                "projection_view_signature_by_background"
+            ],
+            "error_fields": {
+                "selection_error": job["selection_error"],
+                "background_theta_error": job["background_theta_error"],
+            },
+        }
+    )
+
+    assert snapshot == {
+        "current_background_index": 0,
+        "error_fields": {
+            "background_theta_error": None,
+            "selection_error": None,
+        },
+        "live_rows_by_background_counts": {"int:0": 1},
+        "live_rows_handoff_diagnostics": {
+            "current_background": 0,
+            "geometry_fit_live_handoff_patch_marker": "phase4d1",
+            "job_local_fallback_rows": 1,
+            "job_local_fallback_source": "saved_manual_pairs",
+            "job_local_fallback_source_counts": {
+                "primary": 1,
+            },
+            "live_preview_rows_count": 1,
+            "live_rows_by_background_current_count": 1,
+            "live_rows_by_background_keys": [0],
+            "live_rows_current_background_count": 1,
+            "live_rows_signature_by_background_keys": [0],
+            "manual_picker_candidates": 0,
+            "q_group_cached_entries": 0,
+            "requested_signature_by_background_keys": [0],
+            "requested_signature_keys": [0],
+        },
+        "live_rows_signature_by_background": {"int:0": ["requested", 0]},
+        "projection_payload_by_background_keys": [],
+        "projection_view_signature_by_background": {
+            "int:0": {
+                "available": True,
+                "background_index": 0,
+                "mode": "detector",
+            },
+        },
+        "requested_signature_summaries": {"int:0": "('requested', 0)"},
+        "required_indices": [0],
+        "selected_background_indices": [0],
+    }
 
 
 def test_geometry_fit_job_uses_q_group_snapshot_when_live_rows_empty(

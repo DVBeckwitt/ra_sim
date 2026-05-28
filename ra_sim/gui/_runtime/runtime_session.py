@@ -315,6 +315,7 @@ from ra_sim.gui._runtime.live_cache_helpers import (
     live_cache_shape as _live_cache_shape,
     live_cache_signature_summary as _live_cache_signature_summary,
 )
+from ra_sim.gui._runtime.geometry_fit_job import resolve_geometry_fit_selection
 from ra_sim.gui import fit2d_error_sound as gui_fit2d_error_sound
 from ra_sim.gui import views as gui_views
 from ra_sim.gui.geometry_overlay import (
@@ -39588,101 +39589,44 @@ def _build_geometry_fit_async_job(
         except Exception:
             pass
 
-    selection_applied = bool(
-        prepare_bindings.apply_geometry_fit_background_selection(
-            trigger_update=False,
-            sync_live_theta=not preserve_live_theta,
-        )
+    selection_snapshot = resolve_geometry_fit_selection(
+        params=params,
+        var_names=var_names,
+        current_background_index=int(current_background_index),
+        theta_initial_value=float(theta_initial_value),
+        total_background_count=len(manual_dataset_bindings.osc_files or ()),
+        geometry_manual_pairs_for_index=manual_dataset_bindings.geometry_manual_pairs_for_index,
+        apply_geometry_fit_background_selection=(
+            prepare_bindings.apply_geometry_fit_background_selection
+        ),
+        current_geometry_fit_background_indices=(
+            prepare_bindings.current_geometry_fit_background_indices
+        ),
+        geometry_fit_uses_shared_theta_offset=prepare_bindings.geometry_fit_uses_shared_theta_offset,
+        apply_background_theta_metadata=prepare_bindings.apply_background_theta_metadata,
+        current_background_theta_values=prepare_bindings.current_background_theta_values,
+        current_geometry_theta_offset=prepare_bindings.current_geometry_theta_offset,
+        effective_geometry_fit_background_indices=(
+            gui_geometry_fit.effective_geometry_fit_background_indices
+        ),
     )
-    selected_background_indices: list[int] = []
-    requested_indices: list[int] = []
-    skipped_empty_indices: set[int] = set()
-    selection_error: str | None = None
-    if selection_applied:
-        try:
-            requested_indices = [
-                int(idx)
-                for idx in prepare_bindings.current_geometry_fit_background_indices(strict=True)
-            ]
-            selected_background_indices = (
-                gui_geometry_fit.effective_geometry_fit_background_indices(
-                    requested_indices,
-                    total_count=len(manual_dataset_bindings.osc_files or ()),
-                    geometry_manual_pairs_for_index=(
-                        manual_dataset_bindings.geometry_manual_pairs_for_index
-                    ),
-                )
-            )
-            active_set = {int(idx) for idx in selected_background_indices}
-            skipped_empty_indices = {int(idx) for idx in requested_indices if idx not in active_set}
-        except Exception as exc:
-            selection_error = str(exc)
-
-    uses_shared_theta = False
-    if selection_error is None:
-        try:
-            uses_shared_theta = bool(
-                prepare_bindings.geometry_fit_uses_shared_theta_offset(
-                    list(selected_background_indices)
-                )
-            )
-        except Exception:
-            uses_shared_theta = False
-
-    theta_metadata_applied = True
-    background_theta_values: list[float] = []
-    background_theta_error: str | None = None
-    theta_offset_value = 0.0
-    if uses_shared_theta:
-        theta_metadata_applied = bool(
-            prepare_bindings.apply_background_theta_metadata(
-                trigger_update=False,
-                sync_live_theta=not preserve_live_theta,
-            )
-        )
-        if theta_metadata_applied:
-            try:
-                background_theta_values = [
-                    float(value)
-                    for value in prepare_bindings.current_background_theta_values(strict_count=True)
-                ]
-                theta_offset_value = float(
-                    prepare_bindings.current_geometry_theta_offset(strict=True)
-                )
-            except Exception as exc:
-                background_theta_error = str(exc)
-
-    fit_params_snapshot = dict(params)
-    active_in_selection = current_background_index in set(selected_background_indices)
-    primary_index = (
-        int(current_background_index)
-        if active_in_selection
-        else (
-            int(selected_background_indices[0])
-            if selected_background_indices
-            else int(current_background_index)
-        )
-    )
-    joint_background_mode = bool(uses_shared_theta and len(selected_background_indices) > 1)
-    build_all_selected_backgrounds = bool(joint_background_mode)
-    if uses_shared_theta:
-        fit_params_snapshot["theta_offset"] = float(theta_offset_value)
-        if 0 <= int(primary_index) < len(background_theta_values):
-            fit_params_snapshot["theta_initial"] = float(
-                background_theta_values[int(primary_index)]
-            )
-    else:
-        fit_params_snapshot["theta_offset"] = 0.0
-        theta_default = float(fit_params_snapshot.get("theta_initial", theta_initial_value))
-        fit_params_snapshot["theta_initial"] = float(theta_default)
-        background_theta_values = [float(theta_default)]
-
-    if not selection_applied or selection_error is not None or not active_in_selection:
-        required_indices: list[int] = []
-    elif build_all_selected_backgrounds:
-        required_indices = [int(idx) for idx in selected_background_indices]
-    else:
-        required_indices = [int(primary_index)]
+    params = dict(selection_snapshot.params)
+    var_names = list(selection_snapshot.var_names)
+    preserve_live_theta = bool(selection_snapshot.preserve_live_theta)
+    selected_background_indices = list(selection_snapshot.selected_background_indices)
+    skipped_empty_indices = set(selection_snapshot.skipped_empty_indices)
+    selection_applied = bool(selection_snapshot.selection_applied)
+    selection_error = selection_snapshot.selection_error
+    uses_shared_theta = bool(selection_snapshot.uses_shared_theta)
+    theta_metadata_applied = bool(selection_snapshot.theta_metadata_applied)
+    background_theta_values = list(selection_snapshot.background_theta_values)
+    background_theta_error = selection_snapshot.background_theta_error
+    theta_offset_value = float(selection_snapshot.theta_offset)
+    fit_params_snapshot = dict(selection_snapshot.fit_params_snapshot)
+    primary_index = int(selection_snapshot.primary_index)
+    joint_background_mode = bool(selection_snapshot.joint_background_mode)
+    build_all_selected_backgrounds = bool(selection_snapshot.build_all_selected_backgrounds)
+    required_indices = list(selection_snapshot.required_indices)
 
     background_images: dict[int, dict[str, np.ndarray]] = {}
     caked_views_by_background: dict[int, dict[str, object]] = {}

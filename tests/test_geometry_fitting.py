@@ -22,6 +22,7 @@ from ra_sim.simulation.types import (
     SimulationRequest,
     SimulationResult,
 )
+from tests.helpers.geometry_fit_snapshots import normalize_geometry_fit_snapshot
 
 
 def _base_params(image_size: int, *, optics_mode: int = diffraction.OPTICS_MODE_EXACT) -> dict:
@@ -3306,6 +3307,57 @@ def test_fit_geometry_parameters_pixel_path_uses_central_geometry_ray(monkeypatc
     assert bool(result.point_match_summary["central_ray_mode"]) is True
     assert bool(result.point_match_summary["single_ray_enabled"]) is False
     assert int(result.point_match_summary["single_ray_forced_count"]) == 0
+    snapshot = normalize_geometry_fit_snapshot(
+        {
+            "success": bool(result.success),
+            "status": int(result.status),
+            "message": str(result.message),
+            "x": np.asarray(result.x, dtype=float),
+            "fun": np.asarray(result.fun, dtype=float),
+            "final_metric_units": getattr(result, "final_metric_units", None),
+            "point_match_summary": {
+                "matched_pair_count": result.point_match_summary.get("matched_pair_count"),
+                "metric_unit": result.point_match_summary.get("metric_unit"),
+                "weighted_metric_unit": result.point_match_summary.get("weighted_metric_unit"),
+                "objective_space": result.point_match_summary.get("objective_space"),
+                "central_ray_mode": result.point_match_summary.get("central_ray_mode"),
+                "single_ray_enabled": result.point_match_summary.get("single_ray_enabled"),
+                "single_ray_forced_count": result.point_match_summary.get(
+                    "single_ray_forced_count"
+                ),
+            },
+        }
+    )
+
+    assert snapshot == {
+        "final_metric_units": "px",
+        "fun": {
+            "__ndarray__": {
+                "dtype": "float64",
+                "shape": [2],
+                "values": [0.0, 0.0],
+            },
+        },
+        "message": "ok",
+        "point_match_summary": {
+            "central_ray_mode": True,
+            "matched_pair_count": 1,
+            "metric_unit": "px",
+            "objective_space": None,
+            "single_ray_enabled": False,
+            "single_ray_forced_count": 0,
+            "weighted_metric_unit": None,
+        },
+        "status": 1,
+        "success": True,
+        "x": {
+            "__ndarray__": {
+                "dtype": "float64",
+                "shape": [1],
+                "values": [0.5],
+            },
+        },
+    }
 
 
 def test_fit_geometry_parameters_pixel_path_runs_without_full_ray_polish(
