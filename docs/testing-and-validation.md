@@ -23,6 +23,19 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 
 ## Current patch status
 
+- 2026-05-28: Manual Qr/Qz caked fit-space review patch completed. The runtime
+  fallback helper now restores the explicit `manual_space == "caked"` fast path
+  before manual-pair materialization, while keeping the shared
+  `geometry_manual_caked_fit_space_required_from_context` classifier for the
+  remaining detector/mixed/projection-view cases. Bug/performance status:
+  review finding addressed; the defect was avoidable fallback-path work, not a
+  user-facing behavior change. Feature/API status: no GUI control, CLI flag,
+  config key, saved-state field, artifact schema, dependency, CI workflow, or
+  public interface changed. Migration/deprecation status: none required.
+  Shipping status: internal patch-level cleanup with normal git revert
+  rollback. Validation status: source-order regression guard, focused
+  fit-space classification/runtime/optimizer tests, `git diff --check`, and
+  `python -m ra_sim.dev check` passed locally before commit.
 - 2026-05-28: Manual Qr/Qz caked fit-space Tasks 6-7 status. Task 6 automated
   guard closeout is complete: the handoff checker still rejects the bad
   live-trace family and accepts the clean caked route, while the

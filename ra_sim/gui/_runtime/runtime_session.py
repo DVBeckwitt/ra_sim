@@ -43893,36 +43893,19 @@ def _run_async_geometry_fit_worker_job(
         if manual_space == "caked":
             return True
         pairs = _worker_manual_pairs_for_background(background_idx)
-        explicit_detector_origin = any(
-            isinstance(entry, Mapping)
-            and gui_geometry_fit.geometry_manual_pair_enabled_for_geometry_fit(entry)
-            and str(entry.get("manual_background_input_origin") or "").strip().lower() == "detector"
-            for entry in pairs
+        try:
+            pick_applies_to_background = background_idx == int(
+                job_data.get("current_background_index", background_idx),
+            )
+        except Exception:
+            pick_applies_to_background = True
+        return gui_geometry_fit.geometry_manual_caked_fit_space_required_from_context(
+            pairs,
+            manual_fit_space_kind=manual_space,
+            projection_view_mode=job_data.get("projection_view_mode"),
+            pick_uses_caked_space=bool(job_data.get("pick_uses_caked_space", False)),
+            pick_applies_to_background=pick_applies_to_background,
         )
-        if bool(job_data.get("pick_uses_caked_space", False)):
-            try:
-                pick_applies_to_background = background_idx == int(
-                    job_data.get("current_background_index", background_idx),
-                )
-            except Exception:
-                pick_applies_to_background = True
-            if pick_applies_to_background and not explicit_detector_origin:
-                return True
-        if manual_space in {"detector", "mixed"}:
-            return False
-        projection_mode = str(job_data.get("projection_view_mode") or "").strip().lower()
-        if projection_mode == "caked":
-            for entry in pairs:
-                if not gui_geometry_fit.geometry_manual_pair_enabled_for_geometry_fit(entry):
-                    continue
-                origin = str(entry.get("manual_background_input_origin") or "").strip().lower()
-                if origin == "detector":
-                    continue
-                if origin == "caked":
-                    return True
-                if gui_geometry_fit.geometry_manual_pairs_fit_space_kind([entry]) == "caked":
-                    return True
-        return False
 
     def _worker_validate_required_source_rows_for_fit_space(
         rows: Sequence[object] | None,

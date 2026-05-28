@@ -15574,6 +15574,23 @@ def test_runtime_impl_does_not_raw_preflight_detector_origin_caked_pairs() -> No
     assert "manual_fit_requires_caked_space=any(" in source
 
 
+def test_runtime_manual_caked_requirement_keeps_caked_space_fast_path() -> None:
+    source = _source_text(RUNTIME_SESSION_SOURCE_PATH)
+    helper_start = source.index(
+        "def _worker_manual_caked_fit_space_required_for_background"
+    )
+    helper_end = source.index(
+        "def _worker_validate_required_source_rows_for_fit_space",
+        helper_start,
+    )
+    helper_source = source[helper_start:helper_end]
+
+    assert 'if manual_space == "caked":\n            return True' in helper_source
+    assert helper_source.index('if manual_space == "caked":') < helper_source.index(
+        "pairs = _worker_manual_pairs_for_background"
+    )
+
+
 def test_geometry_fit_targeted_projection_mode_uses_actual_caked_primary_view(
     monkeypatch,
 ) -> None:

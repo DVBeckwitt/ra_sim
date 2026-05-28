@@ -22252,6 +22252,84 @@ def _entry_theoretical_two_theta_deg(
     return float(2.0 * np.degrees(np.arcsin(bragg_arg)))
 
 
+def _enforce_manual_caked_route_final_invariant(
+    result: OptimizeResult,
+    *,
+    manual_caked_fit_space_required: bool,
+    manual_caked_fit_space_ready: bool,
+) -> OptimizeResult:
+    if not (manual_caked_fit_space_required or manual_caked_fit_space_ready):
+        return result
+
+    point_summary = getattr(result, "point_match_summary", {})
+    if not isinstance(point_summary, Mapping):
+        point_summary = {}
+    result_metric_name = str(
+        getattr(result, "final_metric_name", "")
+        or point_summary.get("metric_name")
+        or point_summary.get("final_metric_name")
+        or ""
+    ).strip()
+    result_metric_unit = str(
+        getattr(result, "final_metric_units", "")
+        or point_summary.get("metric_unit")
+        or point_summary.get("final_metric_units")
+        or ""
+    ).strip()
+    result_metric_space = str(
+        getattr(result, "final_metric_space", "")
+        or point_summary.get("acceptance_metric_space")
+        or ""
+    ).strip()
+
+    manual_caked_matched_count: Optional[int] = None
+    for matched_count_key in ("final_matched_pair_count", "matched_pair_count"):
+        if matched_count_key not in point_summary:
+            continue
+        try:
+            manual_caked_matched_count = int(point_summary.get(matched_count_key) or 0)
+        except Exception:
+            manual_caked_matched_count = 0
+        break
+    violates_manual_caked_route = (
+        result_metric_name == "central_point_match"
+        or result_metric_unit == "px"
+        or result_metric_space == "detector_px"
+        or (manual_caked_matched_count is not None and manual_caked_matched_count <= 0)
+    )
+    if not violates_manual_caked_route:
+        return result
+
+    result.success = False
+    result.status = -11
+    result.message = "manual_caked_route_invariant_violation"
+    result.final_metric_name = "manual_caked_route_invariant_violation"
+    result.final_metric_space = "caked_deg"
+    result.final_metric_units = "deg"
+    result.weighted_objective_rms = float("nan")
+    result.weighted_objective_rms_units = "deg"
+    result.weighted_residual_rms_px = float("nan")
+    result.rms_px = float("nan")
+    result.rms_deg = float("nan")
+    result.max_deg = float("nan")
+    repaired_summary = dict(point_summary)
+    repaired_summary.update(
+        {
+            "reason": "manual_caked_route_invariant_violation",
+            "metric_name": "manual_caked_route_invariant_violation",
+            "metric_unit": "deg",
+            "objective_space": "caked_deg",
+            "acceptance_metric_space": "caked_deg",
+            "manual_caked_fit_space_required": bool(manual_caked_fit_space_required),
+            "manual_caked_fit_space_ready": bool(manual_caked_fit_space_ready),
+        }
+    )
+    if manual_caked_matched_count is not None:
+        repaired_summary["matched_pair_count"] = int(manual_caked_matched_count)
+    result.point_match_summary = repaired_summary
+    return result
+
+
 def _fit_space_provenance_summary(
     params: Mapping[str, object],
     *,
@@ -36140,74 +36218,11 @@ def fit_geometry_parameters(
                 else float(weighted_residual_rms)
             )
 
-    if manual_caked_fit_space_required or manual_caked_fit_space_ready:
-        point_summary = (
-            result.point_match_summary
-            if isinstance(getattr(result, "point_match_summary", None), Mapping)
-            else {}
-        )
-        result_metric_name = str(
-            getattr(result, "final_metric_name", "")
-            or point_summary.get("metric_name")
-            or point_summary.get("final_metric_name")
-            or ""
-        ).strip()
-        result_metric_unit = str(
-            getattr(result, "final_metric_units", "")
-            or point_summary.get("metric_unit")
-            or point_summary.get("final_metric_units")
-            or ""
-        ).strip()
-        result_metric_space = str(
-            getattr(result, "final_metric_space", "")
-            or point_summary.get("acceptance_metric_space")
-            or ""
-        ).strip()
-        manual_caked_matched_count: Optional[int] = None
-        for matched_count_key in ("final_matched_pair_count", "matched_pair_count"):
-            if matched_count_key not in point_summary:
-                continue
-            try:
-                manual_caked_matched_count = int(point_summary.get(matched_count_key) or 0)
-            except Exception:
-                manual_caked_matched_count = 0
-            break
-        manual_caked_matched_count_zero = (
-            manual_caked_matched_count is not None and manual_caked_matched_count <= 0
-        )
-        if (
-            result_metric_name == "central_point_match"
-            or result_metric_unit == "px"
-            or result_metric_space == "detector_px"
-            or manual_caked_matched_count_zero
-        ):
-            result.success = False
-            result.status = -11
-            result.message = "manual_caked_route_invariant_violation"
-            result.final_metric_name = "manual_caked_route_invariant_violation"
-            result.final_metric_space = "caked_deg"
-            result.final_metric_units = "deg"
-            result.weighted_objective_rms = float("nan")
-            result.weighted_objective_rms_units = "deg"
-            result.weighted_residual_rms_px = float("nan")
-            result.rms_px = float("nan")
-            result.rms_deg = float("nan")
-            result.max_deg = float("nan")
-            repaired_summary = dict(point_summary)
-            repaired_summary.update(
-                {
-                    "reason": "manual_caked_route_invariant_violation",
-                    "metric_name": "manual_caked_route_invariant_violation",
-                    "metric_unit": "deg",
-                    "objective_space": "caked_deg",
-                    "acceptance_metric_space": "caked_deg",
-                    "manual_caked_fit_space_required": bool(manual_caked_fit_space_required),
-                    "manual_caked_fit_space_ready": bool(manual_caked_fit_space_ready),
-                }
-            )
-            if manual_caked_matched_count is not None:
-                repaired_summary["matched_pair_count"] = int(manual_caked_matched_count)
-            result.point_match_summary = repaired_summary
+    result = _enforce_manual_caked_route_final_invariant(
+        result,
+        manual_caked_fit_space_required=bool(manual_caked_fit_space_required),
+        manual_caked_fit_space_ready=bool(manual_caked_fit_space_ready),
+    )
 
     bound_threshold_fraction = 0.01
     bound_entries: List[Dict[str, object]] = []

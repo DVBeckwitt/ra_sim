@@ -18851,6 +18851,61 @@ def geometry_manual_locked_qr_projection_required_by_background(
     return result
 
 
+def _geometry_manual_is_caked_fit_space_value(value: object | None) -> bool:
+    text = str(value or "").strip().lower()
+    return text in {"caked", "caked_deg", "fit_space", "fit-space", "exact_caked_bundle"}
+
+
+def geometry_manual_caked_fit_space_required_from_context(
+    manual_pairs: object,
+    *,
+    manual_fit_space_kind: object | None = None,
+    objective_space: object | None = None,
+    requested_projection_view_mode: object | None = None,
+    projection_view_mode: object | None = None,
+    explicit_fit_space: object | None = None,
+    pick_uses_caked_space: bool = False,
+    pick_applies_to_background: bool = False,
+) -> bool:
+    """Return whether a manual-fit context requires caked angular fit-space."""
+
+    if (
+        _geometry_manual_is_caked_fit_space_value(objective_space)
+        or _geometry_manual_is_caked_fit_space_value(requested_projection_view_mode)
+        or _geometry_manual_is_caked_fit_space_value(explicit_fit_space)
+    ):
+        return True
+
+    manual_space = str(manual_fit_space_kind or "").strip().lower()
+    enabled_manual_pairs = [
+        entry
+        for entry in (manual_pairs or ())
+        if isinstance(entry, Mapping) and geometry_manual_pair_enabled_for_geometry_fit(entry)
+    ]
+    has_detector_origin_pair = any(
+        str(entry.get("manual_background_input_origin") or "").strip().lower() == "detector"
+        for entry in enabled_manual_pairs
+    )
+
+    if manual_space == "caked":
+        return True
+    if pick_uses_caked_space and pick_applies_to_background and not has_detector_origin_pair:
+        return True
+    if manual_space in {"detector", "mixed"}:
+        return False
+
+    if _geometry_manual_is_caked_fit_space_value(projection_view_mode):
+        for entry in enabled_manual_pairs:
+            origin = str(entry.get("manual_background_input_origin") or "").strip().lower()
+            if origin == "detector":
+                continue
+            if origin == "caked":
+                return True
+            if geometry_manual_pairs_fit_space_kind([entry]) == "caked":
+                return True
+    return False
+
+
 def geometry_manual_caked_fit_space_required_by_background(
     background_indices: Sequence[object] | None,
     *,
@@ -18860,14 +18915,11 @@ def geometry_manual_caked_fit_space_required_by_background(
 ) -> dict[int, bool]:
     """Return whether each background must run manual fitting in caked space."""
 
-    def _is_caked_space(value: object | None) -> bool:
-        text = str(value or "").strip().lower()
-        return text in {"caked", "caked_deg", "fit_space", "fit-space", "exact_caked_bundle"}
-
-    requires_caked = bool(
-        _is_caked_space(objective_space)
-        or _is_caked_space(requested_projection_view_mode)
-        or _is_caked_space(explicit_fit_space)
+    requires_caked = geometry_manual_caked_fit_space_required_from_context(
+        (),
+        objective_space=objective_space,
+        requested_projection_view_mode=requested_projection_view_mode,
+        explicit_fit_space=explicit_fit_space,
     )
     return {int(idx): bool(requires_caked) for idx in (background_indices or ())}
 

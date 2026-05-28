@@ -241,6 +241,16 @@ Last updated: 2026-05-28
   workflow, GUI control, CLI flag, config key, saved-state format, artifact
   schema, dependency, ADR, migration, release version, or CI workflow changed.
   Shipping status: docs-only handoff update; rollback is a normal git revert.
+- 2026-05-28 review fast-path patch completed. The async worker fallback helper
+  again returns immediately for `manual_space == "caked"` before materializing
+  manual pairs, while detector/mixed/projection-view fallback decisions still
+  route through `geometry_manual_caked_fit_space_required_from_context`. Bug
+  status: review finding fixed; this was avoidable fallback-path work, not a
+  user-facing fit behavior change. Feature/API status: no GUI control, CLI
+  flag, config key, saved-state field, artifact schema, dependency, public
+  interface, or CI workflow changed. Migration/deprecation status: none.
+  Shipping status: patch-level internal cleanup; rollback is a normal git
+  revert.
 - 2026-05-20 trace-checker invariant follow-up completed. The diagnostic
   checker now rejects split-record traces where a caked objective reaches the
   optimizer and later reports `matched=0`, even if the same record does not

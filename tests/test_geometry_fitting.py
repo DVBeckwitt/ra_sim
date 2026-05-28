@@ -10182,6 +10182,44 @@ def test_manual_caked_route_invariant_rejection_text_names_caked_route_block() -
     assert "No matched peak pairs were available for the fitted solution." not in rejection_reasons
 
 
+def test_manual_caked_route_final_invariant_helper_rejects_pixel_metric() -> None:
+    result = opt.OptimizeResult(
+        success=True,
+        status=1,
+        message="ok",
+    )
+    result.final_metric_name = "dynamic_angular_point_match"
+    result.final_metric_space = "caked_deg"
+    result.final_metric_units = "px"
+    result.weighted_objective_rms = 12.0
+    result.weighted_residual_rms_px = 12.0
+    result.rms_px = 12.0
+    result.rms_deg = 12.0
+    result.max_deg = 25.0
+    result.point_match_summary = {
+        "metric_name": "dynamic_angular_point_match",
+        "metric_unit": "px",
+        "matched_pair_count": 2,
+    }
+
+    repaired = opt._enforce_manual_caked_route_final_invariant(
+        result,
+        manual_caked_fit_space_required=True,
+        manual_caked_fit_space_ready=True,
+    )
+
+    assert repaired is result
+    assert not repaired.success
+    assert repaired.status == -11
+    assert repaired.message == "manual_caked_route_invariant_violation"
+    assert repaired.final_metric_name == "manual_caked_route_invariant_violation"
+    assert repaired.final_metric_space == "caked_deg"
+    assert repaired.final_metric_units == "deg"
+    assert repaired.point_match_summary["reason"] == "manual_caked_route_invariant_violation"
+    assert repaired.point_match_summary["metric_unit"] == "deg"
+    assert repaired.point_match_summary["matched_pair_count"] == 2
+
+
 def test_manual_qr_dynamic_unavailable_rejection_text_names_internal_source_block() -> None:
     from ra_sim.gui import geometry_fit as gui_geometry_fit
 

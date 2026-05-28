@@ -212,6 +212,33 @@ def test_caked_requirement_is_separate_from_detector_origin_provenance() -> None
     assert required == {0: True}
 
 
+def test_caked_requirement_context_keeps_projection_view_separate_from_detector_origin() -> None:
+    assert (
+        geometry_fit.geometry_manual_caked_fit_space_required_from_context(
+            [_detector_origin_pair()],
+            manual_fit_space_kind="detector",
+            projection_view_mode="caked",
+        )
+        is False
+    )
+    assert (
+        geometry_fit.geometry_manual_caked_fit_space_required_from_context(
+            [_detector_origin_pair()],
+            manual_fit_space_kind="detector",
+            objective_space="caked_deg",
+        )
+        is True
+    )
+    assert (
+        geometry_fit.geometry_manual_caked_fit_space_required_from_context(
+            [_caked_origin_pair()],
+            manual_fit_space_kind="caked",
+            projection_view_mode="caked",
+        )
+        is True
+    )
+
+
 def test_caked_requirement_overrides_mixed_pick_provenance_for_preflight() -> None:
     pairs_by_background = {
         0: [_detector_origin_pair()],

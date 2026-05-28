@@ -891,6 +891,14 @@ exited during initial simulation before the callback ran. Do not close the live
 GUI acceptance item until an actual Tk Fit Geometry run writes a fresh trace
 that passes `scripts/diagnostics/check_geometry_fit_handoff.py`.
 
+Review patch status on 2026-05-28: the runtime fallback path again short-circuits
+`manual_space == "caked"` before copying manual pairs, then uses the shared
+manual-caked requirement classifier for detector, mixed, and projection-view
+fallback cases. This addresses the review finding about avoidable fallback-path
+work without changing caked-objective semantics, public GUI behavior, saved
+state, config, CLI flags, artifact schemas, dependencies, or CI workflows.
+Rollback is a normal git revert of the patch commit.
+
 Status as of 2026-05-21: `objective_space=caked_deg` is now the fit-space
 requirement source of truth for manual Qr/Qz geometry fits, even when the manual
 pick provenance remains detector-origin. If every manual pair has finite
