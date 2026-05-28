@@ -874,9 +874,11 @@ objective is requested. The optimizer invariant slice extends the same caked
 route guard to explicit post-optimization zero-match summaries: if a manual
 caked route reports `matched_pair_count == 0` or `final_matched_pair_count == 0`,
 the fit fails closed as `manual_caked_route_invariant_violation` with caked
-degree units. Bug/error status: guarded locally for Tasks 4-5. Interface status:
-no GUI controls, CLI flags, config keys, saved-state fields, artifacts,
-dependencies, or public workflows changed.
+degree units. Bug/error status: fixed and guarded in commit `105ea5aa` for
+Tasks 4-5. Interface status: no GUI controls, CLI flags, config keys,
+saved-state fields, artifacts, dependencies, or public workflows changed.
+Shipping status: no release, rollout, migration, or CI workflow update is
+required; rollback is a normal git revert.
 
 Status as of 2026-05-21: `objective_space=caked_deg` is now the fit-space
 requirement source of truth for manual Qr/Qz geometry fits, even when the manual

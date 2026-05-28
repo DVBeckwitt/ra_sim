@@ -23,7 +23,7 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 
 ## Current patch status
 
-- 2026-05-28: Manual Qr/Qz caked fit-space Tasks 4-5 are implemented locally.
+- 2026-05-28: Manual Qr/Qz caked fit-space Tasks 4-5 are committed as `105ea5aa`.
   Task 4 adds runtime worker parity coverage proving explicit non-caked mixed
   provenance still rejects without caked-view setup, while explicit caked intent
   keeps the caked-required route. Task 5 hardens optimizer final validation so a
@@ -33,7 +33,9 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
   saved-state schema, CLI flag, config key, artifact field, dependency, CI
   workflow, UI control, or new abstraction changed. Review status: no
   correctness, bloat, security, performance, test-quality, or unnecessary
-  new-code findings. Validation status: targeted optimizer, runtime, and
+  new-code findings. Shipping status: internal bug-fix patch, no release or
+  rollout action required, rollback is a normal git revert. Validation status:
+  targeted optimizer, runtime, and
   fit-space classification tests passed; `python -m ra_sim.dev check` and
   `git diff --check` passed for the completed slice.
 - 2026-05-28: Manual Qr/Qz caked fit-space review follow-up is committed as `978ee3fe`. The GUI preflight cleanup is behavior-preserving, removes a dead `ensure_geometry_fit_caked_view` self-assignment, and keeps mixed-provenance rejection disabled when an explicit caked objective supplies the fit-space requirement. Regression coverage now pins `solver_requested_objective_space == "caked_deg"` for every prepared dataset spec in the mixed detector/caked provenance case. Review status: no blocking correctness, security, performance, bloat, test-quality, or unnecessary-new-code findings; no new files or abstractions were added. Migration/deprecation status: no saved-state schema, CLI flag, config key, artifact field, dependency, public workflow, or CI workflow changed. Shipping status: patch-level internal validation update, no release/version bump or staged rollout required, rollback is a normal git revert. Validation status: targeted geometry fit-space tests, targeted GUI geometry workflow tests, `python -m ra_sim.dev check`, and `git diff --check` passed before commit.

@@ -211,8 +211,9 @@ Last updated: 2026-05-28
   Task 5 hardens the optimizer's final caked-route invariant so an explicit
   post-optimization `matched_pair_count == 0` or `final_matched_pair_count == 0`
   is rejected as `manual_caked_route_invariant_violation` with caked degree
-  units. Bug/error status: guarded for the remaining zero-match caked objective
-  loophole. Feature/API status: no GUI control, CLI flag, config key,
+  units. Bug/error status: fixed and guarded in commit `105ea5aa` for the
+  remaining zero-match caked objective loophole. Feature/API status: no GUI
+  control, CLI flag, config key,
   saved-state field, artifact schema, dependency, or version change. Review
   status: no avoidable new file, abstraction, security, performance, or test
   quality issue found. CI/CD and shipping status: no workflow change; local
