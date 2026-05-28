@@ -23,13 +23,14 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 
 ## Current patch status
 
-- 2026-05-28: Manual Qr/Qz caked final-invariant review patch is implemented
-  locally. The public `fit_geometry_parameters` path now rejects manual caked
-  angular results that carry pixel weighted-RMS units or a finite
-  `weighted_residual_rms_px` value, returning
-  `manual_caked_route_invariant_violation` instead of a successful fit. Valid
-  caked angular results keep the weighted objective in degree units and leave
-  pixel RMS fields nonfinite. Bug/error status: review finding addressed.
+- 2026-05-28: Manual Qr/Qz caked final-invariant review patch is committed as
+  `ca09f4bd`; this docs follow-up records the committed state only. The public
+  `fit_geometry_parameters` path now rejects manual caked angular results that
+  carry pixel weighted-RMS units or a finite `weighted_residual_rms_px` value,
+  returning `manual_caked_route_invariant_violation` instead of a successful
+  fit. Valid caked angular results keep the weighted objective in degree units
+  and leave pixel RMS fields nonfinite. Bug/error status: review finding
+  addressed.
   Feature/API status: no GUI control, CLI flag, config key, saved-state field,
   artifact schema, dependency, CI workflow, or public import path changed.
   Deprecation/migration status: none required. Shipping status: internal
@@ -39,8 +40,9 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
   `python -m pytest tests/test_geometry_fitting.py -ra`,
   `python -m pytest tests/test_gui_geometry_fit_workflow.py -k "caked_degree_metric or locked_qr_projection_readiness or caked_angular_rejection" -ra`,
   `python -m compileall ra_sim/fitting/optimization.py tests/test_geometry_fitting.py`, and
-  `python -m ruff check ra_sim/fitting/optimization.py tests/test_geometry_fitting.py`
-  passed locally.
+  `python -m ruff check ra_sim/fitting/optimization.py tests/test_geometry_fitting.py`,
+  `python -m pytest tests/test_testing_validation_index.py -ra`, and
+  `git diff --check` passed before commit.
 - 2026-05-28: Background peak-fit diagnostic Phase 2 slice is implemented
   locally. The large parallel diagnostic script now reuses
   `scripts/diagnostics/background_peak_fit_worker.py` for the rotated Gaussian
