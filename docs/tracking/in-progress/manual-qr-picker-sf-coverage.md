@@ -5,7 +5,7 @@ Type: bug
 Owner: -
 Issue: none
 Priority: p1
-Last updated: 2026-05-27
+Last updated: 2026-05-28
 
 ## Summary
 
@@ -68,6 +68,11 @@ pickable without falling back to primary or packaged 6H rows.
   locked-manual-Qr dynamic rows, and removed the incomplete committed Bi2Se3
   saved-state artifact in favor of synthesizing that regression state from the
   existing repo `new4.json` fixture.
+- 2026-05-28 review cleanup: removed the stale test-only
+  `place_current_release` session field from the detector single-group fallback
+  regression. Production already uses `_manual_pick_skip_release_once` and
+  release-event coordinates for this flow, so no behavior, public API, saved
+  state, config, or operator workflow changed.
 - Bug status: fixed for saved GUI states that contain nonempty
   `state.geometry.q_group_rows` and empty `state.geometry.peak_records`,
   including PbI2 `disordered_phase` rows produced by the modified-CIF disorder
@@ -96,6 +101,9 @@ pickable without falling back to primary or packaged 6H rows.
 - Launch status: focused runtime/import gates passed locally. Rollback is a
   normal revert of the source-row restore fix or this detector background-click
   patch.
+- Review cleanup status: complete. The manual-pick coordinate fix and
+  single-group fallback regression remain covered without legacy
+  `place_current_release` fixture state.
 
 ## Next actions
 
@@ -114,6 +122,10 @@ pickable without falling back to primary or packaged 6H rows.
   4 passed.
 - `pytest -q tests/test_gui_canvas_interactions.py`: 52 passed.
 - `pytest -q tests/test_gui_canvas_interactions.py`: 55 passed.
+- `python -m pytest tests/test_gui_canvas_interactions.py::test_canvas_detector_view_single_group_fallback_places_on_next_release tests/test_gui_canvas_interactions.py::test_canvas_detector_manual_release_uses_event_data_coordinates tests/test_gui_canvas_interactions.py::test_canvas_detector_manual_release_falls_back_to_pixels_without_event_data`:
+  3 passed.
+- `python -m ra_sim.dev check`: passed; 296 fast tests passed, ruff and mypy
+  gates clean.
 - `ruff check ra_sim/gui/canvas_interactions.py tests/test_gui_canvas_interactions.py`:
   passed.
 - `ruff check ra_sim/gui/manual_geometry.py tests/test_manual_geometry_selection_helpers.py tests/test_gui_canvas_interactions.py`:

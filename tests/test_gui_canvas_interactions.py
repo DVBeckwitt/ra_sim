@@ -1040,7 +1040,6 @@ def test_canvas_detector_view_single_group_fallback_places_on_next_release() -> 
             "group_key": ("q", 1),
             "group_entries": [{"label": "sim-1"}],
             "pending_entries": [],
-            "place_current_release": True,
             "zoom_active": False,
             "zoom_center": None,
             "saved_xlim": None,
