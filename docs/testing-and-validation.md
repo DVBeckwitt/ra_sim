@@ -33,9 +33,11 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
   config key, saved-state field, artifact schema, dependency, CI workflow, or
   public interface changed. Migration/deprecation status: none required.
   Shipping status: internal patch-level cleanup with normal git revert
-  rollback. Validation status: source-order regression guard, focused
-  fit-space classification/runtime/optimizer tests, `git diff --check`, and
-  `python -m ra_sim.dev check` passed locally before commit.
+  rollback. Commit status: source patch landed as `ea4b9ee1`; this docs
+  follow-up records the committed state only. Validation status: source-order
+  regression guard, focused fit-space classification/runtime/optimizer tests,
+  `git diff --check`, and `python -m ra_sim.dev check` passed before the source
+  commit.
 - 2026-05-28: Manual Qr/Qz caked fit-space Tasks 6-7 status. Task 6 automated
   guard closeout is complete: the handoff checker still rejects the bad
   live-trace family and accepts the clean caked route, while the

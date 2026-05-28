@@ -897,7 +897,8 @@ manual-caked requirement classifier for detector, mixed, and projection-view
 fallback cases. This addresses the review finding about avoidable fallback-path
 work without changing caked-objective semantics, public GUI behavior, saved
 state, config, CLI flags, artifact schemas, dependencies, or CI workflows.
-Rollback is a normal git revert of the patch commit.
+The source patch is committed as `ea4b9ee1`; rollback is a normal git revert of
+that commit.
 
 Status as of 2026-05-21: `objective_space=caked_deg` is now the fit-space
 requirement source of truth for manual Qr/Qz geometry fits, even when the manual

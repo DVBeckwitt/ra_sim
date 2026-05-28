@@ -249,8 +249,8 @@ Last updated: 2026-05-28
   user-facing fit behavior change. Feature/API status: no GUI control, CLI
   flag, config key, saved-state field, artifact schema, dependency, public
   interface, or CI workflow changed. Migration/deprecation status: none.
-  Shipping status: patch-level internal cleanup; rollback is a normal git
-  revert.
+  Shipping status: patch-level internal cleanup committed as `ea4b9ee1`;
+  rollback is a normal git revert.
 - 2026-05-20 trace-checker invariant follow-up completed. The diagnostic
   checker now rejects split-record traces where a caked objective reaches the
   optimizer and later reports `matched=0`, even if the same record does not
