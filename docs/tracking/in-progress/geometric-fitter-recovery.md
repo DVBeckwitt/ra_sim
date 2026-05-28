@@ -9,6 +9,22 @@ Last updated: 2026-05-28
 
 ## Summary
 
+2026-05-28 geometry fitter shim simplification:
+three unused private nested helpers were removed from
+`ra_sim/fitting/optimization.py`: `_build_point_matches`,
+`_legacy_cost_fn_unused`, and `_legacy_evaluate_pixel_matches_unused`. The live
+geometry fitter still uses the existing global point matcher and dataset
+objective path; no public API, GUI control, CLI flag, config key, saved-state
+schema, artifact schema, dependency, or CI workflow changed. Bug/error/feature
+status: no runtime defect or user-facing feature change, only maintenance
+simplification. Deprecation/migration status: no migration path or compatibility
+shim required because the removed helpers were private, nested, and unreferenced.
+Security/performance status: no input, file, network, subprocess, auth, or
+credential-handling path changed; removing unused nested definitions slightly reduces
+function-local clutter without changing solver behavior. Shipping status: no
+rollout, feature flag, release, or version bump required; rollback is a normal
+git revert of this cleanup commit.
+
 2026-05-28 dead GUI acceleration cleanup and review closeout:
 the abandoned fast-viewer/Tk primary-viewport branch was removed by deleting
 `ra_sim/gui/fast_plot_viewer.py`,

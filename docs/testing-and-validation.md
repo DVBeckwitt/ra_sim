@@ -23,6 +23,22 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 
 ## Current patch status
 
+- 2026-05-28: Geometry fitter shim simplification removed three unused private
+  nested helpers from `ra_sim/fitting/optimization.py`:
+  `_build_point_matches`, `_legacy_cost_fn_unused`, and
+  `_legacy_evaluate_pixel_matches_unused`. Bug/error/feature status: no runtime
+  behavior defect or user-facing feature change; maintenance simplification
+  only. Feature/API status: no GUI control, CLI flag, config key, saved-state
+  field, artifact schema, dependency, CI workflow, or public supported workflow
+  changed. Deprecation/migration status: no compatibility shim or migration path
+  required because the removed helpers were private, nested, and unreferenced.
+  Shipping status: no release, rollout, feature flag, or version bump required;
+  rollback is a normal git revert. Review status: no new files, dependencies,
+  wrapper modules, or abstractions were added. Validation status:
+  `python -m compileall -q ra_sim/fitting/optimization.py`,
+  `python -m pytest tests/test_geometry_fitting.py -q`,
+  `python -m pytest tests/test_testing_validation_index.py -q`, and
+  `git diff --check` pass locally.
 - 2026-05-28: Dead GUI acceleration and stale hBN cleanup is committed as
   `643e1b1c`; this docs follow-up records the committed state and refreshed
   collection baseline. Removed code was unreferenced by active production paths:

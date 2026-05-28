@@ -24299,41 +24299,6 @@ def fit_geometry_parameters(
         local["_qr_fit_point_only_projection"] = bool(qr_fit_point_only_projection)
         return local
 
-    def _build_point_matches(
-        simulated_points: Sequence[Tuple[float, float]],
-        measured_points: Sequence[Tuple[float, float]],
-        *,
-        max_distance: float = np.inf,
-    ) -> List[Tuple[np.ndarray, np.ndarray, float, int, int]]:
-        """Backward-compatible wrapper around the global point matcher."""
-
-        return _build_global_point_matches(
-            simulated_points,
-            measured_points,
-            max_distance=max_distance,
-        )
-
-    def _legacy_cost_fn_unused(x):
-        """Retained only as an inert compatibility shim for old notebooks."""
-
-        return np.asarray(cost_fn(x), dtype=float)
-
-    def _legacy_evaluate_pixel_matches_unused(
-        local: Dict[str, object],
-        *,
-        collect_diagnostics: bool = False,
-    ) -> Tuple[np.ndarray, List[Dict[str, object]], Dict[str, object]]:
-        """Legacy shim. Real geometry point matching lives in `_evaluate_pixel_matches`."""
-
-        del local, collect_diagnostics
-        return (
-            np.array([], dtype=float),
-            [],
-            {
-                "status": "legacy_pixel_match_path_retired",
-            },
-        )
-
     def _theta_initial_for_dataset(
         local: Dict[str, object],
         dataset_ctx: GeometryFitDatasetContext,
