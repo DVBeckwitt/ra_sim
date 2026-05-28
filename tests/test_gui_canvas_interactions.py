@@ -1493,29 +1493,15 @@ def test_canvas_caked_manual_release_uses_event_data_coordinates() -> None:
         pick_session={"group_key": ("q", 1), "zoom_active": True}
     )
     calls = []
-    bindings = canvas_interactions.CanvasInteractionBindings(
+    bindings = _basic_canvas_bindings(
         axis=axis,
         geometry_runtime_state=state.GeometryRuntimeState(manual_pick_armed=True),
-        geometry_preview_state=state.GeometryPreviewState(),
         geometry_manual_state=manual_state,
-        peak_selection_state=state.PeakSelectionState(),
-        peak_selection_callbacks=_PeakCallbacks(),
-        integration_range_drag_callbacks=_DragCallbacks(),
         manual_pick_session_active=lambda: True,
-        set_geometry_manual_pick_mode=lambda *_args, **_kwargs: None,
-        set_geometry_preview_exclude_mode=lambda *_args, **_kwargs: None,
-        toggle_geometry_manual_selection_at=lambda *_args: None,
-        toggle_live_geometry_preview_exclusion_at=lambda *_args: None,
-        clamp_to_axis_view=lambda axis_arg, x, y: (float(x), float(y)),
-        apply_geometry_manual_pick_zoom=lambda *_args, **_kwargs: None,
-        update_geometry_manual_pick_preview=lambda *_args, **_kwargs: None,
         place_geometry_manual_selection_at=lambda col, row: calls.append(
             ("place", float(col), float(row))
         ),
-        clear_geometry_manual_preview_artists=lambda **_kwargs: None,
-        restore_geometry_manual_pick_view=lambda **_kwargs: None,
-        render_current_geometry_manual_pairs=lambda **_kwargs: True,
-        caked_view_enabled_factory=lambda: True,
+        caked_view_enabled=True,
     )
 
     release_event = _FakeEvent(
@@ -1537,29 +1523,14 @@ def test_canvas_detector_manual_release_uses_event_data_coordinates() -> None:
         pick_session={"group_key": ("q", 1), "zoom_active": True}
     )
     calls = []
-    bindings = canvas_interactions.CanvasInteractionBindings(
+    bindings = _basic_canvas_bindings(
         axis=axis,
         geometry_runtime_state=state.GeometryRuntimeState(manual_pick_armed=True),
-        geometry_preview_state=state.GeometryPreviewState(),
         geometry_manual_state=manual_state,
-        peak_selection_state=state.PeakSelectionState(),
-        peak_selection_callbacks=_PeakCallbacks(),
-        integration_range_drag_callbacks=_DragCallbacks(),
         manual_pick_session_active=lambda: True,
-        set_geometry_manual_pick_mode=lambda *_args, **_kwargs: None,
-        set_geometry_preview_exclude_mode=lambda *_args, **_kwargs: None,
-        toggle_geometry_manual_selection_at=lambda *_args: None,
-        toggle_live_geometry_preview_exclusion_at=lambda *_args: None,
-        clamp_to_axis_view=lambda axis_arg, x, y: (float(x), float(y)),
-        apply_geometry_manual_pick_zoom=lambda *_args, **_kwargs: None,
-        update_geometry_manual_pick_preview=lambda *_args, **_kwargs: None,
         place_geometry_manual_selection_at=lambda col, row: calls.append(
             ("place", float(col), float(row))
         ),
-        clear_geometry_manual_preview_artists=lambda **_kwargs: None,
-        restore_geometry_manual_pick_view=lambda **_kwargs: None,
-        render_current_geometry_manual_pairs=lambda **_kwargs: True,
-        caked_view_enabled_factory=lambda: False,
     )
 
     release_event = _FakeEvent(
