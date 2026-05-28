@@ -5,9 +5,40 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-05-27
+Last updated: 2026-05-28
 
 ## Summary
+
+2026-05-28 dead GUI acceleration cleanup and review closeout:
+the abandoned fast-viewer/Tk primary-viewport branch was removed by deleting
+`ra_sim/gui/fast_plot_viewer.py`,
+`ra_sim/gui/runtime_display_acceleration.py`,
+`ra_sim/gui/runtime_primary_viewport.py`, `ra_sim/gui/tk_primary_viewport.py`,
+and their four direct tests. The unused duplicate slider helper
+`ra_sim/gui/update.py` and stale hard-coded-path
+`ra_sim/hbn_fitter/optimizer.py` script were also removed; the maintained hBN
+surface remains `ra_sim/hbn_fitter/fitter.py`. The active validation index and
+test-tier manifest no longer reference deleted tests. Bug/error/feature status:
+no runtime behavior defect or user-facing feature change; this is maintenance
+cleanup plus a review patch that removed an unrelated diagnostics wrapper/test
+from the working diff. UI/API/interface status: no GUI control, frontend state
+contract, CLI flag, config key, saved-state schema, artifact schema, dependency,
+or production interface changed. CI/deprecation/migration status: no CI workflow,
+migration path, deprecation notice, compatibility shim, release/version change,
+new file, or new abstraction required; reference scans found no active
+consumers. Review status: the avoidable new diagnostics abstraction was removed,
+and no correctness, security, performance, test-quality, new-file, or
+abstraction blockers remain. Shipping status: no rollout, feature flag, or
+release bump is required; rollback is a normal git revert of the cleanup commit.
+Validation status: `python -m compileall -q ra_sim scripts tests`,
+`python -m pytest tests/test_gui_sliders.py tests/test_hbn_fitter_bundle_export.py tests/test_hbn_geometry_import_safe.py tests/test_hbn_geometry_mapping.py tests/test_test_tiers_complete.py tests/test_testing_validation_index.py -q`,
+`python tools/repo_debt_report.py`, `python tools/repo_debt_report.py --json`,
+and targeted runtime import-safety/source-audit tests pass locally. Repeated
+full-file `tests/test_gui_runtime_import_safe.py` runs on Python 3.13 reached
+the late AST source-audit section and then hit a native Windows access violation
+inside `ast.walk`/`ast.iter_fields`, with the same audit passing when isolated.
+`tests/test_repo_debt_report.py` also showed Python 3.13 guarded-import
+instability in the pytest wrapper while the report CLI itself passed.
 
 2026-05-27 phase 10 remaining runtime fake-var closeout:
 all remaining local `_Var` helpers in `tests/test_gui_runtime_import_safe.py`
@@ -57,7 +88,7 @@ and `python -m ra_sim.dev check` pass locally.
 
 2026-05-27 phase 8 small test-helper simplification:
 `tests/test_gui_analysis_visibility.py`,
-`tests/test_gui_runtime_display_acceleration.py`,
+the now-removed display-acceleration test,
 `tests/test_gui_geometry_q_group_manager.py`,
 `tests/test_gui_background_manager.py`,
 `tests/test_geometry_fit_lattice_ui_helpers.py`,

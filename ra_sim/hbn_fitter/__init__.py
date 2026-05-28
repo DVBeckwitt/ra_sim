@@ -2,4 +2,4 @@
 
 from __future__ import annotations
 
-__all__ = ["fitter", "optimizer"]
+__all__ = ["fitter"]
