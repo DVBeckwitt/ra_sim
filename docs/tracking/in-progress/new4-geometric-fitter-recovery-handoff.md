@@ -218,6 +218,21 @@ Last updated: 2026-05-28
   status: no avoidable new file, abstraction, security, performance, or test
   quality issue found. CI/CD and shipping status: no workflow change; local
   tests and `ra_sim.dev check` remain the gate, rollback is a normal git revert.
+- 2026-05-28 Task 6 automated guard closeout and Task 7 probe status recorded.
+  The handoff checker still rejects the bad live-trace family and accepts the
+  clean caked route, while the focused optimizer/runtime guard slices keep
+  explicit caked objectives on caked-degree metrics and keep non-caked mixed
+  provenance rejected. The maintained Tk timing harness restored the local
+  Bi2Se3 saved GUI state with TkAgg, caked state, manual geometry pairs, first
+  simulation compute, and first visible draw measured. That is startup/restore
+  proof only: it did not invoke Fit Geometry or emit a new
+  `geometry_fit_trace_*` file. A direct in-process Fit Geometry callback probe
+  exited during initial simulation before the callback ran, so Task 7 acceptance
+  remains open until a fresh actual Tk Fit Geometry trace passes the
+  caked-route checker. Bug/error status: fixed by the existing source patches;
+  this slice changed docs only. Feature/API status: no GUI control, CLI flag,
+  config key, saved-state field, artifact schema, dependency, CI workflow, or
+  public interface changed.
 - 2026-05-20 trace-checker invariant follow-up completed. The diagnostic
   checker now rejects split-record traces where a caked objective reaches the
   optimizer and later reports `matched=0`, even if the same record does not

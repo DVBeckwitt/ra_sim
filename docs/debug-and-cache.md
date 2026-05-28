@@ -880,6 +880,17 @@ saved-state fields, artifacts, dependencies, or public workflows changed.
 Shipping status: no release, rollout, migration, or CI workflow update is
 required; rollback is a normal git revert.
 
+Task 6-7 status on 2026-05-28: the automated trace checker, optimizer, and
+GUI-runtime guard slices still reject the bad caked-objective-to-pixel trace
+family and accept the clean caked route. The maintained Tk timing harness also
+restores the local Bi2Se3 saved GUI state to a first visible TkAgg draw with
+caked state and manual geometry pairs restored, but that is only a
+startup/restore proof. It does not run Fit Geometry or create a
+`geometry_fit_trace_*` file. A direct Fit Geometry callback automation attempt
+exited during initial simulation before the callback ran. Do not close the live
+GUI acceptance item until an actual Tk Fit Geometry run writes a fresh trace
+that passes `scripts/diagnostics/check_geometry_fit_handoff.py`.
+
 Status as of 2026-05-21: `objective_space=caked_deg` is now the fit-space
 requirement source of truth for manual Qr/Qz geometry fits, even when the manual
 pick provenance remains detector-origin. If every manual pair has finite

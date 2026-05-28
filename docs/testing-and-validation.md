@@ -23,6 +23,26 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 
 ## Current patch status
 
+- 2026-05-28: Manual Qr/Qz caked fit-space Tasks 6-7 status. Task 6 automated
+  guard closeout is complete: the handoff checker still rejects the bad
+  live-trace family and accepts the clean caked route, while the
+  optimizer/runtime guard slice keeps explicit caked objectives on caked-degree
+  metrics and keeps non-caked mixed provenance rejected. Task 7 remains a
+  live-operator proof, not an automated acceptance yet: the existing Tk timing
+  harness restored the local Bi2Se3 saved GUI state with TkAgg, caked state,
+  manual geometry pairs, first simulation compute, and first visible draw
+  measured, but it did not invoke Fit Geometry or emit a new
+  `geometry_fit_trace_*` file. A direct in-process Fit Geometry callback probe
+  exited during initial simulation before the fit callback ran, so it is not
+  acceptance evidence. No source, UI, API, config, saved-state, artifact schema,
+  dependency, or CI interface changed. Acceptance still requires a newly written
+  actual Tk Fit Geometry log that passes the caked-route checker. Validation
+  status:
+  `python -m pytest tests/test_geometry_fitter_cache_regression_gate_script.py -ra`,
+  `python -m pytest tests/test_geometry_fitting.py -k "manual_caked_route or locked_qr" -ra`,
+  and
+  `python -m pytest tests/test_gui_runtime_import_safe.py -k "manual_caked or manual_fit_space or caked_fit_space or exact_caked" -ra`
+  passed.
 - 2026-05-28: Manual Qr/Qz caked fit-space Tasks 4-5 are committed as `105ea5aa`.
   Task 4 adds runtime worker parity coverage proving explicit non-caked mixed
   provenance still rejects without caked-view setup, while explicit caked intent
