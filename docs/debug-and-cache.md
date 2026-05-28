@@ -861,11 +861,12 @@ mixed-provenance preflight error remains scoped to the no-explicit-caked-
 requirement path. Regression coverage now also asserts that an explicit caked
 objective marks every prepared dataset spec with
 `solver_requested_objective_space == "caked_deg"` even when detector-origin and
-caked-origin pick provenance are mixed. Bug/error status: fixed and guarded.
-Migration/deprecation status: no saved-state schema, CLI flag, config key,
-artifact field, dependency, or public workflow changed. Shipping status: local
-quality gates pass; no CI workflow, feature flag, staged rollout, or release
-version bump is required, and rollback is a normal git revert.
+caked-origin pick provenance are mixed. Bug/error status: fixed and guarded in
+commit `978ee3fe`. Migration/deprecation status: no saved-state schema, CLI
+flag, config key, artifact field, dependency, or public workflow changed.
+Shipping status: local quality gates passed before commit; no CI workflow,
+feature flag, staged rollout, or release version bump is required, and rollback
+is a normal git revert.
 
 Status as of 2026-05-21: `objective_space=caked_deg` is now the fit-space
 requirement source of truth for manual Qr/Qz geometry fits, even when the manual
