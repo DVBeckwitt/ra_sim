@@ -43,11 +43,13 @@ from ra_sim.gui.caked_intensity_policy import GUI_CAKED_VIEW_CORRECT_SOLID_ANGLE
 from ra_sim.gui.geometry_fit_coordinates import (
     background_detector_pair_for_frame as _geometry_fit_background_detector_pair_for_frame,
     caked_angle_pair as _geometry_fit_caked_angle_pair,
-    entry_frame as _geometry_fit_entry_frame,
     finite_float as _geometry_fit_finite_float,
     finite_pair as _geometry_fit_finite_pair,
     native_detector_anchor as _geometry_fit_native_detector_anchor,
     native_detector_anchor_with_provenance as _geometry_fit_native_detector_anchor_with_provenance,
+    observed_detector_anchor_for_caked_projection as _geometry_fit_observed_detector_anchor_for_caked_projection,
+    project_detector_anchor_to_caked_fit_space as _geometry_fit_project_detector_anchor_to_caked_fit_space,
+    simulated_detector_anchor_for_caked_projection as _geometry_fit_simulated_detector_anchor_for_caked_projection,
 )
 from ra_sim.gui.geometry_fit_contracts import (
     GeometryFitActionNotice,
@@ -11376,7 +11378,6 @@ def build_geometry_manual_fit_dataset(
 
     _finite_float = _geometry_fit_finite_float
     _finite_pair = _geometry_fit_finite_pair
-    _entry_frame = _geometry_fit_entry_frame
     _background_detector_pair_for_frame = _geometry_fit_background_detector_pair_for_frame
     _native_detector_anchor = _geometry_fit_native_detector_anchor
     _native_detector_anchor_with_provenance = _geometry_fit_native_detector_anchor_with_provenance
@@ -17184,49 +17185,6 @@ def build_geometry_manual_fit_dataset(
         else:
             fit_space_projector_unavailable_reason = "native_detector_shape_unavailable"
 
-    def _observed_detector_anchor_for_caked_projection(
-        entry: Mapping[str, object] | None,
-    ) -> tuple[tuple[float, float], str, str] | None:
-        native_anchor = _native_detector_anchor_with_provenance(entry)
-        if native_anchor is not None:
-            anchor, provenance = native_anchor
-            return anchor, "native_detector", str(provenance)
-        fit_anchor = _finite_pair(entry, "fit_detector_x", "fit_detector_y")
-        if fit_anchor is not None:
-            return fit_anchor, "fit_detector", "fit_detector_coords"
-        detector_anchor = _finite_pair(entry, "detector_x", "detector_y")
-        if (
-            detector_anchor is not None
-            and _entry_frame(entry, "detector_input_frame") == "fit_detector"
-        ):
-            return detector_anchor, "fit_detector", "detector_fit_frame"
-        return None
-
-    def _simulated_detector_anchor_for_caked_projection(
-        entry: Mapping[str, object] | None,
-    ) -> tuple[tuple[float, float], str, str] | None:
-        if not isinstance(entry, Mapping):
-            return None
-        native_point = _geometry_fit_point_list(entry.get("sim_native"))
-        if native_point is not None:
-            native_x = _finite_float(native_point[0])
-            native_y = _finite_float(native_point[1])
-            if native_x is not None and native_y is not None:
-                return (
-                    (float(native_x), float(native_y)),
-                    "native_detector",
-                    str(entry.get("sim_native_source") or "sim_native"),
-                )
-        for x_key, y_key, provenance in (
-            ("refined_sim_native_x", "refined_sim_native_y", "refined_sim_native_px"),
-            ("sim_native_x", "sim_native_y", "sim_native_xy"),
-            ("sim_col_raw", "sim_row_raw", "sim_col_raw_row_raw"),
-        ):
-            anchor = _finite_pair(entry, x_key, y_key)
-            if anchor is not None:
-                return anchor, "native_detector", provenance
-        return None
-
     caked_fit_space_projector_ready = bool(
         manual_fit_requires_caked_space
         and callable(fit_space_projector)
@@ -17241,37 +17199,24 @@ def build_geometry_manual_fit_dataset(
         anchor_kind: str,
         source_fallback: str,
     ) -> tuple[tuple[float, float] | None, str | None, str | None]:
-        try:
-            projected = fit_space_projector(
-                np.asarray([float(detector_col)], dtype=np.float64),
-                np.asarray([float(detector_row)], dtype=np.float64),
-                local_params=dict(params_i),
-                anchor_kind=str(anchor_kind),
-                input_frame=str(input_frame),
+        projected = _geometry_fit_project_detector_anchor_to_caked_fit_space(
+            (float(detector_col), float(detector_row)),
+            fit_space_projector,
+            local_params=dict(params_i),
+            anchor_kind=str(anchor_kind),
+            input_frame=str(input_frame),
+            source_fallback=str(source_fallback),
+        )
+        projected_point = _geometry_fit_point_list(projected.get("point"))
+        if projected_point is None:
+            return None, None, str(
+                projected.get("unavailable_reason") or "fit_space_projector_returned_no_caked_point"
             )
-        except Exception as exc:
-            return None, None, f"fit_space_projector_exception:{type(exc).__name__}"
-        if not isinstance(projected, Mapping):
-            return None, None, "fit_space_projector_returned_non_mapping"
-        try:
-            two_theta_values = np.asarray(
-                projected.get("two_theta_deg", []),
-                dtype=np.float64,
-            ).reshape(-1)
-            phi_values = np.asarray(projected.get("phi_deg", []), dtype=np.float64).reshape(-1)
-            two_theta = float(two_theta_values[0])
-            phi = float(phi_values[0])
-        except Exception:
-            return None, None, "fit_space_projector_returned_no_caked_point"
-        if (
-            projected.get("valid") is False
-            or not np.isfinite(two_theta)
-            or not np.isfinite(phi)
-        ):
-            default_reason = f"nonfinite_{str(anchor_kind)}_caked_projection"
-            return None, None, str(projected.get("invalid_reason") or default_reason)
-        source = str(projected.get("caked_projection_source") or source_fallback)
-        return (float(two_theta), float(phi)), source, None
+        return (
+            (float(projected_point[0]), float(projected_point[1])),
+            str(projected.get("source") or source_fallback),
+            None,
+        )
 
     def _project_observed_detector_anchors_to_caked_fit_space() -> None:
         for measured_entry in measured_for_fit:
@@ -17279,16 +17224,25 @@ def build_geometry_manual_fit_dataset(
                 continue
             if geometry_fit_entry_has_observed_caked_anchor(measured_entry):
                 continue
-            anchor_payload = _observed_detector_anchor_for_caked_projection(measured_entry)
+            anchor_payload = _geometry_fit_observed_detector_anchor_for_caked_projection(
+                measured_entry
+            )
             if anchor_payload is None:
                 measured_entry["observed_caked_projection_unavailable_reason"] = (
                     "missing_observed_detector_anchor"
                 )
                 continue
-            (detector_col, detector_row), input_frame, provenance = anchor_payload
+            detector_point = _geometry_fit_point_list(anchor_payload.get("point"))
+            if detector_point is None:
+                measured_entry["observed_caked_projection_unavailable_reason"] = (
+                    "missing_observed_detector_anchor"
+                )
+                continue
+            input_frame = str(anchor_payload.get("input_frame") or "native_detector")
+            provenance = str(anchor_payload.get("provenance") or "")
             point, source, unavailable_reason = _project_detector_anchor_to_caked_fit_space(
-                float(detector_col),
-                float(detector_row),
+                float(detector_point[0]),
+                float(detector_point[1]),
                 input_frame=str(input_frame),
                 anchor_kind="measured",
                 source_fallback="fit_space_projector_native_detector",
@@ -17332,13 +17286,18 @@ def build_geometry_manual_fit_dataset(
                 if pair_idx < len(measured_for_fit) and isinstance(measured_for_fit[pair_idx], dict)
                 else None
             )
-            anchor_payload = _simulated_detector_anchor_for_caked_projection(initial_entry)
+            anchor_payload = _geometry_fit_simulated_detector_anchor_for_caked_projection(
+                initial_entry
+            )
             if anchor_payload is None:
                 continue
-            (detector_col, detector_row), input_frame, _provenance = anchor_payload
+            detector_point = _geometry_fit_point_list(anchor_payload.get("point"))
+            if detector_point is None:
+                continue
+            input_frame = str(anchor_payload.get("input_frame") or "native_detector")
             point, source, _unavailable_reason = _project_detector_anchor_to_caked_fit_space(
-                float(detector_col),
-                float(detector_row),
+                float(detector_point[0]),
+                float(detector_point[1]),
                 input_frame=str(input_frame),
                 anchor_kind="simulated",
                 source_fallback=f"fit_space_projector_{str(input_frame)}",

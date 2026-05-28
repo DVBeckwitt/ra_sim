@@ -37,6 +37,13 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Removed the unused snapshot JSON helper.
 - Added a caked projection-authority snapshot that pins exact-projector use over stale saved caked aliases.
 - Switched the extracted coordinate finite check to stdlib `math.isfinite()` after float coercion.
+- Patch B extracted pure caked projection-anchor helpers into `ra_sim/gui/geometry_fit_coordinates.py`:
+  `observed_detector_anchor_for_caked_projection()`,
+  `simulated_detector_anchor_for_caked_projection()`,
+  `project_detector_anchor_to_caked_fit_space()`, and
+  `resolve_fit_space_anchor()`.
+- Wired `build_geometry_manual_fit_dataset()` to use the observed, simulated, and exact-projector helper paths while leaving public dataset assembly in `ra_sim/gui/geometry_fit.py`.
+- Preserved public dataset payloads, saved-state shape, optimizer request shape, solver math, UI callbacks, CLI/env flags, log fields, and caked projection-authority behavior.
 
 ## Review status
 
@@ -44,12 +51,13 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - No required correctness, security, or performance blockers were found.
 - Follow-up before deeper job/dataset extraction: add direct helper coverage for the remaining `resolve_geometry_fit_selection()` edge branches, including missing theta metadata, background theta errors, skipped empty backgrounds, and no-selection mode.
 - Snapshot helper now raises on normalized mapping-key collisions instead of silently dropping entries.
+- Patch B code review kept `resolve_fit_space_anchor()` out of production wiring because it did not remove enough dataset assembly logic in this slice. It remains a pure tested helper for the next coordinate/dataset boundary.
 
 ## Next actions
 
-1. Extract the higher-level caked projection anchor helpers behind `geometry_fit_coordinates.py`.
-2. Extract async job background/manual/source input snapshots.
-3. Keep helper outputs internal and convert back to existing dict fields before public returns.
+1. Extract async job background/manual/source input snapshots.
+2. Keep helper outputs internal and convert back to existing dict fields before public returns.
+3. Add direct selection/theta helper coverage for the remaining edge branches before broader job-builder extraction.
 
 ## Validation
 
@@ -101,6 +109,23 @@ python -m pytest -q tests/test_geometry_fitting.py -k "fit_geometry_parameters o
 python -m pytest -q tests/test_gui_geometry_fit_workflow.py -k "build_geometry_manual_fit_dataset or prepare_geometry_fit_run or caked or locked_qr or coordinate or optimizer_request"
 python -m ruff check ra_sim/gui/geometry_fit.py ra_sim/gui/geometry_fit_contracts.py ra_sim/gui/geometry_fit_coordinates.py ra_sim/gui/_runtime/geometry_fit_job.py ra_sim/gui/_runtime/runtime_session.py tests/helpers/geometry_fit_snapshots.py tests/test_geometry_fit_snapshot_contracts.py tests/test_geometry_fit_coordinates.py tests/test_geometry_fit_job_selection.py tests/test_geometry_fit_job_live_rows_handoff.py tests/test_geometry_fitting.py tests/test_gui_geometry_fit_workflow.py
 git diff --check
+```
+
+Patch B caked projection-anchor slice:
+
+```bash
+python -m pytest -q tests/test_geometry_fit_snapshot_contracts.py tests/test_geometry_fit_coordinates.py tests/test_gui_geometry_fit_workflow.py::test_caked_point_reprojection_uses_detector_pixel_path tests/test_geometry_fit_job_live_rows_handoff.py::test_geometry_fit_job_canonical_snapshot_pins_live_row_handoff_contract tests/test_gui_geometry_fit_workflow.py::test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload tests/test_geometry_fitting.py::test_fit_geometry_parameters_pixel_path_uses_central_geometry_ray
+python -m pytest -q tests/test_geometry_fit_coordinates.py tests/test_gui_geometry_fit_workflow.py::test_caked_point_reprojection_uses_detector_pixel_path tests/test_gui_geometry_fit_workflow.py::test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload
+python -m pytest -q tests/test_geometry_fit_coordinates.py tests/test_gui_geometry_fit_workflow.py::test_caked_point_reprojection_uses_detector_pixel_path tests/test_gui_geometry_fit_workflow.py::test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload tests/test_geometry_fitting.py::test_fit_geometry_parameters_pixel_path_uses_central_geometry_ray
+python -m pytest -q tests/test_geometry_fit_coordinates.py tests/test_geometry_fit_manual_fit_space_classification.py tests/test_geometry_fit_disordered_preflight.py tests/test_gui_geometry_fit_workflow.py -k "build_geometry_manual_fit_dataset or caked or coordinate or optimizer_request"
+python -m compileall -q ra_sim tests
+python -m pytest -q tests/test_geometry_fit_snapshot_contracts.py tests/test_geometry_fit_coordinates.py tests/test_geometry_fit_manual_fit_space_classification.py tests/test_geometry_fit_disordered_preflight.py
+python -m pytest -q tests/test_gui_geometry_fit_workflow.py -k "build_geometry_manual_fit_dataset or caked or coordinate or optimizer_request"
+python -m pytest -q tests/test_geometry_fitting.py -k "fit_geometry_parameters or caked or manual_qr or locked_qr or dynamic_point or objective_insensitive or full_beam"
+python -m pytest -q tests/test_geometry_fit_job_live_rows_handoff.py tests/test_geometry_fit_live_rows_signature_handoff.py tests/test_geometry_fit_safe_runtime.py tests/test_gui_runtime_geometry_fit.py tests/test_gui_runtime_import_safe.py
+python -m ruff check ra_sim/gui/geometry_fit_coordinates.py ra_sim/gui/geometry_fit.py tests/test_geometry_fit_coordinates.py tests/test_gui_geometry_fit_workflow.py tests/test_geometry_fit_manual_fit_space_classification.py tests/test_geometry_fit_disordered_preflight.py
+git diff --check
+python -m ra_sim.dev check
 ```
 
 Known baseline issue:
