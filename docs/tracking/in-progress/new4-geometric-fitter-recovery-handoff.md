@@ -233,6 +233,14 @@ Last updated: 2026-05-28
   this slice changed docs only. Feature/API status: no GUI control, CLI flag,
   config key, saved-state field, artifact schema, dependency, CI workflow, or
   public interface changed.
+- 2026-05-28 shipping/status follow-up completed. The Task 6-7 gate-status
+  docs landed locally as `fee02686` and record both the completed automated
+  guard proof and the still-open live Tk Fit Geometry trace requirement. Bug
+  status: source fixes remain guarded by existing tests; Task 7 is a validation
+  blocker only, not a new source defect. Feature/API status: no user-facing
+  workflow, GUI control, CLI flag, config key, saved-state format, artifact
+  schema, dependency, ADR, migration, release version, or CI workflow changed.
+  Shipping status: docs-only handoff update; rollback is a normal git revert.
 - 2026-05-20 trace-checker invariant follow-up completed. The diagnostic
   checker now rejects split-record traces where a caked objective reaches the
   optimizer and later reports `matched=0`, even if the same record does not
