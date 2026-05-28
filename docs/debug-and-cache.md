@@ -251,6 +251,16 @@ The parallel background peak-fit diagnostic script
 uses pre-editor and final Qr-rod profile caches in the diagnostic output
 directory.
 
+The script is the orchestration entry point for background preparation,
+cache handling, plotting, and final artifact assembly. The shared peak-fit
+math and process-pool payload assembly live in
+`scripts/diagnostics/background_peak_fit_worker.py`; thread, serial, and
+process fit backends use that same core before detector projection is attached
+in the orchestration pass.
+Process workers still cap native BLAS/OpenMP thread environment variables to
+avoid oversubscription. Local thread and serial backends only sync peak-fit
+settings and preserve the parent process's existing native thread environment.
+
 On Windows, direct `.py` execution with the default `process` backend now
 relaunches through `scripts/diagnostics/run_all_background_peak_fits.py` with
 `RA_SIM_ALL_BACKGROUND_PROCESS_GUARD=1` before expensive fitting begins. The

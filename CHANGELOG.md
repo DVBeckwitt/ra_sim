@@ -519,6 +519,8 @@
 
 - **Repository cleanup**
   - Added a read-only repository debt report covering largest files/functions, test-tier coverage, diagnostics classification, duplicate diagnostic functions, and observed `RA_SIM_*` flags.
+  - Deleted the duplicated rotated Gaussian background peak-fit core from the large parallel diagnostic script; thread, serial, and process fits now reuse `scripts/diagnostics/background_peak_fit_worker.py`.
+  - Preserved local/thread background peak-fit backend behavior so only process workers cap native BLAS/OpenMP thread environment variables.
   - Removed generated geometry-fit logs, temporary preflight JSON dumps, and the duplicate root PbI2 high-temperature CIF helper; the maintained implementation remains `ra_sim.utils.pbi2_ht_shift_cif`, and generated geometry logs are now ignored.
   - Removed tracked root artifacts that did not belong in the long-term project layout: `ig_graph.sqlite`, `ig_graph.sqlite-shm`, `ig_graph.sqlite-wal`, `session.json`, `oneline`, `et --hard a485e65`, and the legacy root `hbn.py`.
   - Added root-level ignore rules so those local artifacts stay out of version control.
@@ -544,6 +546,8 @@
   - Added `fit-geometry-correlations`/`fit-geometry-correlation` for headless geometry-fit parameter correlation exports.
 
 - **Tests**
+  - Added a source guard that rejects reintroducing the background peak-fit worker core as a local duplicate in the large diagnostic script.
+  - Added a regression guard that keeps local/thread background peak-fit setup from mutating parent native thread environment variables.
   - Added completeness gates for top-level pytest tier assignment, diagnostics-script classification, repository debt-report JSON output, and validation-index coverage of top-level tools.
   - Added `tests/test_cli_cif_parse.py` for CIF numeric parsing behavior.
   - Added `tests/test_gui_runtime_import_safe.py` and removed the import-smoke skip for `ra_sim.gui.runtime`.

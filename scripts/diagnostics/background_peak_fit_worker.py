@@ -74,17 +74,20 @@ def clear_peak_fit_worker_array_cache() -> None:
 def configure_peak_fit_worker(
     settings: dict[str, object] | None = None,
     numba_threads: int | None = 1,
+    *,
+    limit_native_threads: bool = True,
 ) -> None:
-    """Configure one process worker before fitting jobs."""
+    """Configure peak-fit settings and optional process-worker thread caps."""
 
-    for name in (
-        "OMP_NUM_THREADS",
-        "OPENBLAS_NUM_THREADS",
-        "MKL_NUM_THREADS",
-        "VECLIB_MAXIMUM_THREADS",
-        "NUMEXPR_NUM_THREADS",
-    ):
-        os.environ[name] = "1"
+    if limit_native_threads:
+        for name in (
+            "OMP_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "VECLIB_MAXIMUM_THREADS",
+            "NUMEXPR_NUM_THREADS",
+        ):
+            os.environ[name] = "1"
     if settings:
         _PEAK_FIT_SETTINGS.update(settings)
     if numba_threads is not None:
@@ -177,8 +180,8 @@ def as_float(value: object, fallback: float = float("nan")) -> float:
     try:
         out = float(value)
     except Exception:
-        return fallback
-    return out if np.isfinite(out) else fallback
+        return float(fallback)
+    return out if np.isfinite(out) else float(fallback)
 
 
 @njit(fastmath=True, nogil=True)

@@ -1565,6 +1565,43 @@ def test_parallel_script_fit_one_peak_uses_corrected_caked_image() -> None:
     ) < source.index("caked_image = caked_density_image")
 
 
+def test_parallel_script_reuses_background_peak_fit_worker_core() -> None:
+    source = _parallel_script_source()
+    tree = ast.parse(source, filename=str(PARALLEL_SCRIPT_PATH))
+    function_names = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    fit_source = source[
+        source.index("def _fit_global_peak_job(") : source.index("\ndef _run_local_peak_jobs(")
+    ]
+
+    assert "fit_one_peak" not in function_names
+    for name in (
+        "_rotated_gaussian_value_numba",
+        "_rotated_gaussian_plane_points_numba",
+        "_rotated_gaussian_residual_points_numba",
+        "_rotated_gaussian_grid_numba",
+        "robust_peak_background_plane",
+        "local_plane_from_coefficients",
+        "deduplicate_peak_starts",
+        "_fit_boundary_warnings",
+        "_fit_boundary_penalty",
+    ):
+        assert name not in function_names
+    assert "fit_one_peak(\n        entry," in fit_source
+    assert "prep[\"ai\"]" not in fit_source
+    assert "_attach_fit_detector_projection(item, prep)" in source
+
+
+def test_parallel_script_local_peak_jobs_do_not_cap_parent_native_threads() -> None:
+    source = _parallel_script_source()
+    local_source = source[
+        source.index("def _run_local_peak_jobs(") : source.index("\ndef _run_process_peak_jobs(")
+    ]
+
+    assert "configure_peak_fit_worker(" in local_source
+    assert "PEAK_FIT_WORKER_SETTINGS" in local_source
+    assert "limit_native_threads=False" in local_source
+
+
 def test_parallel_script_qr_rod_profiles_use_corrected_detector_image() -> None:
     source = _parallel_script_source()
     profile_source = source[
@@ -11220,6 +11257,41 @@ def test_background_peak_fit_worker_distinguishes_fit_from_optimizer_success(
 
     assert item["success"] is True
     assert "optimizer_success" in item
+
+
+def test_background_peak_fit_worker_as_float_coerces_fallback() -> None:
+    value = peak_fit_worker.as_float("not-a-number", np.float64(2.5))
+
+    assert value == 2.5
+    assert type(value) is float
+
+
+def test_background_peak_fit_worker_can_configure_without_native_thread_env_caps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env_names = (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    )
+    for name in env_names:
+        monkeypatch.setenv(name, "7")
+
+    settings = peak_fit_worker.peak_fit_settings_from_values(PEAK_FIT_MAX_NFEV=123)
+    peak_fit_worker.configure_peak_fit_worker(
+        settings,
+        numba_threads=None,
+        limit_native_threads=False,
+    )
+
+    assert all(os.environ[name] == "7" for name in env_names)
+    assert peak_fit_worker._setting_int("PEAK_FIT_MAX_NFEV") == 123
+
+    peak_fit_worker.configure_peak_fit_worker(settings, numba_threads=None)
+
+    assert all(os.environ[name] == "1" for name in env_names)
 
 
 def test_background_peak_fits_runner_sanitizes_run_names() -> None:

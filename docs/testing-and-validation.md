@@ -23,6 +23,23 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 
 ## Current patch status
 
+- 2026-05-28: Background peak-fit diagnostic Phase 2 slice is implemented
+  locally. The large parallel diagnostic script now reuses
+  `scripts/diagnostics/background_peak_fit_worker.py` for the rotated Gaussian
+  peak-fit model, local baseline plane, peak-start deduplication, boundary
+  warnings, and `fit_one_peak` payload assembly, deleting the matching local
+  duplicate block from the orchestration script. Bug/feature status:
+  behavior-preserving cleanup only; the script entry point, runner, cache
+  signatures, output table fields, CLI/environment controls, and saved
+  diagnostic artifacts are unchanged. Review patch status: local/thread backend
+  setup no longer applies the process-worker BLAS/OpenMP environment caps to the
+  parent process while still syncing peak-fit settings. Migration/deprecation
+  status: no user migration or removal yet; `comparison.py` remains a documented
+  delete candidate pending external workflow review. Shipping status: no
+  release, rollout, or version bump required, rollback is a normal git revert.
+  Validation status: targeted background peak-fit worker/process/source/env
+  tests, repo-debt and diagnostics/docs guards, ruff, compileall,
+  extracted-core JSON smoke, and diff-whitespace checks passed locally.
 - 2026-05-28: Repository debt-report Phase 1 is committed as `ccb07a5f`; this
   docs follow-up records the committed state only. The new
   `tools/repo_debt_report.py --json` gate reports top Python files/functions,
@@ -489,8 +506,8 @@ config, or artifact schema changed.
 | Path | Purpose |
 |---|---|
 | `scripts/debug/visualize_new4_qr_fit_coordinates.py` | Visualizes Bi2Se3 Qr fit-coordinate diagnostics. |
-| `scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py` | Runs parallel background peak-fit diagnostics with a shared linear baseline. |
-| `scripts/diagnostics/background_peak_fit_worker.py` | Worker helper for background peak-fit diagnostic batches. |
+| `scripts/diagnostics/all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py` | Runs parallel background peak-fit diagnostics with a shared linear baseline and delegates peak-fit math to the worker module. |
+| `scripts/diagnostics/background_peak_fit_worker.py` | Shared peak-fit core and worker helper for background peak-fit diagnostic batches. |
 | `scripts/diagnostics/run_all_background_peak_fits.py` | Launches the maintained Python background peak-fit diagnostic batch runner by default. |
 | `scripts/diagnostics/summarize_geometry_fit_overlay_diagnostics.py` | Summarizes geometry-fit overlay diagnostic payloads. |
 | `tests/test_background_peak_fits_notebook.py` | Checks notebook-oriented background peak-fit workflows. |

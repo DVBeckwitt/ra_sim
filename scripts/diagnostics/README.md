@@ -6,8 +6,8 @@ compatibility or removal candidates.
 
 ## Maintained Diagnostics
 
-- `all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py` - notebook-derived background peak-fit diagnostic entry point retained until the shared core is extracted.
-- `background_peak_fit_worker.py` - multiprocessing worker used by the background peak-fit diagnostic flow.
+- `all_background_peak_fits_peak_only_shared_linear_baseline_global_fit_parallel.py` - notebook-derived background peak-fit orchestration entry point; peak-fit math is delegated to the worker module.
+- `background_peak_fit_worker.py` - shared peak-fit core and multiprocessing worker used by the background peak-fit diagnostic flow.
 - `check_geometry_fit_handoff.py` - geometry-fit handoff validation helper used by regression tests and manual diagnostics.
 - `run_all_background_peak_fits.py` - orchestration wrapper for background peak-fit diagnostic runs.
 - `summarize_geometry_fit_overlay_diagnostics.py` - summary tool for geometry-fit overlay diagnostic payloads.
