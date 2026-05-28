@@ -36163,10 +36163,23 @@ def fit_geometry_parameters(
             or point_summary.get("acceptance_metric_space")
             or ""
         ).strip()
+        manual_caked_matched_count: Optional[int] = None
+        for matched_count_key in ("final_matched_pair_count", "matched_pair_count"):
+            if matched_count_key not in point_summary:
+                continue
+            try:
+                manual_caked_matched_count = int(point_summary.get(matched_count_key) or 0)
+            except Exception:
+                manual_caked_matched_count = 0
+            break
+        manual_caked_matched_count_zero = (
+            manual_caked_matched_count is not None and manual_caked_matched_count <= 0
+        )
         if (
             result_metric_name == "central_point_match"
             or result_metric_unit == "px"
             or result_metric_space == "detector_px"
+            or manual_caked_matched_count_zero
         ):
             result.success = False
             result.status = -11
@@ -36192,6 +36205,8 @@ def fit_geometry_parameters(
                     "manual_caked_fit_space_ready": bool(manual_caked_fit_space_ready),
                 }
             )
+            if manual_caked_matched_count is not None:
+                repaired_summary["matched_pair_count"] = int(manual_caked_matched_count)
             result.point_match_summary = repaired_summary
 
     bound_threshold_fraction = 0.01

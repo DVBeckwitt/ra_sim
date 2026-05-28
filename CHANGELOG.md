@@ -146,6 +146,11 @@
     `central_point_match`/`metric_unit=px`; the runtime worker now uses the
     same caked-required flag for caked payload handoff and mixed-provenance
     preflight, and CI checks trace logs for impossible caked/pixel states.
+  - Hardened the manual Qr/Qz caked route final invariant so explicit
+    post-optimization zero-match summaries fail as
+    `manual_caked_route_invariant_violation`, while preserving the
+    detector-space mixed-provenance rejection path when no caked objective is
+    requested.
   - Fixed manual caked Qr/Qz geometry-fit handoff for detector-origin picks by
     projecting observed detector anchors into exact-caked fit space during
     dataset build and extending the trace checker to reject live text-log

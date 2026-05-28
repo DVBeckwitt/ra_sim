@@ -868,6 +868,16 @@ Shipping status: local quality gates passed before commit; no CI workflow,
 feature flag, staged rollout, or release version bump is required, and rollback
 is a normal git revert.
 
+Status as of 2026-05-28 follow-up: the runtime worker parity slice now also
+pins the detector-space mixed-provenance rejection path when no explicit caked
+objective is requested. The optimizer invariant slice extends the same caked
+route guard to explicit post-optimization zero-match summaries: if a manual
+caked route reports `matched_pair_count == 0` or `final_matched_pair_count == 0`,
+the fit fails closed as `manual_caked_route_invariant_violation` with caked
+degree units. Bug/error status: guarded locally for Tasks 4-5. Interface status:
+no GUI controls, CLI flags, config keys, saved-state fields, artifacts,
+dependencies, or public workflows changed.
+
 Status as of 2026-05-21: `objective_space=caked_deg` is now the fit-space
 requirement source of truth for manual Qr/Qz geometry fits, even when the manual
 pick provenance remains detector-origin. If every manual pair has finite
@@ -876,8 +886,9 @@ evaluator and logs `manual_caked_route_check ... observed_caked=2
 predicted_caked=2 ... unit=deg` for the live two-pair path. If required caked
 fit-space is missing, the fit fails before optimization with
 `manual_caked_fit_space_missing`. A caked objective is not allowed to finalize as
-`central_point_match`, `metric_unit=px`, or pixel `weighted_rms`; that invariant
-fails closed as `manual_caked_route_invariant_violation`. The handoff checker
+`central_point_match`, `metric_unit=px`, pixel `weighted_rms`, or
+post-optimization `matched=0`; that invariant fails closed as
+`manual_caked_route_invariant_violation`. The handoff checker
 rejects the reported `f761e78f` text-log signature across whole-file state, and
 the GUI rejection copy names the caked route block instead of reporting "No
 matched peak pairs" for a caked manual-pair fit. Bug/error status: fixed in

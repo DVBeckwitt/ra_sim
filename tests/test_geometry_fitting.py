@@ -10362,6 +10362,112 @@ def test_locked_qr_fixed_pairs_cannot_finalize_as_central_point_match(monkeypatc
     assert result.point_match_summary.get("metric_unit") != "px"
 
 
+def test_manual_caked_route_cannot_finalize_with_zero_matched_pairs(monkeypatch) -> None:
+    def fake_least_squares(residual_fn, x0, **_kwargs):
+        return _fake_least_squares_result(residual_fn, x0)
+
+    def fake_dynamic_matches(local_item, *_args, **_kwargs):
+        gamma_value = float(local_item.get("gamma", 0.0))
+        return (
+            np.asarray([0.5 + gamma_value, -0.5], dtype=np.float64),
+            [],
+            {
+                "measured_count": 1,
+                "fixed_source_resolved_count": 1,
+                "qr_fit_expected_count": 1,
+                "qr_fit_resolved_count": 1,
+                "qr_fit_component_count": 2,
+                "qr_fit_expected_component_count": 2,
+                "matched_pair_count": 0,
+                "missing_pair_count": 0,
+                "branch_mismatch_count": 0,
+                "simulated_reflection_count": 1,
+                "total_reflection_count": 1,
+                "fixed_source_reflection_count": 1,
+                "raw_angular_rms_deg": 0.5,
+                "raw_angular_max_deg": 0.5,
+                "weighted_objective_rms": 0.5,
+                "weighted_objective_rms_units": "weighted_deg",
+                "metric_name": "dynamic_angular_point_match",
+                "metric_unit": "deg",
+                "acceptance_metric_space": "caked_deg",
+            },
+        )
+
+    monkeypatch.setattr(opt, "_process_peaks_parallel_safe", _fake_process_peaks)
+    monkeypatch.setattr(opt, "least_squares", fake_least_squares)
+    monkeypatch.setattr(
+        opt,
+        "_evaluate_geometry_fit_dataset_dynamic_point_matches",
+        fake_dynamic_matches,
+    )
+
+    image_size = 24
+    measured = [
+        _locked_qr_fixed_source_entry(
+            hkl=(-1, 0, 10),
+            native_col=8.0,
+            native_row=9.0,
+            source_branch_index=0,
+            source_peak_index=0,
+            source_row_index=42,
+            source_reflection_index=910,
+            fit_observed_caked_deg=[33.063, 130.754],
+            fit_prediction_caked_deg=[32.259, 132.250],
+            fit_space_anchor_override=True,
+        )
+    ]
+
+    def projector(cols, rows, **_kwargs):
+        return {
+            "two_theta_deg": np.asarray(cols, dtype=np.float64),
+            "phi_deg": np.asarray(rows, dtype=np.float64),
+            "valid": True,
+        }
+
+    result = opt.fit_geometry_parameters(
+        np.array([[-1.0, 0.0, 10.0]], dtype=np.float64),
+        np.array([1.0], dtype=np.float64),
+        image_size,
+        _base_params(image_size, optics_mode=1),
+        measured_peaks=measured,
+        var_names=["gamma", "Gamma"],
+        experimental_image=np.zeros((image_size, image_size), dtype=np.float64),
+        dataset_specs=[
+            {
+                "label": "bg0.osc",
+                "measured_peaks": measured,
+                "_manual_caked_fit_space_required": True,
+                "fit_space_projector": projector,
+                "fit_space_projector_kind": "exact_caked_bundle",
+            }
+        ],
+        refinement_config={
+            "solver": {
+                "manual_point_fit_mode": True,
+                "dynamic_point_geometry_fit": True,
+                "restarts": 0,
+                "weighted_matching": False,
+                "use_measurement_uncertainty": False,
+                "max_nfev": 1,
+            },
+            "single_ray": {"enabled": False},
+            "identifiability": {"enabled": False},
+            "full_beam_polish": {"enabled": False},
+            "image_refinement": {"enabled": False},
+        },
+    )
+
+    assert not result.success
+    assert result.status == -11
+    assert result.final_metric_name == "manual_caked_route_invariant_violation"
+    assert result.final_metric_space == "caked_deg"
+    assert result.final_metric_units == "deg"
+    assert result.point_match_summary["reason"] == "manual_caked_route_invariant_violation"
+    assert result.point_match_summary["metric_unit"] == "deg"
+    assert result.point_match_summary["matched_pair_count"] == 0
+
+
 def test_locked_qr_fixed_pairs_require_exact_caked_projector(monkeypatch) -> None:
     monkeypatch.setattr(
         opt,

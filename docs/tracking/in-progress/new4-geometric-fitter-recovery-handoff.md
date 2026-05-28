@@ -5,7 +5,7 @@ Type: investigation
 Owner:
 Issue: [#249](https://github.com/DVBeckwitt/ra_sim/issues/249)
 Priority: p1
-Last updated: 2026-05-27
+Last updated: 2026-05-28
 
 ## Current status
 
@@ -204,6 +204,19 @@ Last updated: 2026-05-27
   runtime/view/state tier passed on rerun after one non-repeatable Python
   access violation. Shipping status: safe as an internal bug-fix slice with
   rollback by git revert.
+- 2026-05-28 runtime/optimizer invariant follow-up completed. Task 4 keeps the
+  runtime worker boundary pinned in both directions: explicit caked intent still
+  bypasses mixed detector/caked provenance rejection, and explicit non-caked
+  intent still rejects mixed provenance without requesting caked-view setup.
+  Task 5 hardens the optimizer's final caked-route invariant so an explicit
+  post-optimization `matched_pair_count == 0` or `final_matched_pair_count == 0`
+  is rejected as `manual_caked_route_invariant_violation` with caked degree
+  units. Bug/error status: guarded for the remaining zero-match caked objective
+  loophole. Feature/API status: no GUI control, CLI flag, config key,
+  saved-state field, artifact schema, dependency, or version change. Review
+  status: no avoidable new file, abstraction, security, performance, or test
+  quality issue found. CI/CD and shipping status: no workflow change; local
+  tests and `ra_sim.dev check` remain the gate, rollback is a normal git revert.
 - 2026-05-20 trace-checker invariant follow-up completed. The diagnostic
   checker now rejects split-record traces where a caked objective reaches the
   optimizer and later reports `matched=0`, even if the same record does not

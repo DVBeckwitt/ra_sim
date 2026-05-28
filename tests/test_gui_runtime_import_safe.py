@@ -18772,6 +18772,26 @@ def test_runtime_session_explicit_caked_requirement_overrides_mixed_provenance(
     )
 
 
+def test_runtime_session_explicit_non_caked_requirement_keeps_mixed_rejection(
+    monkeypatch,
+) -> None:
+    (
+        action_result,
+        dataset_calls,
+        readiness_events,
+    ) = _run_locked_qr_projection_missing_worker_case(
+        monkeypatch,
+        manual_fit_space="mixed",
+        manual_caked_required=False,
+    )
+
+    assert dataset_calls == []
+    assert readiness_events == []
+    assert action_result.error_text is not None
+    assert "mixed detector/caked manual fit spaces are not supported" in action_result.error_text
+    assert "exact caked fit-space projection" not in action_result.error_text
+
+
 def test_worker_caked_manual_prepare_fails_closed_before_dataset_build(
     monkeypatch,
 ) -> None:
