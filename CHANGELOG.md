@@ -67,6 +67,7 @@
   - Made locked Qr/Qz exact-caked projection readiness report source-row and projected-row identity separately, so caked view storage timeouts no longer appear as opaque zero-row projection failures when projected rows are present.
   - Fixed locked Qr/Qz projection-readiness failure details so nonfinite failures label nonfinite row keys, missing failures label missing row keys, and mixed failures preserve both sections.
   - Fixed locked Qr/Qz dynamic-authority diagnostics so explicit source or caked-coordinate authority drift propagates through the GUI-consumed fit result with row-level preflight, pair-audit, and final dynamic caked-coordinate details instead of falling back to manual-outlier repick guidance.
+  - Hardened manual Qr/Qz caked geometry-fit final validation so caked angular fits reject pixel weighted-RMS units or finite pixel RMS values before returning a successful result.
   - Raised the default background max-intensity estimate for sparse bright peaks by using a higher robust percentile while keeping slider ceilings tied to the true finite image range.
   - Added Advanced/Debug GUI toggles to compare primary integer-Bragg peaks against Hendricks-Teller rods and to disable refraction effects by forcing vacuum `n2` with optics-cache invalidation.
 

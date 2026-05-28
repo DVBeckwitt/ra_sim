@@ -6389,6 +6389,7 @@ def test_dynamic_point_match_summary_merges_row_records_across_datasets(
             "identifiability": {"enabled": False},
             "full_beam_polish": {"enabled": False},
             "image_refinement": {"enabled": False},
+            "seed_search": {"enabled": False},
         },
     )
 
@@ -9366,6 +9367,7 @@ def _dynamic_point_only_fit_result_for_metric_tests(
             "identifiability": {"enabled": False},
             "full_beam_polish": {"enabled": False},
             "image_refinement": {"enabled": False},
+            "seed_search": {"enabled": False},
         },
     )
 
@@ -9476,6 +9478,7 @@ def _dynamic_point_only_sensitivity_result(
             "identifiability": {"enabled": False},
             "full_beam_polish": {"enabled": False},
             "image_refinement": {"enabled": False},
+            "seed_search": {"enabled": False},
         },
     )
 
@@ -10220,6 +10223,47 @@ def test_manual_caked_route_final_invariant_helper_rejects_pixel_metric() -> Non
     assert repaired.point_match_summary["matched_pair_count"] == 2
 
 
+def test_manual_caked_route_final_invariant_helper_rejects_pixel_weighted_rms_units() -> None:
+    result = opt.OptimizeResult(
+        success=True,
+        status=1,
+        message="ok",
+    )
+    result.final_metric_name = "dynamic_angular_point_match"
+    result.final_metric_space = "caked_deg"
+    result.final_metric_units = "deg"
+    result.weighted_objective_rms = 12.0
+    result.weighted_objective_rms_units = "px"
+    result.weighted_residual_rms_px = 12.0
+    result.rms_px = float("nan")
+    result.rms_deg = 12.0
+    result.max_deg = 25.0
+    result.point_match_summary = {
+        "metric_name": "dynamic_angular_point_match",
+        "metric_unit": "deg",
+        "matched_pair_count": 2,
+        "weighted_objective_rms_units": "px",
+    }
+
+    repaired = opt._enforce_manual_caked_route_final_invariant(
+        result,
+        manual_caked_fit_space_required=True,
+        manual_caked_fit_space_ready=True,
+    )
+
+    assert repaired is result
+    assert not repaired.success
+    assert repaired.status == -11
+    assert repaired.final_metric_name == "manual_caked_route_invariant_violation"
+    assert repaired.final_metric_space == "caked_deg"
+    assert repaired.final_metric_units == "deg"
+    assert repaired.weighted_objective_rms_units == "deg"
+    assert np.isnan(repaired.weighted_residual_rms_px)
+    assert repaired.point_match_summary["reason"] == "manual_caked_route_invariant_violation"
+    assert repaired.point_match_summary["metric_unit"] == "deg"
+    assert repaired.point_match_summary["matched_pair_count"] == 2
+
+
 def test_manual_qr_dynamic_unavailable_rejection_text_names_internal_source_block() -> None:
     from ra_sim.gui import geometry_fit as gui_geometry_fit
 
@@ -10400,36 +10444,63 @@ def test_locked_qr_fixed_pairs_cannot_finalize_as_central_point_match(monkeypatc
     assert result.point_match_summary.get("metric_unit") != "px"
 
 
-def test_manual_caked_route_cannot_finalize_with_zero_matched_pairs(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("summary_overrides", "expected_matched_pair_count"),
+    [
+        pytest.param(
+            {
+                "matched_pair_count": 0,
+                "weighted_objective_rms_units": "weighted_deg",
+            },
+            0,
+            id="zero-matched-pairs",
+        ),
+        pytest.param(
+            {
+                "matched_pair_count": 1,
+                "weighted_objective_rms_units": "px",
+            },
+            1,
+            id="pixel-weighted-rms-units",
+        ),
+    ],
+)
+def test_manual_caked_route_cannot_finalize_with_invalid_public_summary(
+    monkeypatch,
+    summary_overrides,
+    expected_matched_pair_count,
+) -> None:
     def fake_least_squares(residual_fn, x0, **_kwargs):
         return _fake_least_squares_result(residual_fn, x0)
 
     def fake_dynamic_matches(local_item, *_args, **_kwargs):
         gamma_value = float(local_item.get("gamma", 0.0))
+        summary = {
+            "measured_count": 1,
+            "fixed_source_resolved_count": 1,
+            "qr_fit_expected_count": 1,
+            "qr_fit_resolved_count": 1,
+            "qr_fit_component_count": 2,
+            "qr_fit_expected_component_count": 2,
+            "matched_pair_count": 0,
+            "missing_pair_count": 0,
+            "branch_mismatch_count": 0,
+            "simulated_reflection_count": 1,
+            "total_reflection_count": 1,
+            "fixed_source_reflection_count": 1,
+            "raw_angular_rms_deg": 0.5,
+            "raw_angular_max_deg": 0.5,
+            "weighted_objective_rms": 0.5,
+            "weighted_objective_rms_units": "weighted_deg",
+            "metric_name": "dynamic_angular_point_match",
+            "metric_unit": "deg",
+            "acceptance_metric_space": "caked_deg",
+        }
+        summary.update(summary_overrides)
         return (
             np.asarray([0.5 + gamma_value, -0.5], dtype=np.float64),
             [],
-            {
-                "measured_count": 1,
-                "fixed_source_resolved_count": 1,
-                "qr_fit_expected_count": 1,
-                "qr_fit_resolved_count": 1,
-                "qr_fit_component_count": 2,
-                "qr_fit_expected_component_count": 2,
-                "matched_pair_count": 0,
-                "missing_pair_count": 0,
-                "branch_mismatch_count": 0,
-                "simulated_reflection_count": 1,
-                "total_reflection_count": 1,
-                "fixed_source_reflection_count": 1,
-                "raw_angular_rms_deg": 0.5,
-                "raw_angular_max_deg": 0.5,
-                "weighted_objective_rms": 0.5,
-                "weighted_objective_rms_units": "weighted_deg",
-                "metric_name": "dynamic_angular_point_match",
-                "metric_unit": "deg",
-                "acceptance_metric_space": "caked_deg",
-            },
+            summary,
         )
 
     monkeypatch.setattr(opt, "_process_peaks_parallel_safe", _fake_process_peaks)
@@ -10439,6 +10510,14 @@ def test_manual_caked_route_cannot_finalize_with_zero_matched_pairs(monkeypatch)
         "_evaluate_geometry_fit_dataset_dynamic_point_matches",
         fake_dynamic_matches,
     )
+    original_public_summary = opt._public_point_match_summary
+
+    def fake_public_point_match_summary(summary):
+        public_summary = original_public_summary(summary)
+        public_summary.update(summary_overrides)
+        return public_summary
+
+    monkeypatch.setattr(opt, "_public_point_match_summary", fake_public_point_match_summary)
 
     image_size = 24
     measured = [
@@ -10493,6 +10572,7 @@ def test_manual_caked_route_cannot_finalize_with_zero_matched_pairs(monkeypatch)
             "identifiability": {"enabled": False},
             "full_beam_polish": {"enabled": False},
             "image_refinement": {"enabled": False},
+            "seed_search": {"enabled": False},
         },
     )
 
@@ -10501,9 +10581,11 @@ def test_manual_caked_route_cannot_finalize_with_zero_matched_pairs(monkeypatch)
     assert result.final_metric_name == "manual_caked_route_invariant_violation"
     assert result.final_metric_space == "caked_deg"
     assert result.final_metric_units == "deg"
+    assert result.weighted_objective_rms_units == "deg"
     assert result.point_match_summary["reason"] == "manual_caked_route_invariant_violation"
     assert result.point_match_summary["metric_unit"] == "deg"
-    assert result.point_match_summary["matched_pair_count"] == 0
+    assert result.point_match_summary["weighted_objective_rms_units"] == "deg"
+    assert result.point_match_summary["matched_pair_count"] == expected_matched_pair_count
 
 
 def test_locked_qr_fixed_pairs_require_exact_caked_projector(monkeypatch) -> None:

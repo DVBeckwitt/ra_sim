@@ -1698,6 +1698,142 @@ def _coerce_sequence_items(values: Optional[Sequence[object]]) -> List[object]:
     return _runtime.coerce_sequence_items(values)
 
 
+def _fit_config_section(
+    refinement_config: Optional[Mapping[str, object]],
+    name: str,
+    *,
+    fallback_name: Optional[str] = None,
+) -> Dict[str, object]:
+    if not isinstance(refinement_config, dict):
+        return {}
+    value = refinement_config.get(name)
+    if fallback_name is not None and not value:
+        value = refinement_config.get(fallback_name, {})
+    else:
+        value = value or {}
+    return value if isinstance(value, dict) else {}
+
+
+def _config_bool(value: object, default: bool) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, str):
+        key = value.strip().lower()
+        if key in {"1", "true", "yes", "on", "enabled"}:
+            return True
+        if key in {"0", "false", "no", "off", "disabled", ""}:
+            return False
+        return bool(default)
+    return bool(value)
+
+
+def _initial_geometry_fit_vector(
+    params: Mapping[str, object],
+    var_names: Sequence[object],
+) -> np.ndarray:
+    values: List[float] = []
+    for name in var_names:
+        key = str(name)
+        try:
+            if key == "center_x":
+                value = params.get("center_x", params.get("center", [0.0, 0.0])[0])
+            elif key == "center_y":
+                value = params.get("center_y", params.get("center", [0.0, 0.0])[1])
+            else:
+                value = params.get(key, 0.0)
+            value_f = float(value)
+        except Exception:
+            value_f = 0.0
+        values.append(float(value_f) if np.isfinite(value_f) else 0.0)
+    return np.asarray(values, dtype=float)
+
+
+def _public_point_match_summary(
+    summary_in: Mapping[str, object] | None,
+) -> Dict[str, object]:
+    if not isinstance(summary_in, Mapping):
+        return {}
+
+    def _public_value(value: object) -> object:
+        if isinstance(value, Mapping):
+            return {
+                str(key): _public_value(val)
+                for key, val in dict(value).items()
+                if not str(key).startswith("_")
+            }
+        if isinstance(value, (list, tuple)):
+            return [_public_value(item) for item in value]
+        return value
+
+    return {
+        str(key): _public_value(value)
+        for key, value in dict(summary_in).items()
+        if not str(key).startswith("_")
+    }
+
+
+def _objective_trace_jsonable(value: object) -> object:
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return [_objective_trace_jsonable(item) for item in value.tolist()]
+    if isinstance(value, Mapping):
+        return {
+            str(key): _objective_trace_jsonable(val)
+            for key, val in value.items()
+            if not str(key).startswith("_")
+        }
+    if isinstance(value, (list, tuple)):
+        return [_objective_trace_jsonable(item) for item in value]
+    return value
+
+
+def _mark_locked_manual_qr_identity_loss(
+    result: OptimizeResult,
+    point_match_summary: MutableMapping[str, object],
+    *,
+    locked_manual_qr_expected_count: int,
+    locked_manual_qr_pair_ids: Sequence[object],
+    previous_metric_name: str,
+) -> OptimizeResult:
+    try:
+        final_matched_pair_count = int(point_match_summary.get("matched_pair_count", 0) or 0)
+    except Exception:
+        final_matched_pair_count = 0
+    lost_pair_ids = list(
+        point_match_summary.get("lost_pair_ids")
+        or point_match_summary.get("missing_pair_ids")
+        or ()
+    )
+    if not lost_pair_ids:
+        lost_pair_ids = list(locked_manual_qr_pair_ids or ())
+    result.success = False
+    result.status = -13
+    result.message = "locked_manual_qr_identity_loss"
+    result.final_metric_name = "locked_manual_qr_identity_loss"
+    result.final_metric_space = "caked_deg"
+    result.final_metric_units = "deg"
+    result.weighted_objective_rms = float("nan")
+    result.weighted_objective_rms_units = "deg"
+    result.weighted_residual_rms_px = float("nan")
+    result.rms_px = float("nan")
+    point_match_summary.update(
+        {
+            "reason": "locked_manual_qr_identity_loss",
+            "metric_name": "locked_manual_qr_identity_loss",
+            "final_metric_name": "locked_manual_qr_identity_loss",
+            "metric_unit": "deg",
+            "acceptance_metric_space": "caked_deg",
+            "expected_fixed_qr_pair_count": int(locked_manual_qr_expected_count),
+            "final_matched_pair_count": int(final_matched_pair_count),
+            "final_validation_metric_name": str(previous_metric_name),
+            "lost_pair_ids": lost_pair_ids,
+        }
+    )
+    result.point_match_summary = point_match_summary
+    return result
+
+
 def _resolve_parallel_worker_count(
     raw_value: object,
     *,
@@ -22281,6 +22417,25 @@ def _enforce_manual_caked_route_final_invariant(
         or point_summary.get("acceptance_metric_space")
         or ""
     ).strip()
+    weighted_unit_values = (
+        getattr(result, "weighted_objective_rms_units", ""),
+        getattr(result, "_raw_dynamic_weighted_objective_rms_units", ""),
+        point_summary.get("weighted_objective_rms_units", ""),
+        point_summary.get("weighted_metric_unit", ""),
+        point_summary.get("acceptance_rms_input_units", ""),
+    )
+    weighted_metric_is_pixel = any(
+        str(value or "").strip().lower()
+        in {"px", "pixel", "pixels", "weighted_px", "weighted_pixels"}
+        for value in weighted_unit_values
+    )
+    try:
+        weighted_residual_rms_px = float(getattr(result, "weighted_residual_rms_px", np.nan))
+    except Exception:
+        weighted_residual_rms_px = float("nan")
+    weighted_rms_is_pixel_value = bool(
+        result_metric_space == "caked_deg" and np.isfinite(weighted_residual_rms_px)
+    )
 
     manual_caked_matched_count: Optional[int] = None
     for matched_count_key in ("final_matched_pair_count", "matched_pair_count"):
@@ -22295,6 +22450,8 @@ def _enforce_manual_caked_route_final_invariant(
         result_metric_name == "central_point_match"
         or result_metric_unit == "px"
         or result_metric_space == "detector_px"
+        or weighted_metric_is_pixel
+        or weighted_rms_is_pixel_value
         or (manual_caked_matched_count is not None and manual_caked_matched_count <= 0)
     )
     if not violates_manual_caked_route:
@@ -22318,6 +22475,9 @@ def _enforce_manual_caked_route_final_invariant(
             "reason": "manual_caked_route_invariant_violation",
             "metric_name": "manual_caked_route_invariant_violation",
             "metric_unit": "deg",
+            "weighted_objective_rms_units": "deg",
+            "weighted_metric_unit": WEIGHTED_ANGULAR_METRIC_UNIT,
+            "acceptance_rms_input_units": "deg",
             "objective_space": "caked_deg",
             "acceptance_metric_space": "caked_deg",
             "manual_caked_fit_space_required": bool(manual_caked_fit_space_required),
@@ -23191,67 +23351,19 @@ def fit_geometry_parameters(
     dataset_spec_entries = _coerce_sequence_items(dataset_specs)
     point_match_mode = experimental_image is not None or bool(dataset_spec_entries)
 
-    optimizer_cfg: Dict[str, float] = {}
-    if isinstance(refinement_config, dict):
-        optimizer_cfg = (
-            refinement_config.get("optimizer") or refinement_config.get("solver", {}) or {}
-        )
-    if not isinstance(optimizer_cfg, dict):
-        optimizer_cfg = {}
+    optimizer_cfg = _fit_config_section(
+        refinement_config,
+        "optimizer",
+        fallback_name="solver",
+    )
     solver_cfg = optimizer_cfg
-
-    prior_cfg: Dict[str, float] = {}
-    if isinstance(refinement_config, dict):
-        prior_cfg = refinement_config.get("priors", {}) or {}
-    if not isinstance(prior_cfg, dict):
-        prior_cfg = {}
-
-    image_refinement_cfg: Dict[str, float] = {}
-    if isinstance(refinement_config, dict):
-        image_refinement_cfg = refinement_config.get("image_refinement", {}) or {}
-    if not isinstance(image_refinement_cfg, dict):
-        image_refinement_cfg = {}
-
-    ridge_refinement_cfg: Dict[str, float] = {}
-    if isinstance(refinement_config, dict):
-        ridge_refinement_cfg = refinement_config.get("ridge_refinement", {}) or {}
-    if not isinstance(ridge_refinement_cfg, dict):
-        ridge_refinement_cfg = {}
-
-    full_beam_polish_cfg: Dict[str, object] = {}
-    if isinstance(refinement_config, dict):
-        full_beam_polish_cfg = refinement_config.get("full_beam_polish", {}) or {}
-    if not isinstance(full_beam_polish_cfg, dict):
-        full_beam_polish_cfg = {}
-
-    identifiability_cfg: Dict[str, float] = {}
-    if isinstance(refinement_config, dict):
-        identifiability_cfg = refinement_config.get("identifiability", {}) or {}
-    if not isinstance(identifiability_cfg, dict):
-        identifiability_cfg = {}
-    seed_search_cfg: Dict[str, object] = {}
-    if isinstance(refinement_config, dict):
-        seed_search_cfg = refinement_config.get("seed_search", {}) or {}
-    if not isinstance(seed_search_cfg, dict):
-        seed_search_cfg = {}
-
-    def _config_bool(value: object, default: bool) -> bool:
-        if value is None:
-            return bool(default)
-        if isinstance(value, str):
-            key = value.strip().lower()
-            if key in {"1", "true", "yes", "on", "enabled"}:
-                return True
-            if key in {"0", "false", "no", "off", "disabled", ""}:
-                return False
-            return bool(default)
-        return bool(value)
-
-    discrete_modes_cfg: Dict[str, object] = {}
-    if isinstance(refinement_config, dict):
-        discrete_modes_cfg = refinement_config.get("discrete_modes", {}) or {}
-    if not isinstance(discrete_modes_cfg, dict):
-        discrete_modes_cfg = {}
+    prior_cfg = _fit_config_section(refinement_config, "priors")
+    image_refinement_cfg = _fit_config_section(refinement_config, "image_refinement")
+    ridge_refinement_cfg = _fit_config_section(refinement_config, "ridge_refinement")
+    full_beam_polish_cfg = _fit_config_section(refinement_config, "full_beam_polish")
+    identifiability_cfg = _fit_config_section(refinement_config, "identifiability")
+    seed_search_cfg = _fit_config_section(refinement_config, "seed_search")
+    discrete_modes_cfg = _fit_config_section(refinement_config, "discrete_modes")
     manual_point_fit_mode = bool(solver_cfg.get("manual_point_fit_mode", False))
 
     solver_loss = str(solver_cfg.get("loss", "linear")).strip().lower()
@@ -23382,6 +23494,7 @@ def fit_geometry_parameters(
         measured_peaks,
     )
     locked_manual_qr_expected_count = int(locked_manual_qr_route.get("expected_pair_count", 0) or 0)
+    locked_manual_qr_pair_ids = list(locked_manual_qr_route.get("pair_ids", ()) or ())
     locked_manual_qr_exact_projector_available = bool(
         locked_manual_qr_route.get("exact_projector_available", False)
     )
@@ -23863,22 +23976,8 @@ def fit_geometry_parameters(
         status: int,
         extra_summary: Mapping[str, object] | None = None,
     ) -> OptimizeResult:
-        def _initial_value_for_var(name: object) -> float:
-            key = str(name)
-            try:
-                if key == "center_x":
-                    value = params.get("center_x", params.get("center", [0.0, 0.0])[0])
-                elif key == "center_y":
-                    value = params.get("center_y", params.get("center", [0.0, 0.0])[1])
-                else:
-                    value = params.get(key, 0.0)
-                value_f = float(value)
-            except Exception:
-                value_f = 0.0
-            return float(value_f) if np.isfinite(value_f) else 0.0
-
         result = OptimizeResult(
-            x=np.asarray([_initial_value_for_var(name) for name in var_names], dtype=float),
+            x=_initial_geometry_fit_vector(params, var_names),
             fun=np.array([], dtype=float),
             success=False,
             status=int(status),
@@ -23959,53 +24058,10 @@ def fit_geometry_parameters(
             result.geometry_fit_debug_summary.update(dict(extra_summary))
         return result
 
-    def _mark_locked_manual_qr_identity_loss(
-        result: OptimizeResult,
-        point_match_summary: MutableMapping[str, object],
-        *,
-        previous_metric_name: str,
-    ) -> OptimizeResult:
-        try:
-            final_matched_pair_count = int(point_match_summary.get("matched_pair_count", 0) or 0)
-        except Exception:
-            final_matched_pair_count = 0
-        lost_pair_ids = list(
-            point_match_summary.get("lost_pair_ids")
-            or point_match_summary.get("missing_pair_ids")
-            or ()
-        )
-        if not lost_pair_ids:
-            lost_pair_ids = list(locked_manual_qr_route.get("pair_ids", ()) or ())
-        result.success = False
-        result.status = -13
-        result.message = "locked_manual_qr_identity_loss"
-        result.final_metric_name = "locked_manual_qr_identity_loss"
-        result.final_metric_space = "caked_deg"
-        result.final_metric_units = "deg"
-        result.weighted_objective_rms = float("nan")
-        result.weighted_objective_rms_units = "deg"
-        result.weighted_residual_rms_px = float("nan")
-        result.rms_px = float("nan")
-        point_match_summary.update(
-            {
-                "reason": "locked_manual_qr_identity_loss",
-                "metric_name": "locked_manual_qr_identity_loss",
-                "final_metric_name": "locked_manual_qr_identity_loss",
-                "metric_unit": "deg",
-                "acceptance_metric_space": "caked_deg",
-                "expected_fixed_qr_pair_count": int(locked_manual_qr_expected_count),
-                "final_matched_pair_count": int(final_matched_pair_count),
-                "final_validation_metric_name": str(previous_metric_name),
-                "lost_pair_ids": lost_pair_ids,
-            }
-        )
-        result.point_match_summary = point_match_summary
-        return result
-
     if locked_manual_qr_expected_count > 0:
         locked_summary = {
             "expected_fixed_qr_pair_count": int(locked_manual_qr_expected_count),
-            "locked_manual_qr_pair_ids": list(locked_manual_qr_route.get("pair_ids", ()) or ()),
+            "locked_manual_qr_pair_ids": list(locked_manual_qr_pair_ids),
             "exact_fit_space_projector_available": bool(locked_manual_qr_exact_projector_available),
             "manual_caked_dynamic_prediction_available": bool(
                 manual_caked_dynamic_prediction_available
@@ -25639,29 +25695,6 @@ def fit_geometry_parameters(
             "objective_param_sensitivity_status": status,
         }
 
-    def _public_point_match_summary(
-        summary_in: Mapping[str, object] | None,
-    ) -> Dict[str, object]:
-        if not isinstance(summary_in, Mapping):
-            return {}
-
-        def _public_value(value: object) -> object:
-            if isinstance(value, Mapping):
-                return {
-                    str(key): _public_value(val)
-                    for key, val in dict(value).items()
-                    if not str(key).startswith("_")
-                }
-            if isinstance(value, (list, tuple)):
-                return [_public_value(item) for item in value]
-            return value
-
-        return {
-            str(key): _public_value(value)
-            for key, value in dict(summary_in).items()
-            if not str(key).startswith("_")
-        }
-
     def _point_match_live_payload(
         local: Mapping[str, object],
         point_match_summary: Mapping[str, object] | None,
@@ -25691,21 +25724,6 @@ def fit_geometry_parameters(
     last_live_update_payload: Dict[str, object] | None = None
     objective_trace_records: List[Dict[str, object]] = []
     objective_trace_eval_counter = 0
-
-    def _objective_trace_jsonable(value: object) -> object:
-        if isinstance(value, np.generic):
-            return value.item()
-        if isinstance(value, np.ndarray):
-            return [_objective_trace_jsonable(item) for item in value.tolist()]
-        if isinstance(value, Mapping):
-            return {
-                str(key): _objective_trace_jsonable(val)
-                for key, val in value.items()
-                if not str(key).startswith("_")
-            }
-        if isinstance(value, (list, tuple)):
-            return [_objective_trace_jsonable(item) for item in value]
-        return value
 
     def _objective_trace_prediction_source(entry: Mapping[str, object]) -> str:
         if bool(entry.get("optimizer_request_fallback_row", False)):
@@ -27127,6 +27145,8 @@ def fit_geometry_parameters(
                     return _mark_locked_manual_qr_identity_loss(
                         blocked_result,
                         public_preflight_summary,
+                        locked_manual_qr_expected_count=locked_manual_qr_expected_count,
+                        locked_manual_qr_pair_ids=locked_manual_qr_pair_ids,
                         previous_metric_name="dynamic_baseline_anchor_mismatch",
                     )
             return blocked_result
@@ -35829,6 +35849,7 @@ def fit_geometry_parameters(
         result.weighted_objective_rms_units = "weighted_deg"
         result.final_metric_space = "caked_deg"
         result.final_metric_units = "deg"
+        result.weighted_residual_rms_px = float("nan")
         result.rms_deg = float("nan")
         result.max_deg = float("nan")
         result.rms_px = float("nan")
@@ -35846,6 +35867,9 @@ def fit_geometry_parameters(
                 collect_diagnostics=True,
             )
             point_match_summary = _public_point_match_summary(point_match_summary)
+            result._raw_dynamic_weighted_objective_rms_units = str(
+                point_match_summary.get("weighted_objective_rms_units", "") or ""
+            )
             prediction_branch_source_switched_count = sum(
                 1
                 for entry in point_match_diagnostics or ()
@@ -35885,6 +35909,7 @@ def fit_geometry_parameters(
                     point_match_summary.get("weighted_objective_rms_units", "weighted_deg")
                     or "weighted_deg"
                 )
+                result.weighted_residual_rms_px = float("nan")
             else:
                 result.final_metric_space = "detector_px" if point_match_mode else ""
                 result.final_metric_units = "px" if point_match_mode else ""
@@ -36038,7 +36063,7 @@ def fit_geometry_parameters(
                             else:
                                 weighted_residual_rms = float("nan")
                             result.weighted_objective_rms = float(weighted_residual_rms)
-                            result.weighted_residual_rms_px = float(weighted_residual_rms)
+                            result.weighted_residual_rms_px = float("nan")
                             point_match_summary["weighted_objective_rms"] = float(
                                 weighted_residual_rms
                             )
@@ -36167,6 +36192,8 @@ def fit_geometry_parameters(
                     result = _mark_locked_manual_qr_identity_loss(
                         result,
                         point_match_summary,
+                        locked_manual_qr_expected_count=locked_manual_qr_expected_count,
+                        locked_manual_qr_pair_ids=locked_manual_qr_pair_ids,
                         previous_metric_name=previous_metric_name,
                     )
             dynamic_anchor_diagnostics = _qr_dynamic_baseline_anchor_diagnostics(
