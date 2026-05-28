@@ -23,6 +23,21 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 
 ## Current patch status
 
+- 2026-05-28: Repository debt-report Phase 1 is implemented locally. The new
+  `tools/repo_debt_report.py --json` gate reports top Python files/functions,
+  test-tier coverage, diagnostic-script classification, duplicate diagnostic
+  functions, and observed `RA_SIM_*` flags without importing GUI/runtime-heavy
+  modules. Review patch status: the heavy-import test now guards actual import
+  attempts instead of global `sys.modules` state, and benchmark-directory tests
+  are counted in the same tier total reported by the JSON payload. Bug/feature
+  status: developer-tooling visibility and enforcement only; no optimizer, GUI,
+  CLI, config, saved-state, artifact schema, dependency, or CI workflow changed.
+  Migration/deprecation status: no migration required; `comparison.py` is only
+  documented as a diagnostic delete candidate pending external-workflow review.
+  Shipping status: no release, rollout, or version bump required, rollback is a
+  normal git revert. Validation status: targeted repo-debt, tier-completeness,
+  diagnostics-classification, docs-index, ruff, compileall, JSON smoke, and
+  diff-whitespace checks passed locally.
 - 2026-05-28: Manual Qr/Qz caked fit-space review patch completed. The runtime
   fallback helper now restores the explicit `manual_space == "caked"` fast path
   before manual-pair materialization, while keeping the shared
@@ -104,11 +119,13 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 
 ## Pytest tiers and markers
 
-- `ra_sim/test_tiers.py` is the source of truth for fast and integration tier manifests.
-- `pyproject.toml` defines pytest markers: `fast`, `integration`, `benchmark`, and `slow_baseline_fit`.
+- `ra_sim/test_tiers.py` is the source of truth for fast, integration, slow, diagnostic, and top-level benchmark tier manifests.
+- `pyproject.toml` defines pytest markers: `fast`, `integration`, `benchmark`, `slow`, `diagnostic`, `slow_baseline_fit`, and `slow_geometry`.
 - `tests/conftest.py` adds tier markers from the manifests, marks benchmark-directory files as benchmark tests, and resets shared debug state around tests.
+- `tests/test_test_tiers_complete.py` fails if any top-level `tests/test_*.py` file is missing from or duplicated across the tier manifests.
+- `tools/repo_debt_report.py --json` reports tier coverage and includes benchmark-directory tests in the same total as the benchmark tier.
 - The tests/benchmarks directory is the benchmark test area.
-- Fast and integration manifests are partial in the current checkout; untiered tests still run by direct pytest or `python -m ra_sim.dev test-all`.
+- Fast and integration dev commands still run only their manifests; slow and diagnostic tiers provide explicit classification and selection boundaries, and the full suite still runs through `python -m ra_sim.dev test-all`.
 
 ## Geometry test refactor gate
 
@@ -146,14 +163,17 @@ Current status: the collection baseline is 4819 tests in this checkout. During h
 | Developer tooling and runtime infrastructure | `tests/test_debug_utils.py` | `python -m ra_sim.dev test-fast` | Numba logging helper defaults and explicit log levels. | Fast manifest in ra_sim/test_tiers.py. |
 | Developer tooling and runtime infrastructure | `tests/test_dependency_metadata.py` | `python -m ra_sim.dev test-fast` | Declared dependencies against runtime imports and base-install dependency boundaries. | Fast manifest in ra_sim/test_tiers.py. |
 | Developer tooling and runtime infrastructure | `tests/test_dev_doctor.py` | `python -m ra_sim.dev test-fast` | Doctor warning/failure behavior for local files, dev tools, and strict mode. | Fast manifest in ra_sim/test_tiers.py. |
+| Developer tooling and runtime infrastructure | `tests/test_diagnostics_classification.py` | `python -m ra_sim.dev test-fast` | Completeness guard that every diagnostics script is classified exactly once in `scripts/diagnostics/README.md`. | Fast manifest in ra_sim/test_tiers.py. |
 | Developer tooling and runtime infrastructure | `tests/test_import_smoke.py` | `python -m ra_sim.dev test-fast` | Package import smoke coverage across modules. | Fast manifest in ra_sim/test_tiers.py. |
 | Developer tooling and runtime infrastructure | `tests/test_install_prereqs.py` | `python -m pytest tests/test_install_prereqs.py` | Tkinter prerequisite imports and actionable missing-module errors. | Untiered; direct pytest or full suite. |
 | Developer tooling and runtime infrastructure | `tests/test_logging_controls.py` | `python -m pytest tests/test_logging_controls.py` | Global logging-disable aliases and debug logging gates for runtime traces and projections. | Untiered; direct pytest or full suite. |
 | Developer tooling and runtime infrastructure | `tests/test_numba_cache_env.py` | `python -m pytest tests/test_numba_cache_env.py` | Stable Numba cache env setup and lazy import boundaries for CLI/headless modules. | Untiered; direct pytest or full suite. |
 | Developer tooling and runtime infrastructure | `tests/test_parallel_utils.py` | `python -m pytest tests/test_parallel_utils.py` | Reserved CPU worker counts, Numba thread splits, and detached daemon thread pools. | Untiered; direct pytest or full suite. |
+| Developer tooling and runtime infrastructure | `tests/test_repo_debt_report.py` | `python -m ra_sim.dev test-fast` | Repo debt report JSON contract, tier and diagnostics totals, duplicate diagnostic-function reporting, env-flag inventory, and lazy heavy-module import boundary. | Fast manifest in ra_sim/test_tiers.py. |
 | Developer tooling and runtime infrastructure | `tests/test_sitecustomize.py` | `python -m pytest tests/test_sitecustomize.py` | Default pycache prefix setup and explicit environment preservation. | Untiered; direct pytest or full suite. |
 | Developer tooling and runtime infrastructure | `tests/test_structure_factor_environment.py` | `python -m pytest tests/test_structure_factor_environment.py` | Structure-factor parity environment snapshots and explicit wavelength checks. | Untiered; direct pytest or full suite. |
 | Developer tooling and runtime infrastructure | `tests/test_testing_validation_index.py` | `python -m pytest tests/test_testing_validation_index.py` | Static guard for this testing and validation index. | Untiered; direct pytest or full suite. |
+| Developer tooling and runtime infrastructure | `tests/test_test_tiers_complete.py` | `python -m ra_sim.dev test-fast` | Top-level pytest files are assigned to exactly one fast, integration, slow, diagnostic, or benchmark tier. | Fast manifest in ra_sim/test_tiers.py. |
 | Developer tooling and runtime infrastructure | `tests/test_timing.py` | `python -m pytest tests/test_timing.py` | Timing JSONL events and GUI timing summary helpers. | Untiered; direct pytest or full suite. |
 | Developer tooling and runtime infrastructure | `tests/test_utils_notifications.py` | `python -m pytest tests/test_utils_notifications.py` | Completion chime alias selection, default sound, and background playback. | Untiered; direct pytest or full suite. |
 | Geometry fitting and projection validation | `tests/test_background_peak_matching.py` | `python -m ra_sim.dev test-fast` | Simulated-to-background peak matching, one-to-one ownership, ambiguity rejection, and subpixel refinement. | Fast manifest in ra_sim/test_tiers.py. |
@@ -238,7 +258,7 @@ Current status: the collection baseline is 4819 tests in this checkout. During h
 | Simulation and diffraction engine | `tests/test_diffraction_local_arc.py` | `python -m pytest tests/test_diffraction_local_arc.py` | Local arc windows, broad-profile fallback, mass preservation, and nominal visibility culling. | Untiered; direct pytest or full suite. |
 | Simulation and diffraction engine | `tests/test_diffraction_safe_wrapper.py` | `python -m pytest tests/test_diffraction_safe_wrapper.py` | Safe diffraction wrapper defaults, backend selection, event normalization, and beam replacement rules. | Untiered; direct pytest or full suite. |
 | Simulation and diffraction engine | `tests/test_diffraction_subpixel.py` | `python -m pytest tests/test_diffraction_subpixel.py` | Bilinear hit accumulation, subpixel centroids, local peak merging, and cache-to-hit-row mapping. | Untiered; direct pytest or full suite. |
-| Simulation and diffraction engine | `tests/test_diffraction_tools_module.py` | `python -m pytest tests/test_diffraction_tools_module.py` | Lazy utility exports and diffraction helper reexports from tools/simulation modules. | Untiered; direct pytest or full suite. |
+| Simulation and diffraction engine | `tests/test_diffraction_tools_module.py` | `python -m pytest tests/test_diffraction_tools_module.py` | Lazy utility exports and diffraction helper reexports from tool and simulation modules. | Untiered; direct pytest or full suite. |
 | Simulation and diffraction engine | `tests/test_diffraction_tools_view.py` | `python -m pytest tests/test_diffraction_tools_view.py` | Azimuthal/radial viewer preserves full cake azimuth range. | Untiered; direct pytest or full suite. |
 | Simulation and diffraction engine | `tests/test_diffraction_weighted_events.py` | `python -m pytest tests/test_diffraction_weighted_events.py` | Weighted diffraction event targets, sampling, deposits, mass accounting, and deterministic bounds. | Untiered; direct pytest or full suite. |
 | Simulation and diffraction engine | `tests/test_exact_cake_portable.py` | `python -m pytest tests/test_exact_cake_portable.py` | Exact-cake detector maps, cache reuse, scalar/vector angle conversion, and transform semantics. | Untiered; direct pytest or full suite. |
@@ -308,6 +328,7 @@ Current status: the collection baseline is 4819 tests in this checkout. During h
 | `tests/helpers/__init__.py` | Support package marker | Not direct CLI. | Package marker for shared test helpers. |
 | `tests/helpers/gui_fakes.py` | Support helper | Imported by tests. | Shared dummy GUI variables, axes, canvases, and sliders for geometry test refactors. |
 | `tests/helpers/vesta_reference.py` | Support helper | Imported by tests. | Test import shim for VESTA parity helpers. |
+| `tools/repo_debt_report.py` | Cleanup planning report | `python tools/repo_debt_report.py --json` | Read-only report for top files/functions, test-tier coverage, diagnostics classification, duplicate diagnostic functions, and observed `RA_SIM_*` flags. |
 
 ## Validation, diagnostic, benchmark, and timing scripts
 
@@ -345,7 +366,7 @@ Current status: the collection baseline is 4819 tests in this checkout. During h
 |---|---|
 | `ra_sim/dev.py` | Canonical bootstrap, format, lint, typecheck, test, coverage, build, hook, and lock command surface. |
 | `ra_sim/dev_doctor.py` | Warning-first setup checks for Python, config, local paths, writable dirs, Tkinter, and dev tools. |
-| `ra_sim/test_tiers.py` | Fast and integration pytest manifest used by dev tooling and test collection. |
+| `ra_sim/test_tiers.py` | Fast, integration, slow, diagnostic, and benchmark pytest manifest used by dev tooling and test collection. |
 | `ra_sim/timing.py` | Gated JSONL timing events and spans for GUI performance measurement. |
 
 ## User utility CLIs

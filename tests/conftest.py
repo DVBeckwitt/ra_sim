@@ -7,7 +7,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ra_sim.debug_controls import reset_run_bundle_state, reset_startup_debug_log_path
-from ra_sim.test_tiers import FAST_TEST_FILES, INTEGRATION_TEST_FILES
+from ra_sim.test_tiers import (
+    DIAGNOSTIC_TEST_FILES,
+    FAST_TEST_FILES,
+    INTEGRATION_TEST_FILES,
+    SLOW_TEST_FILES,
+)
 
 
 def _item_path(item: pytest.Item) -> Path:
@@ -25,6 +30,8 @@ def pytest_collection_modifyitems(
 
     fast_marker = pytest.mark.fast
     integration_marker = pytest.mark.integration
+    slow_marker = pytest.mark.slow
+    diagnostic_marker = pytest.mark.diagnostic
     benchmark_marker = pytest.mark.benchmark
 
     for item in items:
@@ -34,6 +41,12 @@ def pytest_collection_modifyitems(
             continue
         if path.name in INTEGRATION_TEST_FILES:
             item.add_marker(integration_marker)
+            continue
+        if path.name in SLOW_TEST_FILES:
+            item.add_marker(slow_marker)
+            continue
+        if path.name in DIAGNOSTIC_TEST_FILES:
+            item.add_marker(diagnostic_marker)
             continue
         if path.name in FAST_TEST_FILES:
             item.add_marker(fast_marker)

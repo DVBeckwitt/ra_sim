@@ -17,6 +17,7 @@ PATH_PREFIXES = (
     "ra_sim/",
     "scripts/",
     "tests/",
+    "tools/",
 )
 TOP_LEVEL_FILES = {
     ".pre-commit-config.yaml",
@@ -30,7 +31,7 @@ GENERATED_OR_EXAMPLE_PATTERNS = (
 )
 PATH_TOKEN_RE = re.compile(
     r"(?<![A-Za-z0-9_./-])"
-    r"((?:\.agents|\.github|artifacts|config|docs|ra_sim|scripts|tests)/[A-Za-z0-9_./{}<>*?-]+"
+    r"((?:\.agents|\.github|artifacts|config|docs|ra_sim|scripts|tests|tools)/[A-Za-z0-9_./{}<>*?-]+"
     r"|\.pre-commit-config\.yaml|pyproject\.toml|coverage\.xml)"
 )
 CODE_SPAN_RE = re.compile(r"`([^`\n]+)`")
@@ -78,6 +79,7 @@ def _expected_index_paths(tracked: list[str]) -> list[str]:
         and not Path(path).name.startswith("test_")
         and path not in {"tests/conftest.py", "tests/__init__.py"}
     )
+    expected.update(path for path in tracked if path.startswith("tools/") and path.endswith(".py"))
     expected.update(
         path for path in tracked if path.startswith("scripts/") and path.endswith(".py")
     )
