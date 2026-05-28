@@ -126,8 +126,15 @@ def normalize_geometry_fit_snapshot(
         )
     if isinstance(value, Mapping):
         normalized_items: list[tuple[str, object]] = []
+        seen_keys: dict[str, object] = {}
         for raw_key, raw_value in value.items():
             normalized_key = _normalize_mapping_key(raw_key, float_digits=float_digits)
+            if normalized_key in seen_keys:
+                raise ValueError(
+                    "geometry-fit snapshot key collision after normalization: "
+                    f"{seen_keys[normalized_key]!r} and {raw_key!r} -> {normalized_key!r}"
+                )
+            seen_keys[normalized_key] = raw_key
             normalized_value = normalize_geometry_fit_snapshot(
                 raw_value,
                 float_digits=float_digits,

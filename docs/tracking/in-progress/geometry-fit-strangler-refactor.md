@@ -33,6 +33,7 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Added `ra_sim/gui/_runtime/geometry_fit_job.py`.
 - Extracted async job selection/theta decisions into `resolve_geometry_fit_selection()`.
 - Fixed snapshot normalization so integer background keys and string keys cannot collapse.
+- Fixed snapshot normalization to fail closed when any normalized mapping keys collide, including typed aliases such as `0` versus `"int:0"` and unstable timestamp-like string keys.
 - Removed the unused snapshot JSON helper.
 - Added a caked projection-authority snapshot that pins exact-projector use over stale saved caked aliases.
 - Switched the extracted coordinate finite check to stdlib `math.isfinite()` after float coercion.
@@ -42,7 +43,7 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Reviewed the current diff for correctness, bloat, security, performance, test quality, and unnecessary new abstractions.
 - No required correctness, security, or performance blockers were found.
 - Follow-up before deeper job/dataset extraction: add direct helper coverage for the remaining `resolve_geometry_fit_selection()` edge branches, including missing theta metadata, background theta errors, skipped empty backgrounds, and no-selection mode.
-- Snapshot helper caveat: string mapping keys are normalized for unstable values; current snapshots use stable schema keys. Add collision detection before using the helper on arbitrary mapping-key payloads.
+- Snapshot helper now raises on normalized mapping-key collisions instead of silently dropping entries.
 
 ## Next actions
 

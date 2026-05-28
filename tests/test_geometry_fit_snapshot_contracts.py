@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from ra_sim.gui import geometry_fit, geometry_fit_contracts
 from tests.helpers.geometry_fit_snapshots import normalize_geometry_fit_snapshot
@@ -32,6 +33,21 @@ def test_geometry_fit_snapshot_preserves_non_string_mapping_key_identity() -> No
         "0": "string background",
         "int:0": "integer background",
     }
+
+
+def test_geometry_fit_snapshot_rejects_typed_key_alias_collision() -> None:
+    with pytest.raises(ValueError, match="snapshot key collision"):
+        normalize_geometry_fit_snapshot({0: "integer background", "int:0": "string alias"})
+
+
+def test_geometry_fit_snapshot_rejects_normalized_string_key_collision() -> None:
+    with pytest.raises(ValueError, match="snapshot key collision"):
+        normalize_geometry_fit_snapshot(
+            {
+                "x20260528_123456": "first trace",
+                "x20260529_123456": "second trace",
+            }
+        )
 
 
 def test_geometry_fit_snapshot_normalizes_arrays_nonfinite_values_and_namespaces() -> None:
