@@ -29,7 +29,8 @@ new file, or new abstraction required; reference scans found no active
 consumers. Review status: the avoidable new diagnostics abstraction was removed,
 and no correctness, security, performance, test-quality, new-file, or
 abstraction blockers remain. Shipping status: no rollout, feature flag, or
-release bump is required; rollback is a normal git revert of the cleanup commit.
+release bump is required; cleanup committed as `643e1b1c`, and rollback is a
+normal git revert of that commit.
 Validation status: `python -m compileall -q ra_sim scripts tests`,
 `python -m pytest tests/test_gui_sliders.py tests/test_hbn_fitter_bundle_export.py tests/test_hbn_geometry_import_safe.py tests/test_hbn_geometry_mapping.py tests/test_test_tiers_complete.py tests/test_testing_validation_index.py -q`,
 `python tools/repo_debt_report.py`, `python tools/repo_debt_report.py --json`,

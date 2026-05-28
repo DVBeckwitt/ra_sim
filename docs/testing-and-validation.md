@@ -23,6 +23,20 @@ Inventory in this page is based on tracked repository files from `git ls-files`.
 
 ## Current patch status
 
+- 2026-05-28: Dead GUI acceleration and stale hBN cleanup is committed as
+  `643e1b1c`; this docs follow-up records the committed state and refreshed
+  collection baseline. Removed code was unreferenced by active production paths:
+  the fast-viewer/Tk primary-viewport branch, duplicate GUI slider helper, stale
+  hBN optimizer script with a hard-coded local path, and their dead tests.
+  Bug/error/feature status: no runtime behavior defect or user-facing feature
+  change; maintenance cleanup only. Feature/API status: no GUI control, CLI
+  flag, config key, saved-state field, artifact schema,
+  dependency, CI workflow, or public supported workflow changed. Deprecation/
+  migration status: no compatibility shim or migration path required; active
+  reference scans found no consumers. Shipping status: no release, rollout,
+  feature flag, or version bump required; rollback is a normal git revert.
+  Review status: no new files, dependencies, wrapper modules, or abstractions
+  were added.
 - 2026-05-28: Manual Qr/Qz caked final-invariant review patch is committed as
   `ca09f4bd`; this docs follow-up records the committed state only. The public
   `fit_geometry_parameters` path now rejects manual caked angular results that
@@ -178,7 +192,7 @@ Use `scripts/dev/check_geometry_test_refactor.ps1` on Windows, or `scripts/dev/c
 
 The gate compares normalized `pytest --collect-only -q` output against local baseline files in `artifacts/test_refactor_baseline/`, ignoring only the elapsed-time suffix, then runs the same four-file suite. The baseline artifacts are local generated files and are intentionally ignored by git.
 
-Current status: the collection baseline is 4819 tests in this checkout. During helper extraction, treat this gate first as a collection and node-ID guard until the runtime baseline is repaired. Keep helper code in the tracked test-helper package; do not move test scaffolding into `ra_sim/`.
+Current status: the collection baseline is 4788 tests in this checkout. During helper extraction, treat this gate first as a collection and node-ID guard until the runtime baseline is repaired. Keep helper code in the tracked test-helper package; do not move test scaffolding into `ra_sim/`.
 
 ## Test file index
 
