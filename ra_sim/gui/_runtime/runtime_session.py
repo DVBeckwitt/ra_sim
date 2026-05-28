@@ -24211,30 +24211,9 @@ def do_update():
         timing_reason=timing_reason,
     )
 
-    update_decision_trace: dict[str, object] = {
-        "update_action": None,
-        "update_reason": None,
-        "requires_worker": None,
-        "missing_contribution_count": None,
-        "center_remap_used": None,
-        "primary_prune_cache_mode": None,
-        "qr_selector_entries_retained": None,
-        "qr_selector_entries_refreshed": None,
-        "qr_selector_refresh_deferred": None,
-        "source_row_snapshots_retained": None,
-        "q_group_content_signature_changed": None,
-        "geometry_fitter_handoff_valid": None,
-        "qr_selector_branch_identity_retained": None,
-        "detector_projection_cache_refreshed": None,
-        "caked_projection_cache_invalidated": None,
-        "center_remap_fallback_reason": None,
-        "classifier_update_action": None,
-        "classifier_update_reason": None,
-        "classifier_requires_worker": None,
-        "classifier_requires_analysis": None,
-        "classifier_missing_contribution_count": None,
-        "effective_update_action": None,
-    }
+    update_decision_trace: dict[str, object] = (
+        gui_runtime_update_trace.initial_update_decision_trace()
+    )
 
     def _set_update_decision(
         *,
@@ -24245,18 +24224,15 @@ def do_update():
         center_remap_used: bool | None = None,
         primary_prune_cache_mode: object = None,
     ) -> None:
-        if update_action is not None:
-            update_decision_trace["update_action"] = str(update_action)
-        if update_reason is not None:
-            update_decision_trace["update_reason"] = str(update_reason)
-        if requires_worker is not None:
-            update_decision_trace["requires_worker"] = bool(requires_worker)
-        if missing_contribution_count is not None:
-            update_decision_trace["missing_contribution_count"] = int(missing_contribution_count)
-        if center_remap_used is not None:
-            update_decision_trace["center_remap_used"] = bool(center_remap_used)
-        if primary_prune_cache_mode is not None:
-            update_decision_trace["primary_prune_cache_mode"] = str(primary_prune_cache_mode)
+        gui_runtime_update_trace.set_update_decision_trace(
+            update_decision_trace,
+            update_action=update_action,
+            update_reason=update_reason,
+            requires_worker=requires_worker,
+            missing_contribution_count=missing_contribution_count,
+            center_remap_used=center_remap_used,
+            primary_prune_cache_mode=primary_prune_cache_mode,
+        )
 
     def _set_qr_selector_trace(
         *,
@@ -24268,51 +24244,16 @@ def do_update():
         q_group_content_signature_changed: bool | None = None,
         geometry_fitter_handoff_valid: bool | None = None,
     ) -> None:
-        if policy is not None:
-            if qr_selector_entries_retained is None:
-                qr_selector_entries_retained = bool(
-                    getattr(policy, "retain_geometry_q_group_entries", False)
-                )
-            if qr_selector_refresh_deferred is None:
-                qr_selector_refresh_deferred = bool(
-                    getattr(policy, "defer_q_group_refresh_until_rows_available", False)
-                )
-            if source_row_snapshots_retained is None:
-                source_row_snapshots_retained = bool(
-                    getattr(policy, "retain_source_row_snapshots", False)
-                )
-            if geometry_fitter_handoff_valid is None:
-                geometry_fitter_handoff_valid = bool(
-                    getattr(policy, "retain_geometry_q_group_entries", False)
-                    and getattr(policy, "retain_source_row_snapshots", False)
-                    and getattr(policy, "retain_intersection_caches", False)
-                    and getattr(policy, "retain_manual_pick_cache", False)
-                    and not getattr(policy, "require_q_group_refresh_after_apply", False)
-                )
-        if qr_selector_entries_retained is not None:
-            update_decision_trace["qr_selector_entries_retained"] = bool(
-                qr_selector_entries_retained
-            )
-        if qr_selector_entries_refreshed is not None:
-            update_decision_trace["qr_selector_entries_refreshed"] = bool(
-                qr_selector_entries_refreshed
-            )
-        if qr_selector_refresh_deferred is not None:
-            update_decision_trace["qr_selector_refresh_deferred"] = bool(
-                qr_selector_refresh_deferred
-            )
-        if source_row_snapshots_retained is not None:
-            update_decision_trace["source_row_snapshots_retained"] = bool(
-                source_row_snapshots_retained
-            )
-        if q_group_content_signature_changed is not None:
-            update_decision_trace["q_group_content_signature_changed"] = bool(
-                q_group_content_signature_changed
-            )
-        if geometry_fitter_handoff_valid is not None:
-            update_decision_trace["geometry_fitter_handoff_valid"] = bool(
-                geometry_fitter_handoff_valid
-            )
+        gui_runtime_update_trace.set_qr_selector_trace(
+            update_decision_trace,
+            policy=policy,
+            qr_selector_entries_retained=qr_selector_entries_retained,
+            qr_selector_entries_refreshed=qr_selector_entries_refreshed,
+            qr_selector_refresh_deferred=qr_selector_refresh_deferred,
+            source_row_snapshots_retained=source_row_snapshots_retained,
+            q_group_content_signature_changed=q_group_content_signature_changed,
+            geometry_fitter_handoff_valid=geometry_fitter_handoff_valid,
+        )
 
     def _set_detector_center_remap_trace(
         *,
@@ -24322,54 +24263,14 @@ def do_update():
         geometry_fitter_handoff_valid: bool | None = None,
         center_remap_fallback_reason: object = None,
     ) -> None:
-        if qr_selector_branch_identity_retained is not None:
-            update_decision_trace["qr_selector_branch_identity_retained"] = bool(
-                qr_selector_branch_identity_retained
-            )
-        if detector_projection_cache_refreshed is not None:
-            update_decision_trace["detector_projection_cache_refreshed"] = bool(
-                detector_projection_cache_refreshed
-            )
-        if caked_projection_cache_invalidated is not None:
-            update_decision_trace["caked_projection_cache_invalidated"] = bool(
-                caked_projection_cache_invalidated
-            )
-        if geometry_fitter_handoff_valid is not None:
-            update_decision_trace["geometry_fitter_handoff_valid"] = bool(
-                geometry_fitter_handoff_valid
-            )
-        if center_remap_fallback_reason is not None:
-            update_decision_trace["center_remap_fallback_reason"] = str(
-                center_remap_fallback_reason
-            )
-
-    def _decision_action() -> str:
-        return str(update_decision_trace.get("update_action") or "")
-
-    def _ensure_update_decision_defaults(reason: str) -> None:
-        if not _decision_action():
-            _set_update_decision(
-                update_action="display_only",
-                update_reason=reason,
-                requires_worker=False,
-                missing_contribution_count=0,
-                center_remap_used=False,
-                primary_prune_cache_mode="none",
-            )
-
-    def _set_classifier_decision(
-        decision: UpdateDecision,
-        *,
-        effective_action: UpdateAction,
-    ) -> None:
-        update_decision_trace["classifier_update_action"] = decision.action.value
-        update_decision_trace["classifier_update_reason"] = str(decision.reason)
-        update_decision_trace["classifier_requires_worker"] = bool(decision.requires_worker)
-        update_decision_trace["classifier_requires_analysis"] = bool(decision.requires_analysis)
-        update_decision_trace["classifier_missing_contribution_count"] = int(
-            len(decision.missing_contribution_keys)
+        gui_runtime_update_trace.set_detector_center_remap_trace(
+            update_decision_trace,
+            qr_selector_branch_identity_retained=qr_selector_branch_identity_retained,
+            detector_projection_cache_refreshed=detector_projection_cache_refreshed,
+            caked_projection_cache_invalidated=caked_projection_cache_invalidated,
+            geometry_fitter_handoff_valid=geometry_fitter_handoff_valid,
+            center_remap_fallback_reason=center_remap_fallback_reason,
         )
-        update_decision_trace["effective_update_action"] = effective_action.value
 
     def _set_update_trace_stage(stage: str) -> None:
         nonlocal update_trace_stage
@@ -24407,7 +24308,10 @@ def do_update():
             _current_update_debounce_ms(),
             do_update,
         )
-        _ensure_update_decision_defaults("busy_rescheduled")
+        gui_runtime_update_trace.ensure_update_decision_defaults(
+            update_decision_trace,
+            "busy_rescheduled",
+        )
         _trace_update(
             "do_update_busy_rescheduled",
             queued_token=simulation_runtime_state.update_pending,
@@ -25261,7 +25165,8 @@ def do_update():
         and (not requires_current_image_signature or not initial_image_signature_changed)
         else UpdateAction.FULL_SIMULATION
     )
-    _set_classifier_decision(
+    gui_runtime_update_trace.set_classifier_decision_trace(
+        update_decision_trace,
         classifier_decision,
         effective_action=effective_update_action,
     )
@@ -26313,7 +26218,10 @@ def do_update():
         simulation_runtime_state.stored_primary_sim_image is None
         and simulation_runtime_state.stored_secondary_sim_image is None
     ):
-        _ensure_update_decision_defaults("missing_simulation_image")
+        gui_runtime_update_trace.ensure_update_decision_defaults(
+            update_decision_trace,
+            "missing_simulation_image",
+        )
         _trace_update("do_update_return_no_simulation_image")
         simulation_runtime_state.update_phase = "queued"
         _refresh_run_status_bar()
@@ -26399,7 +26307,10 @@ def do_update():
         run_secondary = bool(combined_state_diagnostics.get("run_secondary", False))
         updated_image = simulation_runtime_state.stored_sim_image
         max_positions_local = list(simulation_runtime_state.stored_max_positions_local or [])
-    if _decision_action() in {"primary_prune_reuse", "primary_prune_fill"}:
+    if gui_runtime_update_trace._update_decision_action(update_decision_trace) in {
+        "primary_prune_reuse",
+        "primary_prune_fill",
+    }:
         current_prune_row_content_signature = getattr(
             simulation_runtime_state,
             "stored_q_group_content_signature",
@@ -26416,7 +26327,7 @@ def do_update():
                 and update_decision_trace.get("qr_selector_refresh_deferred") is False
             ),
         )
-    if not _decision_action():
+    if not gui_runtime_update_trace._update_decision_action(update_decision_trace):
         _set_update_decision(
             update_action="combine_only",
             update_reason="simulation_components_current",
@@ -26527,14 +26438,20 @@ def do_update():
                     q_group_bindings_factory()
                 )
             )
-            if _decision_action() in {"primary_prune_reuse", "primary_prune_fill"}:
+            if gui_runtime_update_trace._update_decision_action(update_decision_trace) in {
+                "primary_prune_reuse",
+                "primary_prune_fill",
+            }:
                 _set_qr_selector_trace(
                     qr_selector_entries_retained=True,
                     qr_selector_entries_refreshed=True,
                     qr_selector_refresh_deferred=False,
                     geometry_fitter_handoff_valid=bool(listed_entries),
                 )
-            elif _decision_action() == "detector_center_remap":
+            elif (
+                gui_runtime_update_trace._update_decision_action(update_decision_trace)
+                == "detector_center_remap"
+            ):
                 _set_qr_selector_trace(
                     qr_selector_entries_retained=True,
                     qr_selector_entries_refreshed=True,
@@ -26817,7 +26734,11 @@ def do_update():
             bg_cache_sig=bg_cache_sig,
         )
         if ready_analysis_result is not None:
-            if _decision_action() in {"", "display_only", "combine_only"}:
+            if gui_runtime_update_trace._update_decision_action(update_decision_trace) in {
+                "",
+                "display_only",
+                "combine_only",
+            }:
                 _set_update_decision(
                     update_action="analysis_only",
                     update_reason="ready_analysis_result",
@@ -26981,7 +26902,12 @@ def do_update():
                 "bg_caking_sig": bg_caking_sig,
             }
         )
-        if _decision_action() in {"", "display_only", "combine_only", "analysis_only"}:
+        if gui_runtime_update_trace._update_decision_action(update_decision_trace) in {
+            "",
+            "display_only",
+            "combine_only",
+            "analysis_only",
+        }:
             _set_update_decision(
                 update_action="analysis_only",
                 update_reason="analysis_cache_miss",
@@ -27175,7 +27101,10 @@ def do_update():
     if dependency_signatures_applied:
         simulation_runtime_state.last_dependency_signatures = current_dependency_signatures
     _set_update_trace_stage("complete")
-    _ensure_update_decision_defaults("display_refresh")
+    gui_runtime_update_trace.ensure_update_decision_defaults(
+        update_decision_trace,
+        "display_refresh",
+    )
     _trace_update(
         "do_update_complete",
         image_generation_cached=bool(image_generation_cached),
@@ -39600,22 +39529,12 @@ def _geometry_fit_worker_action_result(
 ) -> gui_geometry_fit.GeometryFitRuntimeActionResult:
     """Build one geometry-fit action result from async runtime job metadata."""
 
-    resolved_error_text = (
-        str(error_text)
-        if error_text
-        else (
-            str(getattr(execution_result, "error_text", "") or "")
-            if execution_result is not None
-            else None
-        )
-    )
-    return gui_geometry_fit.GeometryFitRuntimeActionResult(
-        params=dict(job.get("params", {}) or {}),
-        var_names=[str(name) for name in (job.get("var_names", ()) or ())],
-        preserve_live_theta=bool(job.get("preserve_live_theta", False)),
+    return gui_runtime_geometry_fit.build_geometry_fit_worker_action_result(
+        geometry_fit_module=gui_geometry_fit,
+        job=job,
         prepare_result=prepare_result,
         execution_result=execution_result,
-        error_text=resolved_error_text or None,
+        error_text=error_text,
     )
 
 
@@ -39628,17 +39547,13 @@ def _persist_geometry_fit_preflight_failure_log(
 ) -> Path | None:
     """Persist one geometry-fit preflight failure log when logging is enabled."""
 
-    if gui_geometry_fit.geometry_fit_all_logging_disabled():
-        return None
-    try:
-        return gui_geometry_fit.write_geometry_fit_preflight_failure_log(
-            stamp=str(stamp),
-            error_text=str(error_text),
-            log_path=Path(log_path),
-            log_sections=failure_log_sections,
-        )
-    except Exception:
-        return None
+    return gui_runtime_geometry_fit.persist_geometry_fit_preflight_failure_log(
+        geometry_fit_module=gui_geometry_fit,
+        stamp=stamp,
+        log_path=log_path,
+        error_text=error_text,
+        failure_log_sections=failure_log_sections,
+    )
 
 
 def _build_geometry_fit_async_job(

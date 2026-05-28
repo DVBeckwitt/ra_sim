@@ -1,7 +1,168 @@
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from ra_sim.gui import runtime_update_trace
+
+
+def test_initial_update_decision_trace_contains_runtime_classifier_fields() -> None:
+    trace = runtime_update_trace.initial_update_decision_trace()
+
+    assert trace == {
+        "update_action": None,
+        "update_reason": None,
+        "requires_worker": None,
+        "missing_contribution_count": None,
+        "center_remap_used": None,
+        "primary_prune_cache_mode": None,
+        "qr_selector_entries_retained": None,
+        "qr_selector_entries_refreshed": None,
+        "qr_selector_refresh_deferred": None,
+        "source_row_snapshots_retained": None,
+        "q_group_content_signature_changed": None,
+        "geometry_fitter_handoff_valid": None,
+        "qr_selector_branch_identity_retained": None,
+        "detector_projection_cache_refreshed": None,
+        "caked_projection_cache_invalidated": None,
+        "center_remap_fallback_reason": None,
+        "classifier_update_action": None,
+        "classifier_update_reason": None,
+        "classifier_requires_worker": None,
+        "classifier_requires_analysis": None,
+        "classifier_missing_contribution_count": None,
+        "effective_update_action": None,
+    }
+
+
+def test_initial_update_decision_trace_returns_independent_dicts() -> None:
+    first = runtime_update_trace.initial_update_decision_trace()
+    second = runtime_update_trace.initial_update_decision_trace()
+
+    first["update_action"] = "full_simulation"
+
+    assert second["update_action"] is None
+
+
+def test_set_update_decision_trace_coerces_runtime_fields() -> None:
+    trace = runtime_update_trace.initial_update_decision_trace()
+
+    runtime_update_trace.set_update_decision_trace(
+        trace,
+        update_action="primary_prune_reuse",
+        update_reason=123,
+        requires_worker=0,
+        missing_contribution_count="4",
+        center_remap_used=1,
+        primary_prune_cache_mode=Path("reuse"),
+    )
+
+    assert trace["update_action"] == "primary_prune_reuse"
+    assert trace["update_reason"] == "123"
+    assert trace["requires_worker"] is False
+    assert trace["missing_contribution_count"] == 4
+    assert trace["center_remap_used"] is True
+    assert trace["primary_prune_cache_mode"] == str(Path("reuse"))
+
+
+def test_set_qr_selector_trace_derives_policy_defaults() -> None:
+    trace = runtime_update_trace.initial_update_decision_trace()
+    policy = SimpleNamespace(
+        retain_geometry_q_group_entries=True,
+        defer_q_group_refresh_until_rows_available=True,
+        retain_source_row_snapshots=True,
+        retain_intersection_caches=True,
+        retain_manual_pick_cache=True,
+        require_q_group_refresh_after_apply=False,
+    )
+
+    runtime_update_trace.set_qr_selector_trace(
+        trace,
+        policy=policy,
+        qr_selector_entries_refreshed=False,
+        q_group_content_signature_changed=True,
+    )
+
+    assert trace["qr_selector_entries_retained"] is True
+    assert trace["qr_selector_refresh_deferred"] is True
+    assert trace["source_row_snapshots_retained"] is True
+    assert trace["geometry_fitter_handoff_valid"] is True
+    assert trace["qr_selector_entries_refreshed"] is False
+    assert trace["q_group_content_signature_changed"] is True
+
+
+def test_set_detector_center_remap_trace_records_remap_fields() -> None:
+    trace = runtime_update_trace.initial_update_decision_trace()
+
+    runtime_update_trace.set_detector_center_remap_trace(
+        trace,
+        qr_selector_branch_identity_retained=True,
+        detector_projection_cache_refreshed=False,
+        caked_projection_cache_invalidated=True,
+        geometry_fitter_handoff_valid=False,
+        center_remap_fallback_reason=Path("fallback"),
+    )
+
+    assert trace["qr_selector_branch_identity_retained"] is True
+    assert trace["detector_projection_cache_refreshed"] is False
+    assert trace["caked_projection_cache_invalidated"] is True
+    assert trace["geometry_fitter_handoff_valid"] is False
+    assert trace["center_remap_fallback_reason"] == str(Path("fallback"))
+
+
+def test_private_update_decision_action_and_defaults() -> None:
+    trace = runtime_update_trace.initial_update_decision_trace()
+
+    assert runtime_update_trace._update_decision_action(trace) == ""
+
+    runtime_update_trace.ensure_update_decision_defaults(trace, "display_refresh")
+
+    assert runtime_update_trace._update_decision_action(trace) == "display_only"
+    assert trace["update_reason"] == "display_refresh"
+    assert trace["requires_worker"] is False
+    assert trace["missing_contribution_count"] == 0
+    assert trace["center_remap_used"] is False
+    assert trace["primary_prune_cache_mode"] == "none"
+
+
+def test_ensure_update_decision_defaults_preserves_existing_action() -> None:
+    trace = runtime_update_trace.initial_update_decision_trace()
+    runtime_update_trace.set_update_decision_trace(
+        trace,
+        update_action="full_simulation",
+        update_reason="source_changed",
+        requires_worker=True,
+    )
+
+    runtime_update_trace.ensure_update_decision_defaults(trace, "display_refresh")
+
+    assert trace["update_action"] == "full_simulation"
+    assert trace["update_reason"] == "source_changed"
+    assert trace["requires_worker"] is True
+
+
+def test_set_classifier_decision_trace_records_classifier_and_effective_action() -> None:
+    trace = runtime_update_trace.initial_update_decision_trace()
+    decision = SimpleNamespace(
+        action=SimpleNamespace(value="primary_prune_fill"),
+        reason="primary_filter_changed_cache_fill",
+        requires_worker=True,
+        requires_analysis=False,
+        missing_contribution_keys={"rod-a", "rod-b"},
+    )
+    effective_action = SimpleNamespace(value="full_simulation")
+
+    runtime_update_trace.set_classifier_decision_trace(
+        trace,
+        decision,
+        effective_action=effective_action,
+    )
+
+    assert trace["classifier_update_action"] == "primary_prune_fill"
+    assert trace["classifier_update_reason"] == "primary_filter_changed_cache_fill"
+    assert trace["classifier_requires_worker"] is True
+    assert trace["classifier_requires_analysis"] is False
+    assert trace["classifier_missing_contribution_count"] == 2
+    assert trace["effective_update_action"] == "full_simulation"
 
 
 def test_resolve_runtime_update_trace_path_uses_daily_stamp() -> None:

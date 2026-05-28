@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 
@@ -18,6 +20,58 @@ class RuntimeGeometryFitWorkflow:
     action_runtime: object
     action_bindings_factory: object
     on_fit_geometry_click: object
+
+
+def persist_geometry_fit_preflight_failure_log(
+    *,
+    geometry_fit_module,
+    stamp: str,
+    log_path: Path | str,
+    error_text: str,
+    failure_log_sections: Sequence[tuple[str, Sequence[str]]] | None,
+) -> Path | None:
+    """Persist one geometry-fit preflight failure log when logging is enabled."""
+
+    if geometry_fit_module.geometry_fit_all_logging_disabled():
+        return None
+    try:
+        return geometry_fit_module.write_geometry_fit_preflight_failure_log(
+            stamp=str(stamp),
+            error_text=str(error_text),
+            log_path=Path(log_path),
+            log_sections=failure_log_sections,
+        )
+    except Exception:
+        return None
+
+
+def build_geometry_fit_worker_action_result(
+    *,
+    geometry_fit_module,
+    job: Mapping[str, object],
+    prepare_result: object = None,
+    execution_result: object = None,
+    error_text: str | None = None,
+):
+    """Build one geometry-fit action result from async runtime job metadata."""
+
+    resolved_error_text = (
+        str(error_text)
+        if error_text
+        else (
+            str(getattr(execution_result, "error_text", "") or "")
+            if execution_result is not None
+            else None
+        )
+    )
+    return geometry_fit_module.GeometryFitRuntimeActionResult(
+        params=dict(job.get("params", {}) or {}),
+        var_names=[str(name) for name in (job.get("var_names", ()) or ())],
+        preserve_live_theta=bool(job.get("preserve_live_theta", False)),
+        prepare_result=prepare_result,
+        execution_result=execution_result,
+        error_text=resolved_error_text or None,
+    )
 
 
 def build_runtime_geometry_fit_workflow(
