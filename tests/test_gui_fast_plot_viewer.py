@@ -1059,6 +1059,8 @@ def test_canvas_proxy_prefers_fast_viewer_viewport_mapping_for_host_overlay_even
     assert received[0].inaxes is event_axes
     assert received[0].x == 10.0
     assert received[0].y == 20.0
+    assert received[0].x != received[0].xdata
+    assert received[0].y != received[0].ydata
     assert received[0].xdata == 13.5
     assert received[0].ydata == 27.5
 

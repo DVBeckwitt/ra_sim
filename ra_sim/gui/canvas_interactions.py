@@ -412,6 +412,8 @@ def _manual_pick_click_coords(
     *,
     prefer_pixel_anchor: bool = False,
 ) -> tuple[float, float] | None:
+    # MouseEvent.xdata/ydata are the authoritative axes coordinates; x/y
+    # pixel fallback is only for events that cannot provide data coordinates.
     point = _event_axis_data_anchor(bindings.axis, event)
     if point is None and prefer_pixel_anchor and _event_inside_axis_pixels(bindings.axis, event):
         limits = _current_live_limits(bindings)

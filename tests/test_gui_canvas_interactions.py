@@ -120,6 +120,7 @@ def _basic_canvas_bindings(
     integration_range_drag_callbacks=None,
     manual_pick_session_active=None,
     caked_view_enabled=False,
+    place_geometry_manual_selection_at=None,
     set_geometry_manual_pick_mode=None,
     set_geometry_preview_exclude_mode=None,
     begin_live_interaction=None,
@@ -158,7 +159,9 @@ def _basic_canvas_bindings(
         clamp_to_axis_view=lambda axis_arg, x, y: (float(x), float(y)),
         apply_geometry_manual_pick_zoom=lambda *_args, **_kwargs: None,
         update_geometry_manual_pick_preview=lambda *_args, **_kwargs: None,
-        place_geometry_manual_selection_at=lambda *_args: None,
+        place_geometry_manual_selection_at=(
+            place_geometry_manual_selection_at or (lambda *_args: None)
+        ),
         clear_geometry_manual_preview_artists=lambda **_kwargs: None,
         restore_geometry_manual_pick_view=lambda **_kwargs: None,
         render_current_geometry_manual_pairs=lambda **_kwargs: True,
@@ -1571,6 +1574,36 @@ def test_canvas_detector_manual_release_uses_event_data_coordinates() -> None:
 
     assert canvas_interactions.handle_runtime_canvas_release(bindings, release_event) is True
     assert calls == [("place", 111.0, 222.0)]
+    assert manual_state.pick_session["zoom_active"] is False
+
+
+def test_canvas_detector_manual_release_falls_back_to_pixels_without_event_data() -> None:
+    axis = _FakeAxis(xlim=(100.0, 200.0), ylim=(300.0, 100.0))
+    manual_state = state.ManualGeometryState(
+        pick_session={"group_key": ("q", 1), "zoom_active": True}
+    )
+    calls = []
+    bindings = _basic_canvas_bindings(
+        axis=axis,
+        geometry_runtime_state=state.GeometryRuntimeState(manual_pick_armed=True),
+        geometry_manual_state=manual_state,
+        manual_pick_session_active=lambda: True,
+        place_geometry_manual_selection_at=lambda col, row: calls.append(
+            ("place", float(col), float(row))
+        ),
+    )
+
+    release_event = _FakeEvent(
+        button=1,
+        inaxes=axis,
+        xdata=None,
+        ydata=None,
+        x=160.0,
+        y=70.0,
+    )
+
+    assert canvas_interactions.handle_runtime_canvas_release(bindings, release_event) is True
+    assert calls == [("place", 175.0, 200.0)]
     assert manual_state.pick_session["zoom_active"] is False
 
 
