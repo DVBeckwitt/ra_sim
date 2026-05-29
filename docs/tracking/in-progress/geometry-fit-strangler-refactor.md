@@ -13,7 +13,7 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: ready for commit
+Status: Patch C committed and validated; Patch C.1 cleanup complete
 Bug/error/feature status: internal refactor guardrails only; no user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
@@ -47,7 +47,8 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Patch C0 added direct coverage for `resolve_geometry_fit_selection()` no-selection, theta-metadata-not-applied, background-theta-error, and skipped-empty-background branches.
 - Patch C extracted the async job builder background/manual/source input snapshots, live-row handoff, runtime config snapshot, caked projection payload capture, projection-view signatures, current hit-table cache payload, and final job dict assembly into `ra_sim/gui/_runtime/geometry_fit_job.py`.
 - Patch C kept `_build_geometry_fit_async_job()` as the runtime entry point, kept the final worker job as a plain dict, and did not move worker, optimizer, dataset, source-row rebuild, saved-state, CLI/env/debug-flag, solver, or UI callback behavior.
-- Post-Patch-C size report: `_build_geometry_fit_async_job()` is 420 lines, `ra_sim/gui/_runtime/runtime_session.py` is 46,186 lines, and `ra_sim/gui/_runtime/geometry_fit_job.py` is 1,131 lines.
+- Patch C.1 removed an unused private helper parameter from `snapshot_geometry_fit_background_inputs()` and its runtime call site.
+- Post-Patch-C.1 size report: `_build_geometry_fit_async_job()` is 419 lines, `ra_sim/gui/_runtime/runtime_session.py` is 46,185 lines, and `ra_sim/gui/_runtime/geometry_fit_job.py` is 1,130 lines.
 
 ## Review status
 
@@ -160,9 +161,10 @@ python -m ra_sim.dev check
 
 fails on pre-existing formatting in `ra_sim/fitting/optimization.py`, `ra_sim/gui/_runtime/runtime_session.py`, and `ra_sim/test_tiers.py`; those files were not reformatted in this slice.
 
-Current commit readiness:
+Current validation status:
 
-- Narrow focused tests, compileall, targeted geometry/runtime/import-safe suites, geometry fitting route tests, GUI workflow route tests, Ruff on touched files, and `git diff --check` passed for this slice.
+- Patch C broad validation previously passed: geometry fitting route tests, GUI workflow route tests, job/runtime/import-safe suites, Ruff on touched files, and `git diff --check`.
+- Patch C.1 focused validation passed: compileall, job-selection/live-row tests, geometry-fit job import-boundary test, GUI runtime geometry test, Ruff on touched files, and `git diff --check`.
 - `python -m ra_sim.dev check` remains blocked only by the documented pre-existing formatting drift above.
 - No generated artifacts, raw data, local config, notebook output, dependency changes, release version changes, or public migration files are included.
 

@@ -39642,7 +39642,6 @@ def _build_geometry_fit_async_job(
         required_indices=required_indices,
         selected_background_indices=selected_background_indices,
         skipped_empty_indices=skipped_empty_indices,
-        current_background_index=int(current_background_index),
         theta_initial_value=float(theta_initial_value),
         fit_params_snapshot=fit_params_snapshot,
         background_theta_values=background_theta_values,

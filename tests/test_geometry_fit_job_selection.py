@@ -169,7 +169,6 @@ def test_snapshot_geometry_fit_background_inputs_copies_mutable_payloads() -> No
         required_indices=[0],
         selected_background_indices=[0],
         skipped_empty_indices=set(),
-        current_background_index=0,
         theta_initial_value=1.0,
         fit_params_snapshot=fit_params,
         background_theta_values=[2.0],

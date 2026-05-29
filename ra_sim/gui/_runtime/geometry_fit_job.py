@@ -212,7 +212,6 @@ def snapshot_geometry_fit_background_inputs(
     required_indices: Sequence[int],
     selected_background_indices: Sequence[int],
     skipped_empty_indices: set[int],
-    current_background_index: int,
     theta_initial_value: float,
     fit_params_snapshot: Mapping[str, object],
     background_theta_values: Sequence[float],
