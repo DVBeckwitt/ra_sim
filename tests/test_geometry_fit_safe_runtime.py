@@ -23,7 +23,33 @@ def _imported_modules(module_path: Path) -> set[str]:
             imported_modules.update(str(alias.name) for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported_modules.add(str(node.module))
+            imported_modules.update(f"{node.module}.{alias.name}" for alias in node.names)
     return imported_modules
+
+
+def test_imported_modules_records_import_from_aliases(tmp_path: Path) -> None:
+    module_path = tmp_path / "worker_import_probe.py"
+    module_path.write_text(
+        "\n".join(
+            (
+                "from ra_sim.gui import geometry_fit",
+                "from ra_sim.gui import manual_geometry",
+                "from ra_sim.gui._runtime import runtime_session",
+                "from ra_sim.fitting import optimization",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    imported_modules = _imported_modules(module_path)
+
+    assert "ra_sim.gui" in imported_modules
+    assert "ra_sim.gui.geometry_fit" in imported_modules
+    assert "ra_sim.gui.manual_geometry" in imported_modules
+    assert "ra_sim.gui._runtime" in imported_modules
+    assert "ra_sim.gui._runtime.runtime_session" in imported_modules
+    assert "ra_sim.fitting" in imported_modules
+    assert "ra_sim.fitting.optimization" in imported_modules
 
 
 def test_geometry_fit_job_helper_has_no_live_runtime_or_tk_imports() -> None:
