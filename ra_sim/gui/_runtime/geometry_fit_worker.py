@@ -450,6 +450,7 @@ class GeometryFitWorkerContext:
             params_local.update(dict(params_override))
         resolved_caked_payload = None
         exact_caked_bundle = None
+        caked_deps = self.caked_payload_deps
         if normalized_mode == "caked":
             caked_deps = self._require_caked_payload_deps()
             payload_map = self.job_data.setdefault("projection_payload_by_background", {})
@@ -528,7 +529,6 @@ class GeometryFitWorkerContext:
                     return False
             return True
 
-        caked_deps = self.caked_payload_deps
         projection_callbacks = deps.make_projection_callbacks(
             caked_view_enabled=lambda: bool(
                 normalized_mode == "caked" and isinstance(resolved_caked_payload, Mapping)

@@ -536,59 +536,40 @@ def test_worker_context_load_background_by_index_snapshot_missing_payload_matche
     assert np.isnan(display_copy)
 
 
-def test_project_source_rows_for_background_preserves_row_order() -> None:
+def test_project_source_rows_for_background_preserves_order_and_identity_fields() -> None:
     context, _fake_deps = _context_with_source_projection_deps()
     rows = [
-        _source_row(source_row_index=1, hkl=(1, 0, 0)),
-        _source_row(source_row_index=2, hkl=(2, 0, 0)),
+        _source_row(
+            q_group_key=("q_group", "primary", 3, 10),
+            hkl=(-2, 1, 5),
+            normalized_hkl=(-2, 1, 5),
+            source_reflection_index=11,
+            source_row_index=99,
+            locked_qr=1.5,
+            locked_qz=2.75,
+        ),
+        _source_row(
+            q_group_key=("q_group", "primary", 3, 11),
+            hkl=(-2, 1, 6),
+            normalized_hkl=(-2, 1, 6),
+            source_reflection_index=12,
+            source_row_index=100,
+            locked_qr=1.75,
+            locked_qz=2.95,
+        ),
     ]
 
     projected = context.project_source_rows_for_background(0, rows)
 
-    assert [row["source_row_index"] for row in projected] == [1, 2]
+    assert [row["source_row_index"] for row in projected] == [99, 100]
     assert all(row["projected"] is True for row in projected)
-
-
-def test_project_source_rows_for_background_preserves_source_locator_identity() -> None:
-    context, _fake_deps = _context_with_source_projection_deps()
-    row = _source_row(
-        q_group_key=("q_group", "primary", 3, 10),
-        source_row_index=99,
-    )
-
-    projected = context.project_source_rows_for_background(0, [row])
-
     assert projected[0]["q_group_key"] == ("q_group", "primary", 3, 10)
-    assert projected[0]["source_row_index"] == 99
-
-
-def test_project_source_rows_for_background_preserves_reflection_identity() -> None:
-    context, _fake_deps = _context_with_source_projection_deps()
-    row = _source_row(
-        hkl=(-2, 1, 5),
-        normalized_hkl=(-2, 1, 5),
-        source_reflection_index=11,
-        source_reflection_namespace="full_reflection",
-        source_reflection_is_full=True,
-    )
-
-    projected = context.project_source_rows_for_background(0, [row])
-
     assert projected[0]["hkl"] == (-2, 1, 5)
     assert projected[0]["normalized_hkl"] == (-2, 1, 5)
     assert projected[0]["source_reflection_index"] == 11
     assert projected[0]["source_reflection_namespace"] == "full_reflection"
     assert projected[0]["source_reflection_is_full"] is True
-
-
-def test_project_source_rows_for_background_preserves_locked_qr_qz_identity() -> None:
-    context, _fake_deps = _context_with_source_projection_deps()
-    row = _source_row(locked_qr=1.5, locked_qz=2.75)
-
-    projected = context.project_source_rows_for_background(0, [row])
-
-    assert projected[0]["locked_qr"] == 1.5
-    assert projected[0]["locked_qz"] == 2.75
+    assert (projected[0]["locked_qr"], projected[0]["locked_qz"]) == (1.5, 2.75)
 
 
 def test_project_source_rows_for_background_empty_input_matches_current_shape() -> None:
@@ -619,61 +600,27 @@ def test_project_source_rows_for_background_detector_empty_projection_rejects_st
     assert projected == []
 
 
-def test_project_source_rows_by_row_background_groups_by_same_background_key() -> None:
+def test_project_source_rows_by_row_background_preserves_grouping_order_and_identity() -> None:
     context, fake_deps = _context_with_source_projection_deps()
-    rows = [
-        _source_row(background_index=0, source_row_index=1),
-        _source_row(background_index=1, source_row_index=2),
-    ]
-
-    projected = context.project_source_rows_by_row_background(rows)
-
-    assert [row["background_index"] for row in projected] == [0, 1]
-    assert [row["source_row_index"] for row in projected] == [1, 2]
-    assert len(fake_deps.callbacks.calls) == 2
-
-
-def test_project_source_rows_by_row_background_preserves_group_order() -> None:
-    context, _fake_deps = _context_with_source_projection_deps()
-    rows = [
-        _source_row(background_index=1, source_row_index=1),
-        _source_row(background_index=0, source_row_index=2),
-        _source_row(background_index=1, source_row_index=3),
-    ]
-
-    projected = context.project_source_rows_by_row_background(rows)
-
-    assert [row["source_row_index"] for row in projected] == [1, 2, 3]
-
-
-def test_project_source_rows_by_row_background_preserves_locked_qr_qz_fields() -> None:
-    context, _fake_deps = _context_with_source_projection_deps()
     rows = [
         _source_row(background_index=1, source_row_index=1, locked_qr=4.0, locked_qz=5.0),
         _source_row(background_index=0, source_row_index=2, locked_qr=6.0, locked_qz=7.0),
+        _source_row(background_index=1, source_row_index=3, locked_qr=8.0, locked_qz=9.0),
     ]
 
     projected = context.project_source_rows_by_row_background(rows)
 
+    assert [row["background_index"] for row in projected] == [1, 0, 1]
+    assert [row["source_row_index"] for row in projected] == [1, 2, 3]
     assert [(row["locked_qr"], row["locked_qz"]) for row in projected] == [
         (4.0, 5.0),
         (6.0, 7.0),
+        (8.0, 9.0),
     ]
-
-
-def test_project_source_rows_by_row_background_does_not_merge_distinct_background_groups() -> None:
-    context, fake_deps = _context_with_source_projection_deps()
-    rows = [
-        _source_row(background_index=1, source_row_index=1),
-        _source_row(background_index=0, source_row_index=2),
-    ]
-
-    context.project_source_rows_by_row_background(rows)
-
     assert [
         [row["background_index"] for row in call]
         for call in fake_deps.callbacks.calls
-    ] == [[1], [0]]
+    ] == [[1, 1], [0]]
 
 
 def test_project_source_rows_by_row_background_missing_row_background_matches_current_fallback() -> None:
