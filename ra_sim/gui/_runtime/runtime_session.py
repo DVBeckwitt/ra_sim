@@ -306,6 +306,7 @@ from ra_sim.gui.runtime_update_dependencies import (
     classify_update,
 )
 from ra_sim.gui._runtime import primary_cache_helpers as _primary_cache_helpers
+from ra_sim.gui._runtime import geometry_fit_worker as _geometry_fit_worker
 from ra_sim.gui._runtime.live_cache_helpers import (
     empty_qr_cylinder_band_cache as _empty_qr_cylinder_band_cache,
     empty_peak_overlay_cache as _empty_peak_overlay_cache,
@@ -40269,23 +40270,10 @@ def _run_async_geometry_fit_worker_job(
 ) -> gui_geometry_fit.GeometryFitRuntimeActionResult:
     """Run geometry-fit preflight and solver work off the Tk thread."""
 
-    job_data = dict(job or {})
-    job_id = int(job_data.get("job_id", -1))
-    event_queue = job_data.get("event_queue")
-
-    def _emit_worker_event(kind: str, payload: object = None) -> None:
-        if event_queue is None:
-            return
-        try:
-            event_queue.put(
-                {
-                    "job_id": int(job_id),
-                    "kind": str(kind),
-                    "payload": copy.deepcopy(payload),
-                }
-            )
-        except Exception:
-            return
+    worker_context = _geometry_fit_worker.GeometryFitWorkerContext.from_job(job)
+    job_data = worker_context.job_data
+    job_id = worker_context.job_id
+    _emit_worker_event = worker_context.emit_event
 
     skipped_manual_pair_backgrounds = {
         int(idx): str(label)
@@ -40308,69 +40296,25 @@ def _run_async_geometry_fit_worker_job(
             },
         )
 
-    worker_source_row_snapshots = {
-        int(idx): copy.deepcopy(snapshot)
-        for idx, snapshot in dict(job_data.get("source_snapshots", {}) or {}).items()
-    }
-    worker_source_snapshot_diagnostics = copy.deepcopy(
-        job_data.get("source_snapshot_diagnostics") or {}
-    )
-    worker_simulation_diagnostics = copy.deepcopy(job_data.get("simulation_diagnostics") or {})
-    worker_background_cache_by_index: dict[
-        int,
-        gui_geometry_fit.GeometryFitBackgroundCacheBundle,
-    ] = {}
+    worker_source_row_snapshots = worker_context.worker_source_row_snapshots
+    worker_simulation_diagnostics = worker_context.worker_simulation_diagnostics
+    worker_background_cache_by_index = worker_context.worker_background_cache_by_index
     worker_geometry_fit_caking_ai: FastAzimuthalIntegrator | None = None
     worker_geometry_fit_caking_sig: (
         tuple[float | None, float | None, float | None, float | None] | None
     ) = None
-    source_cache_generation_lock = threading.Lock()
-    source_cache_generation_by_background = dict(
-        job_data.get("source_cache_generation_by_background", {}) or {}
-    )
     caked_view_timeout_s = 5.0
-
-    def _current_source_cache_generation(background_index: int) -> int:
-        with source_cache_generation_lock:
-            return int(source_cache_generation_by_background.get(int(background_index), 0))
-
-    def _advance_source_cache_generation(background_index: int) -> int:
-        with source_cache_generation_lock:
-            next_generation = (
-                int(source_cache_generation_by_background.get(int(background_index), 0)) + 1
-            )
-            source_cache_generation_by_background[int(background_index)] = int(next_generation)
-            job_data["source_cache_generation_by_background"] = dict(
-                source_cache_generation_by_background
-            )
-            return int(next_generation)
-
-    def _source_cache_generation_matches(
-        background_index: int,
-        generation_id: int | None,
-    ) -> bool:
-        if generation_id is None:
-            return True
-        return int(_current_source_cache_generation(background_index)) == int(generation_id)
-
-    def _set_worker_source_snapshot_diagnostics(**kwargs) -> None:
-        worker_source_snapshot_diagnostics.clear()
-        worker_source_snapshot_diagnostics.update(kwargs)
-
-    def _last_worker_source_snapshot_diagnostics() -> dict[str, object]:
-        return dict(worker_source_snapshot_diagnostics)
-
-    def _last_worker_simulation_diagnostics() -> dict[str, object]:
-        return dict(worker_simulation_diagnostics)
-
-    def _load_background_by_index_snapshot(index: int) -> tuple[np.ndarray, np.ndarray]:
-        background_payload = dict(
-            dict(job_data.get("background_images", {}) or {}).get(int(index)) or {}
-        )
-        return (
-            np.asarray(background_payload.get("native"), dtype=np.float64).copy(),
-            np.asarray(background_payload.get("display"), dtype=np.float64).copy(),
-        )
+    _current_source_cache_generation = worker_context.current_source_cache_generation
+    _advance_source_cache_generation = worker_context.advance_source_cache_generation
+    _source_cache_generation_matches = worker_context.source_cache_generation_matches
+    _set_worker_source_snapshot_diagnostics = (
+        worker_context.set_worker_source_snapshot_diagnostics
+    )
+    _last_worker_source_snapshot_diagnostics = (
+        worker_context.last_worker_source_snapshot_diagnostics
+    )
+    _last_worker_simulation_diagnostics = worker_context.last_worker_simulation_diagnostics
+    _load_background_by_index_snapshot = worker_context.load_background_by_index_snapshot
 
     def _load_caked_view_by_index_snapshot(
         index: int,

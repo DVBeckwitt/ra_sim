@@ -10,8 +10,12 @@ from ra_sim.gui import geometry_q_group_manager
 from ra_sim.simulation import diffraction
 
 
-def test_geometry_fit_job_helper_has_no_live_runtime_or_tk_imports() -> None:
-    module_path = Path("ra_sim/gui/_runtime/geometry_fit_job.py")
+RUNTIME_SESSION_PATH = Path("ra_sim/gui/_runtime/runtime_session.py")
+GEOMETRY_FIT_JOB_PATH = Path("ra_sim/gui/_runtime/geometry_fit_job.py")
+GEOMETRY_FIT_WORKER_PATH = Path("ra_sim/gui/_runtime/geometry_fit_worker.py")
+
+
+def _imported_modules(module_path: Path) -> set[str]:
     imported_modules: set[str] = set()
     tree = ast.parse(module_path.read_text(encoding="utf-8"))
     for node in ast.walk(tree):
@@ -19,6 +23,11 @@ def test_geometry_fit_job_helper_has_no_live_runtime_or_tk_imports() -> None:
             imported_modules.update(str(alias.name) for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported_modules.add(str(node.module))
+    return imported_modules
+
+
+def test_geometry_fit_job_helper_has_no_live_runtime_or_tk_imports() -> None:
+    imported_modules = _imported_modules(GEOMETRY_FIT_JOB_PATH)
 
     forbidden_imports = {
         "ra_sim.gui._runtime.runtime_session",
@@ -29,6 +38,49 @@ def test_geometry_fit_job_helper_has_no_live_runtime_or_tk_imports() -> None:
     }
     assert not (imported_modules & forbidden_imports)
     assert not any(name.startswith("tkinter.") for name in imported_modules)
+
+
+def test_geometry_fit_worker_helper_has_no_live_runtime_tk_or_solver_imports() -> None:
+    imported_modules = _imported_modules(GEOMETRY_FIT_WORKER_PATH)
+
+    forbidden_imports = {
+        "matplotlib",
+        "ra_sim.fitting.optimization",
+        "ra_sim.gui._runtime.geometry_fit_job",
+        "ra_sim.gui._runtime.runtime_session",
+        "ra_sim.gui.geometry_fit",
+        "ra_sim.gui.manual_geometry",
+        "ra_sim.gui.runtime_geometry_fit",
+        "ra_sim.gui.views",
+        "tkinter",
+    }
+    assert not (imported_modules & forbidden_imports)
+    assert not any(name.startswith("tkinter.") for name in imported_modules)
+    assert not any(name.startswith("matplotlib.") for name in imported_modules)
+
+
+def test_geometry_fit_worker_context_helpers_are_not_duplicated_in_runtime_worker() -> None:
+    source = RUNTIME_SESSION_PATH.read_text(encoding="utf-8")
+    worker_start = source.index("def _run_async_geometry_fit_worker_job(")
+    worker_end = source.index("def _consume_ready_geometry_fit_result(", worker_start)
+    tree = ast.parse(source[worker_start:worker_end])
+    nested_function_names = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name != "_run_async_geometry_fit_worker_job"
+    }
+
+    moved_helper_names = {
+        "_advance_source_cache_generation",
+        "_current_source_cache_generation",
+        "_emit_worker_event",
+        "_last_worker_simulation_diagnostics",
+        "_last_worker_source_snapshot_diagnostics",
+        "_load_background_by_index_snapshot",
+        "_set_worker_source_snapshot_diagnostics",
+        "_source_cache_generation_matches",
+    }
+    assert not (nested_function_names & moved_helper_names)
 
 
 def _geometry_fit_param_set() -> dict[str, object]:

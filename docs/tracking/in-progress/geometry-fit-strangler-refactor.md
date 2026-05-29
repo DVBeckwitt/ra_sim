@@ -13,7 +13,7 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: Patch C committed and validated; Patch C.1 cleanup complete
+Status: Patch D1 worker boundary complete; ready for review
 Bug/error/feature status: internal refactor guardrails only; no user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
@@ -49,6 +49,9 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Patch C kept `_build_geometry_fit_async_job()` as the runtime entry point, kept the final worker job as a plain dict, and did not move worker, optimizer, dataset, source-row rebuild, saved-state, CLI/env/debug-flag, solver, or UI callback behavior.
 - Patch C.1 removed an unused private helper parameter from `snapshot_geometry_fit_background_inputs()` and its runtime call site.
 - Post-Patch-C.1 size report: `_build_geometry_fit_async_job()` is 419 lines, `ra_sim/gui/_runtime/runtime_session.py` is 46,185 lines, and `ra_sim/gui/_runtime/geometry_fit_job.py` is 1,130 lines.
+- Patch D1 added `ra_sim/gui/_runtime/geometry_fit_worker.py` and moved worker context setup, event emission, source-cache generation helpers, diagnostic helpers, and background image snapshot loading behind `GeometryFitWorkerContext`.
+- Patch D1 kept `_run_async_geometry_fit_worker_job(job)` as the runtime worker wrapper and did not move caked payload loading, caked view hydration, source-row projection, cache prebuild, manual validation, dataset calls, solver calls, optimizer behavior, saved-state, CLI/env/debug flags, or UI callbacks.
+- Post-Patch-D1 size report: `_run_async_geometry_fit_worker_job()` is 3,485 lines, `ra_sim/gui/_runtime/runtime_session.py` is 46,129 lines, and `ra_sim/gui/_runtime/geometry_fit_worker.py` is 114 lines.
 
 ## Review status
 
@@ -58,12 +61,13 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Snapshot helper now raises on normalized mapping-key collisions instead of silently dropping entries.
 - Patch B simplification removed the unused `resolve_fit_space_anchor()` helper and its self-only tests because it did not remove production dataset assembly logic in this slice.
 - Patch C added an import-boundary guard proving `geometry_fit_job.py` does not import `runtime_session.py`, Tk, worker modules, or GUI mutation modules.
+- Patch D1 added an import-boundary guard proving `geometry_fit_worker.py` does not import `runtime_session.py`, Tk, GUI mutation modules, `geometry_fit.py`, `manual_geometry.py`, optimizer modules, or matplotlib.
 
 ## Next actions
 
-1. Start worker boundary preparation with an import-boundary test and worker context/event/snapshot utilities.
-2. Keep optimizer, dataset, source-row rebuild, and update-policy extraction out of the next worker-boundary slice.
-3. Revisit `_build_geometry_fit_async_job()` size after worker-boundary helpers are in place; do not add hard debt gates yet.
+1. Patch D2 should move worker caked payload status/loading only.
+2. Keep source-row projection, cache prebuild, manual validation, dataset, solver, optimizer, saved-state, CLI/env, and UI behavior out of D2.
+3. Do not add hard debt gates yet.
 
 ## Validation
 
@@ -153,6 +157,21 @@ git diff --check
 python -m ra_sim.dev check
 ```
 
+Patch D1 worker context/event/snapshot boundary slice:
+
+```bash
+python -m compileall -q ra_sim tests
+python -m pytest -q tests/test_geometry_fit_worker.py
+python -m pytest -q tests/test_geometry_fit_safe_runtime.py -k "geometry_fit_worker or geometry_fit_job"
+python -m pytest -q tests/test_geometry_fit_job_selection.py tests/test_geometry_fit_job_live_rows_handoff.py tests/test_geometry_fit_live_rows_signature_handoff.py tests/test_gui_runtime_geometry_fit.py
+python -m pytest -q tests/test_gui_runtime_import_safe.py
+python -m pytest -q tests/test_gui_geometry_fit_workflow.py -k "build_geometry_manual_fit_dataset or prepare_geometry_fit_run or caked or locked_qr or coordinate or optimizer_request"
+python -m pytest -q tests/test_geometry_fitting.py -k "fit_geometry_parameters or caked or manual_qr or locked_qr or dynamic_point or objective_insensitive or full_beam"
+python -m ruff check ra_sim/gui/_runtime/geometry_fit_worker.py ra_sim/gui/_runtime/runtime_session.py tests/test_geometry_fit_worker.py tests/test_geometry_fit_safe_runtime.py
+git diff --check
+python -m ra_sim.dev check
+```
+
 Known baseline issue:
 
 ```bash
@@ -165,6 +184,7 @@ Current validation status:
 
 - Patch C broad validation previously passed: geometry fitting route tests, GUI workflow route tests, job/runtime/import-safe suites, Ruff on touched files, and `git diff --check`.
 - Patch C.1 focused validation passed: compileall, job-selection/live-row tests, geometry-fit job import-boundary test, GUI runtime geometry test, Ruff on touched files, and `git diff --check`.
+- Patch D1 validation passed: compileall, worker context tests, worker/job import-boundary tests, job/live-row/runtime/import-safe suites, GUI workflow route tests, geometry fitting route tests, Ruff on touched files, and `git diff --check`.
 - `python -m ra_sim.dev check` remains blocked only by the documented pre-existing formatting drift above.
 - No generated artifacts, raw data, local config, notebook output, dependency changes, release version changes, or public migration files are included.
 
