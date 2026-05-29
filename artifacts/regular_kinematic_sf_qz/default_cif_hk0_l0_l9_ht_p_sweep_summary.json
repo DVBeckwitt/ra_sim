@@ -1,0 +1,34 @@
+{
+  "commit": "1c33501d",
+  "cif_path": "C:\\Users\\Kenpo\\OneDrive\\Research\\Rigaku XRD\\ORNL.07.25.2024\\Analysis\\Bi2Se3\\Bi2Se3.cif",
+  "cif_exists": true,
+  "a_angstrom": 4.143,
+  "c_angstrom": 28.636,
+  "lambda_angstrom": 1.54059,
+  "h": 0,
+  "k": 0,
+  "L_min": 0.0,
+  "L_max": 9.0,
+  "Qz_min_A_inv": 0.0,
+  "Qz_max_A_inv": 1.9747404583257535,
+  "L_step": 0.001,
+  "p_values": [
+    0.01,
+    0.001,
+    0.0001,
+    0.0
+  ],
+  "phase_delta_expression": "2*pi*((2*h + k)/3)",
+  "phi_l_divisor": 1.0,
+  "finite_stack": true,
+  "stack_layers": 50,
+  "point_count": 9001,
+  "max_abs_delta_vs_p0": {
+    "0.01": 0.0,
+    "0.001": 0.0,
+    "0.0001": 0.0
+  },
+  "all_curves_identical_to_float_precision": true,
+  "plot_path": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\regular_kinematic_sf_qz\\default_cif_hk0_l0_l9_ht_p_sweep.png",
+  "csv_path": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\regular_kinematic_sf_qz\\default_cif_hk0_l0_l9_ht_p_sweep.csv"
+}

@@ -1008,7 +1008,7 @@ def _build_runtime_defaults(saved_state: dict[str, object]) -> _RuntimeDefaults:
         av2 = None
         cv2 = None
 
-    p_defaults = _ensure_triplet(ht_cfg.get("default_p"), [0.01, 0.99, 0.5])
+    p_defaults = _ensure_triplet(ht_cfg.get("default_p"), [0.0, 0.99, 0.5])
     w_defaults = _ensure_triplet(ht_cfg.get("default_w"), [100.0, 0.0, 0.0])
     try:
         iodine_z_default = float(stack._infer_iodine_z_like_diffuse(primary_cif_path))
@@ -1026,6 +1026,24 @@ def _build_runtime_defaults(saved_state: dict[str, object]) -> _RuntimeDefaults:
         phase_delta_default = stack.validate_phase_delta_expression(phase_delta_default)
     except ValueError:
         phase_delta_default = stack.DEFAULT_PHASE_DELTA_EXPRESSION
+
+    legacy_stack_layers_default = gui_controllers.normalize_finite_stack_layer_count(
+        ht_cfg.get("stack_layers", 50),
+        50,
+    )
+    if "film_thickness_nm" in ht_cfg:
+        film_thickness_nm_default = gui_controllers.normalize_finite_stack_thickness_nm(
+            ht_cfg.get("film_thickness_nm"),
+            gui_controllers.DEFAULT_FINITE_STACK_FILM_THICKNESS_NM,
+        )
+    elif "stack_layers" in ht_cfg:
+        film_thickness_nm_default = float(legacy_stack_layers_default) * float(cv) * 0.1
+    else:
+        film_thickness_nm_default = gui_controllers.DEFAULT_FINITE_STACK_FILM_THICKNESS_NM
+    stack_layers_default = gui_controllers.finite_stack_layers_from_thickness_nm(
+        film_thickness_nm=film_thickness_nm_default,
+        c_axis_angstrom=cv,
+    )
 
     defaults = {
         "theta_initial": float(sample_cfg.get("theta_initial_deg", 6.0)),
@@ -1077,7 +1095,8 @@ def _build_runtime_defaults(saved_state: dict[str, object]) -> _RuntimeDefaults:
             beam_cfg.get("solve_q_mode", diffraction.DEFAULT_SOLVE_Q_MODE)
         ),
         "finite_stack": bool(ht_cfg.get("finite_stack", True)),
-        "stack_layers": int(max(1, float(ht_cfg.get("stack_layers", 50)))),
+        "film_thickness_nm": float(film_thickness_nm_default),
+        "stack_layers": int(stack_layers_default),
         "optics_mode": "exact",
         "weight1": 0.5 if secondary_cif_path else 1.0,
         "weight2": 0.5 if secondary_cif_path else 0.0,
@@ -1115,6 +1134,23 @@ def _build_runtime_defaults(saved_state: dict[str, object]) -> _RuntimeDefaults:
     )
 
 
+def _default_finite_stack_film_thickness_nm(default_values: Mapping[str, object]) -> float:
+    if "film_thickness_nm" in default_values:
+        return gui_controllers.normalize_finite_stack_thickness_nm(
+            default_values.get("film_thickness_nm"),
+            gui_controllers.DEFAULT_FINITE_STACK_FILM_THICKNESS_NM,
+        )
+    if "stack_layers" in default_values:
+        legacy_layers = gui_controllers.normalize_finite_stack_layer_count(
+            default_values.get("stack_layers"),
+            1,
+        )
+        c_axis = _coerce_float(default_values.get("c", 0.0), 0.0)
+        if np.isfinite(c_axis) and c_axis > 0.0:
+            return float(legacy_layers) * float(c_axis) * 0.1
+    return gui_controllers.DEFAULT_FINITE_STACK_FILM_THICKNESS_NM
+
+
 def _build_var_store(
     saved_state: dict[str, object],
     defaults: _RuntimeDefaults,
@@ -1128,6 +1164,7 @@ def _build_var_store(
     background_theta_default = gui_background_theta.format_background_theta_values(
         [defaults.defaults["theta_initial"]] * len(defaults.osc_files)
     )
+    default_film_thickness_nm = _default_finite_stack_film_thickness_nm(defaults.defaults)
 
     var_defaults: dict[str, object] = {
         **_default_fit_toggle_values(),
@@ -1167,6 +1204,7 @@ def _build_var_store(
         "w1_var": defaults.defaults["w1"],
         "w2_var": defaults.defaults["w2"],
         "finite_stack_var": defaults.defaults["finite_stack"],
+        "film_thickness_nm_var": default_film_thickness_nm,
         "stack_layers_var": defaults.defaults["stack_layers"],
         "phase_delta_expr_var": defaults.defaults["phase_delta_expression"],
         "phi_l_divisor_var": defaults.defaults["phi_l_divisor"],
@@ -1180,6 +1218,20 @@ def _build_var_store(
         if name == "optics_mode_var":
             value = _normalize_optics_mode_label(value)
         var_store[name] = _HeadlessVar(value)
+    if "film_thickness_nm_var" not in saved_variables and "stack_layers_var" in saved_variables:
+        legacy_layers = gui_controllers.normalize_finite_stack_layer_count(
+            saved_variables.get("stack_layers_var"),
+            defaults.defaults["stack_layers"],
+        )
+        c_axis = _coerce_float(var_store["c_var"].get(), defaults.defaults["c"])
+        if np.isfinite(c_axis) and c_axis > 0.0:
+            var_store["film_thickness_nm_var"].set(float(legacy_layers) * float(c_axis) * 0.1)
+    var_store["stack_layers_var"].set(
+        gui_controllers.finite_stack_layers_from_thickness_nm(
+            film_thickness_nm=var_store["film_thickness_nm_var"].get(),
+            c_axis_angstrom=var_store["c_var"].get(),
+        )
+    )
     return var_store
 
 
@@ -2418,10 +2470,14 @@ def _load_structure_model(
         var_store["finite_stack_var"].get(),
         defaults.defaults["finite_stack"],
     )
-    defaults_map["stack_layers"] = _coerce_int(
-        var_store["stack_layers_var"].get(),
-        defaults.defaults["stack_layers"],
-        minimum=1,
+    default_film_thickness_nm = _default_finite_stack_film_thickness_nm(defaults.defaults)
+    defaults_map["film_thickness_nm"] = gui_controllers.normalize_finite_stack_thickness_nm(
+        var_store["film_thickness_nm_var"].get(),
+        default_film_thickness_nm,
+    )
+    defaults_map["stack_layers"] = gui_controllers.finite_stack_layers_from_thickness_nm(
+        film_thickness_nm=defaults_map["film_thickness_nm"],
+        c_axis_angstrom=defaults_map["c"],
     )
     defaults_map["phase_delta_expression"] = stack.validate_phase_delta_expression(
         stack.normalize_phase_delta_expression(
@@ -2480,11 +2536,7 @@ def _load_structure_model(
             var_store["finite_stack_var"].get(),
             defaults.defaults["finite_stack"],
         ),
-        layers=_coerce_int(
-            var_store["stack_layers_var"].get(),
-            defaults.defaults["stack_layers"],
-            minimum=1,
-        ),
+        layers=int(defaults_map["stack_layers"]),
         phase_delta_expression_current=stack.validate_phase_delta_expression(
             stack.normalize_phase_delta_expression(
                 var_store["phase_delta_expr_var"].get(),

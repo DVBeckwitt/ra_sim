@@ -525,6 +525,32 @@ def test_finite_stack_controller_helpers_normalize_and_format() -> None:
     assert controllers.normalize_finite_stack_layer_count("72", 10) == 72
     assert controllers.normalize_finite_stack_layer_count("bad", 10) == 10
     assert controllers.format_finite_stack_layer_count(9.8) == "10"
+    assert controllers.normalize_finite_stack_thickness_nm("50.5", 12.0) == 50.5
+    assert controllers.normalize_finite_stack_thickness_nm("bad", 12.0) == 12.0
+    assert controllers.normalize_finite_stack_thickness_nm("-1", 12.0) == 12.0
+    assert controllers.format_finite_stack_thickness_nm(50.0) == "50"
+    assert controllers.format_finite_stack_thickness_nm(0.125) == "0.125"
+    assert (
+        controllers.finite_stack_layers_from_thickness_nm(
+            film_thickness_nm=50.0,
+            c_axis_angstrom=28.636,
+        )
+        == 17
+    )
+    assert (
+        controllers.finite_stack_layers_from_thickness_nm(
+            film_thickness_nm=0.1,
+            c_axis_angstrom=28.636,
+        )
+        == 1
+    )
+    assert (
+        controllers.finite_stack_layers_from_thickness_nm(
+            film_thickness_nm=50.0,
+            c_axis_angstrom=0.0,
+        )
+        == 1
+    )
 
     assert (
         controllers.normalize_finite_stack_phase_delta_expression(

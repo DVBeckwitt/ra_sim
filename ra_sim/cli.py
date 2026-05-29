@@ -1136,7 +1136,7 @@ def run_headless_geometry_fit(
         row = atom_site_fractional_metadata[len(atom_site_values)]
         atom_site_values.append((float(row["x"]), float(row["y"]), float(row["z"])))
 
-    p_defaults = list(ht_cfg.get("default_p", [0.01, 0.99, 0.5]))
+    p_defaults = list(ht_cfg.get("default_p", [0.0, 0.99, 0.5]))
     while len(p_defaults) < 3:
         p_defaults.append(p_defaults[-1] if p_defaults else 0.5)
     w_defaults = list(ht_cfg.get("default_w", [100.0, 0.0, 0.0]))
@@ -2652,15 +2652,31 @@ def build_headless_simulation_defaults(
     occ = tuple(inst.get("occupancies", {}).get("default", [1.0, 1.0, 1.0]))
     av, cv = _parse_cif_cell_a_c(cif_file)
 
-    p_values = tuple(ht_cfg.get("default_p", [0.01, 0.99, 0.5]))
+    p_values = tuple(ht_cfg.get("default_p", [0.0, 0.99, 0.5]))
     w_defaults = np.asarray(
         ht_cfg.get("default_w", [100.0, 0.0, 0.0]),
         dtype=np.float64,
     )
     weights = w_defaults / (w_defaults.sum() if w_defaults.sum() else 1.0)
 
+    from ra_sim.gui import controllers as gui_controllers
+
     finite_stack_flag = bool(ht_cfg.get("finite_stack", True))
-    stack_layers_count = int(max(1, float(ht_cfg.get("stack_layers", 50))))
+    legacy_stack_layers_count = gui_controllers.normalize_finite_stack_layer_count(
+        ht_cfg.get("stack_layers", 50),
+        50,
+    )
+    if "film_thickness_nm" in ht_cfg:
+        film_thickness_nm = gui_controllers.normalize_finite_stack_thickness_nm(
+            ht_cfg.get("film_thickness_nm"),
+            gui_controllers.DEFAULT_FINITE_STACK_FILM_THICKNESS_NM,
+        )
+        stack_layers_count = gui_controllers.finite_stack_layers_from_thickness_nm(
+            film_thickness_nm=film_thickness_nm,
+            c_axis_angstrom=cv,
+        )
+    else:
+        stack_layers_count = legacy_stack_layers_count
     phase_delta_expression = stacking_fault.validate_phase_delta_expression(
         stacking_fault.normalize_phase_delta_expression(
             ht_cfg.get(

@@ -1,0 +1,581 @@
+{
+  "no_pruning": true,
+  "pruning_functions_called": false,
+  "source": "direct Qr=0 HT curve sampling; no SF-prune path",
+  "state_reference": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\geometry_fit_gui_states\\new4.json",
+  "analysis_bounds": {
+    "two_theta_min_deg": 0.5,
+    "two_theta_max_deg": 1.5,
+    "phi_min_deg": -20.0,
+    "phi_max_deg": 20.0
+  },
+  "geometry": {
+    "theta_initial_deg": 5.0,
+    "gamma_deg": 0.0,
+    "Gamma_deg": 0.0,
+    "chi_deg": 0.0,
+    "psi_deg": 0.0,
+    "psi_z_deg": 0.0,
+    "cor_angle_deg": 0.0,
+    "zs_m": 0.0,
+    "zb_m": -0.001,
+    "distance_m": 0.075,
+    "center_row_col_px": [
+      1596.422,
+      1453.12
+    ]
+  },
+  "simulation": {
+    "samples": 25,
+    "events_per_beam_phase": 50,
+    "optics_mode": "exact",
+    "solve_q_mode": "adaptive",
+    "solve_q_steps": 1000,
+    "solve_q_rel_tol": 0.0005,
+    "sigma_mosaic_deg": 5.0,
+    "gamma_mosaic_deg": 5.0,
+    "eta": 0.5,
+    "p0": 0.01,
+    "finite_stack": true,
+    "stack_layers": 50,
+    "rng_seed": 0
+  },
+  "qr_filter": {
+    "enabled_m_values": [
+      0
+    ],
+    "active_L_values": [
+      0.2,
+      0.4,
+      0.6,
+      0.8,
+      1.0,
+      1.2,
+      1.4,
+      1.6,
+      1.8,
+      2.0,
+      2.2,
+      2.4,
+      2.6,
+      2.8,
+      3.0,
+      3.2,
+      3.4,
+      3.6,
+      3.8,
+      4.0,
+      4.2,
+      4.4,
+      4.6,
+      4.8,
+      5.0,
+      5.2,
+      5.4,
+      5.6,
+      5.8,
+      6.0
+    ],
+    "cumulative_disable_thresholds": [
+      0.2,
+      0.4,
+      0.6,
+      0.8,
+      1.0,
+      1.2,
+      1.4,
+      1.6,
+      1.8,
+      2.0,
+      2.2,
+      2.4,
+      2.6,
+      2.8,
+      3.0,
+      3.2,
+      3.4,
+      3.6,
+      3.8,
+      4.0,
+      4.2,
+      4.4,
+      4.6,
+      4.8,
+      5.0,
+      5.2,
+      5.4,
+      5.6,
+      5.8,
+      6.0
+    ]
+  },
+  "per_L_stats": [
+    {
+      "L": 0.2,
+      "source_intensity": 100969717101.00441,
+      "image_sum": 6184747251365.494,
+      "image_max": 1320727535885.6355,
+      "caked_signal_sum": 6184747193996.071
+    },
+    {
+      "L": 0.4,
+      "source_intensity": 25242662263.53972,
+      "image_sum": 807374522666.4985,
+      "image_max": 127513562713.96027,
+      "caked_signal_sum": 807374535484.7906
+    },
+    {
+      "L": 0.6,
+      "source_intensity": 11194895891.746433,
+      "image_sum": 248816382527.24506,
+      "image_max": 32548029454.313377,
+      "caked_signal_sum": 248816382137.52762
+    },
+    {
+      "L": 0.8,
+      "source_intensity": 6266112657.080144,
+      "image_sum": 108651107679.28453,
+      "image_max": 9891483595.781,
+      "caked_signal_sum": 108651106547.95296
+    },
+    {
+      "L": 1.0,
+      "source_intensity": 3.455706527582983e-15,
+      "image_sum": 4.9751738615586855e-14,
+      "image_max": 2.8653970533401275e-15,
+      "caked_signal_sum": 4.9751738521932904e-14
+    },
+    {
+      "L": 1.2,
+      "source_intensity": 2721386570.173228,
+      "image_sum": 33799926675.489365,
+      "image_max": 2076502073.2237134,
+      "caked_signal_sum": 33799926418.58753
+    },
+    {
+      "L": 1.4,
+      "source_intensity": 1954718731.0625,
+      "image_sum": 21427029382.806164,
+      "image_max": 1040024031.0293072,
+      "caked_signal_sum": 21427029442.27688
+    },
+    {
+      "L": 1.6,
+      "source_intensity": 1444313043.8106787,
+      "image_sum": 11462963327.80237,
+      "image_max": 721497942.711236,
+      "caked_signal_sum": 11462963230.775698
+    },
+    {
+      "L": 1.8,
+      "source_intensity": 1078050222.6974638,
+      "image_sum": 9606369900.259706,
+      "image_max": 372263715.40723705,
+      "caked_signal_sum": 9606369937.731024
+    },
+    {
+      "L": 2.0,
+      "source_intensity": 3.162393464427994e-14,
+      "image_sum": 2.6307068941590696e-13,
+      "image_max": 1.0434887027538863e-14,
+      "caked_signal_sum": 2.630706877967246e-13
+    },
+    {
+      "L": 2.2,
+      "source_intensity": 553660123.5417025,
+      "image_sum": 4280520775.10017,
+      "image_max": 123010278.94444957,
+      "caked_signal_sum": 4280520780.999836
+    },
+    {
+      "L": 2.4,
+      "source_intensity": 327861299.94630694,
+      "image_sum": 2365069038.904001,
+      "image_max": 55388178.6266836,
+      "caked_signal_sum": 2365069031.3973722
+    },
+    {
+      "L": 2.6,
+      "source_intensity": 109611450.34501816,
+      "image_sum": 740080491.9725863,
+      "image_max": 16349853.107142523,
+      "caked_signal_sum": 740080489.5234685
+    },
+    {
+      "L": 2.8,
+      "source_intensity": 301791654.0361328,
+      "image_sum": 1911929701.3771143,
+      "image_max": 39310697.471790545,
+      "caked_signal_sum": 1911929687.95856
+    },
+    {
+      "L": 3.0,
+      "source_intensity": 3.80845101329519e+16,
+      "image_sum": 2.265311171219921e+17,
+      "image_max": 4304367550069643.0,
+      "caked_signal_sum": 2.265311166634855e+17
+    },
+    {
+      "L": 3.2,
+      "source_intensity": 4975261698.388335,
+      "image_sum": 27820926900.1077,
+      "image_max": 460554670.02484155,
+      "caked_signal_sum": 27820926951.40856
+    },
+    {
+      "L": 3.4,
+      "source_intensity": 2321029671.685101,
+      "image_sum": 12193982505.721022,
+      "image_max": 187594497.74563548,
+      "caked_signal_sum": 12193982503.131313
+    },
+    {
+      "L": 3.6,
+      "source_intensity": 1650988359.3173106,
+      "image_sum": 8147856651.1375,
+      "image_max": 117809357.80122809,
+      "caked_signal_sum": 8147856658.721639
+    },
+    {
+      "L": 3.8,
+      "source_intensity": 1366409547.1796875,
+      "image_sum": 6331501892.51426,
+      "image_max": 94793089.7422072,
+      "caked_signal_sum": 6331501902.630652
+    },
+    {
+      "L": 4.0,
+      "source_intensity": 6.411678063617786e-14,
+      "image_sum": 2.785697562790638e-13,
+      "image_max": 4.265000875025969e-15,
+      "caked_signal_sum": 2.7856975520294243e-13
+    },
+    {
+      "L": 4.2,
+      "source_intensity": 1163778082.3691268,
+      "image_sum": 4735069679.137119,
+      "image_max": 85347680.84335922,
+      "caked_signal_sum": 4735069702.355273
+    },
+    {
+      "L": 4.4,
+      "source_intensity": 1157668670.1047695,
+      "image_sum": 4407469856.949544,
+      "image_max": 46190107.25586387,
+      "caked_signal_sum": 4407469838.091759
+    },
+    {
+      "L": 4.6,
+      "source_intensity": 1206272670.9140625,
+      "image_sum": 4292030994.275321,
+      "image_max": 46445342.23287391,
+      "caked_signal_sum": 4292030989.327846
+    },
+    {
+      "L": 4.8,
+      "source_intensity": 1323945353.471744,
+      "image_sum": 4396204675.522068,
+      "image_max": 53587035.97428619,
+      "caked_signal_sum": 4396204677.396791
+    },
+    {
+      "L": 5.0,
+      "source_intensity": 2.650149039998276e-13,
+      "image_sum": 8.20144162324155e-13,
+      "image_max": 9.12386743778832e-15,
+      "caked_signal_sum": 8.201441586023076e-13
+    },
+    {
+      "L": 5.2,
+      "source_intensity": 1983486021.365422,
+      "image_sum": 5713659118.816344,
+      "image_max": 61341565.28793678,
+      "caked_signal_sum": 5713659121.178048
+    },
+    {
+      "L": 5.4,
+      "source_intensity": 2907314617.102806,
+      "image_sum": 7787091981.932503,
+      "image_max": 77493164.37823805,
+      "caked_signal_sum": 7787092015.106803
+    },
+    {
+      "L": 5.6,
+      "source_intensity": 5432863974.671875,
+      "image_sum": 13517015967.618372,
+      "image_max": 124538535.55070974,
+      "caked_signal_sum": 13517016039.967445
+    },
+    {
+      "L": 5.8,
+      "source_intensity": 18203695350.62226,
+      "image_sum": 42029439937.43282,
+      "image_max": 357280650.3456831,
+      "caked_signal_sum": 42029439684.53513
+    },
+    {
+      "L": 6.0,
+      "source_intensity": 3.0419260693726483e+17,
+      "image_sum": 6.510759828266031e+17,
+      "image_max": 5032605340922939.0,
+      "caked_signal_sum": 6.510759799039479e+17
+    }
+  ],
+  "case_summaries": [
+    {
+      "label": "disabled: none",
+      "disabled_through_L": null,
+      "radial_sum": 567129185810.1206,
+      "azimuthal_sum": 4021755944967.6133,
+      "positive_radial_points": 8,
+      "positive_azimuthal_points": 80
+    },
+    {
+      "label": "disabled L=0.2",
+      "disabled_through_L": 0.2,
+      "radial_sum": 112691.09332086881,
+      "azimuthal_sum": 942092.4281126168,
+      "positive_radial_points": 1,
+      "positive_azimuthal_points": 3
+    },
+    {
+      "label": "disabled L=0.2..0.4",
+      "disabled_through_L": 0.4,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..0.6",
+      "disabled_through_L": 0.6,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..0.8",
+      "disabled_through_L": 0.8,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..1.0",
+      "disabled_through_L": 1.0,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..1.2",
+      "disabled_through_L": 1.2,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..1.4",
+      "disabled_through_L": 1.4,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..1.6",
+      "disabled_through_L": 1.6,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..1.8",
+      "disabled_through_L": 1.8,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..2.0",
+      "disabled_through_L": 2.0,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..2.2",
+      "disabled_through_L": 2.2,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..2.4",
+      "disabled_through_L": 2.4,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..2.6",
+      "disabled_through_L": 2.6,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..2.8",
+      "disabled_through_L": 2.8,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..3.0",
+      "disabled_through_L": 3.0,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..3.2",
+      "disabled_through_L": 3.2,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..3.4",
+      "disabled_through_L": 3.4,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..3.6",
+      "disabled_through_L": 3.6,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..3.8",
+      "disabled_through_L": 3.8,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..4.0",
+      "disabled_through_L": 4.0,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..4.2",
+      "disabled_through_L": 4.2,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..4.4",
+      "disabled_through_L": 4.4,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..4.6",
+      "disabled_through_L": 4.6,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..4.8",
+      "disabled_through_L": 4.8,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..5.0",
+      "disabled_through_L": 5.0,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..5.2",
+      "disabled_through_L": 5.2,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..5.4",
+      "disabled_through_L": 5.4,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..5.6",
+      "disabled_through_L": 5.6,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..5.8",
+      "disabled_through_L": 5.8,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    },
+    {
+      "label": "disabled L=0.2..6.0",
+      "disabled_through_L": 6.0,
+      "radial_sum": 0.0,
+      "azimuthal_sum": 0.0,
+      "positive_radial_points": 0,
+      "positive_azimuthal_points": 0
+    }
+  ],
+  "outputs": {
+    "radial_png": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\l_disable_sweep_zb_neg_mosaic5_eta05_no_pruning_l0p2_to_l6_log\\radial_integration_l0p2_to_l6_disable_log.png",
+    "azimuthal_png": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\l_disable_sweep_zb_neg_mosaic5_eta05_no_pruning_l0p2_to_l6_log\\azimuthal_integration_l0p2_to_l6_disable_log.png",
+    "combined_png": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\l_disable_sweep_zb_neg_mosaic5_eta05_no_pruning_l0p2_to_l6_log\\radial_azimuthal_l0p2_to_l6_disable_log.png",
+    "radial_csv": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\l_disable_sweep_zb_neg_mosaic5_eta05_no_pruning_l0p2_to_l6_log\\radial_integration_l0p2_to_l6_disable_log.csv",
+    "azimuthal_csv": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\l_disable_sweep_zb_neg_mosaic5_eta05_no_pruning_l0p2_to_l6_log\\azimuthal_integration_l0p2_to_l6_disable_log.csv"
+  }
+}

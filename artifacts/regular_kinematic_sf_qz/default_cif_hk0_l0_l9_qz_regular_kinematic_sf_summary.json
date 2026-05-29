@@ -1,0 +1,72 @@
+{
+  "commit": "1c33501d",
+  "cif_path": "C:\\Users\\Kenpo\\OneDrive\\Research\\Rigaku XRD\\ORNL.07.25.2024\\Analysis\\Bi2Se3\\Bi2Se3.cif",
+  "cif_exists": true,
+  "a_angstrom": 4.143,
+  "c_angstrom": 28.636,
+  "lambda_angstrom": 1.54059,
+  "h": 0,
+  "k": 0,
+  "L_min": 0.0,
+  "L_max": 9.0,
+  "Qz_min_A_inv": 0.0,
+  "Qz_max_A_inv": 1.9747404583257535,
+  "L_step": 0.001,
+  "point_count": 9001,
+  "F2_min": 8.251372745023648e-28,
+  "F2_max": 604080.7744379264,
+  "F2_at_integer_L": [
+    {
+      "L": 0.0,
+      "Qz_A_inv": 0.0,
+      "F2": 604072.5591331389
+    },
+    {
+      "L": 1.0,
+      "Qz_A_inv": 0.2194156064806393,
+      "F2": 8.251372745023648e-28
+    },
+    {
+      "L": 2.0,
+      "Qz_A_inv": 0.4388312129612786,
+      "F2": 8.901305478257484e-27
+    },
+    {
+      "L": 3.0,
+      "Qz_A_inv": 0.6582468194419179,
+      "F2": 11563.923577901076
+    },
+    {
+      "L": 4.0,
+      "Qz_A_inv": 0.8776624259225572,
+      "F2": 2.1115412311966765e-26
+    },
+    {
+      "L": 5.0,
+      "Qz_A_inv": 1.0970780324031963,
+      "F2": 7.631882186255395e-26
+    },
+    {
+      "L": 6.0,
+      "Qz_A_inv": 1.3164936388838357,
+      "F2": 92364.80996367226
+    },
+    {
+      "L": 7.0,
+      "Qz_A_inv": 1.535909245364475,
+      "F2": 1.8139968970122435e-25
+    },
+    {
+      "L": 8.0,
+      "Qz_A_inv": 1.7553248518451143,
+      "F2": 4.2006218920821404e-26
+    },
+    {
+      "L": 9.0,
+      "Qz_A_inv": 1.9747404583257535,
+      "F2": 12205.644606981077
+    }
+  ],
+  "plot_path": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\regular_kinematic_sf_qz\\default_cif_hk0_l0_l9_qz_regular_kinematic_sf.png",
+  "csv_path": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\regular_kinematic_sf_qz\\default_cif_hk0_l0_l9_qz_regular_kinematic_sf.csv"
+}

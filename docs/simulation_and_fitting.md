@@ -1928,14 +1928,15 @@ and the runtime fallbacks are:
 
 | Name | Default | Role |
 | --- | --- | --- |
-| `hendricks_teller.default_p` | `[0.01, 0.99, 0.5]` | Three component stacking parameters shown in the GUI. |
+| `hendricks_teller.default_p` | `[0.0, 0.99, 0.5]` | Three component stacking parameters shown in the GUI. |
 | `hendricks_teller.default_w` | `[100.0, 0.0, 0.0]` | Raw component weights before normalization. |
 | `hendricks_teller.phase_delta_expression` | `"2*pi*((2*h + k)/3)"` | Default HT slip-phase expression. |
 | `hendricks_teller.phi_l_divisor` | `1.0` | Shared divisor for `L`-phase terms unless overridden. |
+| `hendricks_teller.film_thickness_nm` | `50.0` | User-facing finite-stack film thickness. |
 | `hendricks_teller.max_miller_index` | `19` | Maximum generated `(h, k)` range for rod caches. |
 | `hendricks_teller.include_rods` | `false` | Separate GUI flag for fractional-rod injection in the ordered structure model. |
 | runtime `finite_stack` fallback | `True` | Use finite-stack HT correction when config omits the key. |
-| runtime `stack_layers` fallback | `50` | Layer count used with `finite_stack=True` when config omits the key. |
+| runtime `stack_layers` value | derived | Integer layer count sent to the HT helpers, computed as `round(film_thickness_nm / (0.1 * c_axis_angstrom))` and clamped to at least one layer. |
 
 Raw weights are normalized by
 [`normalize_stacking_weight_values`](../ra_sim/gui/controllers.py), and

@@ -3498,12 +3498,13 @@ def create_finite_stack_controls(
     parent: tk.Misc,
     view_state: FiniteStackControlsViewState,
     finite_stack: bool,
+    film_thickness_nm: float,
     stack_layers: int,
     phi_l_divisor: float,
     phase_delta_expression: str,
     on_toggle_finite_stack: Callable[[], None],
-    on_layer_slider: Callable[[object], None],
-    on_commit_layer_entry: Callable[[object], None],
+    on_thickness_slider: Callable[[object], None],
+    on_commit_thickness_entry: Callable[[object], None],
     on_commit_phi_l_divisor_entry: Callable[[object], None],
     on_commit_phase_delta_expression_entry: Callable[[object], None],
 ) -> None:
@@ -3512,7 +3513,15 @@ def create_finite_stack_controls(
     frame = ttk.Frame(parent)
     frame.pack(fill=tk.X, padx=5, pady=5)
 
+    try:
+        thickness_value = float(film_thickness_nm)
+    except (TypeError, ValueError):
+        thickness_value = 50.0
+    if not math.isfinite(thickness_value) or thickness_value <= 0.0:
+        thickness_value = 50.0
+
     finite_stack_var = tk.BooleanVar(value=bool(finite_stack))
+    film_thickness_nm_var = tk.DoubleVar(value=float(thickness_value))
     stack_layers_var = tk.IntVar(value=int(stack_layers))
     phi_l_divisor_var = tk.DoubleVar(value=float(phi_l_divisor))
     phase_delta_expr_var = tk.StringVar(value=str(phase_delta_expression))
@@ -3525,33 +3534,33 @@ def create_finite_stack_controls(
     )
     finite_stack_checkbutton.pack(anchor=tk.W, padx=5, pady=2)
 
-    layers_row = ttk.Frame(frame)
-    layers_row.pack(fill=tk.X, padx=5, pady=2)
-    ttk.Label(layers_row, text="Layers:").grid(row=0, column=0, sticky="w")
+    thickness_row = ttk.Frame(frame)
+    thickness_row.pack(fill=tk.X, padx=5, pady=2)
+    ttk.Label(thickness_row, text="Film thickness (nm):").grid(row=0, column=0, sticky="w")
 
-    layers_entry_var = tk.StringVar(value=str(int(stack_layers)))
-    layers_entry = ttk.Entry(
-        layers_row,
-        textvariable=layers_entry_var,
+    film_thickness_entry_var = tk.StringVar(value=f"{thickness_value:.6g}")
+    film_thickness_entry = ttk.Entry(
+        thickness_row,
+        textvariable=film_thickness_entry_var,
         width=8,
         justify="right",
     )
-    layers_entry.grid(row=0, column=2, sticky="e", padx=(5, 0))
-    layers_entry.bind("<Return>", on_commit_layer_entry)
-    layers_entry.bind("<FocusOut>", on_commit_layer_entry)
+    film_thickness_entry.grid(row=0, column=2, sticky="e", padx=(5, 0))
+    film_thickness_entry.bind("<Return>", on_commit_thickness_entry)
+    film_thickness_entry.bind("<FocusOut>", on_commit_thickness_entry)
 
-    layers_scale = tk.Scale(
-        layers_row,
-        from_=1,
-        to=1000,
+    film_thickness_scale = tk.Scale(
+        thickness_row,
+        from_=0.1,
+        to=max(1000.0, float(thickness_value)),
         orient=tk.HORIZONTAL,
-        resolution=1,
+        resolution=0.1,
         showvalue=False,
-        variable=stack_layers_var,
-        command=on_layer_slider,
+        variable=film_thickness_nm_var,
+        command=on_thickness_slider,
     )
-    layers_scale.grid(row=0, column=1, sticky="ew", padx=(5, 5))
-    layers_row.columnconfigure(1, weight=1)
+    film_thickness_scale.grid(row=0, column=1, sticky="ew", padx=(5, 5))
+    thickness_row.columnconfigure(1, weight=1)
 
     phi_div_row = ttk.Frame(frame)
     phi_div_row.pack(fill=tk.X, padx=5, pady=2)
@@ -3583,11 +3592,16 @@ def create_finite_stack_controls(
     view_state.frame = frame
     view_state.finite_stack_var = finite_stack_var
     view_state.finite_stack_checkbutton = finite_stack_checkbutton
-    view_state.layers_row = layers_row
+    view_state.thickness_row = thickness_row
+    view_state.film_thickness_nm_var = film_thickness_nm_var
+    view_state.film_thickness_scale = film_thickness_scale
+    view_state.film_thickness_entry_var = film_thickness_entry_var
+    view_state.film_thickness_entry = film_thickness_entry
+    view_state.layers_row = thickness_row
     view_state.stack_layers_var = stack_layers_var
-    view_state.layers_scale = layers_scale
-    view_state.layers_entry_var = layers_entry_var
-    view_state.layers_entry = layers_entry
+    view_state.layers_scale = film_thickness_scale
+    view_state.layers_entry_var = film_thickness_entry_var
+    view_state.layers_entry = film_thickness_entry
     view_state.phi_l_divisor_var = phi_l_divisor_var
     view_state.phi_l_divisor_entry_var = phi_l_divisor_entry_var
     view_state.phi_l_divisor_entry = phi_l_divisor_entry
@@ -3596,43 +3610,79 @@ def create_finite_stack_controls(
     view_state.phase_delta_entry = phase_delta_entry
 
 
+def set_finite_stack_thickness_controls_enabled(
+    view_state: FiniteStackControlsViewState,
+    *,
+    enabled: bool,
+) -> None:
+    """Enable or disable the finite-stack film-thickness slider and entry."""
+
+    state_value = tk.NORMAL if enabled else tk.DISABLED
+    _configure_widget_state(
+        getattr(view_state, "film_thickness_scale", None) or view_state.layers_scale,
+        state_value,
+    )
+    _configure_widget_state(
+        getattr(view_state, "film_thickness_entry", None) or view_state.layers_entry,
+        state_value,
+    )
+
+
 def set_finite_stack_layer_controls_enabled(
     view_state: FiniteStackControlsViewState,
     *,
     enabled: bool,
 ) -> None:
-    """Enable or disable the finite-stack layer slider and entry."""
+    """Backward-compatible wrapper for finite-stack thickness controls."""
 
-    state_value = tk.NORMAL if enabled else tk.DISABLED
-    _configure_widget_state(view_state.layers_scale, state_value)
-    _configure_widget_state(view_state.layers_entry, state_value)
+    set_finite_stack_thickness_controls_enabled(view_state, enabled=enabled)
+
+
+def ensure_finite_stack_thickness_scale_max(
+    view_state: FiniteStackControlsViewState,
+    minimum_to: float,
+) -> None:
+    """Ensure the finite-stack thickness slider can reach at least ``minimum_to``."""
+
+    scale = getattr(view_state, "film_thickness_scale", None) or view_state.layers_scale
+    if scale is None:
+        return
+    try:
+        current_to = float(scale.cget("to"))
+    except Exception:
+        current_to = float(minimum_to)
+    if float(minimum_to) > current_to:
+        scale.configure(to=float(minimum_to))
 
 
 def ensure_finite_stack_layer_scale_max(
     view_state: FiniteStackControlsViewState,
     minimum_to: int,
 ) -> None:
-    """Ensure the finite-stack layer slider can reach at least ``minimum_to``."""
+    """Backward-compatible wrapper for the finite-stack thickness slider."""
 
-    if view_state.layers_scale is None:
-        return
-    try:
-        current_to = int(round(float(view_state.layers_scale.cget("to"))))
-    except Exception:
-        current_to = int(minimum_to)
-    if int(minimum_to) > current_to:
-        view_state.layers_scale.configure(to=int(minimum_to))
+    ensure_finite_stack_thickness_scale_max(view_state, float(minimum_to))
+
+
+def set_finite_stack_thickness_entry_text(
+    view_state: FiniteStackControlsViewState,
+    text: str,
+) -> None:
+    """Update the finite-stack film-thickness entry text."""
+
+    entry_var = getattr(view_state, "film_thickness_entry_var", None) or view_state.layers_entry_var
+    setter = getattr(entry_var, "set", None)
+    if callable(setter):
+        setter(str(text))
 
 
 def set_finite_stack_layer_entry_text(
     view_state: FiniteStackControlsViewState,
     text: str,
 ) -> None:
-    """Update the finite-stack layer entry text."""
+    """Backward-compatible wrapper for the finite-stack thickness entry."""
 
-    setter = getattr(view_state.layers_entry_var, "set", None)
-    if callable(setter):
-        setter(str(text))
+    set_finite_stack_thickness_entry_text(view_state, text)
 
 
 def set_finite_stack_phi_l_divisor_entry_text(

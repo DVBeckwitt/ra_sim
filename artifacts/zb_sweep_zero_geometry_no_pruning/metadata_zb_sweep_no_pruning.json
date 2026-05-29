@@ -1,0 +1,151 @@
+{
+  "no_pruning": true,
+  "pruning_functions_called": false,
+  "source": "direct Qr=0 qr_dict filtering to L=0.01..0.20; no SF-prune path",
+  "state_reference_for_structure_sampling_detector": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\geometry_fit_gui_states\\new4.json",
+  "analysis_bounds": {
+    "two_theta_min_deg": 0.5,
+    "two_theta_max_deg": 1.5,
+    "phi_min_deg": -20.0,
+    "phi_max_deg": 20.0
+  },
+  "geometry": {
+    "theta_initial_deg": 5.0,
+    "gamma_deg": 0.0,
+    "Gamma_deg": 0.0,
+    "chi_deg": 0.0,
+    "psi_deg": 0.0,
+    "psi_z_deg": 0.0,
+    "cor_angle_deg": 0.0,
+    "zs_m": 0.0,
+    "zb_sweep_m": [
+      0.0,
+      -0.0005,
+      -0.001,
+      -0.0015,
+      -0.002,
+      -0.0025,
+      -0.003
+    ],
+    "distance_m": 0.075,
+    "center_row_col_px": [
+      1596.422,
+      1453.12
+    ]
+  },
+  "simulation": {
+    "samples": 25,
+    "events_per_beam_phase": 50,
+    "optics_mode": "exact",
+    "solve_q_mode": "adaptive",
+    "solve_q_steps": 1000,
+    "solve_q_rel_tol": 0.0005,
+    "sigma_mosaic_deg": 1.0,
+    "gamma_mosaic_deg": 0.5,
+    "eta": 0.0,
+    "p0": 0.01,
+    "weight0": 100.0,
+    "finite_stack": true,
+    "stack_layers": 50,
+    "rng_seed": 0
+  },
+  "qr_filter": {
+    "enabled_m_values": [
+      0
+    ],
+    "enabled_L": [
+      0.01,
+      0.02,
+      0.03,
+      0.04,
+      0.05,
+      0.06,
+      0.07,
+      0.08,
+      0.09,
+      0.1,
+      0.11,
+      0.12,
+      0.13,
+      0.14,
+      0.15,
+      0.16,
+      0.17,
+      0.18,
+      0.19,
+      0.2
+    ]
+  },
+  "profiles": [
+    {
+      "zb": 0.0,
+      "image_sum": 6736392655048390.0,
+      "image_max": 3223505729215008.0,
+      "radial_sum": 9820952486.836794,
+      "radial_max": 9820952486.836794,
+      "azimuth_sum": 30087434661.472324,
+      "azimuth_max": 4518462720.478016
+    },
+    {
+      "zb": -0.0005,
+      "image_sum": 6736392655048390.0,
+      "image_max": 3212930812790564.0,
+      "radial_sum": 23398358238824.203,
+      "radial_max": 15392327264039.502,
+      "azimuth_sum": 76874281588168.62,
+      "azimuth_max": 3028348522196.53
+    },
+    {
+      "zb": -0.001,
+      "image_sum": 6736392655048390.0,
+      "image_max": 3201632195297718.5,
+      "radial_sum": 1037257071544048.8,
+      "radial_max": 606371159217461.5,
+      "azimuth_sum": 4512961128523272.0,
+      "azimuth_max": 266490337934488.03
+    },
+    {
+      "zb": -0.0015,
+      "image_sum": 6736392655048391.0,
+      "image_max": 3191025683329738.0,
+      "radial_sum": 693921190925548.1,
+      "radial_max": 298856248473422.94,
+      "azimuth_sum": 4512824007217463.0,
+      "azimuth_max": 395264130646113.25
+    },
+    {
+      "zb": -0.002,
+      "image_sum": 6736392655048390.0,
+      "image_max": 3163445073806122.0,
+      "radial_sum": 173585896174055.12,
+      "radial_max": 145276170191285.5,
+      "azimuth_sum": 1440854981423918.0,
+      "azimuth_max": 160679644094284.06
+    },
+    {
+      "zb": -0.0025,
+      "image_sum": 6736392655048391.0,
+      "image_max": 3127620144432420.0,
+      "radial_sum": 0.0,
+      "radial_max": 0.0,
+      "azimuth_sum": 0.0,
+      "azimuth_max": 0.0
+    },
+    {
+      "zb": -0.003,
+      "image_sum": 6736392655048390.0,
+      "image_max": 3071810226419615.5,
+      "radial_sum": 0.0,
+      "radial_max": 0.0,
+      "azimuth_sum": 0.0,
+      "azimuth_max": 0.0
+    }
+  ],
+  "outputs": {
+    "radial_png": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\zb_sweep_zero_geometry_no_pruning\\radial_integration_zb_sweep_no_pruning.png",
+    "azimuthal_png": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\zb_sweep_zero_geometry_no_pruning\\azimuthal_integration_zb_sweep_no_pruning.png",
+    "combined_png": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\zb_sweep_zero_geometry_no_pruning\\radial_azimuthal_integration_zb_sweep_no_pruning.png",
+    "radial_csv": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\zb_sweep_zero_geometry_no_pruning\\radial_integration_zb_sweep_no_pruning.csv",
+    "azimuthal_csv": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\zb_sweep_zero_geometry_no_pruning\\azimuthal_integration_zb_sweep_no_pruning.csv"
+  }
+}

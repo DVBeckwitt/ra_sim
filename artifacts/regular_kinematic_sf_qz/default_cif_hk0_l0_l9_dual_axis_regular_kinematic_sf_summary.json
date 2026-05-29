@@ -1,0 +1,20 @@
+{
+  "commit": "1c33501d",
+  "cif_path": "C:\\Users\\Kenpo\\OneDrive\\Research\\Rigaku XRD\\ORNL.07.25.2024\\Analysis\\Bi2Se3\\Bi2Se3.cif",
+  "cif_exists": true,
+  "a_angstrom": 4.143,
+  "c_angstrom": 28.636,
+  "lambda_angstrom": 1.54059,
+  "h": 0,
+  "k": 0,
+  "L_min": 0.0,
+  "L_max": 9.0,
+  "Qz_min_A_inv": 0.0,
+  "Qz_max_A_inv": 1.9747404583257535,
+  "L_step": 0.001,
+  "point_count": 9001,
+  "F2_min": 8.251372745023648e-28,
+  "F2_max": 604080.7744379264,
+  "plot_path": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\regular_kinematic_sf_qz\\default_cif_hk0_l0_l9_dual_axis_regular_kinematic_sf.png",
+  "csv_path": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\regular_kinematic_sf_qz\\default_cif_hk0_l0_l9_dual_axis_regular_kinematic_sf.csv"
+}

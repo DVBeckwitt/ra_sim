@@ -1823,7 +1823,7 @@ def _initialize_runtime_state_block_05() -> None:
 
     energy = 6.62607e-34 * 2.99792458e8 / (lambda_ * 1e-10) / (1.602176634e-19)  # keV
 
-    p_defaults = _ensure_triplet(hendricks_config.get("default_p"), [0.01, 0.99, 0.5])
+    p_defaults = _ensure_triplet(hendricks_config.get("default_p"), [0.0, 0.99, 0.5])
     w_defaults = _ensure_triplet(hendricks_config.get("default_w"), [100.0, 0.0, 0.0])
     phase_delta_expression_default = normalize_phase_delta_expression(
         hendricks_config.get(
@@ -1846,7 +1846,23 @@ def _initialize_runtime_state_block_05() -> None:
         fallback=DEFAULT_PHI_L_DIVISOR,
     )
     finite_stack_default = bool(hendricks_config.get("finite_stack", True))
-    stack_layers_default = int(max(1, float(hendricks_config.get("stack_layers", 50))))
+    legacy_stack_layers_default = gui_controllers.normalize_finite_stack_layer_count(
+        hendricks_config.get("stack_layers", 50),
+        50,
+    )
+    if "film_thickness_nm" in hendricks_config:
+        film_thickness_nm_default = gui_controllers.normalize_finite_stack_thickness_nm(
+            hendricks_config.get("film_thickness_nm"),
+            gui_controllers.DEFAULT_FINITE_STACK_FILM_THICKNESS_NM,
+        )
+    elif "stack_layers" in hendricks_config:
+        film_thickness_nm_default = float(legacy_stack_layers_default) * float(cv) * 0.1
+    else:
+        film_thickness_nm_default = gui_controllers.DEFAULT_FINITE_STACK_FILM_THICKNESS_NM
+    stack_layers_default = gui_controllers.finite_stack_layers_from_thickness_nm(
+        film_thickness_nm=film_thickness_nm_default,
+        c_axis_angstrom=cv,
+    )
     try:
         iodine_z_default = _infer_iodine_z_like_diffuse(str(cif_file))
     except Exception:
@@ -1902,6 +1918,7 @@ def _initialize_runtime_state_block_05() -> None:
             "solve_q_rel_tol": solve_q_rel_tol_default,
             "solve_q_mode": solve_q_mode_default,
             "finite_stack": finite_stack_default,
+            "film_thickness_nm": film_thickness_nm_default,
             "stack_layers": stack_layers_default,
             "optics_mode": "exact",
             "ordered_structure_scale": 1.0,
@@ -27645,7 +27662,9 @@ def reset_to_defaults():
     w1_var.set(defaults["w1"])
     w2_var.set(defaults["w2"])
     finite_stack_var.set(defaults["finite_stack"])
-    stack_layers_var.set(int(defaults["stack_layers"]))
+    film_thickness_nm_var.set(float(defaults["film_thickness_nm"]))
+    _sync_thickness_entry_from_var()
+    stack_layers_var.set(_current_stack_layers())
     phase_delta_expr_var.set(str(defaults["phase_delta_expression"]))
     phi_l_divisor_var.set(float(defaults["phi_l_divisor"]))
     ordered_structure_fit_debye_x_var.set(True)
@@ -28527,6 +28546,7 @@ def _apply_full_gui_state_snapshot(snapshot: dict[str, object]) -> str:
             )
         )
         _apply_loaded_sample_count_default(variables)
+        _sync_finite_stack_thickness_after_state_restore(variables)
     if bool(structure_model_state.has_second_cif):
         try:
             update_weights()
@@ -28813,6 +28833,7 @@ def _import_full_gui_state() -> None:
                 finite_stack_controls_view_state,
                 gui_controllers.format_finite_stack_phi_l_divisor(_current_phi_l_divisor()),
             )
+        _sync_finite_stack_thickness_after_state_restore({})
         _sync_finite_controls()
         _apply_rod_points_per_gz(trigger_update=False)
         ensure_valid_resolution_choice()
@@ -36795,7 +36816,7 @@ def on_fit_ordered_structure_click():
             a_axis=base_a,
             c_axis=base_c,
             finite_stack_flag=bool(finite_stack_var.get()),
-            layers=int(max(1, stack_layers_var.get())),
+            layers=_current_stack_layers(c_axis_angstrom=base_c),
             phase_delta_expression_current=_current_phase_delta_expression(),
             phi_l_divisor_current=_current_phi_l_divisor(),
             atom_site_values=[tuple(values) for values in local_atom_values],
@@ -47558,7 +47579,7 @@ def _rebuild_diffraction_inputs(
         a_axis=a_axis,
         c_axis=c_axis,
         finite_stack_flag=bool(finite_stack_var.get()),
-        layers=int(max(1, stack_layers_var.get())),
+        layers=_current_stack_layers(c_axis_angstrom=c_axis),
         phase_delta_expression_current=_current_phase_delta_expression(),
         phi_l_divisor_current=_current_phi_l_divisor(),
         atom_site_values=_current_atom_site_fractional_values(),
@@ -47638,19 +47659,65 @@ def _sync_finite_controls():
         finite_stack_controls_view_state.finite_stack_var is not None
         and finite_stack_controls_view_state.finite_stack_var.get()
     )
-    gui_views.set_finite_stack_layer_controls_enabled(
+    gui_views.set_finite_stack_thickness_controls_enabled(
         finite_stack_controls_view_state,
         enabled=enabled,
     )
 
 
-def _normalize_layer_value(raw_value):
-    fallback = (
-        stack_layers_var.get()
-        if finite_stack_controls_view_state.stack_layers_var is not None
-        else 1
+def _current_c_axis_angstrom():
+    try:
+        c_axis_value = float(c_var.get())
+    except (tk.TclError, TypeError, ValueError):
+        c_axis_value = float(defaults["c"])
+    return c_axis_value
+
+
+def _current_film_thickness_nm():
+    default_thickness = defaults.get(
+        "film_thickness_nm",
+        gui_controllers.DEFAULT_FINITE_STACK_FILM_THICKNESS_NM,
     )
-    return gui_controllers.normalize_finite_stack_layer_count(raw_value, fallback)
+    if finite_stack_controls_view_state.film_thickness_nm_var is None:
+        raw_value = default_thickness
+        fallback = default_thickness
+    else:
+        raw_value = film_thickness_nm_var.get()
+        fallback = raw_value
+    return gui_controllers.normalize_finite_stack_thickness_nm(raw_value, fallback)
+
+
+def _current_stack_layers(*, c_axis_angstrom=None):
+    current_c_axis = _current_c_axis_angstrom()
+    c_axis_value = current_c_axis if c_axis_angstrom is None else c_axis_angstrom
+    layers = gui_controllers.finite_stack_layers_from_thickness_nm(
+        film_thickness_nm=_current_film_thickness_nm(),
+        c_axis_angstrom=c_axis_value,
+    )
+    try:
+        update_internal = c_axis_angstrom is None or math.isclose(
+            float(c_axis_value),
+            float(current_c_axis),
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        )
+    except (TypeError, ValueError):
+        update_internal = False
+    try:
+        if (
+            update_internal
+            and finite_stack_controls_view_state.stack_layers_var is not None
+            and stack_layers_var.get() != layers
+        ):
+            stack_layers_var.set(layers)
+    except (tk.TclError, TypeError, ValueError):
+        pass
+    return layers
+
+
+def _normalize_thickness_value(raw_value):
+    fallback = _current_film_thickness_nm()
+    return gui_controllers.normalize_finite_stack_thickness_nm(raw_value, fallback)
 
 
 def _normalize_phase_delta_expression_value(raw_value):
@@ -47668,31 +47735,58 @@ def _normalize_phi_l_divisor_value(raw_value):
     )
 
 
-def _sync_layer_entry_from_var(*_):
-    if finite_stack_controls_view_state.layers_entry_var is None:
+def _sync_thickness_entry_from_var(*_):
+    if finite_stack_controls_view_state.film_thickness_entry_var is None:
         return
-    normalized = gui_controllers.format_finite_stack_layer_count(stack_layers_var.get())
-    if finite_stack_controls_view_state.layers_entry_var.get().strip() != normalized:
-        gui_views.set_finite_stack_layer_entry_text(
+    normalized = gui_controllers.format_finite_stack_thickness_nm(
+        _current_film_thickness_nm()
+    )
+    if finite_stack_controls_view_state.film_thickness_entry_var.get().strip() != normalized:
+        gui_views.set_finite_stack_thickness_entry_text(
             finite_stack_controls_view_state,
             normalized,
         )
 
 
-def _commit_layer_entry(_event=None):
-    if finite_stack_controls_view_state.layers_entry_var is None:
+def _commit_thickness_entry(_event=None):
+    if finite_stack_controls_view_state.film_thickness_entry_var is None:
         return
-    value = _normalize_layer_value(finite_stack_controls_view_state.layers_entry_var.get())
-    gui_views.ensure_finite_stack_layer_scale_max(
+    value = _normalize_thickness_value(
+        finite_stack_controls_view_state.film_thickness_entry_var.get()
+    )
+    gui_views.ensure_finite_stack_thickness_scale_max(
         finite_stack_controls_view_state,
         value,
     )
-    changed = stack_layers_var.get() != value
+    current = _current_film_thickness_nm()
+    changed = not math.isclose(current, value, rel_tol=1e-12, abs_tol=1e-12)
     if changed:
-        stack_layers_var.set(value)
-    _sync_layer_entry_from_var()
+        film_thickness_nm_var.set(float(value))
+    _sync_thickness_entry_from_var()
+    _current_stack_layers()
     if changed and finite_stack_var.get():
         update_occupancies()
+
+
+def _sync_finite_stack_thickness_after_state_restore(saved_variables):
+    if finite_stack_controls_view_state.film_thickness_nm_var is None:
+        return
+    if not isinstance(saved_variables, Mapping):
+        saved_variables = {}
+    restored_thickness = None
+    if "film_thickness_nm_var" not in saved_variables and "stack_layers_var" in saved_variables:
+        legacy_layers = gui_controllers.normalize_finite_stack_layer_count(
+            saved_variables.get("stack_layers_var"),
+            defaults.get("stack_layers", 1),
+        )
+        c_axis_value = _current_c_axis_angstrom()
+        if np.isfinite(c_axis_value) and c_axis_value > 0.0:
+            restored_thickness = float(legacy_layers) * float(c_axis_value) * 0.1
+    if restored_thickness is None:
+        restored_thickness = _current_film_thickness_nm()
+    film_thickness_nm_var.set(restored_thickness)
+    _sync_thickness_entry_from_var()
+    _current_stack_layers()
 
 
 def _commit_phase_delta_expression_entry(_event=None):
@@ -47762,11 +47856,17 @@ def _on_finite_toggle():
     update_occupancies()
 
 
-def _on_layer_slider(val):
-    value = _normalize_layer_value(val)
-    if stack_layers_var.get() != value:
-        stack_layers_var.set(value)
-    _sync_layer_entry_from_var()
+def _on_thickness_slider(val):
+    value = _normalize_thickness_value(val)
+    if not math.isclose(
+        _current_film_thickness_nm(),
+        value,
+        rel_tol=1e-12,
+        abs_tol=1e-12,
+    ):
+        film_thickness_nm_var.set(float(value))
+    _sync_thickness_entry_from_var()
+    _current_stack_layers()
     if finite_stack_var.get():
         update_occupancies()
 
@@ -47917,6 +48017,7 @@ def _rebuild_ordered_structure_fit_selection_controls() -> None:
 def _initialize_runtime_controls_block_54() -> None:
     global \
         finite_stack_var, \
+        film_thickness_nm_var, \
         stack_layers_var, \
         phase_delta_expr_var, \
         phi_l_divisor_var, \
@@ -47953,21 +48054,24 @@ def _initialize_runtime_controls_block_54() -> None:
         parent=stacking_parameter_controls_view_state.stack_frame.frame,
         view_state=finite_stack_controls_view_state,
         finite_stack=bool(defaults["finite_stack"]),
+        film_thickness_nm=float(defaults["film_thickness_nm"]),
         stack_layers=int(defaults["stack_layers"]),
         phi_l_divisor=float(defaults["phi_l_divisor"]),
         phase_delta_expression=str(defaults["phase_delta_expression"]),
         on_toggle_finite_stack=_on_finite_toggle,
-        on_layer_slider=_on_layer_slider,
-        on_commit_layer_entry=_commit_layer_entry,
+        on_thickness_slider=_on_thickness_slider,
+        on_commit_thickness_entry=_commit_thickness_entry,
         on_commit_phi_l_divisor_entry=_commit_phi_l_divisor_entry,
         on_commit_phase_delta_expression_entry=_commit_phase_delta_expression_entry,
     )
     finite_stack_var = finite_stack_controls_view_state.finite_stack_var
+    film_thickness_nm_var = finite_stack_controls_view_state.film_thickness_nm_var
     stack_layers_var = finite_stack_controls_view_state.stack_layers_var
     phase_delta_expr_var = finite_stack_controls_view_state.phase_delta_expr_var
     phi_l_divisor_var = finite_stack_controls_view_state.phi_l_divisor_var
-    stack_layers_var.trace_add("write", _sync_layer_entry_from_var)
-    _sync_layer_entry_from_var()
+    film_thickness_nm_var.trace_add("write", _sync_thickness_entry_from_var)
+    _sync_thickness_entry_from_var()
+    _current_stack_layers()
     _sync_finite_controls()
     phi_l_divisor_var.trace_add("write", _sync_phi_l_divisor_entry_from_var)
     _sync_phi_l_divisor_entry_from_var()
@@ -48430,7 +48534,7 @@ def _build_diffuse_ht_request():
         mx=int(mx),
         two_theta_range=two_theta_range,
         finite_stack=bool(finite_stack_var.get()),
-        stack_layers=int(max(1, stack_layers_var.get())),
+        stack_layers=_current_stack_layers(c_axis_angstrom=c_var.get()),
         phase_delta_expression=_current_phase_delta_expression(),
         phi_l_divisor=_current_phi_l_divisor(),
         rod_points_per_gz=_current_rod_points_per_gz(),
@@ -49251,6 +49355,7 @@ def main(write_excel_flag=None, startup_mode="prompt", calibrant_bundle=None):
                         finite_stack_controls_view_state,
                         gui_controllers.format_finite_stack_phi_l_divisor(_current_phi_l_divisor()),
                     )
+                _sync_finite_stack_thickness_after_state_restore({})
                 _apply_rod_points_per_gz(trigger_update=False)
                 ensure_valid_resolution_choice()
                 profile_loaded = True

@@ -1,0 +1,652 @@
+{
+  "no_pruning": true,
+  "pruning_functions_called": false,
+  "source": "direct Qr=0 qr_dict filtering; no SF-prune path",
+  "state_reference_for_structure_sampling_detector": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\geometry_fit_gui_states\\new4.json",
+  "analysis_bounds": {
+    "two_theta_min_deg": 0.5,
+    "two_theta_max_deg": 1.5,
+    "phi_min_deg": -20.0,
+    "phi_max_deg": 20.0
+  },
+  "geometry": {
+    "theta_initial_deg": 5.0,
+    "gamma_deg": 0.0,
+    "Gamma_deg": 0.0,
+    "chi_deg": 0.0,
+    "psi_deg": 0.0,
+    "psi_z_deg": 0.0,
+    "cor_angle_deg": 0.0,
+    "zs_m": 0.0,
+    "zb_m": 0.001,
+    "distance_m": 0.075,
+    "center_row_col_px": [
+      1596.422,
+      1453.12
+    ]
+  },
+  "simulation": {
+    "samples": 25,
+    "events_per_beam_phase": 50,
+    "optics_mode": "exact",
+    "solve_q_mode": "adaptive",
+    "solve_q_steps": 1000,
+    "solve_q_rel_tol": 0.0005,
+    "sigma_mosaic_deg": 5.0,
+    "gamma_mosaic_deg": 5.0,
+    "eta": 0.5,
+    "p0": 0.01,
+    "weight0": 100.0,
+    "finite_stack": true,
+    "stack_layers": 50,
+    "rng_seed": 0
+  },
+  "qr_filter": {
+    "enabled_m_values": [
+      0
+    ],
+    "enabled_initial_L": [
+      0.01,
+      0.02,
+      0.03,
+      0.04,
+      0.05,
+      0.06,
+      0.07,
+      0.08,
+      0.09,
+      0.1,
+      0.11,
+      0.12,
+      0.13,
+      0.14,
+      0.15,
+      0.16,
+      0.17,
+      0.18,
+      0.19,
+      0.2
+    ],
+    "cumulative_disable_cases": [
+      {
+        "label": "none disabled",
+        "disabled_through_L": null,
+        "enabled_L": [
+          0.01,
+          0.02,
+          0.03,
+          0.04,
+          0.05,
+          0.06,
+          0.07,
+          0.08,
+          0.09,
+          0.1,
+          0.11,
+          0.12,
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "radial_sum": 0.0,
+        "azimuth_sum": 0.0,
+        "radial_max": 0.0,
+        "azimuth_max": 0.0
+      },
+      {
+        "label": "L<=0.01 disabled",
+        "disabled_through_L": 0.01,
+        "enabled_L": [
+          0.02,
+          0.03,
+          0.04,
+          0.05,
+          0.06,
+          0.07,
+          0.08,
+          0.09,
+          0.1,
+          0.11,
+          0.12,
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "radial_sum": 0.0,
+        "azimuth_sum": 0.0,
+        "radial_max": 0.0,
+        "azimuth_max": 0.0
+      },
+      {
+        "label": "L<=0.02 disabled",
+        "disabled_through_L": 0.02,
+        "enabled_L": [
+          0.03,
+          0.04,
+          0.05,
+          0.06,
+          0.07,
+          0.08,
+          0.09,
+          0.1,
+          0.11,
+          0.12,
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "radial_sum": 0.0,
+        "azimuth_sum": 0.0,
+        "radial_max": 0.0,
+        "azimuth_max": 0.0
+      },
+      {
+        "label": "L<=0.03 disabled",
+        "disabled_through_L": 0.03,
+        "enabled_L": [
+          0.04,
+          0.05,
+          0.06,
+          0.07,
+          0.08,
+          0.09,
+          0.1,
+          0.11,
+          0.12,
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "radial_sum": 0.0,
+        "azimuth_sum": 0.0,
+        "radial_max": 0.0,
+        "azimuth_max": 0.0
+      },
+      {
+        "label": "L<=0.04 disabled",
+        "disabled_through_L": 0.04,
+        "enabled_L": [
+          0.05,
+          0.06,
+          0.07,
+          0.08,
+          0.09,
+          0.1,
+          0.11,
+          0.12,
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "radial_sum": 0.0,
+        "azimuth_sum": 0.0,
+        "radial_max": 0.0,
+        "azimuth_max": 0.0
+      },
+      {
+        "label": "L<=0.05 disabled",
+        "disabled_through_L": 0.05,
+        "enabled_L": [
+          0.06,
+          0.07,
+          0.08,
+          0.09,
+          0.1,
+          0.11,
+          0.12,
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "radial_sum": 0.0,
+        "azimuth_sum": 0.0,
+        "radial_max": 0.0,
+        "azimuth_max": 0.0
+      },
+      {
+        "label": "L<=0.06 disabled",
+        "disabled_through_L": 0.06,
+        "enabled_L": [
+          0.07,
+          0.08,
+          0.09,
+          0.1,
+          0.11,
+          0.12,
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "radial_sum": 0.0,
+        "azimuth_sum": 0.0,
+        "radial_max": 0.0,
+        "azimuth_max": 0.0
+      },
+      {
+        "label": "L<=0.07 disabled",
+        "disabled_through_L": 0.07,
+        "enabled_L": [
+          0.08,
+          0.09,
+          0.1,
+          0.11,
+          0.12,
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "radial_sum": 0.0,
+        "azimuth_sum": 0.0,
+        "radial_max": 0.0,
+        "azimuth_max": 0.0
+      },
+      {
+        "label": "L<=0.08 disabled",
+        "disabled_through_L": 0.08,
+        "enabled_L": [
+          0.09,
+          0.1,
+          0.11,
+          0.12,
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "radial_sum": 0.0,
+        "azimuth_sum": 0.0,
+        "radial_max": 0.0,
+        "azimuth_max": 0.0
+      },
+      {
+        "label": "L<=0.09 disabled",
+        "disabled_through_L": 0.09,
+        "enabled_L": [
+          0.1,
+          0.11,
+          0.12,
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "radial_sum": 0.0,
+        "azimuth_sum": 0.0,
+        "radial_max": 0.0,
+        "azimuth_max": 0.0
+      },
+      {
+        "label": "L<=0.10 disabled",
+        "disabled_through_L": 0.1,
+        "enabled_L": [
+          0.11,
+          0.12,
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "radial_sum": 0.0,
+        "azimuth_sum": 0.0,
+        "radial_max": 0.0,
+        "azimuth_max": 0.0
+      },
+      {
+        "label": "L<=0.11 disabled",
+        "disabled_through_L": 0.11,
+        "enabled_L": [
+          0.12,
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "radial_sum": 0.0,
+        "azimuth_sum": 0.0,
+        "radial_max": 0.0,
+        "azimuth_max": 0.0
+      },
+      {
+        "label": "L<=0.12 disabled",
+        "disabled_through_L": 0.12,
+        "enabled_L": [
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "radial_sum": 0.0,
+        "azimuth_sum": 0.0,
+        "radial_max": 0.0,
+        "azimuth_max": 0.0
+      },
+      {
+        "label": "L<=0.13 disabled",
+        "disabled_through_L": 0.13,
+        "enabled_L": [
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "radial_sum": 0.0,
+        "azimuth_sum": 0.0,
+        "radial_max": 0.0,
+        "azimuth_max": 0.0
+      },
+      {
+        "label": "L<=0.14 disabled",
+        "disabled_through_L": 0.14,
+        "enabled_L": [
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "radial_sum": 0.0,
+        "azimuth_sum": 0.0,
+        "radial_max": 0.0,
+        "azimuth_max": 0.0
+      },
+      {
+        "label": "L<=0.15 disabled",
+        "disabled_through_L": 0.15,
+        "enabled_L": [
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "radial_sum": 0.0,
+        "azimuth_sum": 0.0,
+        "radial_max": 0.0,
+        "azimuth_max": 0.0
+      },
+      {
+        "label": "L<=0.16 disabled",
+        "disabled_through_L": 0.16,
+        "enabled_L": [
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "radial_sum": 0.0,
+        "azimuth_sum": 0.0,
+        "radial_max": 0.0,
+        "azimuth_max": 0.0
+      },
+      {
+        "label": "L<=0.17 disabled",
+        "disabled_through_L": 0.17,
+        "enabled_L": [
+          0.18,
+          0.19,
+          0.2
+        ],
+        "radial_sum": 0.0,
+        "azimuth_sum": 0.0,
+        "radial_max": 0.0,
+        "azimuth_max": 0.0
+      },
+      {
+        "label": "L<=0.18 disabled",
+        "disabled_through_L": 0.18,
+        "enabled_L": [
+          0.19,
+          0.2
+        ],
+        "radial_sum": 0.0,
+        "azimuth_sum": 0.0,
+        "radial_max": 0.0,
+        "azimuth_max": 0.0
+      },
+      {
+        "label": "L<=0.19 disabled",
+        "disabled_through_L": 0.19,
+        "enabled_L": [
+          0.2
+        ],
+        "radial_sum": 0.0,
+        "azimuth_sum": 0.0,
+        "radial_max": 0.0,
+        "azimuth_max": 0.0
+      }
+    ]
+  },
+  "per_l_stats": [
+    {
+      "L": 0.01,
+      "source_intensity": 8.063995550905235e+17,
+      "image_sum": 9.464641675729978e+20,
+      "image_max": 4.6511761179389565e+20,
+      "roi_radial_sum": 0.0,
+      "roi_azimuth_sum": 0.0
+    },
+    {
+      "L": 0.02,
+      "source_intensity": 10081161640314.191,
+      "image_sum": 5929664700200065.0,
+      "image_max": 1802179863521112.0,
+      "roi_radial_sum": 0.0,
+      "roi_azimuth_sum": 0.0
+    },
+    {
+      "L": 0.03,
+      "source_intensity": 8.962247283967491e+16,
+      "image_sum": 3.5224035237308846e+19,
+      "image_max": 1.5730480478874673e+19,
+      "roi_radial_sum": 0.0,
+      "roi_azimuth_sum": 0.0
+    },
+    {
+      "L": 0.04,
+      "source_intensity": 2520902529329.2246,
+      "image_sum": 744786176470298.0,
+      "image_max": 227988467781725.2,
+      "roi_radial_sum": 0.0,
+      "roi_azimuth_sum": 0.0
+    },
+    {
+      "L": 0.05,
+      "source_intensity": 3.2271652342237412e+16,
+      "image_sum": 7.644992453457127e+18,
+      "image_max": 3.058629429927228e+18,
+      "roi_radial_sum": 0.0,
+      "roi_azimuth_sum": 0.0
+    },
+    {
+      "L": 0.06,
+      "source_intensity": 1120654198000.9482,
+      "image_sum": 221735259442530.6,
+      "image_max": 68719249659662.164,
+      "roi_radial_sum": 0.0,
+      "roi_azimuth_sum": 0.0
+    },
+    {
+      "L": 0.07,
+      "source_intensity": 1.6468707639327872e+16,
+      "image_sum": 2.7993847104295793e+18,
+      "image_max": 9.829175796281277e+17,
+      "roi_radial_sum": 0.0,
+      "roi_azimuth_sum": 0.0
+    },
+    {
+      "L": 0.08,
+      "source_intensity": 630499626929.8732,
+      "image_sum": 93989829695462.34,
+      "image_max": 29254306987234.688,
+      "roi_radial_sum": 0.0,
+      "roi_azimuth_sum": 0.0
+    },
+    {
+      "L": 0.09,
+      "source_intensity": 9964546866894342.0,
+      "image_sum": 1.3233787320172093e+18,
+      "image_max": 3.9949492715803654e+17,
+      "roi_radial_sum": 0.0,
+      "roi_azimuth_sum": 0.0
+    },
+    {
+      "L": 0.1,
+      "source_intensity": 403597122127.43805,
+      "image_sum": 48350217358311.56,
+      "image_max": 14759733247201.953,
+      "roi_radial_sum": 0.0,
+      "roi_azimuth_sum": 0.0
+    },
+    {
+      "L": 0.11,
+      "source_intensity": 6671703314199427.0,
+      "image_sum": 7.282388424530925e+17,
+      "image_max": 1.8927413255425046e+17,
+      "roi_radial_sum": 0.0,
+      "roi_azimuth_sum": 0.0
+    },
+    {
+      "L": 0.12,
+      "source_intensity": 280324689633.6393,
+      "image_sum": 28111724633746.258,
+      "image_max": 8419553365350.103,
+      "roi_radial_sum": 0.0,
+      "roi_azimuth_sum": 0.0
+    },
+    {
+      "L": 0.13,
+      "source_intensity": 4777573957718916.0,
+      "image_sum": 4.4324841297348915e+17,
+      "image_max": 9.855704223122333e+16,
+      "roi_radial_sum": 0.0,
+      "roi_azimuth_sum": 0.0
+    },
+    {
+      "L": 0.14,
+      "source_intensity": 205985206642.27927,
+      "image_sum": 17785455701188.035,
+      "image_max": 5100817706439.367,
+      "roi_radial_sum": 0.0,
+      "roi_azimuth_sum": 0.0
+    },
+    {
+      "L": 0.15,
+      "source_intensity": 3589021702482566.5,
+      "image_sum": 2.898770542788282e+17,
+      "image_max": 5.433883354679977e+16,
+      "roi_radial_sum": 0.0,
+      "roi_azimuth_sum": 0.0
+    },
+    {
+      "L": 0.16,
+      "source_intensity": 157729461092.38947,
+      "image_sum": 11969940442612.57,
+      "image_max": 3180433482301.728,
+      "roi_radial_sum": 0.0,
+      "roi_azimuth_sum": 0.0
+    },
+    {
+      "L": 0.17,
+      "source_intensity": 2794586955019703.5,
+      "image_sum": 2.000488761759465e+17,
+      "image_max": 3.596550494077513e+16,
+      "roi_radial_sum": 0.0,
+      "roi_azimuth_sum": 0.0
+    },
+    {
+      "L": 0.18,
+      "source_intensity": 124640966982.63748,
+      "image_sum": 8445436131308.161,
+      "image_max": 2064337987807.121,
+      "roi_radial_sum": 0.0,
+      "roi_azimuth_sum": 0.0
+    },
+    {
+      "L": 0.19,
+      "source_intensity": 2237471188094989.8,
+      "image_sum": 1.439468276497287e+17,
+      "image_max": 2.653669413849362e+16,
+      "roi_radial_sum": 0.0,
+      "roi_azimuth_sum": 0.0
+    },
+    {
+      "L": 0.2,
+      "source_intensity": 100969717101.00441,
+      "image_sum": 6184747251365.495,
+      "image_max": 1341190869752.106,
+      "roi_radial_sum": 0.0,
+      "roi_azimuth_sum": 0.0
+    }
+  ],
+  "outputs": {
+    "radial_png": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\l_disable_sweep_zb_pos_mosaic5_eta05_no_pruning\\radial_integration_l_disable_zb_pos_mosaic5_eta05_no_pruning.png",
+    "azimuthal_png": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\l_disable_sweep_zb_pos_mosaic5_eta05_no_pruning\\azimuthal_integration_l_disable_zb_pos_mosaic5_eta05_no_pruning.png",
+    "combined_png": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\l_disable_sweep_zb_pos_mosaic5_eta05_no_pruning\\radial_azimuthal_l_disable_zb_pos_mosaic5_eta05_no_pruning.png",
+    "radial_csv": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\l_disable_sweep_zb_pos_mosaic5_eta05_no_pruning\\radial_integration_l_disable_zb_pos_mosaic5_eta05_no_pruning.csv",
+    "azimuthal_csv": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\l_disable_sweep_zb_pos_mosaic5_eta05_no_pruning\\azimuthal_integration_l_disable_zb_pos_mosaic5_eta05_no_pruning.csv"
+  }
+}

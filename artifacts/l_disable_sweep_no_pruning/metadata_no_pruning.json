@@ -1,0 +1,539 @@
+{
+  "description": "Unpruned cumulative L-disable sweep for default headless simulation; only primary Qr m=0 retained.",
+  "no_pruning": true,
+  "pruning_functions_called": [],
+  "simulation_defaults": {
+    "image_size": 3000,
+    "samples": 1000,
+    "cif_file": "C:\\Users\\Kenpo\\OneDrive\\Research\\Rigaku XRD\\ORNL.07.25.2024\\Analysis\\Bi2Se3\\Bi2Se3.cif",
+    "geometry_center_row_col": [
+      1628.9999999999998,
+      1517.9999999999998
+    ],
+    "distance_m": 0.075,
+    "pixel_size_m": 0.0001,
+    "lambda_angstrom": 1.54,
+    "theta_initial_deg": 6.0,
+    "sigma_mosaic_deg": 0.33972872011520766,
+    "gamma_mosaic_deg": 0.29726263010080667,
+    "eta": 0.0,
+    "solve_q_steps": 1000,
+    "solve_q_rel_tol": 0.0005,
+    "solve_q_mode": 0
+  },
+  "roi": {
+    "gui_phi_deg": [
+      -60.0,
+      -35.0
+    ],
+    "raw_phi_deg": [
+      -55.0,
+      -30.0
+    ],
+    "two_theta_deg": [
+      0.4,
+      1.2
+    ],
+    "selected_detector_pixels": 81,
+    "row_range": [
+      1607,
+      1651
+    ],
+    "col_range": [
+      1496,
+      1540
+    ],
+    "npt_rad": 22,
+    "npt_azim": 69
+  },
+  "qr_filter": {
+    "retained_m_values": [
+      0
+    ],
+    "target_L_values": [
+      0.01,
+      0.02,
+      0.03,
+      0.04,
+      0.05,
+      0.06,
+      0.07,
+      0.08,
+      0.09,
+      0.1,
+      0.11,
+      0.12,
+      0.13,
+      0.14,
+      0.15,
+      0.16,
+      0.17,
+      0.18,
+      0.19,
+      0.2
+    ],
+    "disabled_cutoffs": [
+      null,
+      0.01,
+      0.02,
+      0.03,
+      0.04,
+      0.05,
+      0.06,
+      0.07,
+      0.08,
+      0.09,
+      0.1,
+      0.11,
+      0.12,
+      0.13,
+      0.14,
+      0.15,
+      0.16,
+      0.17,
+      0.18,
+      0.19
+    ],
+    "cases": [
+      {
+        "disabled_cutoff_L": null,
+        "disabled_label": "none",
+        "enabled_L_min": 0.01,
+        "enabled_L_max": 0.2,
+        "enabled_L_count": 20,
+        "enabled_L_values": [
+          0.01,
+          0.02,
+          0.03,
+          0.04,
+          0.05,
+          0.06,
+          0.07,
+          0.08,
+          0.09,
+          0.1,
+          0.11,
+          0.12,
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "total_signal_roi": 0.0,
+        "image_max": 0.0
+      },
+      {
+        "disabled_cutoff_L": 0.01,
+        "disabled_label": "<= 0.01",
+        "enabled_L_min": 0.02,
+        "enabled_L_max": 0.2,
+        "enabled_L_count": 19,
+        "enabled_L_values": [
+          0.02,
+          0.03,
+          0.04,
+          0.05,
+          0.06,
+          0.07,
+          0.08,
+          0.09,
+          0.1,
+          0.11,
+          0.12,
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "total_signal_roi": 0.0,
+        "image_max": 0.0
+      },
+      {
+        "disabled_cutoff_L": 0.02,
+        "disabled_label": "<= 0.02",
+        "enabled_L_min": 0.03,
+        "enabled_L_max": 0.2,
+        "enabled_L_count": 18,
+        "enabled_L_values": [
+          0.03,
+          0.04,
+          0.05,
+          0.06,
+          0.07,
+          0.08,
+          0.09,
+          0.1,
+          0.11,
+          0.12,
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "total_signal_roi": 0.0,
+        "image_max": 0.0
+      },
+      {
+        "disabled_cutoff_L": 0.03,
+        "disabled_label": "<= 0.03",
+        "enabled_L_min": 0.04,
+        "enabled_L_max": 0.2,
+        "enabled_L_count": 17,
+        "enabled_L_values": [
+          0.04,
+          0.05,
+          0.06,
+          0.07,
+          0.08,
+          0.09,
+          0.1,
+          0.11,
+          0.12,
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "total_signal_roi": 0.0,
+        "image_max": 0.0
+      },
+      {
+        "disabled_cutoff_L": 0.04,
+        "disabled_label": "<= 0.04",
+        "enabled_L_min": 0.05,
+        "enabled_L_max": 0.2,
+        "enabled_L_count": 16,
+        "enabled_L_values": [
+          0.05,
+          0.06,
+          0.07,
+          0.08,
+          0.09,
+          0.1,
+          0.11,
+          0.12,
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "total_signal_roi": 0.0,
+        "image_max": 0.0
+      },
+      {
+        "disabled_cutoff_L": 0.05,
+        "disabled_label": "<= 0.05",
+        "enabled_L_min": 0.06,
+        "enabled_L_max": 0.2,
+        "enabled_L_count": 15,
+        "enabled_L_values": [
+          0.06,
+          0.07,
+          0.08,
+          0.09,
+          0.1,
+          0.11,
+          0.12,
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "total_signal_roi": 0.0,
+        "image_max": 0.0
+      },
+      {
+        "disabled_cutoff_L": 0.06,
+        "disabled_label": "<= 0.06",
+        "enabled_L_min": 0.07,
+        "enabled_L_max": 0.2,
+        "enabled_L_count": 14,
+        "enabled_L_values": [
+          0.07,
+          0.08,
+          0.09,
+          0.1,
+          0.11,
+          0.12,
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "total_signal_roi": 0.0,
+        "image_max": 0.0
+      },
+      {
+        "disabled_cutoff_L": 0.07,
+        "disabled_label": "<= 0.07",
+        "enabled_L_min": 0.08,
+        "enabled_L_max": 0.2,
+        "enabled_L_count": 13,
+        "enabled_L_values": [
+          0.08,
+          0.09,
+          0.1,
+          0.11,
+          0.12,
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "total_signal_roi": 0.0,
+        "image_max": 0.0
+      },
+      {
+        "disabled_cutoff_L": 0.08,
+        "disabled_label": "<= 0.08",
+        "enabled_L_min": 0.09,
+        "enabled_L_max": 0.2,
+        "enabled_L_count": 12,
+        "enabled_L_values": [
+          0.09,
+          0.1,
+          0.11,
+          0.12,
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "total_signal_roi": 0.0,
+        "image_max": 0.0
+      },
+      {
+        "disabled_cutoff_L": 0.09,
+        "disabled_label": "<= 0.09",
+        "enabled_L_min": 0.1,
+        "enabled_L_max": 0.2,
+        "enabled_L_count": 11,
+        "enabled_L_values": [
+          0.1,
+          0.11,
+          0.12,
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "total_signal_roi": 0.0,
+        "image_max": 0.0
+      },
+      {
+        "disabled_cutoff_L": 0.1,
+        "disabled_label": "<= 0.10",
+        "enabled_L_min": 0.11,
+        "enabled_L_max": 0.2,
+        "enabled_L_count": 10,
+        "enabled_L_values": [
+          0.11,
+          0.12,
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "total_signal_roi": 0.0,
+        "image_max": 0.0
+      },
+      {
+        "disabled_cutoff_L": 0.11,
+        "disabled_label": "<= 0.11",
+        "enabled_L_min": 0.12,
+        "enabled_L_max": 0.2,
+        "enabled_L_count": 9,
+        "enabled_L_values": [
+          0.12,
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "total_signal_roi": 0.0,
+        "image_max": 0.0
+      },
+      {
+        "disabled_cutoff_L": 0.12,
+        "disabled_label": "<= 0.12",
+        "enabled_L_min": 0.13,
+        "enabled_L_max": 0.2,
+        "enabled_L_count": 8,
+        "enabled_L_values": [
+          0.13,
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "total_signal_roi": 0.0,
+        "image_max": 0.0
+      },
+      {
+        "disabled_cutoff_L": 0.13,
+        "disabled_label": "<= 0.13",
+        "enabled_L_min": 0.14,
+        "enabled_L_max": 0.2,
+        "enabled_L_count": 7,
+        "enabled_L_values": [
+          0.14,
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "total_signal_roi": 0.0,
+        "image_max": 0.0
+      },
+      {
+        "disabled_cutoff_L": 0.14,
+        "disabled_label": "<= 0.14",
+        "enabled_L_min": 0.15,
+        "enabled_L_max": 0.2,
+        "enabled_L_count": 6,
+        "enabled_L_values": [
+          0.15,
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "total_signal_roi": 0.0,
+        "image_max": 0.0
+      },
+      {
+        "disabled_cutoff_L": 0.15,
+        "disabled_label": "<= 0.15",
+        "enabled_L_min": 0.16,
+        "enabled_L_max": 0.2,
+        "enabled_L_count": 5,
+        "enabled_L_values": [
+          0.16,
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "total_signal_roi": 0.0,
+        "image_max": 0.0
+      },
+      {
+        "disabled_cutoff_L": 0.16,
+        "disabled_label": "<= 0.16",
+        "enabled_L_min": 0.17,
+        "enabled_L_max": 0.2,
+        "enabled_L_count": 4,
+        "enabled_L_values": [
+          0.17,
+          0.18,
+          0.19,
+          0.2
+        ],
+        "total_signal_roi": 0.0,
+        "image_max": 0.0
+      },
+      {
+        "disabled_cutoff_L": 0.17,
+        "disabled_label": "<= 0.17",
+        "enabled_L_min": 0.18,
+        "enabled_L_max": 0.2,
+        "enabled_L_count": 3,
+        "enabled_L_values": [
+          0.18,
+          0.19,
+          0.2
+        ],
+        "total_signal_roi": 0.0,
+        "image_max": 0.0
+      },
+      {
+        "disabled_cutoff_L": 0.18,
+        "disabled_label": "<= 0.18",
+        "enabled_L_min": 0.19,
+        "enabled_L_max": 0.2,
+        "enabled_L_count": 2,
+        "enabled_L_values": [
+          0.19,
+          0.2
+        ],
+        "total_signal_roi": 0.0,
+        "image_max": 0.0
+      },
+      {
+        "disabled_cutoff_L": 0.19,
+        "disabled_label": "<= 0.19",
+        "enabled_L_min": 0.2,
+        "enabled_L_max": 0.2,
+        "enabled_L_count": 1,
+        "enabled_L_values": [
+          0.2
+        ],
+        "total_signal_roi": 0.0,
+        "image_max": 0.0
+      }
+    ]
+  },
+  "outputs": {
+    "radial_png": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\l_disable_sweep_no_pruning\\radial_integration_no_pruning.png",
+    "azimuthal_png": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\l_disable_sweep_no_pruning\\azimuthal_integration_no_pruning.png",
+    "combined_png": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\l_disable_sweep_no_pruning\\radial_azimuthal_integration_no_pruning.png",
+    "radial_csv": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\l_disable_sweep_no_pruning\\radial_integration_no_pruning.csv",
+    "azimuth_csv": "C:\\Users\\Kenpo\\.codex\\worktrees\\f4dd\\ra_sim\\artifacts\\l_disable_sweep_no_pruning\\azimuthal_integration_no_pruning.csv"
+  },
+  "elapsed_seconds": 8.120798587799072,
+  "zero_signal_note": "No simulated detector signal for these unpruned Qr=0, L=0.01..0.20 cases in this ROI"
+}
