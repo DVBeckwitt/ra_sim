@@ -98,11 +98,16 @@ def test_geometry_fit_worker_context_helpers_are_not_duplicated_in_runtime_worke
 
     moved_helper_names = {
         "_advance_source_cache_generation",
+        "_caked_projection_payload_status",
         "_current_source_cache_generation",
         "_emit_worker_event",
+        "_ensure_worker_caked_projection_payload",
         "_last_worker_simulation_diagnostics",
         "_last_worker_source_snapshot_diagnostics",
         "_load_background_by_index_snapshot",
+        "_load_caked_projection_by_index_snapshot",
+        "_load_caked_view_by_index_snapshot",
+        "_projection_candidate_state",
         "_set_worker_source_snapshot_diagnostics",
         "_source_cache_generation_matches",
     }

@@ -40316,229 +40316,6 @@ def _run_async_geometry_fit_worker_job(
     _last_worker_simulation_diagnostics = worker_context.last_worker_simulation_diagnostics
     _load_background_by_index_snapshot = worker_context.load_background_by_index_snapshot
 
-    def _load_caked_view_by_index_snapshot(
-        index: int,
-    ) -> dict[str, object] | None:
-        caked_payload = dict(
-            dict(job_data.get("caked_views_by_background", {}) or {}).get(int(index)) or {}
-        )
-        if not caked_payload:
-            return None
-        normalized_payload = _normalize_geometry_fit_caked_view_payload(
-            caked_payload,
-            detector_shape=caked_payload.get("detector_shape"),
-            ai=_worker_geometry_fit_caking_integrator(),
-        )
-        hydrated_payload = gui_geometry_fit._geometry_fit_hydrate_exact_caked_payload(
-            normalized_payload,
-            detector_shape=(
-                normalized_payload.get("detector_shape")
-                if isinstance(normalized_payload, Mapping)
-                else caked_payload.get("detector_shape")
-            ),
-            params=dict(job_data.get("params", {}) or {}),
-            require_background=True,
-        )
-        if not isinstance(hydrated_payload, dict):
-            return None
-        job_data.setdefault("caked_views_by_background", {})[int(index)] = hydrated_payload
-        if str(job_data.get("projection_view_mode") or "").strip().lower() == "caked":
-            projection_payload = gui_geometry_fit.geometry_fit_caked_projection_payload(
-                hydrated_payload
-            )
-            stored_projection_payload = _geometry_fit_projection_payload_storage_copy(
-                projection_payload
-            )
-            if isinstance(stored_projection_payload, Mapping):
-                job_data.setdefault("projection_payload_by_background", {})[int(index)] = (
-                    stored_projection_payload
-                )
-        return hydrated_payload
-
-    def _caked_projection_payload_status(
-        payload: Mapping[str, object] | None,
-    ) -> str:
-        if not isinstance(payload, Mapping):
-            return "projection_payload_missing_axes"
-        try:
-            radial_axis = np.asarray(
-                payload.get("radial_axis", payload.get("radial")),
-                dtype=np.float64,
-            ).reshape(-1)
-            azimuth_axis = np.asarray(
-                payload.get("azimuth_axis", payload.get("azimuth")),
-                dtype=np.float64,
-            ).reshape(-1)
-            raw_azimuth_axis = np.asarray(
-                payload.get("raw_azimuth_axis", payload.get("raw_azimuth")),
-                dtype=np.float64,
-            ).reshape(-1)
-        except Exception:
-            return "projection_payload_missing_axes"
-        if radial_axis.size <= 0 or azimuth_axis.size <= 0 or raw_azimuth_axis.size <= 0:
-            return "projection_payload_missing_axes"
-        if (
-            raw_azimuth_axis.shape != azimuth_axis.shape
-            or not np.all(np.isfinite(radial_axis))
-            or not np.all(np.isfinite(azimuth_axis))
-            or not np.all(np.isfinite(raw_azimuth_axis))
-        ):
-            return "projection_payload_axis_mismatch"
-        if not isinstance(payload.get("transform_bundle"), CakeTransformBundle):
-            return "missing_exact_caked_bundle"
-        if _geometry_fit_projection_payload_digest(payload) is None:
-            return "missing_exact_caked_bundle"
-        return "projection_payload_ready"
-
-    def _projection_candidate_state(
-        payload: Mapping[str, object] | None,
-        *,
-        detector_shape: Sequence[object] | None = None,
-    ) -> tuple[dict[str, object] | None, str]:
-        projection = gui_geometry_fit.geometry_fit_caked_projection_payload(payload)
-        if not isinstance(projection, Mapping):
-            return None, "absent"
-        requested_shape = _geometry_fit_detector_shape_2d(detector_shape)
-        candidate_shape = _geometry_fit_detector_shape_2d(projection.get("detector_shape"))
-        if candidate_shape is None and isinstance(
-            projection.get("transform_bundle"),
-            CakeTransformBundle,
-        ):
-            candidate_shape = _geometry_fit_detector_shape_2d(
-                projection["transform_bundle"].detector_shape
-            )
-        if (
-            requested_shape is not None
-            and candidate_shape is not None
-            and tuple(requested_shape) != tuple(candidate_shape)
-        ):
-            return dict(projection), "invalid"
-        status = _caked_projection_payload_status(projection)
-        if status == "projection_payload_ready":
-            return dict(projection), "ready"
-        return dict(projection), "invalid"
-
-    def _load_caked_projection_by_index_snapshot(
-        index: int,
-        *,
-        detector_shape: Sequence[object] | None = None,
-        allow_generated_payload: bool = False,
-    ) -> dict[str, object] | None:
-        background_idx = int(index)
-        payload_map = job_data.setdefault("projection_payload_by_background", {})
-
-        def _hydrate_store_return(
-            projection_payload: Mapping[str, object],
-        ) -> dict[str, object] | None:
-            normalized_payload = _normalize_geometry_fit_caked_view_payload(
-                projection_payload,
-                detector_shape=detector_shape or projection_payload.get("detector_shape"),
-                ai=_worker_geometry_fit_caking_integrator(),
-            )
-            if not isinstance(normalized_payload, Mapping):
-                return None
-            hydrated_payload = gui_geometry_fit._geometry_fit_hydrate_exact_caked_payload(
-                gui_geometry_fit.geometry_fit_caked_projection_payload(normalized_payload),
-                detector_shape=(
-                    detector_shape
-                    or normalized_payload.get("detector_shape")
-                    or projection_payload.get("detector_shape")
-                ),
-                params=dict(job_data.get("params", {}) or {}),
-                require_background=False,
-            )
-            if not isinstance(hydrated_payload, Mapping) or not isinstance(
-                hydrated_payload.get("transform_bundle"),
-                CakeTransformBundle,
-            ):
-                return None
-            stored_payload = gui_geometry_fit.geometry_fit_caked_projection_payload(
-                hydrated_payload
-            )
-            stored_payload = _geometry_fit_projection_payload_storage_copy(stored_payload)
-            if not isinstance(stored_payload, Mapping) or not isinstance(
-                stored_payload.get("transform_bundle"),
-                CakeTransformBundle,
-            ):
-                return None
-            if _geometry_fit_projection_payload_digest(stored_payload) is None:
-                return None
-            payload_map[background_idx] = stored_payload
-            return dict(stored_payload)
-
-        projection_payload, state = _projection_candidate_state(
-            payload_map.get(background_idx),
-            detector_shape=detector_shape,
-        )
-        if state == "ready" and isinstance(projection_payload, Mapping):
-            return _hydrate_store_return(projection_payload)
-        if state == "invalid":
-            return None
-
-        caked_payload = dict(
-            dict(job_data.get("caked_views_by_background", {}) or {}).get(background_idx) or {}
-        )
-        projection_payload, state = _projection_candidate_state(
-            caked_payload,
-            detector_shape=detector_shape,
-        )
-        if state == "ready" and isinstance(projection_payload, Mapping):
-            return _hydrate_store_return(projection_payload)
-        if state == "invalid":
-            return None
-
-        if bool(allow_generated_payload):
-            generated_payload = _geometry_fit_resolve_targeted_caked_projection_payload(
-                background_idx,
-                detector_shape=detector_shape,
-                ai=_worker_geometry_fit_caking_integrator(),
-                analysis_preview_bins=job_data.get("analysis_bins"),
-                allow_generated_payload=True,
-            )
-            projection_payload, state = _projection_candidate_state(
-                generated_payload,
-                detector_shape=detector_shape,
-            )
-            if state == "ready" and isinstance(projection_payload, Mapping):
-                return _hydrate_store_return(projection_payload)
-        return None
-
-    def _ensure_worker_caked_projection_payload(
-        background_index: int,
-        *,
-        detector_shape: Sequence[object] | None = None,
-        stage_callback: gui_geometry_fit.GeometryFitStageCallback | None = None,
-        emit_event: bool = False,
-    ) -> dict[str, object] | None:
-        projection_payload = _load_caked_projection_by_index_snapshot(
-            int(background_index),
-            detector_shape=detector_shape,
-            allow_generated_payload=True,
-        )
-        status = _caked_projection_payload_status(projection_payload)
-        if bool(emit_event):
-            gui_geometry_fit._emit_geometry_fit_stage_event(
-                stage_callback,
-                str(status),
-                background_index=int(background_index),
-                background_label=str(
-                    dict(job_data.get("background_labels", {}) or {}).get(
-                        int(background_index),
-                        f"background {int(background_index) + 1}",
-                    )
-                ),
-                status=str(status),
-                payload_kind="projection",
-                message=(
-                    f"preflight: exact caked projection payload ready for background {int(background_index) + 1}"
-                    if status == "projection_payload_ready"
-                    else f"preflight: exact caked projection payload failed for background {int(background_index) + 1} (status={status})"
-                ),
-            )
-        if status != "projection_payload_ready":
-            return None
-        return projection_payload
-
     def _copy_source_rows(raw_rows: Sequence[object] | None) -> list[dict[str, object]]:
         return [dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)]
 
@@ -41197,6 +40974,36 @@ def _run_async_geometry_fit_worker_job(
             worker_geometry_fit_caking_ai = None
             worker_geometry_fit_caking_sig = None
         return worker_geometry_fit_caking_ai
+
+    worker_context.caked_payload_deps = (
+        _geometry_fit_worker.GeometryFitWorkerCakedPayloadDeps(
+            normalize_caked_view_payload=_normalize_geometry_fit_caked_view_payload,
+            hydrate_exact_caked_payload=(
+                gui_geometry_fit._geometry_fit_hydrate_exact_caked_payload
+            ),
+            caked_projection_payload=gui_geometry_fit.geometry_fit_caked_projection_payload,
+            projection_payload_storage_copy=_geometry_fit_projection_payload_storage_copy,
+            projection_payload_digest=_geometry_fit_projection_payload_digest,
+            detector_shape_2d=_geometry_fit_detector_shape_2d,
+            resolve_targeted_caked_projection_payload=(
+                _geometry_fit_resolve_targeted_caked_projection_payload
+            ),
+            caking_integrator=_worker_geometry_fit_caking_integrator,
+            emit_stage_event=gui_geometry_fit._emit_geometry_fit_stage_event,
+            is_transform_bundle=lambda value: isinstance(value, CakeTransformBundle),
+        )
+    )
+    _caked_projection_payload_status = worker_context.caked_projection_payload_status
+    _projection_candidate_state = worker_context.projection_candidate_state
+    _load_caked_view_by_index_snapshot = (
+        worker_context.load_caked_view_by_index_snapshot
+    )
+    _load_caked_projection_by_index_snapshot = (
+        worker_context.load_caked_projection_by_index_snapshot
+    )
+    _ensure_worker_caked_projection_payload = (
+        worker_context.ensure_worker_caked_projection_payload
+    )
 
     def _store_worker_caked_view_for_background(
         bundle: gui_geometry_fit.GeometryFitBackgroundCacheBundle,
