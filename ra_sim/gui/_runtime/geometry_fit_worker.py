@@ -620,6 +620,8 @@ class GeometryFitWorkerContext:
                 background_index,
                 projection_callbacks.project_peaks_to_current_view(normalized_rows),
             )
+            # Current-background live rows may already carry exact caked anchors.
+            # Keep those rows when detector projection has nothing to rebuild.
             if (
                 not projected_rows
                 and normalized_mode == "detector"
