@@ -14,7 +14,6 @@ from ra_sim.gui.geometry_fit_coordinates import (
     native_detector_anchor_with_provenance,
     observed_detector_anchor_for_caked_projection,
     project_detector_anchor_to_caked_fit_space,
-    resolve_fit_space_anchor,
     simulated_detector_anchor_for_caked_projection,
 )
 
@@ -267,6 +266,22 @@ def test_project_detector_anchor_to_caked_fit_space_rejects_nonfinite_output() -
     }
 
 
+def test_project_detector_anchor_to_caked_fit_space_preserves_invalid_reason_for_invalid_nonfinite_projection() -> (
+    None
+):
+    def projector(cols, rows, *, local_params, anchor_kind, input_frame):
+        return {
+            "two_theta_deg": [math.nan],
+            "phi_deg": [math.nan],
+            "valid": False,
+            "invalid_reason": "fit_detector_to_native_failed",
+        }
+
+    result = project_detector_anchor_to_caked_fit_space((100.0, 200.0), projector)
+
+    assert result["unavailable_reason"] == "fit_detector_to_native_failed"
+
+
 def test_project_detector_anchor_to_caked_fit_space_rejects_missing_output() -> None:
     def projector(cols, rows, *, local_params, anchor_kind, input_frame):
         return {"two_theta_deg": [], "phi_deg": []}
@@ -274,58 +289,3 @@ def test_project_detector_anchor_to_caked_fit_space_rejects_missing_output() -> 
     assert project_detector_anchor_to_caked_fit_space((100.0, 200.0), projector)[
         "unavailable_reason"
     ] == "fit_space_projector_returned_no_caked_point"
-
-
-def test_resolve_fit_space_anchor_keeps_detector_objective_projector_free() -> None:
-    entry = {"native_col": 10.0, "native_row": 20.0}
-
-    assert resolve_fit_space_anchor(entry, None, "detector_px", None) == {
-        "point": (10.0, 20.0),
-        "space": "detector_px",
-        "frame": "native_detector",
-        "authority": "saved_native",
-        "provenance": "saved_native_col_row",
-        "fresh": True,
-        "input_frame": "native_detector",
-    }
-
-
-def test_resolve_fit_space_anchor_requires_projector_for_caked_objective() -> None:
-    entry = {"native_col": 10.0, "native_row": 20.0, "caked_x": -777.0, "caked_y": -888.0}
-
-    assert resolve_fit_space_anchor(entry, None, "caked_deg", None) == {
-        "point": None,
-        "space": "caked_deg",
-        "frame": "caked_deg",
-        "authority": "exact_projector",
-        "provenance": "",
-        "fresh": False,
-        "source": None,
-        "unavailable_reason": "fit_space_projector_unavailable",
-    }
-
-
-def test_resolve_fit_space_anchor_projects_detector_native_for_caked_objective() -> None:
-    def projector(cols, rows, *, local_params, anchor_kind, input_frame):
-        return {
-            "two_theta_deg": [float(cols[0]) + 0.5],
-            "phi_deg": [float(rows[0]) - 0.25],
-            "caked_projection_source": "fit_space_projector_native_detector",
-            "valid": True,
-        }
-
-    assert resolve_fit_space_anchor(
-        {"native_col": 10.0, "native_row": 20.0, "caked_x": -777.0, "caked_y": -888.0},
-        None,
-        "caked_deg",
-        projector,
-    ) == {
-        "point": (10.5, 19.75),
-        "space": "caked_deg",
-        "frame": "caked_deg",
-        "authority": "exact_projector",
-        "provenance": "fit_space_projector_native_detector",
-        "fresh": True,
-        "source": "fit_space_projector_native_detector",
-        "unavailable_reason": None,
-    }

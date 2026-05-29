@@ -264,17 +264,14 @@ def project_detector_anchor_to_caked_fit_space(
     phi_raw = _first_projected_raw(projected.get("phi_deg", []))
     if two_theta_raw is _MISSING_PROJECTED_VALUE or phi_raw is _MISSING_PROJECTED_VALUE:
         return _projection_failure("fit_space_projector_returned_no_caked_point")
-    two_theta = finite_float(two_theta_raw)
-    phi = finite_float(phi_raw)
-    if two_theta is None or phi is None:
-        return _projection_failure(f"nonfinite_{str(anchor_kind)}_caked_projection")
-    if projected.get("valid") is False:
-        return _projection_failure(
-            str(
-                projected.get("invalid_reason")
-                or f"nonfinite_{str(anchor_kind)}_caked_projection"
-            )
-        )
+    try:
+        two_theta = float(two_theta_raw)
+        phi = float(phi_raw)
+    except Exception:
+        return _projection_failure("fit_space_projector_returned_no_caked_point")
+    default_reason = f"nonfinite_{str(anchor_kind)}_caked_projection"
+    if projected.get("valid") is False or not math.isfinite(two_theta) or not math.isfinite(phi):
+        return _projection_failure(str(projected.get("invalid_reason") or default_reason))
     source = str(projected.get("caked_projection_source") or source_fallback)
     return {
         "point": (float(two_theta), float(phi)),
@@ -286,24 +283,3 @@ def project_detector_anchor_to_caked_fit_space(
         "source": source,
         "unavailable_reason": None,
     }
-
-
-def resolve_fit_space_anchor(
-    entry: Mapping[str, object] | None,
-    source_row: Mapping[str, object] | None,
-    objective_space: str,
-    projector: object,
-) -> dict[str, object] | None:
-    del source_row
-    anchor_payload = observed_detector_anchor_for_caked_projection(entry)
-    if str(objective_space or "").strip().lower() != "caked_deg":
-        return anchor_payload
-    if anchor_payload is None:
-        return _projection_failure("missing_observed_detector_anchor")
-    return project_detector_anchor_to_caked_fit_space(
-        anchor_payload["point"],  # type: ignore[arg-type]
-        projector,
-        input_frame=str(anchor_payload.get("input_frame") or "native_detector"),
-        anchor_kind="measured",
-        source_fallback="fit_space_projector_native_detector",
-    )

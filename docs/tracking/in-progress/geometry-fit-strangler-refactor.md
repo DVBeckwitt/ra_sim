@@ -40,8 +40,7 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Patch B extracted pure caked projection-anchor helpers into `ra_sim/gui/geometry_fit_coordinates.py`:
   `observed_detector_anchor_for_caked_projection()`,
   `simulated_detector_anchor_for_caked_projection()`,
-  `project_detector_anchor_to_caked_fit_space()`, and
-  `resolve_fit_space_anchor()`.
+  and `project_detector_anchor_to_caked_fit_space()`.
 - Wired `build_geometry_manual_fit_dataset()` to use the observed, simulated, and exact-projector helper paths while leaving public dataset assembly in `ra_sim/gui/geometry_fit.py`.
 - Preserved public dataset payloads, saved-state shape, optimizer request shape, solver math, UI callbacks, CLI/env flags, log fields, and caked projection-authority behavior.
 
@@ -51,7 +50,7 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - No required correctness, security, or performance blockers were found.
 - Follow-up before deeper job/dataset extraction: add direct helper coverage for the remaining `resolve_geometry_fit_selection()` edge branches, including missing theta metadata, background theta errors, skipped empty backgrounds, and no-selection mode.
 - Snapshot helper now raises on normalized mapping-key collisions instead of silently dropping entries.
-- Patch B code review kept `resolve_fit_space_anchor()` out of production wiring because it did not remove enough dataset assembly logic in this slice. It remains a pure tested helper for the next coordinate/dataset boundary.
+- Patch B simplification removed the unused `resolve_fit_space_anchor()` helper and its self-only tests because it did not remove production dataset assembly logic in this slice.
 
 ## Next actions
 
