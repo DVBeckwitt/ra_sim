@@ -13,8 +13,8 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: Patch D3.0 projection/cache contract coverage complete; ready for review
-Bug/error/feature status: internal refactor guardrails only; no user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
+Status: Patch D3.1 worker source-row projection helper extraction complete; ready for review
+Bug/error/feature status: internal worker refactor only; no user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
 Shipping status: no runtime rollout or feature flag is needed because behavior is preserved behind existing public wrappers. Rollback is a normal commit revert.
@@ -73,6 +73,25 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
   marking, bundle storage, cache prebuild, manual validation, dataset, solver,
   optimizer, saved-state, CLI/env/debug flags, result packaging, and UI callbacks
   remain in their existing locations.
+- Patch D3.1 moved only the worker source-row projection helpers behind
+  `GeometryFitWorkerContext`:
+  `project_source_rows_for_background()` and
+  `project_source_rows_by_row_background()`.
+- Patch D3.1 injects source projection dependencies from `runtime_session.py`,
+  keeps `_run_async_geometry_fit_worker_job(job)` as the runtime worker wrapper,
+  and aliases the moved methods back to the old local helper names.
+- Patch D3.1 kept cached projection-row marking, projection-row matching, bundle
+  row reuse, bundle storage, cache bundle build/prebuild, manual validation,
+  dataset calls, solver calls, optimizer behavior, saved-state behavior,
+  CLI/env/debug flags, result packaging, and UI callbacks in their existing
+  locations.
+- Patch D3.1 preserved detector-mode live-row handoff by retaining job-local
+  live rows with source provenance and finite caked anchors when the detector
+  projection callback returns no rows; stored caked rows without live source
+  provenance are still not promoted into projected rows.
+- Post-Patch-D3.1 size report: `_run_async_geometry_fit_worker_job()` is 3,046
+  lines, `ra_sim/gui/_runtime/runtime_session.py` is 45,727 lines, and
+  `ra_sim/gui/_runtime/geometry_fit_worker.py` is 676 lines.
 
 ## Review status
 
@@ -89,6 +108,9 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Patch D3.0 added a no-production-movement guard proving the D3 source-row
   projection/cache helper names have not been introduced in
   `geometry_fit_worker.py` yet.
+- Patch D3.1 updated the movement guard so only the D3.1 source-row projection
+  helpers may exist in `geometry_fit_worker.py`; D3.2/D3.3 cache helpers remain
+  forbidden there until their slices.
 
 ## D3 contract map
 
@@ -158,8 +180,11 @@ D3.3 cache bundle/prebuild helpers:
 
 ## Next actions
 
-1. Patch D3.1 should move `_project_source_rows_for_background` and `_project_source_rows_by_row_background` only.
-2. Keep cache marking, bundle storage, cache prebuild, manual validation, dataset, solver, optimizer, saved-state, CLI/env, and UI behavior out of D3.1.
+1. Patch D3.2 should move cached projection-row marking and bundle storage only:
+   `_mark_worker_cached_projection_rows`, `_worker_cached_projection_rows_match`,
+   `_bundle_rows`, and `_store_worker_background_cache_bundle`.
+2. Keep cache bundle build/prebuild, manual validation, dataset, solver,
+   optimizer, saved-state, CLI/env, and UI behavior out of D3.2.
 3. Do not add hard debt gates yet.
 
 ## Validation
@@ -291,6 +316,20 @@ python -m ruff check tests/test_geometry_fit_worker.py tests/test_geometry_fit_s
 git diff --check
 ```
 
+Patch D3.1 worker source-row projection helper slice:
+
+```bash
+python -m compileall -q ra_sim tests
+python -m pytest -q tests/test_geometry_fit_worker.py
+python -m pytest -q tests/test_geometry_fit_safe_runtime.py -k "geometry_fit_worker or geometry_fit_job"
+python -m pytest -q tests/test_geometry_fit_job_live_rows_handoff.py tests/test_geometry_fit_live_rows_signature_handoff.py tests/test_gui_runtime_geometry_fit.py tests/test_gui_runtime_import_safe.py
+python -m pytest -q tests/test_gui_geometry_fit_workflow.py -k "build_geometry_manual_fit_dataset or prepare_geometry_fit_run or caked or locked_qr or coordinate or optimizer_request"
+python -m pytest -q tests/test_geometry_fitting.py -k "fit_geometry_parameters or caked or manual_qr or locked_qr or dynamic_point or objective_insensitive or full_beam"
+python -m ruff check ra_sim/gui/_runtime/geometry_fit_worker.py ra_sim/gui/_runtime/runtime_session.py tests/test_geometry_fit_worker.py tests/test_geometry_fit_safe_runtime.py tests/test_geometry_fit_job_live_rows_handoff.py tests/test_gui_runtime_import_safe.py
+git diff --check
+python -m ra_sim.dev check
+```
+
 Known baseline issue:
 
 ```bash
@@ -306,6 +345,7 @@ Current validation status:
 - Patch D1 validation passed: compileall, worker context tests, worker/job import-boundary tests, job/live-row/runtime/import-safe suites, GUI workflow route tests, geometry fitting route tests, Ruff on touched files, and `git diff --check`.
 - Patch D2 validation passed: compileall, worker caked payload tests, worker/job import-boundary tests, job/live-row/runtime/import-safe suites, GUI workflow route tests, geometry fitting route tests, Ruff on touched files, and `git diff --check`.
 - Patch D3.0 validation passed: compileall, worker context/source-cache tests, worker/job import-boundary tests, live-row/runtime guard tests, Ruff on touched test files, and `git diff --check`.
+- Patch D3.1 validation passed: compileall, worker source-row projection tests, worker/job import-boundary tests, live-row/runtime/import-safe guard tests, GUI workflow route tests, geometry fitting route tests, Ruff on touched files, and `git diff --check`.
 - `python -m ra_sim.dev check` remains blocked only by the documented pre-existing formatting drift above.
 - No generated artifacts, raw data, local config, notebook output, dependency changes, release version changes, or public migration files are included.
 

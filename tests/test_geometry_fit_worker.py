@@ -7,6 +7,7 @@ import numpy as np
 from ra_sim.gui._runtime.geometry_fit_worker import (
     GeometryFitWorkerCakedPayloadDeps,
     GeometryFitWorkerContext,
+    GeometryFitWorkerSourceProjectionDeps,
 )
 
 
@@ -151,6 +152,104 @@ class FakeCakedPayloadDeps:
         return isinstance(value, FakeBundle)
 
 
+class FakeProjectionCallbacks:
+    def __init__(self) -> None:
+        self.calls: list[list[dict[str, object]]] = []
+        self.projected_rows: list[dict[str, object]] | None = None
+
+    def project_peaks_to_current_view(
+        self,
+        rows: list[dict[str, object]],
+    ) -> list[dict[str, object]]:
+        self.calls.append([dict(row) for row in rows])
+        if self.projected_rows is not None:
+            return [dict(row) for row in self.projected_rows]
+        return [dict(row, projected=True) for row in rows]
+
+
+class FakeSourceProjectionDeps:
+    def __init__(self) -> None:
+        self.callbacks = FakeProjectionCallbacks()
+
+    @property
+    def deps(self) -> GeometryFitWorkerSourceProjectionDeps:
+        return GeometryFitWorkerSourceProjectionDeps(
+            rows_for_background=self.rows_for_background,
+            group_rows_by_background=self.group_rows_by_background,
+            make_projection_callbacks=self.make_projection_callbacks,
+            native_detector_coords_to_bundle_detector_coords=(
+                self.native_detector_coords_to_bundle_detector_coords
+            ),
+            raw_phi_to_gui_phi=lambda value: float(value),
+            rotate_point_for_display=lambda col, row: (float(col), float(row)),
+            native_sim_to_display_coords=None,
+            get_detector_angular_maps=lambda _ai: None,
+            detector_pixel_to_scattering_angles=None,
+            backend_detector_coords_to_native_detector_coords=(
+                lambda col, row, *_args, **_kwargs: (float(col), float(row))
+            ),
+            scattering_angles_to_detector_pixel=None,
+            profile_cache=lambda: {},
+            default_pixel_size_m=1.0e-4,
+            default_image_size=256,
+            default_display_rotate_k=0,
+        )
+
+    def rows_for_background(
+        self,
+        background_index: int,
+        raw_rows: object,
+    ) -> list[dict[str, object]]:
+        normalized_rows: list[dict[str, object]] = []
+        for raw_entry in raw_rows or ():
+            if not isinstance(raw_entry, Mapping):
+                continue
+            entry = dict(raw_entry)
+            entry.setdefault("background_index", int(background_index))
+            normalized_rows.append(entry)
+        return normalized_rows
+
+    def group_rows_by_background(
+        self,
+        raw_rows: object,
+        *,
+        default_background_index: int,
+        order_key: str | None = None,
+    ) -> list[tuple[int, list[dict[str, object]]]]:
+        grouped_rows: dict[int, list[dict[str, object]]] = {}
+        ordered_backgrounds: list[int] = []
+        for position, raw_entry in enumerate(raw_rows or ()):
+            if not isinstance(raw_entry, Mapping):
+                continue
+            entry = dict(raw_entry)
+            try:
+                background_idx = int(entry.get("background_index"))
+            except Exception:
+                background_idx = int(default_background_index)
+            entry.setdefault("background_index", int(background_idx))
+            if order_key is not None:
+                entry[order_key] = int(position)
+            if int(background_idx) not in grouped_rows:
+                ordered_backgrounds.append(int(background_idx))
+                grouped_rows[int(background_idx)] = []
+            grouped_rows[int(background_idx)].append(entry)
+        return [
+            (int(background_idx), list(grouped_rows.get(int(background_idx), ())))
+            for background_idx in ordered_backgrounds
+        ]
+
+    def make_projection_callbacks(self, **_kwargs: object) -> FakeProjectionCallbacks:
+        return self.callbacks
+
+    def native_detector_coords_to_bundle_detector_coords(
+        self,
+        col: float,
+        row: float,
+        _detector_shape: object,
+    ) -> tuple[float, float]:
+        return float(col), float(row)
+
+
 def _ready_projection_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "radial_axis": [1.0, 2.0],
@@ -174,10 +273,62 @@ def _context_with_caked_deps(
     return context, fake_deps
 
 
+def _context_with_source_projection_deps(
+    job: dict[str, object] | None = None,
+    fake_deps: FakeSourceProjectionDeps | None = None,
+) -> tuple[GeometryFitWorkerContext, FakeSourceProjectionDeps]:
+    fake_deps = fake_deps or FakeSourceProjectionDeps()
+    context = GeometryFitWorkerContext.from_job(
+        {
+            "current_background_index": 0,
+            "projection_view_mode": "detector",
+            "background_images": {
+                0: {"native": [[1.0]], "display": [[1.0]]},
+                1: {"native": [[2.0]], "display": [[2.0]]},
+            },
+            "params": {"center": (0.0, 0.0), "pixel_size_m": 1.0e-4},
+            "solver_inputs": type(
+                "FakeSolverInputs",
+                (),
+                {"miller": [1], "intensities": [1.0]},
+            )(),
+            **(job or {}),
+        }
+    )
+    context.source_projection_deps = fake_deps.deps
+    return context, fake_deps
+
+
+def _source_row(**overrides: object) -> dict[str, object]:
+    row: dict[str, object] = {
+        "background_index": 0,
+        "source_label": "primary",
+        "q_group_key": ("q_group", "primary", 1, 10),
+        "hkl": (-1, 0, 10),
+        "normalized_hkl": (-1, 0, 10),
+        "source_reflection_index": 7,
+        "source_reflection_namespace": "full_reflection",
+        "source_reflection_is_full": True,
+        "source_row_index": 42,
+        "locked_qr": 1.25,
+        "locked_qz": 2.5,
+        "sim_col": 11.0,
+        "sim_row": 12.0,
+    }
+    row.update(overrides)
+    return row
+
+
 # D2 contract map: caked payload helpers return ready/invalid/absent status
 # strings, mutate only job-local caked/projection payload maps, short-circuit
 # invalid existing payloads before generated fallback, and emit stage diagnostics
 # with the same status/kind/message fields as the old nested helpers.
+#
+# D3.1 contract map: source-row projection helpers normalize source rows for a
+# background, project them through runtime manual projection callbacks, preserve
+# source/reflection/locked-Q identity fields, return [] for empty rows, group
+# mixed-background rows with current background as the fallback, and restore the
+# original cross-background row ordering after projection.
 
 
 def test_worker_context_from_job_copies_source_snapshots() -> None:
@@ -383,6 +534,163 @@ def test_worker_context_load_background_by_index_snapshot_missing_payload_matche
     assert display_copy.dtype == np.float64
     assert np.isnan(native_copy)
     assert np.isnan(display_copy)
+
+
+def test_project_source_rows_for_background_preserves_row_order() -> None:
+    context, _fake_deps = _context_with_source_projection_deps()
+    rows = [
+        _source_row(source_row_index=1, hkl=(1, 0, 0)),
+        _source_row(source_row_index=2, hkl=(2, 0, 0)),
+    ]
+
+    projected = context.project_source_rows_for_background(0, rows)
+
+    assert [row["source_row_index"] for row in projected] == [1, 2]
+    assert all(row["projected"] is True for row in projected)
+
+
+def test_project_source_rows_for_background_preserves_source_locator_identity() -> None:
+    context, _fake_deps = _context_with_source_projection_deps()
+    row = _source_row(
+        q_group_key=("q_group", "primary", 3, 10),
+        source_row_index=99,
+    )
+
+    projected = context.project_source_rows_for_background(0, [row])
+
+    assert projected[0]["q_group_key"] == ("q_group", "primary", 3, 10)
+    assert projected[0]["source_row_index"] == 99
+
+
+def test_project_source_rows_for_background_preserves_reflection_identity() -> None:
+    context, _fake_deps = _context_with_source_projection_deps()
+    row = _source_row(
+        hkl=(-2, 1, 5),
+        normalized_hkl=(-2, 1, 5),
+        source_reflection_index=11,
+        source_reflection_namespace="full_reflection",
+        source_reflection_is_full=True,
+    )
+
+    projected = context.project_source_rows_for_background(0, [row])
+
+    assert projected[0]["hkl"] == (-2, 1, 5)
+    assert projected[0]["normalized_hkl"] == (-2, 1, 5)
+    assert projected[0]["source_reflection_index"] == 11
+    assert projected[0]["source_reflection_namespace"] == "full_reflection"
+    assert projected[0]["source_reflection_is_full"] is True
+
+
+def test_project_source_rows_for_background_preserves_locked_qr_qz_identity() -> None:
+    context, _fake_deps = _context_with_source_projection_deps()
+    row = _source_row(locked_qr=1.5, locked_qz=2.75)
+
+    projected = context.project_source_rows_for_background(0, [row])
+
+    assert projected[0]["locked_qr"] == 1.5
+    assert projected[0]["locked_qz"] == 2.75
+
+
+def test_project_source_rows_for_background_empty_input_matches_current_shape() -> None:
+    context, _fake_deps = _context_with_source_projection_deps()
+
+    assert context.project_source_rows_for_background(0, []) == []
+    assert context.project_source_rows_for_background(0, None) == []
+
+
+def test_project_source_rows_for_background_detector_empty_projection_preserves_rows() -> None:
+    context, fake_deps = _context_with_source_projection_deps()
+    fake_deps.callbacks.projected_rows = []
+    rows = [_source_row(source_row_index=4, caked_x=1.0, caked_y=2.0)]
+
+    projected = context.project_source_rows_for_background(0, rows)
+
+    assert projected == rows
+
+
+def test_project_source_rows_for_background_detector_empty_projection_rejects_stored_caked_rows() -> None:
+    context, fake_deps = _context_with_source_projection_deps()
+    fake_deps.callbacks.projected_rows = []
+    row = _source_row(source_row_index=4, caked_x=1.0, caked_y=2.0)
+    row.pop("source_label")
+
+    projected = context.project_source_rows_for_background(0, [row])
+
+    assert projected == []
+
+
+def test_project_source_rows_by_row_background_groups_by_same_background_key() -> None:
+    context, fake_deps = _context_with_source_projection_deps()
+    rows = [
+        _source_row(background_index=0, source_row_index=1),
+        _source_row(background_index=1, source_row_index=2),
+    ]
+
+    projected = context.project_source_rows_by_row_background(rows)
+
+    assert [row["background_index"] for row in projected] == [0, 1]
+    assert [row["source_row_index"] for row in projected] == [1, 2]
+    assert len(fake_deps.callbacks.calls) == 2
+
+
+def test_project_source_rows_by_row_background_preserves_group_order() -> None:
+    context, _fake_deps = _context_with_source_projection_deps()
+    rows = [
+        _source_row(background_index=1, source_row_index=1),
+        _source_row(background_index=0, source_row_index=2),
+        _source_row(background_index=1, source_row_index=3),
+    ]
+
+    projected = context.project_source_rows_by_row_background(rows)
+
+    assert [row["source_row_index"] for row in projected] == [1, 2, 3]
+
+
+def test_project_source_rows_by_row_background_preserves_locked_qr_qz_fields() -> None:
+    context, _fake_deps = _context_with_source_projection_deps()
+    rows = [
+        _source_row(background_index=1, source_row_index=1, locked_qr=4.0, locked_qz=5.0),
+        _source_row(background_index=0, source_row_index=2, locked_qr=6.0, locked_qz=7.0),
+    ]
+
+    projected = context.project_source_rows_by_row_background(rows)
+
+    assert [(row["locked_qr"], row["locked_qz"]) for row in projected] == [
+        (4.0, 5.0),
+        (6.0, 7.0),
+    ]
+
+
+def test_project_source_rows_by_row_background_does_not_merge_distinct_background_groups() -> None:
+    context, fake_deps = _context_with_source_projection_deps()
+    rows = [
+        _source_row(background_index=1, source_row_index=1),
+        _source_row(background_index=0, source_row_index=2),
+    ]
+
+    context.project_source_rows_by_row_background(rows)
+
+    assert [
+        [row["background_index"] for row in call]
+        for call in fake_deps.callbacks.calls
+    ] == [[1], [0]]
+
+
+def test_project_source_rows_by_row_background_missing_row_background_matches_current_fallback() -> None:
+    context, _fake_deps = _context_with_source_projection_deps(
+        {"current_background_index": 3}
+    )
+    missing_background_row = _source_row(source_row_index=1)
+    missing_background_row.pop("background_index")
+    rows = [
+        missing_background_row,
+        _source_row(background_index=2, source_row_index=2),
+    ]
+
+    projected = context.project_source_rows_by_row_background(rows)
+
+    assert [row["background_index"] for row in projected] == [3, 2]
+    assert [row["source_row_index"] for row in projected] == [1, 2]
 
 
 def test_caked_projection_payload_status_reports_ready_payload() -> None:

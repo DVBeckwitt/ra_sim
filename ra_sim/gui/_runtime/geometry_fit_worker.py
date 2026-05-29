@@ -24,6 +24,25 @@ class GeometryFitWorkerCakedPayloadDeps:
     is_transform_bundle: Callable[[object], bool]
 
 
+@dataclass(frozen=True)
+class GeometryFitWorkerSourceProjectionDeps:
+    rows_for_background: Callable[..., object]
+    group_rows_by_background: Callable[..., object]
+    make_projection_callbacks: Callable[..., object]
+    native_detector_coords_to_bundle_detector_coords: Callable[..., object]
+    raw_phi_to_gui_phi: Callable[..., object]
+    rotate_point_for_display: Callable[..., object]
+    native_sim_to_display_coords: Callable[..., object] | None
+    get_detector_angular_maps: Callable[..., object] | None
+    detector_pixel_to_scattering_angles: Callable[..., object] | None
+    backend_detector_coords_to_native_detector_coords: Callable[..., object]
+    scattering_angles_to_detector_pixel: Callable[..., object] | None
+    profile_cache: Callable[..., object]
+    default_pixel_size_m: float
+    default_image_size: int
+    default_display_rotate_k: int
+
+
 @dataclass
 class GeometryFitWorkerContext:
     job_data: dict[str, object]
@@ -36,6 +55,7 @@ class GeometryFitWorkerContext:
     source_cache_generation_by_background: dict[int, object]
     source_cache_generation_lock: threading.Lock = field(default_factory=threading.Lock)
     caked_payload_deps: GeometryFitWorkerCakedPayloadDeps | None = None
+    source_projection_deps: GeometryFitWorkerSourceProjectionDeps | None = None
 
     @classmethod
     def from_job(cls, job: Mapping[str, object]) -> GeometryFitWorkerContext:
@@ -132,6 +152,13 @@ class GeometryFitWorkerContext:
         if self.caked_payload_deps is None:
             raise RuntimeError("geometry-fit worker caked payload deps are not configured")
         return self.caked_payload_deps
+
+    def _require_source_projection_deps(self) -> GeometryFitWorkerSourceProjectionDeps:
+        if self.source_projection_deps is None:
+            raise RuntimeError(
+                "geometry-fit worker source projection deps are not configured"
+            )
+        return self.source_projection_deps
 
     def caked_projection_payload_status(
         self,
@@ -363,3 +390,287 @@ class GeometryFitWorkerContext:
         if status != "projection_payload_ready":
             return None
         return projection_payload
+
+    def project_source_rows_for_background(
+        self,
+        background_index: int,
+        raw_rows: Sequence[object] | None,
+        *,
+        mode_override: str | None = None,
+        strict_caked_projection: bool = True,
+        params_override: Mapping[str, object] | None = None,
+    ) -> Sequence[object]:
+        deps = self._require_source_projection_deps()
+        normalized_rows = deps.rows_for_background(background_index, raw_rows)
+        if not normalized_rows:
+            return []
+        normalized_mode = (
+            str(
+                mode_override
+                if mode_override is not None
+                else self.job_data.get("projection_view_mode") or "detector"
+            )
+            .strip()
+            .lower()
+        )
+        if normalized_mode not in {"detector", "caked", "q_space"}:
+            normalized_mode = "detector"
+        current_background_index = int(self.job_data.get("current_background_index", 0))
+        is_current_background = int(background_index) == int(current_background_index)
+        if normalized_mode == "q_space":
+            if not is_current_background:
+                return []
+            projector = self.job_data.get("project_rows")
+            if not callable(projector):
+                return []
+            try:
+                return deps.rows_for_background(
+                    background_index,
+                    projector(normalized_rows),
+                )
+            except Exception:
+                return []
+
+        background_payload = dict(
+            dict(self.job_data.get("background_images", {}) or {}).get(
+                int(background_index)
+            )
+            or {}
+        )
+        native_background = background_payload.get("native")
+        display_background = background_payload.get("display")
+        try:
+            detector_shape = tuple(
+                int(v) for v in np.asarray(native_background, dtype=np.float64).shape[:2]
+            )
+        except Exception:
+            detector_shape = None
+        params_local = dict(self.job_data.get("params", {}) or {})
+        if isinstance(params_override, Mapping):
+            params_local.update(dict(params_override))
+        resolved_caked_payload = None
+        exact_caked_bundle = None
+        if normalized_mode == "caked":
+            caked_deps = self._require_caked_payload_deps()
+            payload_map = self.job_data.setdefault("projection_payload_by_background", {})
+            resolved_caked_payload = self.load_caked_projection_by_index_snapshot(
+                int(background_index),
+                detector_shape=detector_shape,
+                allow_generated_payload=True,
+            )
+            if not isinstance(resolved_caked_payload, Mapping):
+                if not bool(strict_caked_projection):
+                    return []
+                raise RuntimeError(
+                    "exact caked projector unavailable for background "
+                    f"{int(background_index) + 1}"
+                )
+            hydrated_caked_payload = caked_deps.hydrate_exact_caked_payload(
+                resolved_caked_payload,
+                detector_shape=detector_shape,
+                params=params_local,
+                require_background=False,
+            )
+            if (
+                not isinstance(hydrated_caked_payload, Mapping)
+                or not caked_deps.is_transform_bundle(
+                    hydrated_caked_payload.get("transform_bundle")
+                )
+            ):
+                if not bool(strict_caked_projection):
+                    return []
+                raise RuntimeError(
+                    "exact caked projector unavailable for background "
+                    f"{int(background_index) + 1}"
+                )
+            resolved_caked_payload = hydrated_caked_payload
+            exact_caked_bundle = hydrated_caked_payload.get("transform_bundle")
+            stored_projection_payload = caked_deps.caked_projection_payload(
+                hydrated_caked_payload
+            )
+            stored_projection_payload = caked_deps.projection_payload_storage_copy(
+                stored_projection_payload
+            )
+            if isinstance(stored_projection_payload, Mapping):
+                payload_map[int(background_index)] = stored_projection_payload
+
+        center_value = params_local.get("center")
+        if isinstance(center_value, Sequence) and len(center_value) >= 2:
+            try:
+                center_pair = [float(center_value[0]), float(center_value[1])]
+            except Exception:
+                center_pair = None
+        else:
+            center_pair = None
+
+        def _background_native_detector_coords_to_bundle_detector_coords(
+            col: float,
+            row: float,
+        ) -> tuple[float | None, float | None]:
+            return deps.native_detector_coords_to_bundle_detector_coords(
+                float(col),
+                float(row),
+                detector_shape,
+            )
+
+        def _has_live_caked_handoff_rows(rows: Sequence[Mapping[str, object]]) -> bool:
+            if not rows:
+                return False
+            for row in rows:
+                if row.get("source_label") is None:
+                    return False
+                try:
+                    caked_x = float(row.get("caked_x", row.get("background_two_theta_deg")))
+                    caked_y = float(row.get("caked_y", row.get("background_phi_deg")))
+                except Exception:
+                    return False
+                if not (np.isfinite(caked_x) and np.isfinite(caked_y)):
+                    return False
+            return True
+
+        caked_deps = self.caked_payload_deps
+        projection_callbacks = deps.make_projection_callbacks(
+            caked_view_enabled=lambda: bool(
+                normalized_mode == "caked" and isinstance(resolved_caked_payload, Mapping)
+            ),
+            last_caked_background_image_unscaled=lambda: (
+                resolved_caked_payload.get("background")
+                if isinstance(resolved_caked_payload, Mapping)
+                else None
+            ),
+            last_caked_radial_values=lambda: (
+                resolved_caked_payload.get("radial_axis")
+                if isinstance(resolved_caked_payload, Mapping)
+                else None
+            ),
+            last_caked_azimuth_values=lambda: (
+                resolved_caked_payload.get("azimuth_axis")
+                if isinstance(resolved_caked_payload, Mapping)
+                else None
+            ),
+            current_background_display=lambda: display_background,
+            current_background_native=lambda: native_background,
+            ai=(
+                caked_deps.caking_integrator
+                if caked_deps is not None
+                else (lambda: None)
+            ),
+            center=lambda: center_pair,
+            detector_distance=lambda: float(
+                params_local.get("corto_detector", 0.0) or 0.0
+            ),
+            pixel_size=float(
+                params_local.get("pixel_size_m", deps.default_pixel_size_m)
+                or deps.default_pixel_size_m
+            ),
+            caked_transform_bundle=lambda: (
+                exact_caked_bundle
+                if caked_deps is not None
+                and caked_deps.is_transform_bundle(
+                    exact_caked_bundle
+                )
+                else None
+            ),
+            wrap_phi_range=deps.raw_phi_to_gui_phi,
+            rotate_point_for_display=deps.rotate_point_for_display,
+            display_rotate_k=int(
+                self.job_data.get("display_rotate_k", deps.default_display_rotate_k)
+            ),
+            current_background_index=lambda: int(background_index),
+            caked_projection_payload=lambda: resolved_caked_payload,
+            current_geometry_fit_params=lambda: dict(params_local),
+            build_live_preview_simulated_peaks_from_cache=lambda: [],
+            ensure_peak_overlay_data=lambda **_kwargs: False,
+            miller=lambda: self.job_data["solver_inputs"].miller,
+            intensities=lambda: self.job_data["solver_inputs"].intensities,
+            image_size=int(self.job_data.get("image_size", deps.default_image_size)),
+            display_to_native_sim_coords=self.job_data.get("display_to_native_sim_coords"),
+            native_sim_to_display_coords=deps.native_sim_to_display_coords,
+            native_detector_coords_to_detector_display_coords=(
+                _background_native_detector_coords_to_bundle_detector_coords
+            ),
+            get_detector_angular_maps=(
+                (lambda ai_value: deps.get_detector_angular_maps(ai_value))
+                if callable(deps.get_detector_angular_maps)
+                else (lambda _ai_value: None)
+            ),
+            detector_pixel_to_scattering_angles=(
+                deps.detector_pixel_to_scattering_angles
+            ),
+            backend_detector_coords_to_native_detector_coords=(
+                deps.backend_detector_coords_to_native_detector_coords
+            ),
+            native_detector_coords_to_bundle_detector_coords=(
+                _background_native_detector_coords_to_bundle_detector_coords
+            ),
+            bundle_detector_coords_to_background_display_coords=(
+                lambda col, row: (float(col), float(row))
+            ),
+            scattering_angles_to_detector_pixel=deps.scattering_angles_to_detector_pixel,
+            filter_simulated_peaks=(
+                lambda peaks, *_args, **_kwargs: (list(peaks or ()), [], 0)
+            ),
+            collapse_simulated_peaks=(
+                lambda peaks, *_args, **_kwargs: (list(peaks or ()), 0)
+            ),
+            profile_cache=deps.profile_cache,
+        )
+        try:
+            projected_rows = deps.rows_for_background(
+                background_index,
+                projection_callbacks.project_peaks_to_current_view(normalized_rows),
+            )
+            if (
+                not projected_rows
+                and normalized_mode == "detector"
+                and _has_live_caked_handoff_rows(normalized_rows)
+            ):
+                return normalized_rows
+            return projected_rows
+        except Exception:
+            if normalized_mode == "q_space":
+                return []
+            if normalized_mode == "caked":
+                if bool(strict_caked_projection):
+                    raise
+                return []
+            return normalized_rows
+
+    def project_source_rows_by_row_background(
+        self,
+        raw_rows: Sequence[object] | None,
+    ) -> list[dict[str, object]]:
+        deps = self._require_source_projection_deps()
+        order_key = "__ra_sim_projection_row_order__"
+        grouped_rows = deps.group_rows_by_background(
+            raw_rows,
+            default_background_index=int(self.job_data.get("current_background_index", 0)),
+            order_key=order_key,
+        )
+        if not grouped_rows:
+            return []
+        projected_rows: list[dict[str, object]] = []
+        for background_index, rows_for_background in grouped_rows:
+            projected_rows.extend(
+                dict(entry)
+                for entry in (
+                    self.project_source_rows_for_background(
+                        int(background_index),
+                        rows_for_background,
+                    )
+                    or ()
+                )
+                if isinstance(entry, Mapping)
+            )
+        sorted_rows = sorted(
+            projected_rows,
+            key=lambda entry: (
+                int(entry.get(order_key)) if entry.get(order_key) is not None else int(1e12)
+            ),
+        )
+        cleaned_rows: list[dict[str, object]] = []
+        for raw_entry in sorted_rows:
+            entry = dict(raw_entry)
+            entry.pop(order_key, None)
+            cleaned_rows.append(entry)
+        return cleaned_rows

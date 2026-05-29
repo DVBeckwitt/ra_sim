@@ -108,13 +108,15 @@ def test_geometry_fit_worker_context_helpers_are_not_duplicated_in_runtime_worke
         "_load_caked_projection_by_index_snapshot",
         "_load_caked_view_by_index_snapshot",
         "_projection_candidate_state",
+        "_project_source_rows_by_row_background",
+        "_project_source_rows_for_background",
         "_set_worker_source_snapshot_diagnostics",
         "_source_cache_generation_matches",
     }
     assert not (nested_function_names & moved_helper_names)
 
 
-def test_geometry_fit_worker_has_not_moved_d3_projection_cache_helpers_yet() -> None:
+def test_geometry_fit_worker_has_moved_only_d3_source_projection_helpers() -> None:
     tree = ast.parse(GEOMETRY_FIT_WORKER_PATH.read_text(encoding="utf-8"))
     worker_function_names = {
         node.name
@@ -122,18 +124,28 @@ def test_geometry_fit_worker_has_not_moved_d3_projection_cache_helpers_yet() -> 
         if isinstance(node, ast.FunctionDef)
     }
 
-    d3_helper_names = {
+    assert {
+        "project_source_rows_by_row_background",
+        "project_source_rows_for_background",
+    } <= worker_function_names
+
+    pending_d3_helper_names = {
         "_build_geometry_fit_background_cache_bundle",
         "_bundle_rows",
         "_mark_worker_cached_projection_rows",
         "_prebuild_background_cache_bundle_worker",
         "_prebuild_required_background_caches",
-        "_project_source_rows_by_row_background",
-        "_project_source_rows_for_background",
         "_store_worker_background_cache_bundle",
         "_worker_cached_projection_rows_match",
+        "build_geometry_fit_background_cache_bundle",
+        "bundle_rows",
+        "mark_worker_cached_projection_rows",
+        "prebuild_background_cache_bundle_worker",
+        "prebuild_required_background_caches",
+        "store_worker_background_cache_bundle",
+        "worker_cached_projection_rows_match",
     }
-    assert not (worker_function_names & d3_helper_names)
+    assert not (worker_function_names & pending_d3_helper_names)
 
 
 def _geometry_fit_param_set() -> dict[str, object]:
