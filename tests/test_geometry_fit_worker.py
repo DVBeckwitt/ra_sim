@@ -284,16 +284,6 @@ def test_worker_context_current_source_cache_generation_defaults_zero() -> None:
 
 def test_worker_context_advance_source_cache_generation_updates_job_data() -> None:
     context = GeometryFitWorkerContext.from_job(
-        {"source_cache_generation_by_background": {2: 5}}
-    )
-
-    assert context.advance_source_cache_generation(2) == 6
-    assert context.source_cache_generation_by_background[2] == 6
-    assert context.job_data["source_cache_generation_by_background"] == {2: 6}
-
-
-def test_worker_context_advance_source_cache_generation_preserves_other_backgrounds() -> None:
-    context = GeometryFitWorkerContext.from_job(
         {"source_cache_generation_by_background": {1: 3, 2: 5}}
     )
 
