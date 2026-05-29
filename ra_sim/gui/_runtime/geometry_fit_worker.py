@@ -43,6 +43,12 @@ class GeometryFitWorkerSourceProjectionDeps:
     default_display_rotate_k: int
 
 
+@dataclass(frozen=True)
+class GeometryFitWorkerCacheBundleDeps:
+    is_background_cache_bundle: Callable[[object], bool]
+    copy_source_rows: Callable[..., object]
+
+
 @dataclass
 class GeometryFitWorkerContext:
     job_data: dict[str, object]
@@ -56,6 +62,7 @@ class GeometryFitWorkerContext:
     source_cache_generation_lock: threading.Lock = field(default_factory=threading.Lock)
     caked_payload_deps: GeometryFitWorkerCakedPayloadDeps | None = None
     source_projection_deps: GeometryFitWorkerSourceProjectionDeps | None = None
+    cache_bundle_deps: GeometryFitWorkerCacheBundleDeps | None = None
 
     @classmethod
     def from_job(cls, job: Mapping[str, object]) -> GeometryFitWorkerContext:
@@ -159,6 +166,11 @@ class GeometryFitWorkerContext:
                 "geometry-fit worker source projection deps are not configured"
             )
         return self.source_projection_deps
+
+    def _require_cache_bundle_deps(self) -> GeometryFitWorkerCacheBundleDeps:
+        if self.cache_bundle_deps is None:
+            raise RuntimeError("geometry-fit worker cache bundle deps are not configured")
+        return self.cache_bundle_deps
 
     def caked_projection_payload_status(
         self,
@@ -676,3 +688,126 @@ class GeometryFitWorkerContext:
             entry.pop(order_key, None)
             cleaned_rows.append(entry)
         return cleaned_rows
+
+    def mark_worker_cached_projection_rows(
+        self,
+        rows: list[dict[str, object]],
+        *,
+        background_index: int,
+        mode: str,
+    ) -> list[dict[str, object]]:
+        if mode not in {"caked", "q_space"}:
+            return rows
+        for row in rows:
+            row["_geometry_fit_worker_cached_projection"] = True
+            row["_geometry_fit_worker_projection_mode"] = mode
+            row["_geometry_fit_worker_projection_background_index"] = int(
+                background_index
+            )
+        return rows
+
+    def worker_cached_projection_rows_match(
+        self,
+        rows: Sequence[Mapping[str, object]],
+        *,
+        background_index: int,
+        mode: str,
+    ) -> bool:
+        if mode not in {"caked", "q_space"} or not rows:
+            return False
+        expected_background_index = int(background_index)
+        for row in rows:
+            try:
+                row_background_index = int(
+                    row.get("_geometry_fit_worker_projection_background_index")
+                )
+            except Exception:
+                return False
+            if (
+                row.get("_geometry_fit_worker_cached_projection") is not True
+                or row_background_index != expected_background_index
+                or str(row.get("_geometry_fit_worker_projection_mode") or "").lower()
+                != mode
+            ):
+                return False
+        return True
+
+    def bundle_rows(
+        self,
+        bundle: object | None,
+        *,
+        mode_override: str | None = None,
+        params_override: Mapping[str, object] | None = None,
+    ) -> list[dict[str, object]]:
+        cache_deps = self._require_cache_bundle_deps()
+        source_deps = self._require_source_projection_deps()
+        if not cache_deps.is_background_cache_bundle(bundle):
+            return []
+        background_index = int(bundle.background_index)
+        base_mode = str(self.job_data.get("projection_view_mode") or "detector").strip().lower()
+        normalized_mode = str(mode_override or base_mode or "detector").strip().lower()
+        if normalized_mode not in {"detector", "caked", "q_space"}:
+            normalized_mode = "detector"
+        rows = source_deps.rows_for_background(
+            background_index,
+            bundle.projected_rows,
+        )
+        if rows and self.worker_cached_projection_rows_match(
+            rows,
+            background_index=background_index,
+            mode=normalized_mode,
+        ):
+            return [dict(entry) for entry in rows if isinstance(entry, Mapping)]
+        if rows and params_override is None and normalized_mode == base_mode:
+            return self.mark_worker_cached_projection_rows(
+                rows,
+                background_index=background_index,
+                mode=normalized_mode,
+            )
+        if normalized_mode in {"caked", "q_space"}:
+            projected_rows = source_deps.rows_for_background(
+                background_index,
+                self.project_source_rows_for_background(
+                    background_index,
+                    bundle.stored_rows,
+                    mode_override=normalized_mode,
+                    params_override=params_override,
+                ),
+            )
+            if projected_rows:
+                return self.mark_worker_cached_projection_rows(
+                    projected_rows,
+                    background_index=background_index,
+                    mode=normalized_mode,
+                )
+            return []
+        return source_deps.rows_for_background(background_index, bundle.stored_rows)
+
+    def store_worker_background_cache_bundle(self, bundle: object) -> int:
+        cache_deps = self._require_cache_bundle_deps()
+        background_index = int(bundle.background_index)
+        self.worker_background_cache_by_index[background_index] = bundle
+        projection_signatures = dict(
+            self.job_data.get("projection_view_signature_by_background", {}) or {}
+        )
+        self.worker_source_row_snapshots[background_index] = {
+            "background_index": background_index,
+            "simulation_signature": bundle.requested_signature,
+            "rows": cache_deps.copy_source_rows(bundle.stored_rows),
+            "stored_rows": cache_deps.copy_source_rows(bundle.stored_rows),
+            "projected_rows": cache_deps.copy_source_rows(bundle.projected_rows),
+            "row_count": int(len(bundle.stored_rows or ())),
+            "projected_row_count": int(len(bundle.projected_rows or ())),
+            "created_from": str(bundle.cache_source or "geometry_fit_background_cache"),
+            "requested_signature": bundle.requested_signature,
+            "requested_signature_summary": bundle.requested_signature_summary,
+            "diagnostics": copy.deepcopy(dict(bundle.diagnostics or {})),
+            "projection_view_signature": copy.deepcopy(
+                projection_signatures.get(background_index)
+            ),
+            "valid_for_picker": bool(bundle.stored_rows),
+            "valid_for_geometry_fit_dataset": bool(
+                bundle.stored_rows or bundle.projected_rows
+            ),
+        }
+        return self.advance_source_cache_generation(background_index)

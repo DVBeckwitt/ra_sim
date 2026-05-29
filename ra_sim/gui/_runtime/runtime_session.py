@@ -40441,117 +40441,6 @@ def _run_async_geometry_fit_worker_job(
             job_data["projection_view_signature"] = copy.deepcopy(signature_map[background_idx])
         return copy.deepcopy(signature_map[background_idx])
 
-    def _mark_worker_cached_projection_rows(
-        rows: list[dict[str, object]],
-        *,
-        background_index: int,
-        mode: str,
-    ) -> list[dict[str, object]]:
-        if mode not in {"caked", "q_space"}:
-            return rows
-        for row in rows:
-            row["_geometry_fit_worker_cached_projection"] = True
-            row["_geometry_fit_worker_projection_mode"] = mode
-            row["_geometry_fit_worker_projection_background_index"] = int(background_index)
-        return rows
-
-    def _worker_cached_projection_rows_match(
-        rows: Sequence[Mapping[str, object]],
-        *,
-        background_index: int,
-        mode: str,
-    ) -> bool:
-        if mode not in {"caked", "q_space"} or not rows:
-            return False
-        expected_background_index = int(background_index)
-        for row in rows:
-            try:
-                row_background_index = int(
-                    row.get("_geometry_fit_worker_projection_background_index")
-                )
-            except Exception:
-                return False
-            if (
-                row.get("_geometry_fit_worker_cached_projection") is not True
-                or row_background_index != expected_background_index
-                or str(row.get("_geometry_fit_worker_projection_mode") or "").lower() != mode
-            ):
-                return False
-        return True
-
-    def _bundle_rows(
-        bundle: gui_geometry_fit.GeometryFitBackgroundCacheBundle | None,
-        *,
-        mode_override: str | None = None,
-        params_override: Mapping[str, object] | None = None,
-    ) -> list[dict[str, object]]:
-        if not isinstance(bundle, gui_geometry_fit.GeometryFitBackgroundCacheBundle):
-            return []
-        base_mode = str(job_data.get("projection_view_mode") or "detector").strip().lower()
-        normalized_mode = str(mode_override or base_mode or "detector").strip().lower()
-        if normalized_mode not in {"detector", "caked", "q_space"}:
-            normalized_mode = "detector"
-        rows = _geometry_fit_rows_for_background(
-            int(bundle.background_index),
-            bundle.projected_rows,
-        )
-        if rows and _worker_cached_projection_rows_match(
-            rows,
-            background_index=int(bundle.background_index),
-            mode=normalized_mode,
-        ):
-            return [dict(entry) for entry in rows if isinstance(entry, Mapping)]
-        if rows and params_override is None and normalized_mode == base_mode:
-            return _mark_worker_cached_projection_rows(
-                rows,
-                background_index=int(bundle.background_index),
-                mode=normalized_mode,
-            )
-        if normalized_mode in {"caked", "q_space"}:
-            projected_rows = _geometry_fit_rows_for_background(
-                int(bundle.background_index),
-                _project_source_rows_for_background(
-                    int(bundle.background_index),
-                    bundle.stored_rows,
-                    mode_override=normalized_mode,
-                    params_override=params_override,
-                ),
-            )
-            if projected_rows:
-                return _mark_worker_cached_projection_rows(
-                    projected_rows,
-                    background_index=int(bundle.background_index),
-                    mode=normalized_mode,
-                )
-            return []
-        return _geometry_fit_rows_for_background(int(bundle.background_index), bundle.stored_rows)
-
-    def _store_worker_background_cache_bundle(
-        bundle: gui_geometry_fit.GeometryFitBackgroundCacheBundle,
-    ) -> int:
-        worker_background_cache_by_index[int(bundle.background_index)] = bundle
-        worker_source_row_snapshots[int(bundle.background_index)] = {
-            "background_index": int(bundle.background_index),
-            "simulation_signature": bundle.requested_signature,
-            "rows": _copy_source_rows(bundle.stored_rows),
-            "stored_rows": _copy_source_rows(bundle.stored_rows),
-            "projected_rows": _copy_source_rows(bundle.projected_rows),
-            "row_count": int(len(bundle.stored_rows or ())),
-            "projected_row_count": int(len(bundle.projected_rows or ())),
-            "created_from": str(bundle.cache_source or "geometry_fit_background_cache"),
-            "requested_signature": bundle.requested_signature,
-            "requested_signature_summary": bundle.requested_signature_summary,
-            "diagnostics": copy.deepcopy(dict(bundle.diagnostics or {})),
-            "projection_view_signature": copy.deepcopy(
-                dict(job_data.get("projection_view_signature_by_background", {}) or {}).get(
-                    int(bundle.background_index)
-                )
-            ),
-            "valid_for_picker": bool(bundle.stored_rows),
-            "valid_for_geometry_fit_dataset": bool(bundle.stored_rows or bundle.projected_rows),
-        }
-        return _advance_source_cache_generation(int(bundle.background_index))
-
     def _build_geometry_fit_background_cache_bundle(
         *,
         background_index: int,
@@ -40778,6 +40667,16 @@ def _run_async_geometry_fit_worker_job(
             default_display_rotate_k=int(globals().get("DISPLAY_ROTATE_K", 0)),
         )
     )
+
+    def _is_worker_background_cache_bundle(value: object) -> bool:
+        return isinstance(value, gui_geometry_fit.GeometryFitBackgroundCacheBundle)
+
+    worker_context.cache_bundle_deps = (
+        _geometry_fit_worker.GeometryFitWorkerCacheBundleDeps(
+            is_background_cache_bundle=_is_worker_background_cache_bundle,
+            copy_source_rows=_copy_source_rows,
+        )
+    )
     _caked_projection_payload_status = worker_context.caked_projection_payload_status
     _projection_candidate_state = worker_context.projection_candidate_state
     _load_caked_view_by_index_snapshot = (
@@ -40794,6 +40693,16 @@ def _run_async_geometry_fit_worker_job(
     )
     _project_source_rows_by_row_background = (
         worker_context.project_source_rows_by_row_background
+    )
+    _mark_worker_cached_projection_rows = (
+        worker_context.mark_worker_cached_projection_rows
+    )
+    _worker_cached_projection_rows_match = (
+        worker_context.worker_cached_projection_rows_match
+    )
+    _bundle_rows = worker_context.bundle_rows
+    _store_worker_background_cache_bundle = (
+        worker_context.store_worker_background_cache_bundle
     )
 
     def _store_worker_caked_view_for_background(

@@ -5,6 +5,7 @@ from collections.abc import Mapping
 import numpy as np
 
 from ra_sim.gui._runtime.geometry_fit_worker import (
+    GeometryFitWorkerCacheBundleDeps,
     GeometryFitWorkerCakedPayloadDeps,
     GeometryFitWorkerContext,
     GeometryFitWorkerSourceProjectionDeps,
@@ -27,6 +28,42 @@ class FailingQueue:
 class FakeBundle:
     def __init__(self, detector_shape: tuple[int, int] = (2, 3)) -> None:
         self.detector_shape = detector_shape
+
+
+class FakeBackgroundCacheBundle:
+    def __init__(
+        self,
+        *,
+        background_index: int = 0,
+        stored_rows: list[dict[str, object]] | None = None,
+        projected_rows: list[dict[str, object]] | None = None,
+        cache_source: str = "fake_cache",
+        requested_signature: object = ("signature", 0),
+        requested_signature_summary: object = {"summary": 0},
+        diagnostics: dict[str, object] | None = None,
+    ) -> None:
+        self.background_index = int(background_index)
+        self.stored_rows = stored_rows if stored_rows is not None else []
+        self.projected_rows = projected_rows if projected_rows is not None else []
+        self.cache_source = cache_source
+        self.requested_signature = requested_signature
+        self.requested_signature_summary = requested_signature_summary
+        self.diagnostics = diagnostics if diagnostics is not None else {}
+
+
+class FakeCacheBundleDeps:
+    @property
+    def deps(self) -> GeometryFitWorkerCacheBundleDeps:
+        return GeometryFitWorkerCacheBundleDeps(
+            is_background_cache_bundle=lambda value: isinstance(
+                value,
+                FakeBackgroundCacheBundle,
+            ),
+            copy_source_rows=self.copy_source_rows,
+        )
+
+    def copy_source_rows(self, raw_rows: object) -> list[dict[str, object]]:
+        return [dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)]
 
 
 class FakeCakedPayloadDeps:
@@ -297,6 +334,20 @@ def _context_with_source_projection_deps(
     )
     context.source_projection_deps = fake_deps.deps
     return context, fake_deps
+
+
+def _context_with_cache_bundle_deps(
+    job: dict[str, object] | None = None,
+    fake_deps: FakeCacheBundleDeps | None = None,
+) -> tuple[GeometryFitWorkerContext, FakeCacheBundleDeps, FakeSourceProjectionDeps]:
+    source_deps = FakeSourceProjectionDeps()
+    context, _source_deps = _context_with_source_projection_deps(
+        job,
+        fake_deps=source_deps,
+    )
+    fake_deps = fake_deps or FakeCacheBundleDeps()
+    context.cache_bundle_deps = fake_deps.deps
+    return context, fake_deps, source_deps
 
 
 def _source_row(**overrides: object) -> dict[str, object]:
@@ -638,6 +689,374 @@ def test_project_source_rows_by_row_background_missing_row_background_matches_cu
 
     assert [row["background_index"] for row in projected] == [3, 2]
     assert [row["source_row_index"] for row in projected] == [1, 2]
+
+
+def test_mark_worker_cached_projection_rows_noops_for_detector_mode() -> None:
+    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+    rows = [_source_row(source_row_index=1)]
+
+    marked = context.mark_worker_cached_projection_rows(
+        rows,
+        background_index=0,
+        mode="detector",
+    )
+
+    assert marked is rows
+    assert "_geometry_fit_worker_cached_projection" not in rows[0]
+
+
+def test_mark_worker_cached_projection_rows_marks_caked_rows_in_place() -> None:
+    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+    rows = [_source_row(source_row_index=1)]
+
+    marked = context.mark_worker_cached_projection_rows(
+        rows,
+        background_index="2",
+        mode="caked",
+    )
+
+    assert marked is rows
+    assert rows[0]["_geometry_fit_worker_cached_projection"] is True
+    assert rows[0]["_geometry_fit_worker_projection_mode"] == "caked"
+    assert rows[0]["_geometry_fit_worker_projection_background_index"] == 2
+
+
+def test_mark_worker_cached_projection_rows_marks_q_space_rows_in_place() -> None:
+    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+    rows = [_source_row(source_row_index=1)]
+
+    marked = context.mark_worker_cached_projection_rows(
+        rows,
+        background_index=3,
+        mode="q_space",
+    )
+
+    assert marked is rows
+    assert rows[0]["_geometry_fit_worker_cached_projection"] is True
+    assert rows[0]["_geometry_fit_worker_projection_mode"] == "q_space"
+    assert rows[0]["_geometry_fit_worker_projection_background_index"] == 3
+
+
+def test_worker_cached_projection_rows_match_rejects_empty_rows() -> None:
+    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+
+    assert (
+        context.worker_cached_projection_rows_match(
+            [],
+            background_index=0,
+            mode="caked",
+        )
+        is False
+    )
+
+
+def test_worker_cached_projection_rows_match_rejects_detector_mode() -> None:
+    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+    rows = context.mark_worker_cached_projection_rows(
+        [_source_row()],
+        background_index=0,
+        mode="caked",
+    )
+
+    assert (
+        context.worker_cached_projection_rows_match(
+            rows,
+            background_index=0,
+            mode="detector",
+        )
+        is False
+    )
+
+
+def test_worker_cached_projection_rows_match_rejects_missing_marker() -> None:
+    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+
+    assert (
+        context.worker_cached_projection_rows_match(
+            [_source_row()],
+            background_index=0,
+            mode="caked",
+        )
+        is False
+    )
+
+
+def test_worker_cached_projection_rows_match_rejects_background_mismatch() -> None:
+    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+    rows = context.mark_worker_cached_projection_rows(
+        [_source_row()],
+        background_index=1,
+        mode="caked",
+    )
+
+    assert (
+        context.worker_cached_projection_rows_match(
+            rows,
+            background_index=0,
+            mode="caked",
+        )
+        is False
+    )
+
+
+def test_worker_cached_projection_rows_match_rejects_mode_mismatch() -> None:
+    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+    rows = context.mark_worker_cached_projection_rows(
+        [_source_row()],
+        background_index=0,
+        mode="q_space",
+    )
+
+    assert (
+        context.worker_cached_projection_rows_match(
+            rows,
+            background_index=0,
+            mode="caked",
+        )
+        is False
+    )
+
+
+def test_worker_cached_projection_rows_match_accepts_matching_caked_rows() -> None:
+    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+    rows = context.mark_worker_cached_projection_rows(
+        [_source_row()],
+        background_index=0,
+        mode="caked",
+    )
+
+    assert (
+        context.worker_cached_projection_rows_match(
+            rows,
+            background_index=0,
+            mode="caked",
+        )
+        is True
+    )
+
+
+def test_worker_cached_projection_rows_match_accepts_matching_q_space_rows() -> None:
+    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+    rows = context.mark_worker_cached_projection_rows(
+        [_source_row()],
+        background_index=0,
+        mode="q_space",
+    )
+
+    assert (
+        context.worker_cached_projection_rows_match(
+            rows,
+            background_index=0,
+            mode="q_space",
+        )
+        is True
+    )
+
+
+def test_bundle_rows_returns_empty_for_non_bundle() -> None:
+    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+
+    assert context.bundle_rows(object()) == []
+
+
+def test_bundle_rows_reuses_matching_cached_projected_rows_as_copies() -> None:
+    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps(
+        {"projection_view_mode": "caked"}
+    )
+    projected_rows = context.mark_worker_cached_projection_rows(
+        [_source_row(source_row_index=1, projected=True)],
+        background_index=0,
+        mode="caked",
+    )
+    bundle = FakeBackgroundCacheBundle(projected_rows=projected_rows)
+
+    rows = context.bundle_rows(bundle)
+    rows[0]["source_row_index"] = 99
+
+    assert rows[0]["projected"] is True
+    assert bundle.projected_rows[0]["source_row_index"] == 1
+
+
+def test_bundle_rows_marks_unmarked_projected_rows_when_mode_matches_and_no_params_override() -> None:
+    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps(
+        {"projection_view_mode": "caked"}
+    )
+    bundle = FakeBackgroundCacheBundle(
+        projected_rows=[_source_row(source_row_index=1, projected=True)]
+    )
+
+    rows = context.bundle_rows(bundle)
+
+    assert rows[0]["_geometry_fit_worker_cached_projection"] is True
+    assert rows[0]["_geometry_fit_worker_projection_mode"] == "caked"
+    assert rows[0]["_geometry_fit_worker_projection_background_index"] == 0
+
+
+def test_bundle_rows_remarks_stale_projected_rows_when_mode_matches() -> None:
+    context, _fake_deps, source_deps = _context_with_cache_bundle_deps(
+        {"projection_view_mode": "caked"}
+    )
+    stale_rows = context.mark_worker_cached_projection_rows(
+        [_source_row(source_row_index=1, projected=True)],
+        background_index=2,
+        mode="caked",
+    )
+    bundle = FakeBackgroundCacheBundle(
+        stored_rows=[_source_row(source_row_index=2)],
+        projected_rows=stale_rows,
+    )
+
+    rows = context.bundle_rows(bundle)
+
+    assert rows[0]["source_row_index"] == 1
+    assert rows[0]["_geometry_fit_worker_projection_background_index"] == 0
+    assert not source_deps.callbacks.calls
+
+
+def test_bundle_rows_remarks_incompatible_projection_modes_when_mode_matches() -> None:
+    context, _fake_deps, source_deps = _context_with_cache_bundle_deps(
+        {"projection_view_mode": "caked"}
+    )
+    q_space_rows = context.mark_worker_cached_projection_rows(
+        [_source_row(source_row_index=1, projected=True)],
+        background_index=0,
+        mode="q_space",
+    )
+    bundle = FakeBackgroundCacheBundle(
+        stored_rows=[_source_row(source_row_index=2)],
+        projected_rows=q_space_rows,
+    )
+
+    rows = context.bundle_rows(bundle)
+
+    assert rows[0]["source_row_index"] == 1
+    assert rows[0]["_geometry_fit_worker_projection_mode"] == "caked"
+    assert not source_deps.callbacks.calls
+
+
+def test_bundle_rows_matching_cached_rows_win_before_params_override() -> None:
+    context, _fake_deps, source_deps = _context_with_cache_bundle_deps(
+        {"projection_view_mode": "caked"}
+    )
+    projected_rows = context.mark_worker_cached_projection_rows(
+        [_source_row(source_row_index=1, projected=True)],
+        background_index=0,
+        mode="caked",
+    )
+    bundle = FakeBackgroundCacheBundle(
+        stored_rows=[_source_row(source_row_index=2)],
+        projected_rows=projected_rows,
+    )
+
+    rows = context.bundle_rows(bundle, params_override={"center": (1.0, 2.0)})
+
+    assert rows[0]["source_row_index"] == 1
+    assert not source_deps.callbacks.calls
+
+
+def test_bundle_rows_detector_mode_returns_stored_rows_when_no_projected_rows() -> None:
+    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps(
+        {"projection_view_mode": "detector"}
+    )
+    stored_rows = [_source_row(source_row_index=3)]
+    bundle = FakeBackgroundCacheBundle(stored_rows=stored_rows, projected_rows=[])
+
+    rows = context.bundle_rows(bundle)
+    rows[0]["source_row_index"] = 99
+
+    assert bundle.stored_rows[0]["source_row_index"] == 3
+
+
+def test_store_worker_background_cache_bundle_updates_cache_map() -> None:
+    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+    bundle = FakeBackgroundCacheBundle(background_index=2)
+
+    context.store_worker_background_cache_bundle(bundle)
+
+    assert context.worker_background_cache_by_index[2] is bundle
+
+
+def test_store_worker_background_cache_bundle_writes_source_snapshot_shape() -> None:
+    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps(
+        {
+            "projection_view_signature_by_background": {
+                2: {"mode": "caked", "digest": "sig"}
+            }
+        }
+    )
+    bundle = FakeBackgroundCacheBundle(
+        background_index=2,
+        stored_rows=[_source_row(source_row_index=1)],
+        projected_rows=[_source_row(source_row_index=2, projected=True)],
+        diagnostics={"status": "ready"},
+    )
+
+    context.store_worker_background_cache_bundle(bundle)
+    snapshot = context.worker_source_row_snapshots[2]
+
+    assert set(snapshot) == {
+        "background_index",
+        "created_from",
+        "diagnostics",
+        "projected_row_count",
+        "projected_rows",
+        "projection_view_signature",
+        "requested_signature",
+        "requested_signature_summary",
+        "row_count",
+        "rows",
+        "simulation_signature",
+        "stored_rows",
+        "valid_for_geometry_fit_dataset",
+        "valid_for_picker",
+    }
+    assert snapshot["projection_view_signature"] == {"mode": "caked", "digest": "sig"}
+
+
+def test_store_worker_background_cache_bundle_deep_copies_rows_and_diagnostics() -> None:
+    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+    bundle = FakeBackgroundCacheBundle(
+        stored_rows=[_source_row(source_row_index=1)],
+        projected_rows=[_source_row(source_row_index=2, projected=True)],
+        diagnostics={"rows": [{"value": 1}]},
+    )
+
+    context.store_worker_background_cache_bundle(bundle)
+    snapshot = context.worker_source_row_snapshots[0]
+    snapshot["rows"][0]["source_row_index"] = 99
+    snapshot["projected_rows"][0]["source_row_index"] = 98
+    snapshot["diagnostics"]["rows"][0]["value"] = 2
+
+    assert bundle.stored_rows[0]["source_row_index"] == 1
+    assert bundle.projected_rows[0]["source_row_index"] == 2
+    assert bundle.diagnostics["rows"][0]["value"] == 1
+
+
+def test_store_worker_background_cache_bundle_writes_projection_view_signature() -> None:
+    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps(
+        {"projection_view_signature_by_background": {0: {"mode": "q_space"}}}
+    )
+    bundle = FakeBackgroundCacheBundle()
+
+    context.store_worker_background_cache_bundle(bundle)
+
+    assert (
+        context.worker_source_row_snapshots[0]["projection_view_signature"]
+        == {"mode": "q_space"}
+    )
+
+
+def test_store_worker_background_cache_bundle_advances_generation_and_job_data() -> None:
+    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps(
+        {"source_cache_generation_by_background": {0: 4}}
+    )
+    bundle = FakeBackgroundCacheBundle()
+
+    generation = context.store_worker_background_cache_bundle(bundle)
+
+    assert generation == 5
+    assert context.source_cache_generation_by_background[0] == 5
+    assert context.job_data["source_cache_generation_by_background"][0] == 5
 
 
 def test_caked_projection_payload_status_reports_ready_payload() -> None:
