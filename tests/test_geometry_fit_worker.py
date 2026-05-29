@@ -51,21 +51,6 @@ class FakeBackgroundCacheBundle:
         self.diagnostics = diagnostics if diagnostics is not None else {}
 
 
-class FakeCacheBundleDeps:
-    @property
-    def deps(self) -> GeometryFitWorkerCacheBundleDeps:
-        return GeometryFitWorkerCacheBundleDeps(
-            is_background_cache_bundle=lambda value: isinstance(
-                value,
-                FakeBackgroundCacheBundle,
-            ),
-            copy_source_rows=self.copy_source_rows,
-        )
-
-    def copy_source_rows(self, raw_rows: object) -> list[dict[str, object]]:
-        return [dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)]
-
-
 class FakeCakedPayloadDeps:
     def __init__(self) -> None:
         self.generated_payload: dict[str, object] | None = None
@@ -336,18 +321,28 @@ def _context_with_source_projection_deps(
     return context, fake_deps
 
 
+def _fake_cache_bundle_deps() -> GeometryFitWorkerCacheBundleDeps:
+    return GeometryFitWorkerCacheBundleDeps(
+        is_background_cache_bundle=lambda value: isinstance(
+            value,
+            FakeBackgroundCacheBundle,
+        ),
+        copy_source_rows=lambda raw_rows: [
+            dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)
+        ],
+    )
+
+
 def _context_with_cache_bundle_deps(
     job: dict[str, object] | None = None,
-    fake_deps: FakeCacheBundleDeps | None = None,
-) -> tuple[GeometryFitWorkerContext, FakeCacheBundleDeps, FakeSourceProjectionDeps]:
+) -> tuple[GeometryFitWorkerContext, FakeSourceProjectionDeps]:
     source_deps = FakeSourceProjectionDeps()
     context, _source_deps = _context_with_source_projection_deps(
         job,
         fake_deps=source_deps,
     )
-    fake_deps = fake_deps or FakeCacheBundleDeps()
-    context.cache_bundle_deps = fake_deps.deps
-    return context, fake_deps, source_deps
+    context.cache_bundle_deps = _fake_cache_bundle_deps()
+    return context, source_deps
 
 
 def _source_row(**overrides: object) -> dict[str, object]:
@@ -692,7 +687,7 @@ def test_project_source_rows_by_row_background_missing_row_background_matches_cu
 
 
 def test_mark_worker_cached_projection_rows_noops_for_detector_mode() -> None:
-    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+    context, _source_deps = _context_with_cache_bundle_deps()
     rows = [_source_row(source_row_index=1)]
 
     marked = context.mark_worker_cached_projection_rows(
@@ -706,7 +701,7 @@ def test_mark_worker_cached_projection_rows_noops_for_detector_mode() -> None:
 
 
 def test_mark_worker_cached_projection_rows_marks_caked_rows_in_place() -> None:
-    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+    context, _source_deps = _context_with_cache_bundle_deps()
     rows = [_source_row(source_row_index=1)]
 
     marked = context.mark_worker_cached_projection_rows(
@@ -722,7 +717,7 @@ def test_mark_worker_cached_projection_rows_marks_caked_rows_in_place() -> None:
 
 
 def test_mark_worker_cached_projection_rows_marks_q_space_rows_in_place() -> None:
-    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+    context, _source_deps = _context_with_cache_bundle_deps()
     rows = [_source_row(source_row_index=1)]
 
     marked = context.mark_worker_cached_projection_rows(
@@ -738,7 +733,7 @@ def test_mark_worker_cached_projection_rows_marks_q_space_rows_in_place() -> Non
 
 
 def test_worker_cached_projection_rows_match_rejects_empty_rows() -> None:
-    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+    context, _source_deps = _context_with_cache_bundle_deps()
 
     assert (
         context.worker_cached_projection_rows_match(
@@ -751,7 +746,7 @@ def test_worker_cached_projection_rows_match_rejects_empty_rows() -> None:
 
 
 def test_worker_cached_projection_rows_match_rejects_detector_mode() -> None:
-    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+    context, _source_deps = _context_with_cache_bundle_deps()
     rows = context.mark_worker_cached_projection_rows(
         [_source_row()],
         background_index=0,
@@ -769,7 +764,7 @@ def test_worker_cached_projection_rows_match_rejects_detector_mode() -> None:
 
 
 def test_worker_cached_projection_rows_match_rejects_missing_marker() -> None:
-    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+    context, _source_deps = _context_with_cache_bundle_deps()
 
     assert (
         context.worker_cached_projection_rows_match(
@@ -782,7 +777,7 @@ def test_worker_cached_projection_rows_match_rejects_missing_marker() -> None:
 
 
 def test_worker_cached_projection_rows_match_rejects_background_mismatch() -> None:
-    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+    context, _source_deps = _context_with_cache_bundle_deps()
     rows = context.mark_worker_cached_projection_rows(
         [_source_row()],
         background_index=1,
@@ -800,7 +795,7 @@ def test_worker_cached_projection_rows_match_rejects_background_mismatch() -> No
 
 
 def test_worker_cached_projection_rows_match_rejects_mode_mismatch() -> None:
-    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+    context, _source_deps = _context_with_cache_bundle_deps()
     rows = context.mark_worker_cached_projection_rows(
         [_source_row()],
         background_index=0,
@@ -818,7 +813,7 @@ def test_worker_cached_projection_rows_match_rejects_mode_mismatch() -> None:
 
 
 def test_worker_cached_projection_rows_match_accepts_matching_caked_rows() -> None:
-    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+    context, _source_deps = _context_with_cache_bundle_deps()
     rows = context.mark_worker_cached_projection_rows(
         [_source_row()],
         background_index=0,
@@ -836,7 +831,7 @@ def test_worker_cached_projection_rows_match_accepts_matching_caked_rows() -> No
 
 
 def test_worker_cached_projection_rows_match_accepts_matching_q_space_rows() -> None:
-    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+    context, _source_deps = _context_with_cache_bundle_deps()
     rows = context.mark_worker_cached_projection_rows(
         [_source_row()],
         background_index=0,
@@ -854,13 +849,13 @@ def test_worker_cached_projection_rows_match_accepts_matching_q_space_rows() -> 
 
 
 def test_bundle_rows_returns_empty_for_non_bundle() -> None:
-    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+    context, _source_deps = _context_with_cache_bundle_deps()
 
     assert context.bundle_rows(object()) == []
 
 
 def test_bundle_rows_reuses_matching_cached_projected_rows_as_copies() -> None:
-    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps(
+    context, _source_deps = _context_with_cache_bundle_deps(
         {"projection_view_mode": "caked"}
     )
     projected_rows = context.mark_worker_cached_projection_rows(
@@ -878,7 +873,7 @@ def test_bundle_rows_reuses_matching_cached_projected_rows_as_copies() -> None:
 
 
 def test_bundle_rows_marks_unmarked_projected_rows_when_mode_matches_and_no_params_override() -> None:
-    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps(
+    context, _source_deps = _context_with_cache_bundle_deps(
         {"projection_view_mode": "caked"}
     )
     bundle = FakeBackgroundCacheBundle(
@@ -893,7 +888,7 @@ def test_bundle_rows_marks_unmarked_projected_rows_when_mode_matches_and_no_para
 
 
 def test_bundle_rows_remarks_stale_projected_rows_when_mode_matches() -> None:
-    context, _fake_deps, source_deps = _context_with_cache_bundle_deps(
+    context, source_deps = _context_with_cache_bundle_deps(
         {"projection_view_mode": "caked"}
     )
     stale_rows = context.mark_worker_cached_projection_rows(
@@ -914,7 +909,7 @@ def test_bundle_rows_remarks_stale_projected_rows_when_mode_matches() -> None:
 
 
 def test_bundle_rows_remarks_incompatible_projection_modes_when_mode_matches() -> None:
-    context, _fake_deps, source_deps = _context_with_cache_bundle_deps(
+    context, source_deps = _context_with_cache_bundle_deps(
         {"projection_view_mode": "caked"}
     )
     q_space_rows = context.mark_worker_cached_projection_rows(
@@ -935,7 +930,7 @@ def test_bundle_rows_remarks_incompatible_projection_modes_when_mode_matches() -
 
 
 def test_bundle_rows_matching_cached_rows_win_before_params_override() -> None:
-    context, _fake_deps, source_deps = _context_with_cache_bundle_deps(
+    context, source_deps = _context_with_cache_bundle_deps(
         {"projection_view_mode": "caked"}
     )
     projected_rows = context.mark_worker_cached_projection_rows(
@@ -955,7 +950,7 @@ def test_bundle_rows_matching_cached_rows_win_before_params_override() -> None:
 
 
 def test_bundle_rows_detector_mode_returns_stored_rows_when_no_projected_rows() -> None:
-    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps(
+    context, _source_deps = _context_with_cache_bundle_deps(
         {"projection_view_mode": "detector"}
     )
     stored_rows = [_source_row(source_row_index=3)]
@@ -968,7 +963,7 @@ def test_bundle_rows_detector_mode_returns_stored_rows_when_no_projected_rows() 
 
 
 def test_store_worker_background_cache_bundle_updates_cache_map() -> None:
-    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+    context, _source_deps = _context_with_cache_bundle_deps()
     bundle = FakeBackgroundCacheBundle(background_index=2)
 
     context.store_worker_background_cache_bundle(bundle)
@@ -977,7 +972,7 @@ def test_store_worker_background_cache_bundle_updates_cache_map() -> None:
 
 
 def test_store_worker_background_cache_bundle_writes_source_snapshot_shape() -> None:
-    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps(
+    context, _source_deps = _context_with_cache_bundle_deps(
         {
             "projection_view_signature_by_background": {
                 2: {"mode": "caked", "digest": "sig"}
@@ -1014,7 +1009,7 @@ def test_store_worker_background_cache_bundle_writes_source_snapshot_shape() -> 
 
 
 def test_store_worker_background_cache_bundle_deep_copies_rows_and_diagnostics() -> None:
-    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps()
+    context, _source_deps = _context_with_cache_bundle_deps()
     bundle = FakeBackgroundCacheBundle(
         stored_rows=[_source_row(source_row_index=1)],
         projected_rows=[_source_row(source_row_index=2, projected=True)],
@@ -1033,7 +1028,7 @@ def test_store_worker_background_cache_bundle_deep_copies_rows_and_diagnostics()
 
 
 def test_store_worker_background_cache_bundle_writes_projection_view_signature() -> None:
-    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps(
+    context, _source_deps = _context_with_cache_bundle_deps(
         {"projection_view_signature_by_background": {0: {"mode": "q_space"}}}
     )
     bundle = FakeBackgroundCacheBundle()
@@ -1047,7 +1042,7 @@ def test_store_worker_background_cache_bundle_writes_projection_view_signature()
 
 
 def test_store_worker_background_cache_bundle_advances_generation_and_job_data() -> None:
-    context, _fake_deps, _source_deps = _context_with_cache_bundle_deps(
+    context, _source_deps = _context_with_cache_bundle_deps(
         {"source_cache_generation_by_background": {0: 4}}
     )
     bundle = FakeBackgroundCacheBundle()
