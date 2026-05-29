@@ -5,7 +5,7 @@ Type: refactor
 Owner:
 Issue: none
 Priority: p1
-Last updated: 2026-05-28
+Last updated: 2026-05-29
 
 ## Summary
 
@@ -43,12 +43,14 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
   and `project_detector_anchor_to_caked_fit_space()`.
 - Wired `build_geometry_manual_fit_dataset()` to use the observed, simulated, and exact-projector helper paths while leaving public dataset assembly in `ra_sim/gui/geometry_fit.py`.
 - Preserved public dataset payloads, saved-state shape, optimizer request shape, solver math, UI callbacks, CLI/env flags, log fields, and caked projection-authority behavior.
+- Patch B.1 restored the previous caked projection diagnostic ordering so `valid=False` exact-projector failures preserve `invalid_reason` even when returned caked coordinates are nonfinite.
+- Patch C0 added direct coverage for `resolve_geometry_fit_selection()` no-selection, theta-metadata-not-applied, background-theta-error, and skipped-empty-background branches.
 
 ## Review status
 
 - Reviewed the current diff for correctness, bloat, security, performance, test quality, and unnecessary new abstractions.
 - No required correctness, security, or performance blockers were found.
-- Follow-up before deeper job/dataset extraction: add direct helper coverage for the remaining `resolve_geometry_fit_selection()` edge branches, including missing theta metadata, background theta errors, skipped empty backgrounds, and no-selection mode.
+- Follow-up before deeper job/dataset extraction was completed in Patch C0 by adding direct helper coverage for the remaining `resolve_geometry_fit_selection()` edge branches.
 - Snapshot helper now raises on normalized mapping-key collisions instead of silently dropping entries.
 - Patch B simplification removed the unused `resolve_fit_space_anchor()` helper and its self-only tests because it did not remove production dataset assembly logic in this slice.
 
@@ -56,7 +58,7 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 
 1. Extract async job background/manual/source input snapshots.
 2. Keep helper outputs internal and convert back to existing dict fields before public returns.
-3. Add direct selection/theta helper coverage for the remaining edge branches before broader job-builder extraction.
+3. Leave live-row handoff, caked projection payloads, hit-table cache payloads, and worker code untouched in the next slice.
 
 ## Validation
 
@@ -125,6 +127,13 @@ python -m pytest -q tests/test_geometry_fit_job_live_rows_handoff.py tests/test_
 python -m ruff check ra_sim/gui/geometry_fit_coordinates.py ra_sim/gui/geometry_fit.py tests/test_geometry_fit_coordinates.py tests/test_gui_geometry_fit_workflow.py tests/test_geometry_fit_manual_fit_space_classification.py tests/test_geometry_fit_disordered_preflight.py
 git diff --check
 python -m ra_sim.dev check
+```
+
+Patch C0 async selection edge-coverage slice:
+
+```bash
+python -m pytest -q tests/test_geometry_fit_job_selection.py
+python -m pytest -q tests/test_geometry_fit_job_selection.py tests/test_geometry_fit_job_live_rows_handoff.py::test_geometry_fit_job_canonical_snapshot_pins_live_row_handoff_contract
 ```
 
 Known baseline issue:
