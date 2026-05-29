@@ -47,6 +47,8 @@ class GeometryFitWorkerSourceProjectionDeps:
 class GeometryFitWorkerCacheBundleDeps:
     is_background_cache_bundle: Callable[[object], bool]
     copy_source_rows: Callable[..., object]
+    make_background_cache_bundle: Callable[..., object]
+    copy_optional_values: Callable[..., object]
 
 
 @dataclass
@@ -811,3 +813,127 @@ class GeometryFitWorkerContext:
             ),
         }
         return self.advance_source_cache_generation(background_index)
+
+    def build_geometry_fit_background_cache_bundle(
+        self,
+        *,
+        background_index: int,
+        background_label: str,
+        requested_signature: object,
+        requested_signature_summary: object,
+        theta_base: float,
+        theta_initial: float,
+        stored_rows: Sequence[object] | None,
+        projected_rows: Sequence[object] | None = None,
+        cache_source: str,
+        diagnostics: Mapping[str, object] | None = None,
+        peak_table_lattice: Sequence[object] | None = None,
+        hit_tables: Sequence[object] | None = None,
+        intersection_cache: Sequence[object] | None = None,
+        cache_metadata: Mapping[str, object] | None = None,
+    ) -> object:
+        cache_deps = self._require_cache_bundle_deps()
+        source_deps = self._require_source_projection_deps()
+        copied_stored_rows = source_deps.rows_for_background(
+            int(background_index),
+            stored_rows,
+        )
+        copied_projected_rows = source_deps.rows_for_background(
+            int(background_index),
+            projected_rows,
+        )
+        normalized_mode = str(
+            self.job_data.get("projection_view_mode") or "detector"
+        ).strip().lower()
+        strict_projection_mode = normalized_mode in {"caked", "q_space"}
+        projection_failure_reason: str | None = None
+        projected_from_stored_rows = False
+        if not copied_projected_rows:
+            if strict_projection_mode:
+                try:
+                    copied_projected_rows = source_deps.rows_for_background(
+                        int(background_index),
+                        self.project_source_rows_for_background(
+                            int(background_index),
+                            copied_stored_rows,
+                            mode_override=normalized_mode,
+                            strict_caked_projection=True,
+                        ),
+                    )
+                    projected_from_stored_rows = bool(copied_projected_rows)
+                except Exception as exc:
+                    copied_projected_rows = []
+                    projection_failure_reason = f"projection_error:{type(exc).__name__}"
+            else:
+                copied_projected_rows = source_deps.rows_for_background(
+                    int(background_index),
+                    self.project_source_rows_for_background(
+                        int(background_index),
+                        copied_stored_rows,
+                    ),
+                )
+        resolved_diagnostics = dict(diagnostics) if isinstance(diagnostics, Mapping) else {}
+        resolved_diagnostics.setdefault("source", "geometry_fit_background_cache")
+        resolved_diagnostics.setdefault(
+            "cache_family",
+            "geometry_fit_background_cache",
+        )
+        resolved_diagnostics.setdefault("action", "prepare")
+        resolved_diagnostics.setdefault("status", "background_cache_ready")
+        resolved_diagnostics.setdefault("background_index", int(background_index))
+        resolved_diagnostics.setdefault("background_label", str(background_label))
+        resolved_diagnostics.setdefault("requested_signature", requested_signature)
+        resolved_diagnostics.setdefault(
+            "requested_signature_summary",
+            requested_signature_summary,
+        )
+        resolved_diagnostics.setdefault("snapshot_signature", requested_signature)
+        resolved_diagnostics.setdefault(
+            "stored_signature_summary",
+            requested_signature_summary,
+        )
+        resolved_diagnostics.setdefault("theta_base", float(theta_base))
+        resolved_diagnostics.setdefault("theta_initial", float(theta_initial))
+        resolved_diagnostics.setdefault("raw_peak_count", int(len(copied_stored_rows)))
+        resolved_diagnostics.setdefault(
+            "projected_peak_count",
+            int(len(copied_projected_rows)),
+        )
+        if projected_from_stored_rows:
+            resolved_diagnostics["projected_peak_count"] = int(
+                len(copied_projected_rows)
+            )
+            resolved_diagnostics.setdefault(
+                "projected_rows_generated_from_stored_rows",
+                True,
+            )
+        if projection_failure_reason is not None:
+            resolved_diagnostics.setdefault(
+                "projection_failure_reason",
+                str(projection_failure_reason),
+            )
+        resolved_diagnostics.setdefault("cache_source", str(cache_source))
+        resolved_diagnostics.setdefault("signature_match", True)
+        resolved_diagnostics.setdefault(
+            "live_cache_inventory",
+            copy.deepcopy(self.job_data.get("live_cache_inventory", {})),
+        )
+
+        return cache_deps.make_background_cache_bundle(
+            background_index=int(background_index),
+            requested_signature=requested_signature,
+            requested_signature_summary=requested_signature_summary,
+            background_label=str(background_label),
+            theta_base=float(theta_base),
+            theta_initial=float(theta_initial),
+            projected_rows=copied_projected_rows,
+            stored_rows=copied_stored_rows,
+            cache_source=str(cache_source),
+            diagnostics=resolved_diagnostics,
+            peak_table_lattice=cache_deps.copy_optional_values(peak_table_lattice),
+            hit_tables=cache_deps.copy_optional_values(hit_tables),
+            intersection_cache=cache_deps.copy_optional_values(intersection_cache),
+            cache_metadata=(
+                dict(cache_metadata) if isinstance(cache_metadata, Mapping) else None
+            ),
+        )

@@ -40441,121 +40441,6 @@ def _run_async_geometry_fit_worker_job(
             job_data["projection_view_signature"] = copy.deepcopy(signature_map[background_idx])
         return copy.deepcopy(signature_map[background_idx])
 
-    def _build_geometry_fit_background_cache_bundle(
-        *,
-        background_index: int,
-        background_label: str,
-        requested_signature: object,
-        requested_signature_summary: object,
-        theta_base: float,
-        theta_initial: float,
-        stored_rows: Sequence[object] | None,
-        projected_rows: Sequence[object] | None = None,
-        cache_source: str,
-        diagnostics: Mapping[str, object] | None = None,
-        peak_table_lattice: Sequence[object] | None = None,
-        hit_tables: Sequence[object] | None = None,
-        intersection_cache: Sequence[object] | None = None,
-        cache_metadata: Mapping[str, object] | None = None,
-    ) -> gui_geometry_fit.GeometryFitBackgroundCacheBundle:
-        copied_stored_rows = _geometry_fit_rows_for_background(
-            int(background_index),
-            stored_rows,
-        )
-        copied_projected_rows = _geometry_fit_rows_for_background(
-            int(background_index),
-            projected_rows,
-        )
-        normalized_mode = str(job_data.get("projection_view_mode") or "detector").strip().lower()
-        strict_projection_mode = normalized_mode in {"caked", "q_space"}
-        projection_failure_reason: str | None = None
-        projected_from_stored_rows = False
-        if not copied_projected_rows:
-            if strict_projection_mode:
-                try:
-                    copied_projected_rows = _geometry_fit_rows_for_background(
-                        int(background_index),
-                        _project_source_rows_for_background(
-                            int(background_index),
-                            copied_stored_rows,
-                            mode_override=normalized_mode,
-                            strict_caked_projection=True,
-                        ),
-                    )
-                    projected_from_stored_rows = bool(copied_projected_rows)
-                except Exception as exc:
-                    copied_projected_rows = []
-                    projection_failure_reason = f"projection_error:{type(exc).__name__}"
-            else:
-                copied_projected_rows = _geometry_fit_rows_for_background(
-                    int(background_index),
-                    _project_source_rows_for_background(
-                        int(background_index),
-                        copied_stored_rows,
-                    ),
-                )
-        resolved_diagnostics = dict(diagnostics) if isinstance(diagnostics, Mapping) else {}
-        resolved_diagnostics.setdefault("source", "geometry_fit_background_cache")
-        resolved_diagnostics.setdefault(
-            "cache_family",
-            "geometry_fit_background_cache",
-        )
-        resolved_diagnostics.setdefault("action", "prepare")
-        resolved_diagnostics.setdefault("status", "background_cache_ready")
-        resolved_diagnostics.setdefault("background_index", int(background_index))
-        resolved_diagnostics.setdefault("background_label", str(background_label))
-        resolved_diagnostics.setdefault("requested_signature", requested_signature)
-        resolved_diagnostics.setdefault(
-            "requested_signature_summary",
-            requested_signature_summary,
-        )
-        resolved_diagnostics.setdefault("snapshot_signature", requested_signature)
-        resolved_diagnostics.setdefault(
-            "stored_signature_summary",
-            requested_signature_summary,
-        )
-        resolved_diagnostics.setdefault("theta_base", float(theta_base))
-        resolved_diagnostics.setdefault("theta_initial", float(theta_initial))
-        resolved_diagnostics.setdefault(
-            "raw_peak_count",
-            int(len(copied_stored_rows)),
-        )
-        resolved_diagnostics.setdefault(
-            "projected_peak_count",
-            int(len(copied_projected_rows)),
-        )
-        if projected_from_stored_rows:
-            resolved_diagnostics["projected_peak_count"] = int(len(copied_projected_rows))
-            resolved_diagnostics.setdefault("projected_rows_generated_from_stored_rows", True)
-        if projection_failure_reason is not None:
-            resolved_diagnostics.setdefault(
-                "projection_failure_reason",
-                str(projection_failure_reason),
-            )
-        resolved_diagnostics.setdefault("cache_source", str(cache_source))
-        resolved_diagnostics.setdefault("signature_match", True)
-        resolved_diagnostics.setdefault(
-            "live_cache_inventory",
-            copy.deepcopy(job_data.get("live_cache_inventory", {})),
-        )
-
-        return gui_geometry_fit.GeometryFitBackgroundCacheBundle(
-            background_index=int(background_index),
-            requested_signature=requested_signature,
-            requested_signature_summary=requested_signature_summary,
-            background_label=str(background_label),
-            theta_base=float(theta_base),
-            theta_initial=float(theta_initial),
-            projected_rows=copied_projected_rows,
-            stored_rows=copied_stored_rows,
-            cache_source=str(cache_source),
-            diagnostics=resolved_diagnostics,
-            peak_table_lattice=_copy_optional_values(peak_table_lattice),
-            hit_tables=_copy_optional_values(hit_tables),
-            intersection_cache=_copy_optional_values(intersection_cache),
-            cache_metadata=(dict(cache_metadata) if isinstance(cache_metadata, Mapping) else None),
-        )
-
     def _worker_geometry_fit_caking_integrator() -> FastAzimuthalIntegrator | None:
         nonlocal worker_geometry_fit_caking_ai, worker_geometry_fit_caking_sig
         params_local = dict(job_data.get("params", {}) or {})
@@ -40675,6 +40560,10 @@ def _run_async_geometry_fit_worker_job(
         _geometry_fit_worker.GeometryFitWorkerCacheBundleDeps(
             is_background_cache_bundle=_is_worker_background_cache_bundle,
             copy_source_rows=_copy_source_rows,
+            make_background_cache_bundle=(
+                gui_geometry_fit.GeometryFitBackgroundCacheBundle
+            ),
+            copy_optional_values=_copy_optional_values,
         )
     )
     _caked_projection_payload_status = worker_context.caked_projection_payload_status
@@ -40703,6 +40592,9 @@ def _run_async_geometry_fit_worker_job(
     _bundle_rows = worker_context.bundle_rows
     _store_worker_background_cache_bundle = (
         worker_context.store_worker_background_cache_bundle
+    )
+    _build_geometry_fit_background_cache_bundle = (
+        worker_context.build_geometry_fit_background_cache_bundle
     )
 
     def _store_worker_caked_view_for_background(

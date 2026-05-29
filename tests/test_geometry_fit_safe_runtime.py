@@ -116,6 +116,7 @@ def test_geometry_fit_worker_context_helpers_are_not_duplicated_in_runtime_worke
         "_store_worker_background_cache_bundle",
         "_worker_cached_projection_rows_match",
         "_bundle_rows",
+        "_build_geometry_fit_background_cache_bundle",
     }
     assert not (nested_function_names & moved_helper_names)
 
@@ -130,6 +131,7 @@ def test_geometry_fit_worker_has_moved_only_d3_source_projection_and_bundle_help
 
     assert {
         "bundle_rows",
+        "build_geometry_fit_background_cache_bundle",
         "mark_worker_cached_projection_rows",
         "project_source_rows_by_row_background",
         "project_source_rows_for_background",
@@ -138,10 +140,8 @@ def test_geometry_fit_worker_has_moved_only_d3_source_projection_and_bundle_help
     } <= worker_function_names
 
     pending_d3_helper_names = {
-        "_build_geometry_fit_background_cache_bundle",
         "_prebuild_background_cache_bundle_worker",
         "_prebuild_required_background_caches",
-        "build_geometry_fit_background_cache_bundle",
         "prebuild_background_cache_bundle_worker",
         "prebuild_required_background_caches",
     }

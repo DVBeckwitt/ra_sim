@@ -19749,7 +19749,7 @@ def test_worker_prebuild_uses_background_specific_projection_signature() -> None
 def test_worker_projection_signature_recomputes_detector_instead_of_reusing_stale_caked() -> None:
     source = _source_text(RUNTIME_SESSION_SOURCE_PATH)
     helper_start = source.index("def _worker_projection_view_signature_for_background(")
-    helper_end = source.index("def _build_geometry_fit_background_cache_bundle(", helper_start)
+    helper_end = source.index("def _worker_geometry_fit_caking_integrator(", helper_start)
     helper_source = source[helper_start:helper_end]
 
     assert "stored_signature" not in helper_source

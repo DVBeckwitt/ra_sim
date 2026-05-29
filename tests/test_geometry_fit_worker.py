@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from collections.abc import Mapping
 
 import numpy as np
@@ -35,20 +36,34 @@ class FakeBackgroundCacheBundle:
         self,
         *,
         background_index: int = 0,
+        background_label: str = "background 1",
+        theta_base: float = 0.0,
+        theta_initial: float = 0.0,
         stored_rows: list[dict[str, object]] | None = None,
         projected_rows: list[dict[str, object]] | None = None,
         cache_source: str = "fake_cache",
         requested_signature: object = ("signature", 0),
         requested_signature_summary: object = {"summary": 0},
         diagnostics: dict[str, object] | None = None,
+        peak_table_lattice: list[object] | None = None,
+        hit_tables: list[object] | None = None,
+        intersection_cache: list[object] | None = None,
+        cache_metadata: dict[str, object] | None = None,
     ) -> None:
         self.background_index = int(background_index)
+        self.background_label = str(background_label)
+        self.theta_base = float(theta_base)
+        self.theta_initial = float(theta_initial)
         self.stored_rows = stored_rows if stored_rows is not None else []
         self.projected_rows = projected_rows if projected_rows is not None else []
         self.cache_source = cache_source
         self.requested_signature = requested_signature
         self.requested_signature_summary = requested_signature_summary
         self.diagnostics = diagnostics if diagnostics is not None else {}
+        self.peak_table_lattice = peak_table_lattice
+        self.hit_tables = hit_tables
+        self.intersection_cache = intersection_cache
+        self.cache_metadata = cache_metadata
 
 
 class FakeCakedPayloadDeps:
@@ -178,12 +193,15 @@ class FakeProjectionCallbacks:
     def __init__(self) -> None:
         self.calls: list[list[dict[str, object]]] = []
         self.projected_rows: list[dict[str, object]] | None = None
+        self.error: Exception | None = None
 
     def project_peaks_to_current_view(
         self,
         rows: list[dict[str, object]],
     ) -> list[dict[str, object]]:
         self.calls.append([dict(row) for row in rows])
+        if self.error is not None:
+            raise self.error
         if self.projected_rows is not None:
             return [dict(row) for row in self.projected_rows]
         return [dict(row, projected=True) for row in rows]
@@ -330,6 +348,12 @@ def _fake_cache_bundle_deps() -> GeometryFitWorkerCacheBundleDeps:
         copy_source_rows=lambda raw_rows: [
             dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)
         ],
+        make_background_cache_bundle=FakeBackgroundCacheBundle,
+        copy_optional_values=lambda raw_values: (
+            None
+            if raw_values is None
+            else [copy.deepcopy(entry) for entry in raw_values]
+        ),
     )
 
 
@@ -375,6 +399,12 @@ def _source_row(**overrides: object) -> dict[str, object]:
 # source/reflection/locked-Q identity fields, return [] for empty rows, group
 # mixed-background rows with current background as the fallback, and restore the
 # original cross-background row ordering after projection.
+#
+# D3.3a contract map: background cache bundle construction copies stored and
+# projected rows for one background, projects missing rows in the current
+# detector/caked/q-space mode, records projection failure diagnostics without
+# raising for bundle construction, fills default cache diagnostics, and copies
+# optional table/cache metadata into the bundle constructor.
 
 
 def test_worker_context_from_job_copies_source_snapshots() -> None:
@@ -1052,6 +1082,139 @@ def test_store_worker_background_cache_bundle_advances_generation_and_job_data()
     assert generation == 5
     assert context.source_cache_generation_by_background[0] == 5
     assert context.job_data["source_cache_generation_by_background"][0] == 5
+
+
+def test_build_geometry_fit_background_cache_bundle_copies_stored_and_projected_rows() -> None:
+    context, _source_deps = _context_with_cache_bundle_deps()
+    stored_rows = [_source_row(source_row_index=1)]
+    projected_rows = [_source_row(source_row_index=2, projected=True)]
+
+    bundle = context.build_geometry_fit_background_cache_bundle(
+        background_index=0,
+        background_label="bg1",
+        requested_signature=("sig", 0),
+        requested_signature_summary={"digest": "sig"},
+        theta_base=1.0,
+        theta_initial=2.0,
+        stored_rows=stored_rows,
+        projected_rows=projected_rows,
+        cache_source="unit",
+    )
+    stored_rows[0]["source_row_index"] = 99
+    projected_rows[0]["source_row_index"] = 98
+
+    assert bundle.stored_rows[0]["source_row_index"] == 1
+    assert bundle.projected_rows[0]["source_row_index"] == 2
+
+
+def test_build_geometry_fit_background_cache_bundle_detector_mode_projects_missing_projected_rows() -> None:
+    context, source_deps = _context_with_cache_bundle_deps(
+        {"projection_view_mode": "detector"}
+    )
+
+    bundle = context.build_geometry_fit_background_cache_bundle(
+        background_index=0,
+        background_label="bg1",
+        requested_signature=("sig", 0),
+        requested_signature_summary={"digest": "sig"},
+        theta_base=1.0,
+        theta_initial=2.0,
+        stored_rows=[_source_row(source_row_index=3)],
+        cache_source="unit",
+    )
+
+    assert bundle.projected_rows[0]["projected"] is True
+    assert bundle.diagnostics["projected_peak_count"] == 1
+    assert "projected_rows_generated_from_stored_rows" not in bundle.diagnostics
+    assert len(source_deps.callbacks.calls) == 1
+
+
+def test_build_geometry_fit_background_cache_bundle_caked_projection_failure_records_reason() -> None:
+    context, source_deps = _context_with_cache_bundle_deps(
+        {"projection_view_mode": "caked"}
+    )
+    context.caked_payload_deps = FakeCakedPayloadDeps().deps
+    source_deps.callbacks.error = RuntimeError("projection unavailable")
+
+    bundle = context.build_geometry_fit_background_cache_bundle(
+        background_index=0,
+        background_label="bg1",
+        requested_signature=("sig", 0),
+        requested_signature_summary={"digest": "sig"},
+        theta_base=1.0,
+        theta_initial=2.0,
+        stored_rows=[_source_row(source_row_index=4)],
+        cache_source="unit",
+    )
+
+    assert bundle.projected_rows == []
+    assert bundle.diagnostics["projection_failure_reason"] == "projection_error:RuntimeError"
+    assert bundle.diagnostics["projected_peak_count"] == 0
+
+
+def test_build_geometry_fit_background_cache_bundle_sets_default_diagnostics() -> None:
+    context, _source_deps = _context_with_cache_bundle_deps(
+        {"live_cache_inventory": {"ready": 2}}
+    )
+
+    bundle = context.build_geometry_fit_background_cache_bundle(
+        background_index=2,
+        background_label="bg3",
+        requested_signature=("sig", 2),
+        requested_signature_summary={"digest": "sig2"},
+        theta_base=3.0,
+        theta_initial=4.0,
+        stored_rows=[_source_row(background_index=2, source_row_index=5)],
+        projected_rows=[],
+        cache_source="unit",
+        diagnostics={"status": "custom_status"},
+    )
+
+    assert bundle.diagnostics["source"] == "geometry_fit_background_cache"
+    assert bundle.diagnostics["cache_family"] == "geometry_fit_background_cache"
+    assert bundle.diagnostics["action"] == "prepare"
+    assert bundle.diagnostics["status"] == "custom_status"
+    assert bundle.diagnostics["background_index"] == 2
+    assert bundle.diagnostics["background_label"] == "bg3"
+    assert bundle.diagnostics["theta_base"] == 3.0
+    assert bundle.diagnostics["theta_initial"] == 4.0
+    assert bundle.diagnostics["raw_peak_count"] == 1
+    assert bundle.diagnostics["cache_source"] == "unit"
+    assert bundle.diagnostics["signature_match"] is True
+    assert bundle.diagnostics["live_cache_inventory"] == {"ready": 2}
+
+
+def test_build_geometry_fit_background_cache_bundle_preserves_optional_tables_and_metadata() -> None:
+    context, _source_deps = _context_with_cache_bundle_deps()
+    peak_table_lattice = [{"phase": "primary"}]
+    hit_tables = [{"hits": [1]}]
+    intersection_cache = [{"intersections": [2]}]
+    cache_metadata = {"source": "logged"}
+
+    bundle = context.build_geometry_fit_background_cache_bundle(
+        background_index=0,
+        background_label="bg1",
+        requested_signature=("sig", 0),
+        requested_signature_summary={"digest": "sig"},
+        theta_base=1.0,
+        theta_initial=2.0,
+        stored_rows=[],
+        projected_rows=[],
+        cache_source="unit",
+        peak_table_lattice=peak_table_lattice,
+        hit_tables=hit_tables,
+        intersection_cache=intersection_cache,
+        cache_metadata=cache_metadata,
+    )
+    peak_table_lattice[0]["phase"] = "mutated"
+    hit_tables[0]["hits"].append(99)
+    intersection_cache[0]["intersections"].append(98)
+    cache_metadata["source"] = "mutated"
+
+    assert bundle.peak_table_lattice == [{"phase": "primary"}]
+    assert bundle.hit_tables == [{"hits": [1]}]
+    assert bundle.intersection_cache == [{"intersections": [2]}]
+    assert bundle.cache_metadata == {"source": "logged"}
 
 
 def test_caked_projection_payload_status_reports_ready_payload() -> None:
