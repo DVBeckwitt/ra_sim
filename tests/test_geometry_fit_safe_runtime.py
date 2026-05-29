@@ -1,10 +1,34 @@
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import numpy as np
 
 from ra_sim.gui import geometry_fit
 from ra_sim.gui import geometry_q_group_manager
 from ra_sim.simulation import diffraction
+
+
+def test_geometry_fit_job_helper_has_no_live_runtime_or_tk_imports() -> None:
+    module_path = Path("ra_sim/gui/_runtime/geometry_fit_job.py")
+    imported_modules: set[str] = set()
+    tree = ast.parse(module_path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_modules.update(str(alias.name) for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported_modules.add(str(node.module))
+
+    forbidden_imports = {
+        "ra_sim.gui._runtime.runtime_session",
+        "tkinter",
+        "ra_sim.gui.views",
+        "ra_sim.gui.runtime_geometry_fit",
+        "ra_sim.gui._runtime.geometry_fit_worker",
+    }
+    assert not (imported_modules & forbidden_imports)
+    assert not any(name.startswith("tkinter.") for name in imported_modules)
 
 
 def _geometry_fit_param_set() -> dict[str, object]:

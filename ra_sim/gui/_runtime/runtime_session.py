@@ -315,7 +315,17 @@ from ra_sim.gui._runtime.live_cache_helpers import (
     live_cache_shape as _live_cache_shape,
     live_cache_signature_summary as _live_cache_signature_summary,
 )
-from ra_sim.gui._runtime.geometry_fit_job import resolve_geometry_fit_selection
+from ra_sim.gui._runtime.geometry_fit_job import (
+    assemble_geometry_fit_worker_job,
+    build_projection_view_signatures,
+    build_current_hit_table_cache_payload,
+    build_geometry_fit_runtime_config_snapshot,
+    filter_geometry_fit_background_inputs_for_manual_pair_space,
+    resolve_geometry_fit_selection,
+    snapshot_caked_projection_payloads,
+    snapshot_live_rows_handoff,
+    snapshot_geometry_fit_background_inputs,
+)
 from ra_sim.gui import fit2d_error_sound as gui_fit2d_error_sound
 from ra_sim.gui import views as gui_views
 from ra_sim.gui.geometry_overlay import (
@@ -39628,76 +39638,36 @@ def _build_geometry_fit_async_job(
     build_all_selected_backgrounds = bool(selection_snapshot.build_all_selected_backgrounds)
     required_indices = list(selection_snapshot.required_indices)
 
-    background_images: dict[int, dict[str, np.ndarray]] = {}
-    caked_views_by_background: dict[int, dict[str, object]] = {}
-    projection_payload_by_background: dict[int, dict[str, object]] = {}
-    manual_pairs_by_background: dict[int, list[dict[str, object]]] = {}
-    source_snapshots: dict[int, dict[str, object]] = {}
-    requested_signatures: dict[int, object] = {}
-    requested_signature_summaries: dict[int, object] = {}
-    background_labels: dict[int, str] = {}
-    theta_base_by_background: dict[int, float] = {}
-    theta_initial_by_background: dict[int, float] = {}
-
-    def _manual_dataset_background_label(idx: int) -> str:
-        try:
-            osc_path = manual_dataset_bindings.osc_files[int(idx)]
-        except Exception:
-            osc_path = None
-        if osc_path is not None:
-            try:
-                name = Path(str(osc_path)).name
-            except Exception:
-                name = ""
-            if str(name).strip():
-                return str(name)
-        return _geometry_fit_background_label(int(idx))
-
-    skipped_manual_pair_backgrounds: dict[int, str] = {
-        int(idx): _manual_dataset_background_label(int(idx))
-        for idx in sorted(skipped_empty_indices)
-    }
-
-    def _theta_base_for_index(dataset_index: int) -> float:
-        if build_all_selected_backgrounds or joint_background_mode:
-            if 0 <= int(dataset_index) < len(background_theta_values):
-                return float(background_theta_values[int(dataset_index)])
-        return float(fit_params_snapshot.get("theta_initial", theta_initial_value))
-
-    def _record_background_fit_inputs(idx: int) -> None:
-        theta_base_value = float(_theta_base_for_index(int(idx)))
-        theta_initial_value_i = float(
-            theta_base_value + float(fit_params_snapshot.get("theta_offset", 0.0))
-        )
-        theta_base_by_background[int(idx)] = float(theta_base_value)
-        theta_initial_by_background[int(idx)] = float(theta_initial_value_i)
-        params_i = dict(fit_params_snapshot)
-        params_i["theta_initial"] = float(theta_initial_value_i)
-        requested_signature = _geometry_source_snapshot_signature_for_background(
-            int(idx),
-            params_i,
-        )
-        requested_signatures[int(idx)] = requested_signature
-        requested_signature_summaries[int(idx)] = _live_cache_signature_summary(requested_signature)
-
-    for idx in required_indices:
-        native_background, display_background = manual_dataset_bindings.load_background_by_index(
-            int(idx)
-        )
-        background_images[int(idx)] = {
-            "native": np.asarray(native_background, dtype=np.float64).copy(),
-            "display": np.asarray(display_background, dtype=np.float64).copy(),
-        }
-        manual_pairs_by_background[int(idx)] = [
-            dict(entry)
-            for entry in (manual_dataset_bindings.geometry_manual_pairs_for_index(int(idx)) or ())
-            if isinstance(entry, Mapping)
-        ]
-        source_snapshots[int(idx)] = copy.deepcopy(
-            simulation_runtime_state.source_row_snapshots.get(int(idx)) or {}
-        )
-        background_labels[int(idx)] = _manual_dataset_background_label(int(idx))
-        _record_background_fit_inputs(int(idx))
+    background_input_snapshot = snapshot_geometry_fit_background_inputs(
+        required_indices=required_indices,
+        selected_background_indices=selected_background_indices,
+        skipped_empty_indices=skipped_empty_indices,
+        current_background_index=int(current_background_index),
+        theta_initial_value=float(theta_initial_value),
+        fit_params_snapshot=fit_params_snapshot,
+        background_theta_values=background_theta_values,
+        uses_shared_theta=uses_shared_theta,
+        joint_background_mode=joint_background_mode,
+        build_all_selected_backgrounds=build_all_selected_backgrounds,
+        primary_index=primary_index,
+        osc_files=list(manual_dataset_bindings.osc_files or ()),
+        load_background_by_index=manual_dataset_bindings.load_background_by_index,
+        geometry_manual_pairs_for_index=manual_dataset_bindings.geometry_manual_pairs_for_index,
+        source_row_snapshots=(
+            getattr(simulation_runtime_state, "source_row_snapshots", None) or {}
+        ),
+        background_label_for_index=_geometry_fit_background_label,
+        source_snapshot_signature_for_background=(
+            _geometry_source_snapshot_signature_for_background
+        ),
+        signature_summary=_live_cache_signature_summary,
+    )
+    background_images = background_input_snapshot.background_images
+    manual_pairs_by_background = background_input_snapshot.manual_pairs_by_background
+    requested_signatures = background_input_snapshot.requested_signatures
+    requested_signature_summaries = background_input_snapshot.requested_signature_summaries
+    background_labels = background_input_snapshot.background_labels
+    theta_initial_by_background = background_input_snapshot.theta_initial_by_background
 
     try:
         manual_match_config = (
@@ -39716,72 +39686,35 @@ def _build_geometry_fit_async_job(
     except Exception:
         pick_uses_caked_space = False
 
-    manual_fit_space_by_background = gui_geometry_fit.geometry_manual_fit_space_by_background(
-        required_indices,
-        manual_pairs_by_background,
+    background_input_snapshot = filter_geometry_fit_background_inputs_for_manual_pair_space(
+        background_input_snapshot,
         pick_uses_caked_space=bool(pick_uses_caked_space),
         current_background_index=int(current_background_index),
+        theta_initial_value=float(theta_initial_value),
+        background_theta_values=background_theta_values,
+        geometry_manual_fit_space_by_background=(
+            gui_geometry_fit.geometry_manual_fit_space_by_background
+        ),
+        source_snapshot_signature_for_background=(
+            _geometry_source_snapshot_signature_for_background
+        ),
+        signature_summary=_live_cache_signature_summary,
     )
-    has_usable_manual_pair_background = any(
-        str(kind).strip().lower() != "missing" for kind in manual_fit_space_by_background.values()
+    background_images = background_input_snapshot.background_images
+    manual_pairs_by_background = background_input_snapshot.manual_pairs_by_background
+    requested_signatures = background_input_snapshot.requested_signatures
+    requested_signature_summaries = background_input_snapshot.requested_signature_summaries
+    background_labels = background_input_snapshot.background_labels
+    theta_initial_by_background = background_input_snapshot.theta_initial_by_background
+    manual_fit_space_by_background = (
+        background_input_snapshot.manual_fit_space_by_background
     )
-    if skipped_empty_indices and not has_usable_manual_pair_background:
-        manual_fit_space_by_background.update(
-            {int(idx): "missing" for idx in skipped_empty_indices}
-        )
-    missing_manual_pair_indices = [
-        int(idx)
-        for idx, kind in manual_fit_space_by_background.items()
-        if str(kind).strip().lower() == "missing"
-    ]
-    missing_manual_pair_set = {int(idx) for idx in missing_manual_pair_indices}
-    usable_manual_pair_indices = [
-        int(idx) for idx in required_indices if int(idx) not in missing_manual_pair_set
-    ]
-    if missing_manual_pair_indices and usable_manual_pair_indices:
-        usable_set = {int(idx) for idx in usable_manual_pair_indices}
-        skipped_manual_pair_backgrounds.update(
-            {
-                int(idx): str(background_labels.get(int(idx), f"background {int(idx) + 1}"))
-                for idx in sorted(missing_manual_pair_indices)
-            }
-        )
-        required_indices = [int(idx) for idx in required_indices if int(idx) in usable_set]
-        selected_background_indices = [
-            int(idx) for idx in selected_background_indices if int(idx) in usable_set
-        ]
-        manual_fit_space_by_background = {
-            int(idx): str(manual_fit_space_by_background[int(idx)]) for idx in required_indices
-        }
-        for payload_by_background in (
-            background_images,
-            manual_pairs_by_background,
-            source_snapshots,
-            background_labels,
-        ):
-            for idx in list(payload_by_background):
-                if int(idx) not in usable_set:
-                    del payload_by_background[idx]
-        primary_index = (
-            int(current_background_index)
-            if int(current_background_index) in usable_set
-            else int(required_indices[0])
-        )
-        uses_shared_theta = bool(uses_shared_theta and len(selected_background_indices) > 1)
-        joint_background_mode = bool(uses_shared_theta)
-        build_all_selected_backgrounds = bool(joint_background_mode)
-        if not uses_shared_theta:
-            fit_params_snapshot["theta_offset"] = 0.0
-            if 0 <= int(primary_index) < len(background_theta_values):
-                fit_params_snapshot["theta_initial"] = float(
-                    background_theta_values[int(primary_index)]
-                )
-        theta_base_by_background.clear()
-        theta_initial_by_background.clear()
-        requested_signatures.clear()
-        requested_signature_summaries.clear()
-        for idx in required_indices:
-            _record_background_fit_inputs(int(idx))
+    required_indices = background_input_snapshot.required_indices
+    selected_background_indices = background_input_snapshot.selected_background_indices
+    fit_params_snapshot = dict(background_input_snapshot.fit_params_snapshot)
+    primary_index = int(background_input_snapshot.primary_index)
+    uses_shared_theta = bool(background_input_snapshot.uses_shared_theta)
+    joint_background_mode = bool(background_input_snapshot.joint_background_mode)
     manual_fit_uses_caked_space = any(
         str(kind) == "caked" for kind in manual_fit_space_by_background.values()
     )
@@ -39824,420 +39757,90 @@ def _build_geometry_fit_async_job(
             prepare_bindings.ensure_geometry_fit_caked_view()
         pick_uses_caked_space = True
 
-    base_geometry_runtime_cfg = copy.deepcopy(
-        prepare_bindings.build_runtime_config(dict(fit_params_snapshot))
-    )
-    geometry_runtime_cfg = gui_geometry_fit.apply_joint_geometry_fit_runtime_safety_overrides(
-        base_geometry_runtime_cfg,
+    runtime_config_snapshot = build_geometry_fit_runtime_config_snapshot(
+        fit_params_snapshot=fit_params_snapshot,
+        manual_pairs_by_background=manual_pairs_by_background,
+        manual_fit_requires_caked_space=manual_fit_requires_caked_space,
         joint_background_mode=joint_background_mode,
-    )
-    if manual_fit_requires_caked_space:
-        selected_manual_pair_rows = [
-            dict(entry)
-            for rows in manual_pairs_by_background.values()
-            for entry in (rows or ())
-            if isinstance(entry, Mapping)
-            and gui_geometry_fit.geometry_manual_pair_enabled_for_geometry_fit(entry)
-        ]
-        geometry_runtime_cfg = (
-            gui_geometry_fit.apply_manual_caked_point_geometry_fit_runtime_overrides(
-                geometry_runtime_cfg,
-                joint_background_mode=joint_background_mode,
-                active_var_names=var_names,
-                manual_pair_rows=selected_manual_pair_rows,
-            )
-        )
-    else:
-        geometry_runtime_cfg = gui_geometry_fit.apply_manual_point_geometry_fit_runtime_overrides(
-            geometry_runtime_cfg,
-            joint_background_mode=joint_background_mode,
-        )
-    fit_solver_mosaic_params, fit_sample_count = (
-        gui_geometry_fit.build_geometry_fit_solver_mosaic_params(
-            params=fit_params_snapshot,
-            geometry_runtime_cfg=geometry_runtime_cfg,
-            build_mosaic_params=build_mosaic_params,
-        )
+        var_names=var_names,
+        build_runtime_config=prepare_bindings.build_runtime_config,
+        apply_joint_runtime_safety_overrides=(
+            gui_geometry_fit.apply_joint_geometry_fit_runtime_safety_overrides
+        ),
+        manual_pair_enabled_for_geometry_fit=(
+            gui_geometry_fit.geometry_manual_pair_enabled_for_geometry_fit
+        ),
+        apply_manual_caked_runtime_overrides=(
+            gui_geometry_fit.apply_manual_caked_point_geometry_fit_runtime_overrides
+        ),
+        apply_manual_point_runtime_overrides=(
+            gui_geometry_fit.apply_manual_point_geometry_fit_runtime_overrides
+        ),
+        build_solver_mosaic_params=gui_geometry_fit.build_geometry_fit_solver_mosaic_params,
+        build_mosaic_params=build_mosaic_params,
     )
 
-    live_rows_by_background: dict[int, list[dict[str, object]]] = {}
-    live_rows_cache_metadata_by_background: dict[int, dict[str, object]] = {}
-    live_rows_signature_by_background: dict[int, object] = {}
-    live_rows_handoff_diagnostics: dict[str, object] = {
-        "geometry_fit_live_handoff_patch_marker": GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER,
-        "current_background": int(current_background_index),
-        "q_group_cached_entries": int(len(_geometry_fit_q_group_cache_entries())),
-        "manual_picker_candidates": 0,
-        "live_preview_rows_count": 0,
-        "live_rows_by_background_keys": [],
-        "live_rows_by_background_current_count": 0,
-        "requested_signature_keys": sorted(int(key) for key in requested_signatures),
-        "requested_signature_by_background_keys": sorted(int(key) for key in requested_signatures),
-        "live_rows_signature_by_background_keys": [],
-    }
-    if int(current_background_index) in set(required_indices):
-        current_background_idx = int(current_background_index)
-        live_preview_rows = [
-            dict(entry)
-            for entry in (_build_live_preview_simulated_peaks_from_cache() or ())
-            if isinstance(entry, Mapping)
-        ]
-        live_rows_by_background[current_background_idx] = live_preview_rows
-        live_rows_cache_metadata_by_background[current_background_idx] = (
-            dict(_last_live_preview_cache_metadata())
+    live_rows_snapshot = snapshot_live_rows_handoff(
+        current_background_index=int(current_background_index),
+        required_indices=required_indices,
+        background_images=background_images,
+        manual_pairs_by_background=manual_pairs_by_background,
+        requested_signatures=requested_signatures,
+        theta_initial_value=float(theta_initial_value),
+        fit_params_snapshot=fit_params_snapshot,
+        theta_initial_by_background=theta_initial_by_background,
+        q_group_cached_entry_count=int(len(_geometry_fit_q_group_cache_entries())),
+        current_live_preview_rows=_build_live_preview_simulated_peaks_from_cache,
+        current_live_preview_cache_metadata=(
+            _last_live_preview_cache_metadata
             if callable(_last_live_preview_cache_metadata)
-            else {}
-        )
-        live_rows_signature_by_background[current_background_idx] = requested_signatures.get(
-            current_background_idx
-        )
-        live_rows_cache_metadata_by_background[current_background_idx].update(
-            {
-                "live_rows_raw_count": int(
-                    len(live_rows_by_background.get(current_background_idx, ()))
-                ),
-                "live_rows_payload_count": int(
-                    len(live_rows_by_background.get(current_background_idx, ()))
-                ),
-                "live_rows_signature_match": True,
-                "live_rows_signature_reason": "matched_at_job_build",
-                "live_rows_cache_source": str(
-                    live_rows_cache_metadata_by_background[current_background_idx].get(
-                        "cache_source",
-                        "live_preview_cache",
-                    )
-                    or "live_preview_cache"
-                ),
-                "live_rows_source_counts": _geometry_fit_live_row_source_counts(
-                    live_rows_by_background.get(current_background_idx, ())
-                ),
-                "geometry_fit_live_handoff_patch_marker": (GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER),
-            }
-        )
-        live_rows_handoff_diagnostics["live_preview_rows_count"] = int(len(live_preview_rows))
-        current_manual_pairs = list(
-            manual_pairs_by_background.get(int(current_background_idx), ()) or ()
-        )
-        if current_manual_pairs or not live_preview_rows:
-            background_payload = dict(background_images.get(current_background_idx) or {})
-            fallback_params = dict(fit_params_snapshot)
-            fallback_params["theta_initial"] = float(
-                theta_initial_by_background.get(
-                    current_background_idx,
-                    fit_params_snapshot.get("theta_initial", theta_initial_value),
-                )
-            )
-            fallback_rows, fallback_diag = (
-                _geometry_fit_job_local_source_rows_from_picker_or_q_group_cache(
-                    background_index=current_background_idx,
-                    params_local=fallback_params,
-                    display_background=background_payload.get("display"),
-                    manual_pairs=current_manual_pairs,
-                )
-            )
-            live_rows_handoff_diagnostics.update(dict(fallback_diag))
-            if fallback_rows:
-                current_live_rows = [
-                    dict(row)
-                    for row in live_rows_by_background.get(current_background_idx, ())
-                    if isinstance(row, Mapping)
-                ]
-                fallback_keys = {
-                    key
-                    for row in fallback_rows
-                    if (key := _geometry_fit_live_source_row_merge_key(row)) is not None
-                }
-                current_keys = {
-                    key
-                    for row in current_live_rows
-                    if (key := _geometry_fit_live_source_row_merge_key(row)) is not None
-                }
-                if (
-                    current_manual_pairs
-                    and str(fallback_diag.get("job_local_fallback_source") or "")
-                    == "saved_manual_pairs"
-                    and not (fallback_keys & current_keys)
-                ):
-                    live_rows_by_background[current_background_idx] = [
-                        dict(row) for row in fallback_rows
-                    ]
-                elif current_live_rows:
-                    merged_rows = list(current_live_rows)
-                    merged_key_indices: dict[tuple[object, ...], int] = {}
-                    for row_index, row in enumerate(merged_rows):
-                        key = _geometry_fit_live_source_row_merge_key(row)
-                        if key is not None:
-                            merged_key_indices.setdefault(key, int(row_index))
-                    for fallback_row in fallback_rows:
-                        fallback_copy = dict(fallback_row)
-                        key = _geometry_fit_live_source_row_merge_key(fallback_copy)
-                        if key is not None and key in merged_key_indices:
-                            merged_rows[int(merged_key_indices[key])] = fallback_copy
-                        else:
-                            if key is not None:
-                                merged_key_indices[key] = int(len(merged_rows))
-                            merged_rows.append(fallback_copy)
-                    live_rows_by_background[current_background_idx] = merged_rows
-                else:
-                    live_rows_by_background[current_background_idx] = [
-                        dict(row) for row in fallback_rows
-                    ]
-                payload_rows = live_rows_by_background.get(current_background_idx, ())
-                live_rows_cache_metadata_by_background[current_background_idx].update(
-                    {
-                        "cache_source": str(
-                            fallback_diag.get("job_local_fallback_source") or "q_group_snapshot"
-                        ),
-                        "live_rows_cache_source": str(
-                            fallback_diag.get("job_local_fallback_source") or "q_group_snapshot"
-                        ),
-                        "live_rows_raw_count": int(len(payload_rows)),
-                        "live_rows_payload_count": int(len(payload_rows)),
-                        "live_rows_signature_match": True,
-                        "live_rows_signature_reason": "matched_job_local_snapshot",
-                        "live_rows_source_counts": _geometry_fit_live_row_source_counts(
-                            payload_rows
-                        ),
-                        "geometry_fit_live_handoff_patch_marker": (
-                            GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER
-                        ),
-                        "job_local_fallback_rows": int(len(fallback_rows)),
-                        "job_local_fallback_source": str(
-                            fallback_diag.get("job_local_fallback_source") or "q_group_snapshot"
-                        ),
-                    }
-                )
-                _append_runtime_update_trace(
-                    "geometry_fit_job_live_rows_from_q_group_snapshot",
-                    geometry_fit_live_handoff_patch_marker=(GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER),
-                    background_index=int(current_background_idx),
-                    rows=int(len(fallback_rows)),
-                    sources=_geometry_fit_live_row_source_counts(fallback_rows),
-                    job_local_fallback_source=str(
-                        fallback_diag.get("job_local_fallback_source") or "q_group_snapshot"
-                    ),
-                )
-        live_rows_handoff_diagnostics.update(
-            {
-                "live_rows_by_background_keys": sorted(int(key) for key in live_rows_by_background),
-                "live_rows_by_background_current_count": int(
-                    len(live_rows_by_background.get(current_background_idx, ()))
-                ),
-                "live_rows_current_background_count": int(
-                    len(live_rows_by_background.get(current_background_idx, ()))
-                ),
-                "live_rows_signature_by_background_keys": sorted(
-                    int(key) for key in live_rows_signature_by_background
-                ),
-            }
-        )
-        live_rows_cache_metadata_by_background[current_background_idx].update(
-            {
-                "geometry_fit_live_handoff_patch_marker": (GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER),
-                "live_rows_handoff_diagnostics": dict(live_rows_handoff_diagnostics),
-                "q_group_cached_entries": int(
-                    live_rows_handoff_diagnostics.get("q_group_cached_entries", 0) or 0
-                ),
-                "manual_picker_candidates": int(
-                    live_rows_handoff_diagnostics.get("manual_picker_candidates", 0) or 0
-                ),
-                "live_preview_rows_count": int(
-                    live_rows_handoff_diagnostics.get("live_preview_rows_count", 0) or 0
-                ),
-            }
-        )
-    for required_background_idx in required_indices:
-        background_idx = int(required_background_idx)
-        if live_rows_by_background.get(background_idx):
-            continue
-        background_payload = dict(background_images.get(background_idx) or {})
-        fallback_params = dict(fit_params_snapshot)
-        fallback_params["theta_initial"] = float(
-            theta_initial_by_background.get(
-                background_idx,
-                fit_params_snapshot.get("theta_initial", theta_initial_value),
-            )
-        )
-        fallback_rows, fallback_diag = (
-            _geometry_fit_job_local_source_rows_from_picker_or_q_group_cache(
-                background_index=background_idx,
-                params_local=fallback_params,
-                display_background=background_payload.get("display"),
-                manual_pairs=manual_pairs_by_background.get(int(background_idx), ()),
-            )
-        )
-        live_rows_handoff_diagnostics.update(dict(fallback_diag))
-        if not fallback_rows:
-            continue
-        live_rows_by_background[background_idx] = [dict(row) for row in fallback_rows]
-        metadata = dict(live_rows_cache_metadata_by_background.get(background_idx) or {})
-        metadata.update(
-            {
-                "background_index": int(background_idx),
-                "cache_source": str(
-                    fallback_diag.get("job_local_fallback_source") or "q_group_snapshot"
-                ),
-                "live_rows_cache_source": str(
-                    fallback_diag.get("job_local_fallback_source") or "q_group_snapshot"
-                ),
-                "live_rows_raw_count": int(len(fallback_rows)),
-                "live_rows_payload_count": int(len(fallback_rows)),
-                "live_rows_signature_match": True,
-                "live_rows_signature_reason": "matched_job_local_snapshot",
-                "live_rows_source_counts": _geometry_fit_live_row_source_counts(fallback_rows),
-                "geometry_fit_live_handoff_patch_marker": GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER,
-                "job_local_fallback_rows": int(len(fallback_rows)),
-                "job_local_fallback_source": str(
-                    fallback_diag.get("job_local_fallback_source") or "q_group_snapshot"
-                ),
-            }
-        )
-        live_rows_cache_metadata_by_background[background_idx] = metadata
-        live_rows_signature_by_background[background_idx] = requested_signatures.get(background_idx)
-        _append_runtime_update_trace(
-            "geometry_fit_job_live_rows_from_q_group_snapshot",
-            geometry_fit_live_handoff_patch_marker=GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER,
-            background_index=int(background_idx),
-            rows=int(len(fallback_rows)),
-            sources=_geometry_fit_live_row_source_counts(fallback_rows),
-            job_local_fallback_source=str(
-                fallback_diag.get("job_local_fallback_source") or "q_group_snapshot"
-            ),
-        )
-    live_rows_handoff_diagnostics.update(
-        {
-            "live_rows_by_background_keys": sorted(int(key) for key in live_rows_by_background),
-            "live_rows_by_background_current_count": int(
-                len(live_rows_by_background.get(int(current_background_index), ()))
-            ),
-            "live_rows_current_background_count": int(
-                len(live_rows_by_background.get(int(current_background_index), ()))
-            ),
-            "live_rows_signature_by_background_keys": sorted(
-                int(key) for key in live_rows_signature_by_background
-            ),
-        }
+            else (lambda: {})
+        ),
+        q_group_fallback_rows=_geometry_fit_job_local_source_rows_from_picker_or_q_group_cache,
+        merge_key=_geometry_fit_live_source_row_merge_key,
+        source_counts=_geometry_fit_live_row_source_counts,
+        trace_callback=_append_runtime_update_trace,
+        handoff_patch_marker=GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER,
     )
-    for background_idx, metadata in list(live_rows_cache_metadata_by_background.items()):
-        metadata["live_rows_handoff_diagnostics"] = dict(live_rows_handoff_diagnostics)
-        live_rows_cache_metadata_by_background[int(background_idx)] = metadata
-    if manual_fit_requires_caked_space and int(current_background_index) in set(required_indices):
-        caked_view_payload = _geometry_fit_caked_view_for_index(int(current_background_index))
-        if isinstance(caked_view_payload, Mapping):
-            try:
-                projection_payload = _geometry_fit_caked_projection_for_index(
-                    int(current_background_index)
-                )
-                if not isinstance(projection_payload, Mapping):
-                    projection_payload = gui_geometry_fit.geometry_fit_caked_projection_payload(
-                        caked_view_payload
-                    )
-                if isinstance(projection_payload, Mapping):
-                    stored_projection_payload = _geometry_fit_projection_payload_storage_copy(
-                        projection_payload
-                    )
-                    if isinstance(stored_projection_payload, Mapping):
-                        projection_payload_by_background[int(current_background_index)] = (
-                            stored_projection_payload
-                        )
-                sanitized_payload, _sanitize_diag = (
-                    gui_geometry_fit.sanitize_geometry_fit_caked_display_payload(caked_view_payload)
-                )
-                if isinstance(sanitized_payload, Mapping):
-                    caked_views_by_background[int(current_background_index)] = {
-                        "background": np.asarray(
-                            sanitized_payload.get("background"),
-                            dtype=np.float64,
-                        ).copy(),
-                        "radial_axis": np.asarray(
-                            sanitized_payload.get("radial_axis"),
-                            dtype=np.float64,
-                        ).copy(),
-                        "azimuth_axis": np.asarray(
-                            sanitized_payload.get("azimuth_axis"),
-                            dtype=np.float64,
-                        ).copy(),
-                        "raw_azimuth_axis": np.asarray(
-                            sanitized_payload.get("raw_azimuth_axis"),
-                            dtype=np.float64,
-                        ).copy(),
-                        "raw_to_gui_row_permutation": np.asarray(
-                            sanitized_payload.get("raw_to_gui_row_permutation"),
-                            dtype=np.int32,
-                        ).copy(),
-                        "transform_bundle": sanitized_payload.get("transform_bundle"),
-                        "detector_shape": tuple(
-                            int(v) for v in tuple(sanitized_payload.get("detector_shape", ()))[:2]
-                        ),
-                    }
-            except Exception:
-                pass
-
-    analysis_bins: tuple[int, int]
-    current_caked_view = caked_views_by_background.get(int(current_background_index))
-    try:
-        current_radial_axis = np.asarray(
-            dict(current_caked_view or {}).get("radial_axis"),
-            dtype=np.float64,
-        )
-        current_azimuth_axis = np.asarray(
-            dict(current_caked_view or {}).get("azimuth_axis"),
-            dtype=np.float64,
-        )
-    except Exception:
-        current_radial_axis = None
-        current_azimuth_axis = None
-    if (
-        isinstance(current_radial_axis, np.ndarray)
-        and current_radial_axis.size > 0
-        and isinstance(current_azimuth_axis, np.ndarray)
-        and current_azimuth_axis.size > 0
-    ):
-        analysis_bins = (
-            int(current_radial_axis.size),
-            int(current_azimuth_axis.size),
-        )
-    else:
-        preview_bins = getattr(simulation_runtime_state, "analysis_preview_bins", None)
-        if (
-            isinstance(preview_bins, tuple)
-            and len(preview_bins) == 2
-            and all(int(value) > 0 for value in preview_bins)
-        ):
-            analysis_bins = (int(preview_bins[0]), int(preview_bins[1]))
-        else:
-            analysis_bins = (
-                int(DEFAULT_ANALYSIS_RADIAL_BINS),
-                int(DEFAULT_ANALYSIS_AZIMUTH_BINS),
-            )
-
-    projection_view_mode = (
-        "caked" if manual_fit_requires_caked_space else targeted_projection_view_mode
+    live_rows_by_background = live_rows_snapshot.live_rows_by_background
+    live_rows_signature_by_background = live_rows_snapshot.live_rows_signature_by_background
+    live_rows_handoff_diagnostics = live_rows_snapshot.live_rows_handoff_diagnostics
+    caked_projection_snapshot = snapshot_caked_projection_payloads(
+        manual_fit_requires_caked_space=manual_fit_requires_caked_space,
+        current_background_index=int(current_background_index),
+        required_indices=required_indices,
+        caked_view_for_index=_geometry_fit_caked_view_for_index,
+        caked_projection_for_index=_geometry_fit_caked_projection_for_index,
+        caked_projection_payload_from_view=(
+            gui_geometry_fit.geometry_fit_caked_projection_payload
+        ),
+        projection_payload_storage_copy=_geometry_fit_projection_payload_storage_copy,
+        sanitize_caked_display_payload=gui_geometry_fit.sanitize_geometry_fit_caked_display_payload,
     )
-    projection_view_signature_by_background: dict[int, dict[str, object]] = {}
-    for idx in required_indices:
-        background_payload = dict(background_images.get(int(idx)) or {})
-        native_background = background_payload.get("native")
-        try:
-            detector_shape = tuple(
-                int(v) for v in np.asarray(native_background, dtype=np.float64).shape[:2]
-            )
-        except Exception:
-            detector_shape = None
-        projection_view_signature_by_background[int(idx)] = (
-            _normalize_geometry_fit_projection_view_signature(
-                _geometry_fit_targeted_projection_view_signature(
-                    int(idx),
-                    mode_override=projection_view_mode,
-                    caked_payload=(
-                        dict(projection_payload_by_background.get(int(idx)) or {}) or None
-                    ),
-                    detector_shape=detector_shape,
-                    analysis_preview_bins=analysis_bins,
-                ),
-                int(idx),
-            )
-        )
+    caked_views_by_background = caked_projection_snapshot.caked_views_by_background
+    projection_payload_by_background = (
+        caked_projection_snapshot.projection_payload_by_background
+    )
+
+    projection_view_signatures = build_projection_view_signatures(
+        current_background_index=int(current_background_index),
+        required_indices=required_indices,
+        background_images=background_images,
+        caked_views_by_background=caked_views_by_background,
+        projection_payload_by_background=projection_payload_by_background,
+        manual_fit_requires_caked_space=manual_fit_requires_caked_space,
+        targeted_projection_view_mode=targeted_projection_view_mode,
+        analysis_preview_bins=getattr(simulation_runtime_state, "analysis_preview_bins", None),
+        default_radial_bins=DEFAULT_ANALYSIS_RADIAL_BINS,
+        default_azimuth_bins=DEFAULT_ANALYSIS_AZIMUTH_BINS,
+        targeted_projection_view_signature=_geometry_fit_targeted_projection_view_signature,
+        normalize_projection_view_signature=_normalize_geometry_fit_projection_view_signature,
+    )
+    analysis_bins = projection_view_signatures.analysis_bins
+    projection_view_mode = projection_view_signatures.projection_view_mode
+    projection_view_signature_by_background = (
+        projection_view_signatures.projection_view_signature_by_background
+    )
 
     simulation_runtime_state.geometry_fit_job_counter = (
         int(getattr(simulation_runtime_state, "geometry_fit_job_counter", 0) or 0) + 1
@@ -40262,189 +39865,126 @@ def _build_geometry_fit_async_job(
         }
     )
     memory_intersection_cache = _copy_intersection_cache_tables(get_last_intersection_cache())
-    current_hit_table_cache_by_background: dict[int, dict[str, object]] = {}
-    if int(current_background_index) in set(required_indices):
-        current_background_idx = int(current_background_index)
-        requested_signature = requested_signatures.get(current_background_idx)
-        requested_base_signature = _geometry_source_snapshot_base_simulation_signature(
-            requested_signature
-        )
-        current_base_signature = getattr(
+    current_hit_table_cache_by_background = build_current_hit_table_cache_payload(
+        current_background_index=int(current_background_index),
+        required_indices=required_indices,
+        requested_signatures=requested_signatures,
+        requested_signature_summaries=requested_signature_summaries,
+        background_labels=background_labels,
+        projection_view_mode=str(projection_view_mode),
+        manual_fit_space_by_background=manual_fit_space_by_background,
+        projection_view_signature_by_background=projection_view_signature_by_background,
+        last_simulation_signature=getattr(
             simulation_runtime_state, "last_simulation_signature", None
-        )
-        source_signature_match = bool(
-            current_base_signature is not None
-            and requested_base_signature == current_base_signature
-        )
-        current_source_tables: list[object] = []
-        current_hit_table_reason = "base_simulation_signature_mismatch"
-        if source_signature_match:
-            try:
-                current_source_tables = _copy_hit_tables(
-                    getattr(simulation_runtime_state, "stored_max_positions_local", None) or []
-                )
-                current_hit_table_reason = (
-                    "matched" if current_source_tables else "missing_stored_max_positions_local"
-                )
-            except Exception:
-                current_source_tables = []
-                current_hit_table_reason = "stored_max_positions_local_unavailable"
-        requested_base_signature_json = gui_geometry_fit._geometry_fit_cache_jsonable(
-            requested_base_signature
-        )
-        current_base_signature_json = gui_geometry_fit._geometry_fit_cache_jsonable(
-            current_base_signature
-        )
-        current_hit_table_cache_by_background[current_background_idx] = {
-            "hit_tables": copy.deepcopy(list(current_source_tables or ())),
-            "cache_metadata": {
-                "background_index": int(current_background_idx),
-                "background_label": background_labels.get(
-                    int(current_background_idx),
-                    f"background {int(current_background_idx) + 1}",
-                ),
-                "projection_view_mode": str(projection_view_mode),
-                "fit_space": str(
-                    manual_fit_space_by_background.get(int(current_background_idx), "")
-                    or projection_view_mode
-                ),
-                "requested_signature": gui_geometry_fit._geometry_fit_cache_jsonable(
-                    requested_signature
-                ),
-                "requested_signature_summary": requested_signature_summaries.get(
-                    int(current_background_idx)
-                ),
-                "base_simulation_signature_match": bool(source_signature_match),
-                "source_signature_match": bool(source_signature_match),
-                "table_source_kind": "stored_max_positions_local",
-                "table_base_signature": current_base_signature_json,
-                "requested_base_signature": requested_base_signature_json,
-                "requested_base_signature_digest": gui_geometry_fit._geometry_fit_digest_payload(
-                    requested_base_signature_json
-                ),
-                "table_base_signature_digest": gui_geometry_fit._geometry_fit_digest_payload(
-                    current_base_signature_json
-                ),
-                "current_base_signature_digest": gui_geometry_fit._geometry_fit_digest_payload(
-                    current_base_signature_json
-                ),
-                "projection_view_signature": copy.deepcopy(
-                    projection_view_signature_by_background.get(int(current_background_idx))
-                ),
-                "table_kind": "hit_tables" if current_source_tables else "unavailable",
-                "hit_table_count": int(len(current_source_tables or ())),
-                "cache_source": "current_hit_table_cache",
-                "current_hit_table_cache_reason": str(current_hit_table_reason),
-            },
-        }
+        ),
+        stored_max_positions_local=getattr(
+            simulation_runtime_state, "stored_max_positions_local", None
+        ),
+        source_snapshot_base_signature=_geometry_source_snapshot_base_simulation_signature,
+        copy_hit_tables=_copy_hit_tables,
+        cache_jsonable=gui_geometry_fit._geometry_fit_cache_jsonable,
+        digest_payload=gui_geometry_fit._geometry_fit_digest_payload,
+    )
     _append_runtime_update_trace(
         "geometry_fit_job_live_rows_build",
         **dict(live_rows_handoff_diagnostics),
     )
-    return {
-        "job_id": int(job_id),
-        "stamp": stamp,
-        "log_path": Path(log_path),
-        "params": dict(params),
-        "var_names": list(var_names),
-        "preserve_live_theta": bool(preserve_live_theta),
-        "mosaic_params": dict(mosaic_params),
-        "fit_solver_mosaic_params": (
-            dict(fit_solver_mosaic_params) if fit_sample_count is not None else None
-        ),
-        "fit_sample_count": fit_sample_count,
-        "fit_config": fit_config_snapshot,
-        "geometry_runtime_cfg": geometry_runtime_cfg,
-        "theta_initial": float(theta_initial_value),
-        "current_background_index": int(current_background_index),
-        "selection_applied": bool(selection_applied),
-        "selected_background_indices": [int(idx) for idx in selected_background_indices],
-        "selection_error": selection_error,
-        "uses_shared_theta": bool(uses_shared_theta),
-        "theta_metadata_applied": bool(theta_metadata_applied),
-        "background_theta_values": [float(value) for value in background_theta_values],
-        "background_theta_error": background_theta_error,
-        "theta_offset": float(theta_offset_value),
-        "joint_background_mode": bool(joint_background_mode),
-        "required_indices": [int(idx) for idx in required_indices],
-        "primary_index": int(primary_index),
-        "osc_files": [str(path) for path in (manual_dataset_bindings.osc_files or ())],
-        "image_size": int(manual_dataset_bindings.image_size),
-        "display_rotate_k": int(manual_dataset_bindings.display_rotate_k),
-        "analysis_bins": analysis_bins,
-        "npt_rad": int(analysis_bins[0]),
-        "npt_azim": int(analysis_bins[1]),
-        "background_images": background_images,
-        "caked_views_by_background": caked_views_by_background,
-        "projection_payload_by_background": projection_payload_by_background,
-        "manual_pairs_by_background": manual_pairs_by_background,
-        "source_snapshots": source_snapshots,
-        "background_cache_by_index": {},
-        "requested_signatures": requested_signatures,
-        "requested_signature_summaries": requested_signature_summaries,
-        "background_labels": background_labels,
-        "projection_view_mode": str(projection_view_mode),
-        "projection_view_signature": copy.deepcopy(
-            projection_view_signature_by_background.get(int(current_background_index))
-            or _geometry_fit_targeted_projection_view_signature(
-                int(current_background_index),
-                mode_override=projection_view_mode,
-                analysis_preview_bins=analysis_bins,
-            )
-        ),
-        "projection_view_signature_by_background": copy.deepcopy(
-            projection_view_signature_by_background
-        ),
-        "theta_base_by_background": theta_base_by_background,
-        "theta_initial_by_background": theta_initial_by_background,
-        "source_snapshot_diagnostics": _geometry_manual_last_source_snapshot_diagnostics(),
-        "simulation_diagnostics": globals().get(
-            "_geometry_manual_last_simulation_diagnostics",
-            lambda: {},
-        )(),
-        "live_cache_inventory": _live_cache_inventory_snapshot(),
-        "memory_intersection_cache": memory_intersection_cache,
-        "memory_intersection_cache_signature": (simulation_runtime_state.last_simulation_signature),
-        "current_hit_table_cache_by_background": current_hit_table_cache_by_background,
-        "live_rows_by_background": live_rows_by_background,
-        "live_rows_cache_metadata_by_background": live_rows_cache_metadata_by_background,
-        "live_rows_signature_by_background": live_rows_signature_by_background,
-        "live_rows_signature": simulation_runtime_state.last_simulation_signature,
-        "live_rows_handoff_diagnostics": live_rows_handoff_diagnostics,
-        "manual_match_config": manual_match_config,
-        "manual_fit_space_by_background": dict(manual_fit_space_by_background),
-        "manual_caked_fit_space_required_by_background": dict(
-            manual_caked_fit_space_required_by_background
-        ),
-        "disable_auto_caked_route_for_gamma_gamma": bool(disable_auto_caked_gamma_gamma),
-        "skipped_manual_pair_backgrounds": dict(skipped_manual_pair_backgrounds),
-        "pick_uses_caked_space": bool(pick_uses_caked_space),
-        "geometry_manual_simulated_lookup": (
-            manual_dataset_bindings.geometry_manual_simulated_lookup
-        ),
-        "geometry_manual_entry_display_coords": (
-            manual_dataset_bindings.geometry_manual_entry_display_coords
-        ),
-        "geometry_manual_project_peaks_to_current_view": (
-            manual_dataset_bindings.geometry_manual_project_peaks_to_current_view
-        ),
-        "unrotate_display_peaks": manual_dataset_bindings.unrotate_display_peaks,
-        "display_to_native_sim_coords": (manual_dataset_bindings.display_to_native_sim_coords),
-        "native_detector_coords_to_detector_display_coords": (
-            manual_dataset_bindings.native_detector_coords_to_detector_display_coords
-        ),
-        "select_fit_orientation": manual_dataset_bindings.select_fit_orientation,
-        "apply_orientation_to_entries": (manual_dataset_bindings.apply_orientation_to_entries),
-        "orient_image_for_fit": manual_dataset_bindings.orient_image_for_fit,
-        "apply_background_backend_orientation": (
-            manual_dataset_bindings.apply_background_backend_orientation
-        ),
-        "solver_inputs": execution_bindings.solver_inputs,
-        "solve_fit": bindings.solve_fit,
-        "execution_bindings": execution_bindings,
-        "event_queue": getattr(simulation_runtime_state, "geometry_fit_event_queue", None),
-        "enable_live_update_events": False,
-    }
+    return assemble_geometry_fit_worker_job(
+        core_fields={
+            "job_id": int(job_id),
+            "stamp": stamp,
+            "log_path": log_path,
+            "params": dict(params),
+            "var_names": list(var_names),
+            "preserve_live_theta": bool(preserve_live_theta),
+            "mosaic_params": dict(mosaic_params),
+            "fit_config": fit_config_snapshot,
+            "theta_initial": float(theta_initial_value),
+            "current_background_index": int(current_background_index),
+            "osc_files": [str(path) for path in (manual_dataset_bindings.osc_files or ())],
+            "image_size": int(manual_dataset_bindings.image_size),
+            "display_rotate_k": int(manual_dataset_bindings.display_rotate_k),
+            "projection_view_signature_fallback": (
+                lambda: _geometry_fit_targeted_projection_view_signature(
+                    int(current_background_index),
+                    mode_override=projection_view_mode,
+                    analysis_preview_bins=analysis_bins,
+                )
+            ),
+            "solver_inputs": execution_bindings.solver_inputs,
+            "solve_fit": bindings.solve_fit,
+            "execution_bindings": execution_bindings,
+            "event_queue": getattr(simulation_runtime_state, "geometry_fit_event_queue", None),
+            "enable_live_update_events": False,
+        },
+        selection_fields={
+            "selection_applied": bool(selection_applied),
+            "selected_background_indices": [int(idx) for idx in selected_background_indices],
+            "selection_error": selection_error,
+            "uses_shared_theta": bool(uses_shared_theta),
+            "theta_metadata_applied": bool(theta_metadata_applied),
+            "background_theta_values": [float(value) for value in background_theta_values],
+            "background_theta_error": background_theta_error,
+            "theta_offset": float(theta_offset_value),
+            "joint_background_mode": bool(joint_background_mode),
+            "required_indices": [int(idx) for idx in required_indices],
+            "primary_index": int(primary_index),
+        },
+        background_snapshot=background_input_snapshot,
+        runtime_config_snapshot=runtime_config_snapshot,
+        caked_projection_snapshot=caked_projection_snapshot,
+        projection_signatures=projection_view_signatures,
+        live_rows_snapshot=live_rows_snapshot,
+        cache_fields={
+            "memory_intersection_cache": memory_intersection_cache,
+            "memory_intersection_cache_signature": (
+                simulation_runtime_state.last_simulation_signature
+            ),
+            "current_hit_table_cache_by_background": current_hit_table_cache_by_background,
+        },
+        diagnostic_fields={
+            "source_snapshot_diagnostics": _geometry_manual_last_source_snapshot_diagnostics(),
+            "simulation_diagnostics": globals().get(
+                "_geometry_manual_last_simulation_diagnostics",
+                lambda: {},
+            )(),
+            "live_cache_inventory": _live_cache_inventory_snapshot(),
+        },
+        manual_fields={
+            "manual_match_config": manual_match_config,
+            "manual_caked_fit_space_required_by_background": dict(
+                manual_caked_fit_space_required_by_background
+            ),
+            "disable_auto_caked_route_for_gamma_gamma": bool(disable_auto_caked_gamma_gamma),
+            "pick_uses_caked_space": bool(pick_uses_caked_space),
+        },
+        callback_fields={
+            "geometry_manual_simulated_lookup": (
+                manual_dataset_bindings.geometry_manual_simulated_lookup
+            ),
+            "geometry_manual_entry_display_coords": (
+                manual_dataset_bindings.geometry_manual_entry_display_coords
+            ),
+            "geometry_manual_project_peaks_to_current_view": (
+                manual_dataset_bindings.geometry_manual_project_peaks_to_current_view
+            ),
+            "unrotate_display_peaks": manual_dataset_bindings.unrotate_display_peaks,
+            "display_to_native_sim_coords": (
+                manual_dataset_bindings.display_to_native_sim_coords
+            ),
+            "native_detector_coords_to_detector_display_coords": (
+                manual_dataset_bindings.native_detector_coords_to_detector_display_coords
+            ),
+            "select_fit_orientation": manual_dataset_bindings.select_fit_orientation,
+            "apply_orientation_to_entries": (
+                manual_dataset_bindings.apply_orientation_to_entries
+            ),
+            "orient_image_for_fit": manual_dataset_bindings.orient_image_for_fit,
+            "apply_background_backend_orientation": (
+                manual_dataset_bindings.apply_background_backend_orientation
+            ),
+        },
+    )
 
 
 def _format_source_cache_worker_event_message(

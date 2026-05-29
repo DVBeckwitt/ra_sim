@@ -29,6 +29,9 @@ RUNTIME_IMPL_WRAPPER_SOURCE_PATH = (
 RUNTIME_SESSION_SOURCE_PATH = (
     Path(__file__).resolve().parent.parent / "ra_sim" / "gui" / "_runtime" / "runtime_session.py"
 )
+GEOMETRY_FIT_JOB_SOURCE_PATH = (
+    Path(__file__).resolve().parent.parent / "ra_sim" / "gui" / "_runtime" / "geometry_fit_job.py"
+)
 PRIMARY_CACHE_HELPERS_SOURCE_PATH = (
     Path(__file__).resolve().parent.parent
     / "ra_sim"
@@ -5263,14 +5266,18 @@ def test_runtime_worker_caked_projection_view_builds_same_axes_metadata(monkeypa
 
 
 def test_runtime_impl_geometry_fit_async_job_captures_analysis_bins() -> None:
-    source = _source_text(RUNTIME_SESSION_SOURCE_PATH)
-    helper_start = source.index("def _build_geometry_fit_async_job(")
-    helper_end = source.index("def _handle_geometry_fit_worker_event(", helper_start)
-    helper_source = source[helper_start:helper_end]
+    runtime_source = _source_text(RUNTIME_SESSION_SOURCE_PATH)
+    helper_start = runtime_source.index("def _build_geometry_fit_async_job(")
+    helper_end = runtime_source.index("def _handle_geometry_fit_worker_event(", helper_start)
+    helper_source = runtime_source[helper_start:helper_end]
+    job_source = _source_text(GEOMETRY_FIT_JOB_SOURCE_PATH)
+    assembly_start = job_source.index("def assemble_geometry_fit_worker_job(")
+    assembly_source = job_source[assembly_start:]
 
-    assert '"analysis_bins": analysis_bins' in helper_source
-    assert '"npt_rad": int(analysis_bins[0])' in helper_source
-    assert '"npt_azim": int(analysis_bins[1])' in helper_source
+    assert "projection_signatures=projection_view_signatures" in helper_source
+    assert '"analysis_bins": projection_signatures.analysis_bins' in assembly_source
+    assert '"npt_rad": int(projection_signatures.analysis_bins[0])' in assembly_source
+    assert '"npt_azim": int(projection_signatures.analysis_bins[1])' in assembly_source
 
 
 def test_runtime_impl_prepare_caked_payload_keeps_canonical_transform_metadata() -> None:

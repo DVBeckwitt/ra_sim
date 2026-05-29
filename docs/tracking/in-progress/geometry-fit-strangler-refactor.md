@@ -45,6 +45,9 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Preserved public dataset payloads, saved-state shape, optimizer request shape, solver math, UI callbacks, CLI/env flags, log fields, and caked projection-authority behavior.
 - Patch B.1 restored the previous caked projection diagnostic ordering so `valid=False` exact-projector failures preserve `invalid_reason` even when returned caked coordinates are nonfinite.
 - Patch C0 added direct coverage for `resolve_geometry_fit_selection()` no-selection, theta-metadata-not-applied, background-theta-error, and skipped-empty-background branches.
+- Patch C extracted the async job builder background/manual/source input snapshots, live-row handoff, runtime config snapshot, caked projection payload capture, projection-view signatures, current hit-table cache payload, and final job dict assembly into `ra_sim/gui/_runtime/geometry_fit_job.py`.
+- Patch C kept `_build_geometry_fit_async_job()` as the runtime entry point, kept the final worker job as a plain dict, and did not move worker, optimizer, dataset, source-row rebuild, saved-state, CLI/env/debug-flag, solver, or UI callback behavior.
+- Post-Patch-C size report: `_build_geometry_fit_async_job()` is 420 lines, `ra_sim/gui/_runtime/runtime_session.py` is 46,186 lines, and `ra_sim/gui/_runtime/geometry_fit_job.py` is 1,131 lines.
 
 ## Review status
 
@@ -53,12 +56,13 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Follow-up before deeper job/dataset extraction was completed in Patch C0 by adding direct helper coverage for the remaining `resolve_geometry_fit_selection()` edge branches.
 - Snapshot helper now raises on normalized mapping-key collisions instead of silently dropping entries.
 - Patch B simplification removed the unused `resolve_fit_space_anchor()` helper and its self-only tests because it did not remove production dataset assembly logic in this slice.
+- Patch C added an import-boundary guard proving `geometry_fit_job.py` does not import `runtime_session.py`, Tk, worker modules, or GUI mutation modules.
 
 ## Next actions
 
-1. Extract async job background/manual/source input snapshots.
-2. Keep helper outputs internal and convert back to existing dict fields before public returns.
-3. Leave live-row handoff, caked projection payloads, hit-table cache payloads, and worker code untouched in the next slice.
+1. Start worker boundary preparation with an import-boundary test and worker context/event/snapshot utilities.
+2. Keep optimizer, dataset, source-row rebuild, and update-policy extraction out of the next worker-boundary slice.
+3. Revisit `_build_geometry_fit_async_job()` size after worker-boundary helpers are in place; do not add hard debt gates yet.
 
 ## Validation
 
@@ -134,6 +138,18 @@ Patch C0 async selection edge-coverage slice:
 ```bash
 python -m pytest -q tests/test_geometry_fit_job_selection.py
 python -m pytest -q tests/test_geometry_fit_job_selection.py tests/test_geometry_fit_job_live_rows_handoff.py::test_geometry_fit_job_canonical_snapshot_pins_live_row_handoff_contract
+```
+
+Patch C async job-builder extraction slice:
+
+```bash
+python -m compileall -q ra_sim tests
+python -m pytest -q tests/test_geometry_fit_job_selection.py tests/test_geometry_fit_job_live_rows_handoff.py tests/test_geometry_fit_live_rows_signature_handoff.py tests/test_geometry_fit_safe_runtime.py tests/test_gui_runtime_geometry_fit.py tests/test_gui_runtime_import_safe.py
+python -m pytest -q tests/test_geometry_fitting.py -k "fit_geometry_parameters or caked or manual_qr or locked_qr or dynamic_point or objective_insensitive or full_beam"
+python -m pytest -q tests/test_gui_geometry_fit_workflow.py -k "build_geometry_manual_fit_dataset or prepare_geometry_fit_run or caked or locked_qr or coordinate or optimizer_request"
+python -m ruff check ra_sim/gui/_runtime/geometry_fit_job.py ra_sim/gui/_runtime/runtime_session.py tests/test_geometry_fit_job_selection.py tests/test_geometry_fit_job_live_rows_handoff.py tests/test_geometry_fit_live_rows_signature_handoff.py tests/test_geometry_fit_safe_runtime.py tests/test_gui_runtime_geometry_fit.py
+git diff --check
+python -m ra_sim.dev check
 ```
 
 Known baseline issue:

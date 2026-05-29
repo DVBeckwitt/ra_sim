@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from ra_sim.gui._runtime.geometry_fit_job import resolve_geometry_fit_selection
+import numpy as np
+
+from ra_sim.gui._runtime.geometry_fit_job import (
+    resolve_geometry_fit_selection,
+    snapshot_geometry_fit_background_inputs,
+)
 
 
 def _selection_snapshot(**overrides):
@@ -151,3 +156,50 @@ def test_resolve_geometry_fit_selection_records_skipped_empty_backgrounds() -> N
     assert snapshot.selected_background_indices == [0, 2]
     assert snapshot.skipped_empty_indices == {1}
     assert snapshot.required_indices == [0]
+
+
+def test_snapshot_geometry_fit_background_inputs_copies_mutable_payloads() -> None:
+    native_background = np.asarray([[1.0]], dtype=float)
+    display_background = np.asarray([[2.0]], dtype=float)
+    manual_pair = {"pair": 1, "label": "manual"}
+    source_row_snapshots = {0: {"rows": [{"source": "snapshot"}]}}
+    fit_params = {"theta_initial": 2.0, "theta_offset": 0.5}
+
+    snapshot = snapshot_geometry_fit_background_inputs(
+        required_indices=[0],
+        selected_background_indices=[0],
+        skipped_empty_indices=set(),
+        current_background_index=0,
+        theta_initial_value=1.0,
+        fit_params_snapshot=fit_params,
+        background_theta_values=[2.0],
+        uses_shared_theta=False,
+        joint_background_mode=False,
+        build_all_selected_backgrounds=False,
+        primary_index=0,
+        osc_files=["bg0.osc"],
+        load_background_by_index=lambda _idx: (native_background, display_background),
+        geometry_manual_pairs_for_index=lambda _idx: [manual_pair],
+        source_row_snapshots=source_row_snapshots,
+        background_label_for_index=lambda _idx: "background 1",
+        source_snapshot_signature_for_background=lambda idx, params: (
+            "sig",
+            idx,
+            params["theta_initial"],
+        ),
+        signature_summary=lambda signature: repr(signature),
+    )
+
+    native_background[0, 0] = 99.0
+    display_background[0, 0] = 88.0
+    manual_pair["pair"] = 99
+    source_row_snapshots[0]["rows"][0]["source"] = "mutated"
+    fit_params["theta_initial"] = 99.0
+
+    assert snapshot.background_images[0]["native"][0, 0] == 1.0
+    assert snapshot.background_images[0]["display"][0, 0] == 2.0
+    assert snapshot.manual_pairs_by_background[0][0]["pair"] == 1
+    assert snapshot.source_snapshots[0]["rows"][0]["source"] == "snapshot"
+    assert snapshot.requested_signature_summaries[0] == "('sig', 0, 2.5)"
+    assert snapshot.theta_base_by_background[0] == 2.0
+    assert snapshot.theta_initial_by_background[0] == 2.5
