@@ -13,7 +13,7 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: Patch D2 worker caked payload loading complete; ready for review
+Status: Patch D3.0 projection/cache contract coverage complete; ready for review
 Bug/error/feature status: internal refactor guardrails only; no user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
@@ -67,6 +67,12 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Post-Patch-D2 size report: `_run_async_geometry_fit_worker_job()` is 3,255 lines,
   `ra_sim/gui/_runtime/runtime_session.py` is 45,936 lines, and
   `ra_sim/gui/_runtime/geometry_fit_worker.py` is 365 lines.
+- Patch D3.0 added test/docs guardrails for source-row projection and cache reuse
+  before moving any D3 production helpers.
+- Patch D3.0 did not move production behavior. Source-row projection, cache
+  marking, bundle storage, cache prebuild, manual validation, dataset, solver,
+  optimizer, saved-state, CLI/env/debug flags, result packaging, and UI callbacks
+  remain in their existing locations.
 
 ## Review status
 
@@ -80,11 +86,80 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Patch D2 extended the duplicate-helper guard so caked payload helpers cannot remain
   nested in `_run_async_geometry_fit_worker_job()` while also existing on the
   worker context.
+- Patch D3.0 added a no-production-movement guard proving the D3 source-row
+  projection/cache helper names have not been introduced in
+  `geometry_fit_worker.py` yet.
+
+## D3 contract map
+
+D3.1 source-row projection helpers:
+
+- `_project_source_rows_for_background(background_index, raw_rows, *, mode_override=None, strict_caked_projection=True, params_override=None) -> Sequence[object]`
+  - Inputs: background index, raw source rows, optional projection mode override, strict caked failure mode, and optional parameter override.
+  - Return shape: list-like projected row payloads from `_geometry_fit_rows_for_background(...)`; returns `[]` when there are no rows, when q-space is requested for a noncurrent background, or when q-space projection cannot run.
+  - `job_data` mutations: for caked mode, may update `job_data["projection_payload_by_background"][background_index]` with a stored exact projection payload.
+  - Cache map mutations: none outside the caked projection payload map.
+  - Source-cache generation side effects: none.
+  - Event emissions: none.
+  - Fallback order: normalize rows, normalize mode, q-space current-background projector path, detector/caked background payload lookup, caked projection payload load/hydrate when mode is caked, projection callback construction, then `project_peaks_to_current_view`.
+  - Empty/error behavior: detector mode falls back to normalized rows if projection callback raises; q-space returns `[]`; caked mode re-raises only when `strict_caked_projection` is true, otherwise returns `[]`.
+- `_project_source_rows_by_row_background(raw_rows) -> list[dict[str, object]]`
+  - Inputs: rows that may span multiple row-background identities.
+  - Return shape: copied projected row dicts sorted by the temporary `__ra_sim_projection_row_order__` key, with that temporary key removed before return.
+  - `job_data` mutations: only those caused by `_project_source_rows_for_background` for each group.
+  - Cache map mutations: only the caked projection payload map through the per-background helper.
+  - Source-cache generation side effects: none.
+  - Event emissions: none.
+  - Fallback order: group rows by background with current background as default, project each group, restore original row order.
+  - Empty/error behavior: returns `[]` when grouping yields no rows.
+
+D3.2 cached projection-row and bundle-storage helpers:
+
+- `_mark_worker_cached_projection_rows(rows, *, background_index, mode) -> list[dict[str, object]]`
+  - Inputs: row dicts, background index, projection mode.
+  - Return shape: the same list object, with rows mutated only when mode is `caked` or `q_space`.
+  - Row marker fields: `_geometry_fit_worker_cached_projection=True`, `_geometry_fit_worker_projection_mode=<mode>`, `_geometry_fit_worker_projection_background_index=<int background_index>`.
+  - Empty/error behavior: detector or unknown modes return rows unchanged.
+- `_worker_cached_projection_rows_match(rows, *, background_index, mode) -> bool`
+  - Inputs: row mappings, background index, projection mode.
+  - Return shape: boolean.
+  - Freshness rules: mode must be `caked` or `q_space`; rows must be nonempty; every row must have cached marker true, matching mode, and matching background index.
+  - Empty/error behavior: returns `False` for empty rows, detector/unknown modes, missing/noninteger background marker, or any stale row.
+- `_bundle_rows(bundle, *, mode_override=None, params_override=None) -> list[dict[str, object]]`
+  - Inputs: `GeometryFitBackgroundCacheBundle`, optional mode override, optional params override.
+  - Return shape: copied or projected row dicts for the bundle background; returns `[]` for non-bundles or failed strict projection paths.
+  - Reuse rules: valid cached projected rows are reused; unmarked projected rows are marked and reused only when `params_override is None` and requested mode matches current base mode; stale projected rows are rejected; caked/q-space can reproject stored rows.
+  - `job_data` mutations: through projection helpers only.
+  - Source-cache generation side effects: none.
+- `_store_worker_background_cache_bundle(bundle) -> int`
+  - Inputs: `GeometryFitBackgroundCacheBundle`.
+  - Return shape: new source-cache generation id.
+  - Mutations: stores bundle in `worker_background_cache_by_index`, writes a deep-copied source snapshot into `worker_source_row_snapshots`, and advances source-cache generation through `_advance_source_cache_generation`.
+  - Snapshot fields: background index, requested signatures/summaries, stored rows, projected rows, row counts, diagnostics, projection view signature, and picker/dataset validity booleans.
+
+D3.3 cache bundle/prebuild helpers:
+
+- `_build_geometry_fit_background_cache_bundle(...) -> GeometryFitBackgroundCacheBundle`
+  - Inputs: background metadata, requested signature data, theta values, stored rows, optional projected rows, cache source, diagnostics, peak/hit/intersection caches, and cache metadata.
+  - Return shape: `GeometryFitBackgroundCacheBundle` with copied stored/projected rows and copied optional table/cache payloads.
+  - Projection rules: when mode is caked or q-space, projected rows are generated when absent or stale; projection failure status is recorded in diagnostics.
+  - Mutations: may update projection payload map through projection helpers; otherwise returns a bundle.
+- `_prebuild_background_cache_bundle_worker(...) -> GeometryFitBackgroundCacheBundle | None`
+  - Inputs: background index, theta base, optional parameter set, consumer, prior diagnostics, required pairs, and stage callback.
+  - Return shape: cache bundle or `None`.
+  - Mutations/events: emits worker/stage diagnostics while collecting live rows, cache rows, fresh simulation rows, caked payload status, and projection results; can update worker diagnostics and projection payload maps.
+  - Fallback order: live/job-local rows, runtime/source snapshots, targeted/manual fallback, then fresh simulation when needed.
+  - Empty/error behavior: returns `None` with diagnostics for missing rows, timeout, stale signature, or projection failure conditions according to current status strings.
+- `_prebuild_required_background_caches() -> None`
+  - Inputs: required indices and job-local manual pairs from `job_data`.
+  - Return shape: none.
+  - Mutations/events: emits source-cache build/bundle start, ready, failed, and locked-Qr readiness diagnostics; stores successful bundles; advances cache generation through storage.
+  - Fallback/error behavior: continues after ordinary failed bundle builds, but raises runtime timeout errors for targeted/fresh simulation timeout statuses.
 
 ## Next actions
 
-1. Patch D3 should move worker source-row projection and cache-bundle helpers only after D2 review.
-2. Keep manual validation, dataset, solver, optimizer, saved-state, CLI/env, and UI behavior out of D3.
+1. Patch D3.1 should move `_project_source_rows_for_background` and `_project_source_rows_by_row_background` only.
+2. Keep cache marking, bundle storage, cache prebuild, manual validation, dataset, solver, optimizer, saved-state, CLI/env, and UI behavior out of D3.1.
 3. Do not add hard debt gates yet.
 
 ## Validation
@@ -205,6 +280,17 @@ git diff --check
 python -m ra_sim.dev check
 ```
 
+Patch D3.0 worker projection/cache contract coverage slice:
+
+```bash
+python -m compileall -q ra_sim tests
+python -m pytest -q tests/test_geometry_fit_worker.py
+python -m pytest -q tests/test_geometry_fit_safe_runtime.py -k "geometry_fit_worker or geometry_fit_job"
+python -m pytest -q tests/test_geometry_fit_job_live_rows_handoff.py tests/test_geometry_fit_live_rows_signature_handoff.py tests/test_gui_runtime_geometry_fit.py
+python -m ruff check tests/test_geometry_fit_worker.py tests/test_geometry_fit_safe_runtime.py tests/test_geometry_fit_job_live_rows_handoff.py
+git diff --check
+```
+
 Known baseline issue:
 
 ```bash
@@ -219,6 +305,7 @@ Current validation status:
 - Patch C.1 focused validation passed: compileall, job-selection/live-row tests, geometry-fit job import-boundary test, GUI runtime geometry test, Ruff on touched files, and `git diff --check`.
 - Patch D1 validation passed: compileall, worker context tests, worker/job import-boundary tests, job/live-row/runtime/import-safe suites, GUI workflow route tests, geometry fitting route tests, Ruff on touched files, and `git diff --check`.
 - Patch D2 validation passed: compileall, worker caked payload tests, worker/job import-boundary tests, job/live-row/runtime/import-safe suites, GUI workflow route tests, geometry fitting route tests, Ruff on touched files, and `git diff --check`.
+- Patch D3.0 validation passed: compileall, worker context/source-cache tests, worker/job import-boundary tests, live-row/runtime guard tests, Ruff on touched test files, and `git diff --check`.
 - `python -m ra_sim.dev check` remains blocked only by the documented pre-existing formatting drift above.
 - No generated artifacts, raw data, local config, notebook output, dependency changes, release version changes, or public migration files are included.
 

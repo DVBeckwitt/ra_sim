@@ -447,6 +447,16 @@ def test_geometry_fit_job_builds_q_group_rows_for_noncurrent_required_background
 
     assert sorted(job["live_rows_by_background"]) == [0, 1]
     assert len(job["live_rows_by_background"][1]) == 1
+    row = job["live_rows_by_background"][1][0]
+    assert row["q_group_key"] == ("q_group", "primary", 1, 0)
+    assert row["source_reflection_index"] == 7
+    assert row["source_reflection_namespace"] == "full_reflection"
+    assert row["source_reflection_is_full"] is True
+    assert row["source_row_index"] == 0
+    assert row["source_table_index"] == 0
+    assert row["source_branch_index"] == 1
+    assert row["qr"] == 1.2
+    assert row["qz"] == 0.4
     assert job["live_rows_cache_metadata_by_background"][1]["job_local_fallback_source"] == (
         "q_group_snapshot"
     )

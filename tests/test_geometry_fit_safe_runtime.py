@@ -114,6 +114,28 @@ def test_geometry_fit_worker_context_helpers_are_not_duplicated_in_runtime_worke
     assert not (nested_function_names & moved_helper_names)
 
 
+def test_geometry_fit_worker_has_not_moved_d3_projection_cache_helpers_yet() -> None:
+    tree = ast.parse(GEOMETRY_FIT_WORKER_PATH.read_text(encoding="utf-8"))
+    worker_function_names = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+    }
+
+    d3_helper_names = {
+        "_build_geometry_fit_background_cache_bundle",
+        "_bundle_rows",
+        "_mark_worker_cached_projection_rows",
+        "_prebuild_background_cache_bundle_worker",
+        "_prebuild_required_background_caches",
+        "_project_source_rows_by_row_background",
+        "_project_source_rows_for_background",
+        "_store_worker_background_cache_bundle",
+        "_worker_cached_projection_rows_match",
+    }
+    assert not (worker_function_names & d3_helper_names)
+
+
 def _geometry_fit_param_set() -> dict[str, object]:
     return {
         "a": 3.0,
