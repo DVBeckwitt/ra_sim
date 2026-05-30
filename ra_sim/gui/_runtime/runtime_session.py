@@ -41676,16 +41676,12 @@ def _run_async_geometry_fit_worker_job(
     def _stage_callback(stage: str, payload: Mapping[str, object]) -> None:
         _emit_worker_event(str(stage), dict(payload or {}))
 
-    _prebuild_required_background_caches = (
-        lambda: worker_context.prebuild_required_background_caches(
-            stage_callback=_stage_callback
-        )
-    )
-
     try:
         manual_spaces = _worker_manual_fit_space_by_background()
         _reject_worker_mixed_manual_fit_spaces(manual_spaces)
-        _prebuild_required_background_caches()
+        worker_context.prebuild_required_background_caches(
+            stage_callback=_stage_callback
+        )
         prepare_result = gui_geometry_fit.prepare_geometry_fit_run(
             params=dict(job_data.get("params", {}) or {}),
             var_names=list(job_data.get("var_names", ()) or ()),
