@@ -13,7 +13,7 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: Patch D3.3a background cache bundle construction extraction complete; ready for review
+Status: Patch D3.3b single-background cache prebuild extraction complete; ready for review
 Bug/error/feature status: internal worker refactor only; no user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
@@ -117,6 +117,19 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Post-Patch-D3.3a size report: `_run_async_geometry_fit_worker_job()` is 2,847
   lines, `ra_sim/gui/_runtime/runtime_session.py` is 45,528 lines, and
   `ra_sim/gui/_runtime/geometry_fit_worker.py` is 939 lines.
+- Patch D3.3a.1 clarified that the D3.3a bundle helper generates
+  caked/q-space projected rows only when projected rows are absent, and kept
+  source-row cache lookup/rebuild helpers explicitly pending in the movement
+  guard.
+- Patch D3.3b moved single-background cache prebuild orchestration behind
+  `GeometryFitWorkerContext`: `prebuild_background_cache_bundle_worker()`.
+- Patch D3.3b injects only the runtime-local callbacks needed by the moved
+  helper; required-background prebuild, source-row cache lookup/rebuild, manual
+  validation, dataset, solver, optimizer, saved-state, CLI/env/debug, result
+  packaging, and UI behavior did not move.
+- Post-Patch-D3.3b size report: `_run_async_geometry_fit_worker_job()` is 2,465
+  lines, `ra_sim/gui/_runtime/runtime_session.py` is 45,146 lines, and
+  `ra_sim/gui/_runtime/geometry_fit_worker.py` is 1,421 lines.
 
 ## Review status
 
@@ -207,9 +220,14 @@ D3.3b/D3.3c cache prebuild helpers:
 - `_prebuild_background_cache_bundle_worker(...) -> GeometryFitBackgroundCacheBundle | None`
   - Inputs: background index, theta base, optional parameter set, consumer, prior diagnostics, required pairs, and stage callback.
   - Return shape: cache bundle or `None`.
-  - Mutations/events: emits worker/stage diagnostics while collecting live rows, cache rows, fresh simulation rows, caked payload status, and projection results; can update worker diagnostics and projection payload maps.
-  - Fallback order: live/job-local rows, runtime/source snapshots, targeted/manual fallback, then fresh simulation when needed.
-  - Empty/error behavior: returns `None` with diagnostics for missing rows, timeout, stale signature, or projection failure conditions according to current status strings.
+  - Snapshot-hit path: if the source snapshot signature matches, rows exist, and required-pair validation is absent or valid, builds/stores a background cache bundle from snapshot rows, updates source and simulation diagnostics from the bundle, and returns that bundle without a fresh rebuild.
+  - Param override path: starts from `job_data["params"]`, injects per-background `theta_initial`, then applies the override. Trial signatures use the `geometry_fit_worker_trial_source_rows` tag plus digests of local params and the base requested signature.
+  - Live rows payload behavior: live rows are forwarded only when the live-row signature matches the requested signature; mismatches return an empty rows payload with `requested_signature_mismatch` metadata.
+  - Required-pair validation failure behavior: matching snapshots that fail required-pair validation record `background_cache_pair_validation_failed` source diagnostics before falling through to rebuild.
+  - Caked payload order: ensure an active caked payload, use a ready stored projection payload when valid, hydrate it, then fall back to generated snapshot loading only when the candidate was absent.
+  - Rebuild handling: calls the pure rebuild helper with equivalent cache, projection, live-row, targeted-cache, and stage callbacks; rebuild diagnostics replace worker source/simulation diagnostics.
+  - Bundle storage: rebuild results with stored rows are converted through `_build_geometry_fit_background_cache_bundle`, stored through `_store_worker_background_cache_bundle`, and returned.
+  - Empty/error behavior: empty rebuild results return `None`; caked projection failures still raise the existing runtime errors from the moved caked-payload helpers.
 - `_prebuild_required_background_caches() -> None`
   - Inputs: required indices and job-local manual pairs from `job_data`.
   - Return shape: none.
@@ -218,11 +236,11 @@ D3.3b/D3.3c cache prebuild helpers:
 
 ## Next actions
 
-1. Patch D3.3b should move single-background cache prebuild orchestration only:
-   `_prebuild_background_cache_bundle_worker`.
-2. Keep required-background prebuild, source-row cache lookup/rebuild, manual
-   validation, dataset, solver, optimizer, saved-state, CLI/env, and UI behavior
-   out of D3.3b.
+1. Patch D3.3c should move source-row cache lookup/rebuild helpers only:
+   `_rebuild_source_rows_for_background_worker` and
+   `_source_rows_for_background_worker`.
+2. Keep required-background prebuild, manual validation, dataset, solver,
+   optimizer, saved-state, CLI/env, and UI behavior out of D3.3c.
 3. Do not add hard debt gates yet.
 
 ## Validation
@@ -430,6 +448,10 @@ Current validation status:
   construction tests, worker/job import-boundary tests,
   live-row/runtime/import-safe guard tests, GUI workflow route tests, geometry
   fitting route tests, Ruff on touched files, and `git diff --check`.
+- Patch D3.3b validation passed: compileall, worker prebuild/cache tests,
+  worker/job import-boundary tests, live-row/runtime/import-safe guard tests,
+  GUI workflow route tests, geometry fitting route tests, Ruff on touched files,
+  and `git diff --check`.
 - `python -m ra_sim.dev check` remains blocked only by the documented pre-existing formatting drift above.
 - No generated artifacts, raw data, local config, notebook output, dependency changes, release version changes, or public migration files are included.
 

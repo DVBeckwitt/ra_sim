@@ -9,6 +9,7 @@ from ra_sim.gui._runtime.geometry_fit_worker import (
     GeometryFitWorkerCacheBundleDeps,
     GeometryFitWorkerCakedPayloadDeps,
     GeometryFitWorkerContext,
+    GeometryFitWorkerPrebuildDeps,
     GeometryFitWorkerSourceProjectionDeps,
 )
 
@@ -64,6 +65,35 @@ class FakeBackgroundCacheBundle:
         self.hit_tables = hit_tables
         self.intersection_cache = intersection_cache
         self.cache_metadata = cache_metadata
+
+
+class FakeRebuildResult:
+    def __init__(
+        self,
+        *,
+        background_index: int = 0,
+        requested_signature: object = ("rebuilt", 0),
+        requested_signature_summary: object = {"summary": "rebuilt"},
+        stored_rows: list[dict[str, object]] | None = None,
+        projected_rows: list[dict[str, object]] | None = None,
+        rebuild_source: str = "fresh_rebuild",
+        diagnostics: dict[str, object] | None = None,
+        peak_table_lattice: list[object] | None = None,
+        hit_tables: list[object] | None = None,
+        intersection_cache: list[object] | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> None:
+        self.background_index = int(background_index)
+        self.requested_signature = requested_signature
+        self.requested_signature_summary = requested_signature_summary
+        self.stored_rows = stored_rows if stored_rows is not None else []
+        self.projected_rows = projected_rows if projected_rows is not None else []
+        self.rebuild_source = rebuild_source
+        self.diagnostics = diagnostics if diagnostics is not None else {}
+        self.peak_table_lattice = peak_table_lattice
+        self.hit_tables = hit_tables
+        self.intersection_cache = intersection_cache
+        self.metadata = metadata
 
 
 class FakeCakedPayloadDeps:
@@ -290,6 +320,212 @@ class FakeSourceProjectionDeps:
         return float(col), float(row)
 
 
+class FakePrebuildDeps:
+    def __init__(self) -> None:
+        self.validation_result: dict[str, object] = {"valid": True}
+        self.rebuild_result: FakeRebuildResult = FakeRebuildResult(
+            diagnostics={"status": "rebuilt"}
+        )
+        self.rebuild_calls: list[dict[str, object]] = []
+        self.live_rows_payloads: list[object] = []
+        self.targeted_loads: list[str] = []
+        self.targeted_stores: list[tuple[str, object]] = []
+
+    @property
+    def deps(self) -> GeometryFitWorkerPrebuildDeps:
+        return GeometryFitWorkerPrebuildDeps(
+            theta_initial_for_background=self.theta_initial_for_background,
+            int_keyed_mapping=self.int_keyed_mapping,
+            live_cache_signature_summary=self.live_cache_signature_summary,
+            cache_jsonable=self.cache_jsonable,
+            digest_payload=self.digest_payload,
+            collect_required_manual_fit_targets=(self.collect_required_manual_fit_targets),
+            required_branch_group_keys=self.required_branch_group_keys,
+            live_row_source_counts=self.live_row_source_counts,
+            validate_required_source_rows_for_fit_space=(
+                self.validate_required_source_rows_for_fit_space
+            ),
+            projection_view_signature_for_background=(
+                self.projection_view_signature_for_background
+            ),
+            logged_intersection_cache_loaders=self.logged_intersection_cache_loaders,
+            copy_intersection_cache_tables=self.copy_intersection_cache_tables,
+            logged_cache_matches_params=self.logged_cache_matches_params,
+            forward_source_rows_for_rebuild=self.forward_source_rows_for_rebuild,
+            build_source_rows_for_rebuild=self.build_source_rows_for_rebuild,
+            simulate_hit_tables_for_fit=self.simulate_hit_tables_for_fit,
+            load_targeted_projected_cache_entry=self.load_targeted_projected_cache_entry,
+            store_targeted_projected_cache_entry=self.store_targeted_projected_cache_entry,
+            rebuild_geometry_fit_source_rows=self.rebuild_geometry_fit_source_rows,
+            hydrate_exact_caked_payload=self.hydrate_exact_caked_payload,
+            projection_payload_storage_copy=self.projection_payload_storage_copy,
+            is_transform_bundle=self.is_transform_bundle,
+            live_handoff_patch_marker="phase4d1",
+        )
+
+    def theta_initial_for_background(self, background_index: int) -> float:
+        return float(background_index) + 10.0
+
+    def int_keyed_mapping(self, raw_mapping: object) -> dict[int, object]:
+        normalized: dict[int, object] = {}
+        if not isinstance(raw_mapping, Mapping):
+            return normalized
+        for key, value in raw_mapping.items():
+            try:
+                normalized[int(key)] = value
+            except Exception:
+                continue
+        return normalized
+
+    def live_cache_signature_summary(self, signature: object) -> dict[str, object]:
+        return {"signature": signature}
+
+    def cache_jsonable(self, payload: object) -> object:
+        return copy.deepcopy(payload)
+
+    def digest_payload(self, payload: object) -> tuple[str, str]:
+        return ("digest", repr(payload))
+
+    def collect_required_manual_fit_targets(
+        self,
+        required_pairs: object,
+        *,
+        background_index: int,
+    ) -> list[dict[str, object]]:
+        return [
+            dict(pair, background_index=int(background_index))
+            for pair in (required_pairs or ())
+            if isinstance(pair, Mapping)
+        ]
+
+    def required_branch_group_keys(
+        self,
+        required_manual_fit_targets: object,
+    ) -> list[tuple[tuple[int, int, int], int | None, object | None]]:
+        if not required_manual_fit_targets:
+            return []
+        return [((1, 0, 0), None, None)]
+
+    def live_row_source_counts(self, raw_rows: object) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for row in raw_rows or ():
+            if not isinstance(row, Mapping):
+                continue
+            source_label = str(row.get("source_label", "primary") or "primary")
+            counts[source_label] = int(counts.get(source_label, 0)) + 1
+        return dict(sorted(counts.items()))
+
+    def validate_required_source_rows_for_fit_space(
+        self,
+        _rows: object,
+        *,
+        required_pairs: object,
+        background_index: int,
+    ) -> dict[str, object]:
+        return dict(
+            self.validation_result,
+            background_index=int(background_index),
+            required_pair_count=len(required_pairs or ()),
+        )
+
+    def projection_view_signature_for_background(
+        self,
+        background_index: int,
+    ) -> dict[str, object]:
+        return {"background_index": int(background_index), "mode": "detector"}
+
+    def logged_intersection_cache_loaders(self) -> tuple[None, None]:
+        return None, None
+
+    def copy_intersection_cache_tables(self, raw_tables: object) -> list[object]:
+        return copy.deepcopy(list(raw_tables or ()))
+
+    def logged_cache_matches_params(self, *_args: object, **_kwargs: object) -> bool:
+        return True
+
+    def forward_source_rows_for_rebuild(
+        self,
+        rebuild_callback: object,
+        source_tables: object,
+        *,
+        params_local: Mapping[str, object],
+        fallback_consumer: object = "geometry_fit_preflight_cache",
+        kwargs: Mapping[str, object] | None = None,
+    ) -> object:
+        return rebuild_callback(
+            source_tables,
+            params_local=params_local,
+            consumer=str(fallback_consumer or "geometry_fit_preflight_cache"),
+            **dict(kwargs or {}),
+        )
+
+    def build_source_rows_for_rebuild(
+        self,
+        _source_tables: object,
+        *,
+        params_local: Mapping[str, object],
+        consumer: str,
+        **_kwargs: object,
+    ) -> tuple[list[dict[str, object]], None, None, None]:
+        return (
+            [
+                _source_row(
+                    background_index=0,
+                    source_label=str(consumer),
+                    theta=float(params_local.get("theta_initial", 0.0)),
+                )
+            ],
+            None,
+            None,
+            None,
+        )
+
+    def simulate_hit_tables_for_fit(
+        self,
+        *_args: object,
+        **_kwargs: object,
+    ) -> list[object]:
+        return []
+
+    def load_targeted_projected_cache_entry(
+        self,
+        *,
+        background_index: int,
+        key_digest: str,
+    ) -> object:
+        self.targeted_loads.append(f"{int(background_index)}:{key_digest}")
+        return None
+
+    def store_targeted_projected_cache_entry(
+        self,
+        *,
+        background_index: int,
+        key_digest: str,
+        payload: object,
+    ) -> None:
+        self.targeted_stores.append((f"{int(background_index)}:{key_digest}", payload))
+
+    def rebuild_geometry_fit_source_rows(self, **kwargs: object) -> FakeRebuildResult:
+        self.rebuild_calls.append(dict(kwargs))
+        build_live_rows = kwargs.get("build_live_rows")
+        if callable(build_live_rows):
+            self.live_rows_payloads.append(build_live_rows())
+        return self.rebuild_result
+
+    def hydrate_exact_caked_payload(self, payload: object, **_kwargs: object) -> object:
+        if not isinstance(payload, Mapping):
+            return None
+        hydrated = dict(payload)
+        hydrated.setdefault("transform_bundle", FakeBundle())
+        return hydrated
+
+    def projection_payload_storage_copy(self, payload: object) -> object:
+        return dict(payload) if isinstance(payload, Mapping) else payload
+
+    def is_transform_bundle(self, value: object) -> bool:
+        return isinstance(value, FakeBundle)
+
+
 def _ready_projection_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "radial_axis": [1.0, 2.0],
@@ -367,6 +603,16 @@ def _context_with_cache_bundle_deps(
     )
     context.cache_bundle_deps = _fake_cache_bundle_deps()
     return context, source_deps
+
+
+def _context_with_prebuild_deps(
+    job: dict[str, object] | None = None,
+) -> tuple[GeometryFitWorkerContext, FakePrebuildDeps]:
+    context, _source_deps = _context_with_cache_bundle_deps(job)
+    fake_prebuild_deps = FakePrebuildDeps()
+    context.prebuild_deps = fake_prebuild_deps.deps
+    context.caked_payload_deps = FakeCakedPayloadDeps().deps
+    return context, fake_prebuild_deps
 
 
 def _source_row(**overrides: object) -> dict[str, object]:
@@ -1215,6 +1461,161 @@ def test_build_geometry_fit_background_cache_bundle_preserves_optional_tables_an
     assert bundle.hit_tables == [{"hits": [1]}]
     assert bundle.intersection_cache == [{"intersections": [2]}]
     assert bundle.cache_metadata == {"source": "logged"}
+
+
+def test_prebuild_background_cache_bundle_worker_uses_matching_snapshot_without_rebuild() -> None:
+    context, prebuild_deps = _context_with_prebuild_deps(
+        {
+            "params": {"theta_initial": 1.0, "distance": 2.0},
+            "requested_signatures": {0: ("sig", 0)},
+            "requested_signature_summaries": {0: {"digest": "sig"}},
+            "source_snapshots": {
+                0: {
+                    "simulation_signature": ("sig", 0),
+                    "rows": [_source_row(source_row_index=11)],
+                    "created_from": "source_snapshot",
+                }
+            },
+            "background_labels": {0: "bg1"},
+        }
+    )
+
+    bundle = context.prebuild_background_cache_bundle_worker(
+        0,
+        theta_base=2.0,
+    )
+
+    assert isinstance(bundle, FakeBackgroundCacheBundle)
+    assert bundle.cache_source == "source_snapshot"
+    assert bundle.stored_rows[0]["source_row_index"] == 11
+    assert prebuild_deps.rebuild_calls == []
+    assert context.worker_background_cache_by_index[0] is bundle
+    assert context.worker_source_snapshot_diagnostics["status"] == "background_cache_ready"
+    assert context.worker_simulation_diagnostics["status"] == "background_cache_ready"
+
+
+def test_prebuild_background_cache_bundle_worker_records_pair_validation_failure() -> None:
+    context, prebuild_deps = _context_with_prebuild_deps(
+        {
+            "params": {"theta_initial": 1.0},
+            "requested_signatures": {0: ("sig", 0)},
+            "requested_signature_summaries": {0: {"digest": "sig"}},
+            "source_snapshots": {
+                0: {
+                    "simulation_signature": ("sig", 0),
+                    "rows": [_source_row(source_row_index=12)],
+                    "created_from": "source_snapshot",
+                }
+            },
+            "background_labels": {0: "bg1"},
+        }
+    )
+    prebuild_deps.validation_result = {"valid": False, "reason": "missing_pair"}
+    prebuild_deps.rebuild_result = FakeRebuildResult(
+        stored_rows=[],
+        diagnostics={"status": "empty_rebuild"},
+    )
+
+    bundle = context.prebuild_background_cache_bundle_worker(
+        0,
+        theta_base=2.0,
+        required_pairs=[{"manual_pair_id": "pair-1"}],
+    )
+
+    assert bundle is None
+    assert context.worker_source_snapshot_diagnostics["status"] == "empty_rebuild"
+    assert prebuild_deps.rebuild_calls
+    rebuild_call = prebuild_deps.rebuild_calls[0]
+    assert rebuild_call["preflight_mode"] == "manual_geometry_targeted"
+    assert rebuild_call["prior_diagnostics"]["status"] == (
+        "background_cache_pair_validation_failed"
+    )
+    assert rebuild_call["prior_diagnostics"]["live_runtime_cache_validation"]["valid"] is False
+
+
+def test_prebuild_background_cache_bundle_worker_live_rows_payload_requires_signature_match() -> None:
+    context, prebuild_deps = _context_with_prebuild_deps(
+        {
+            "params": {"theta_initial": 1.0},
+            "requested_signatures": {0: ("requested", 0)},
+            "requested_signature_summaries": {0: {"digest": "requested"}},
+            "live_rows_signature_by_background": {0: ("stale", 0)},
+            "live_rows_by_background": {0: [_source_row(source_row_index=13)]},
+            "live_rows_cache_metadata_by_background": {0: {"cache_source": "live"}},
+        }
+    )
+    prebuild_deps.rebuild_result = FakeRebuildResult(
+        stored_rows=[],
+        diagnostics={"status": "empty_rebuild"},
+    )
+
+    context.prebuild_background_cache_bundle_worker(0, theta_base=2.0)
+
+    assert prebuild_deps.live_rows_payloads
+    payload = prebuild_deps.live_rows_payloads[0]
+    assert payload["rows"] == []
+    assert payload["cache_metadata"]["live_rows_signature_match"] is False
+    assert payload["cache_metadata"]["reason"] == "requested_signature_mismatch"
+    assert payload["cache_metadata"]["live_rows_payload_count"] == 0
+
+
+def test_prebuild_background_cache_bundle_worker_rebuild_result_stores_bundle() -> None:
+    context, prebuild_deps = _context_with_prebuild_deps(
+        {
+            "params": {"theta_initial": 1.0},
+            "requested_signatures": {0: ("requested", 0)},
+            "requested_signature_summaries": {0: {"digest": "requested"}},
+        }
+    )
+    prebuild_deps.rebuild_result = FakeRebuildResult(
+        requested_signature=("rebuilt", 0),
+        requested_signature_summary={"digest": "rebuilt"},
+        stored_rows=[_source_row(source_row_index=14)],
+        projected_rows=[_source_row(source_row_index=15, projected=True)],
+        rebuild_source="fresh_rebuild",
+        diagnostics={"status": "fresh_rebuild_ready"},
+        metadata={"cache": "metadata"},
+    )
+
+    bundle = context.prebuild_background_cache_bundle_worker(0, theta_base=2.0)
+
+    assert isinstance(bundle, FakeBackgroundCacheBundle)
+    assert bundle.requested_signature == ("rebuilt", 0)
+    assert bundle.stored_rows[0]["source_row_index"] == 14
+    assert bundle.projected_rows[0]["source_row_index"] == 15
+    assert bundle.cache_source == "fresh_rebuild"
+    assert context.worker_background_cache_by_index[0] is bundle
+    assert context.source_cache_generation_by_background[0] == 1
+    assert context.job_data["source_cache_generation_by_background"][0] == 1
+    assert context.worker_source_snapshot_diagnostics["status"] == "fresh_rebuild_ready"
+    assert context.worker_simulation_diagnostics["status"] == "fresh_rebuild_ready"
+
+
+def test_prebuild_background_cache_bundle_worker_empty_rebuild_returns_none() -> None:
+    context, prebuild_deps = _context_with_prebuild_deps(
+        {
+            "params": {"theta_initial": 1.0},
+            "requested_signatures": {0: ("requested", 0)},
+        }
+    )
+    prebuild_deps.rebuild_result = FakeRebuildResult(
+        stored_rows=[],
+        projected_rows=[_source_row(source_row_index=16, projected=True)],
+        diagnostics={"status": "empty_rebuild", "reason": "no_rows"},
+    )
+
+    bundle = context.prebuild_background_cache_bundle_worker(0, theta_base=2.0)
+
+    assert bundle is None
+    assert context.worker_background_cache_by_index == {}
+    assert context.worker_source_snapshot_diagnostics == {
+        "status": "empty_rebuild",
+        "reason": "no_rows",
+    }
+    assert context.worker_simulation_diagnostics == {
+        "status": "empty_rebuild",
+        "reason": "no_rows",
+    }
 
 
 def test_caked_projection_payload_status_reports_ready_payload() -> None:

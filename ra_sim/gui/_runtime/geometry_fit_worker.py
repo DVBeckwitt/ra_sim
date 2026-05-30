@@ -51,6 +51,33 @@ class GeometryFitWorkerCacheBundleDeps:
     copy_optional_values: Callable[..., object]
 
 
+@dataclass(frozen=True)
+class GeometryFitWorkerPrebuildDeps:
+    theta_initial_for_background: Callable[..., object]
+    int_keyed_mapping: Callable[..., object]
+    live_cache_signature_summary: Callable[..., object]
+    cache_jsonable: Callable[..., object]
+    digest_payload: Callable[..., object]
+    collect_required_manual_fit_targets: Callable[..., object]
+    required_branch_group_keys: Callable[..., object]
+    live_row_source_counts: Callable[..., object]
+    validate_required_source_rows_for_fit_space: Callable[..., object]
+    projection_view_signature_for_background: Callable[..., object]
+    logged_intersection_cache_loaders: Callable[..., object]
+    copy_intersection_cache_tables: Callable[..., object]
+    logged_cache_matches_params: Callable[..., object]
+    forward_source_rows_for_rebuild: Callable[..., object]
+    build_source_rows_for_rebuild: Callable[..., object]
+    simulate_hit_tables_for_fit: Callable[..., object]
+    load_targeted_projected_cache_entry: Callable[..., object]
+    store_targeted_projected_cache_entry: Callable[..., object]
+    rebuild_geometry_fit_source_rows: Callable[..., object]
+    hydrate_exact_caked_payload: Callable[..., object]
+    projection_payload_storage_copy: Callable[..., object]
+    is_transform_bundle: Callable[[object], bool]
+    live_handoff_patch_marker: str
+
+
 @dataclass
 class GeometryFitWorkerContext:
     job_data: dict[str, object]
@@ -65,6 +92,7 @@ class GeometryFitWorkerContext:
     caked_payload_deps: GeometryFitWorkerCakedPayloadDeps | None = None
     source_projection_deps: GeometryFitWorkerSourceProjectionDeps | None = None
     cache_bundle_deps: GeometryFitWorkerCacheBundleDeps | None = None
+    prebuild_deps: GeometryFitWorkerPrebuildDeps | None = None
 
     @classmethod
     def from_job(cls, job: Mapping[str, object]) -> GeometryFitWorkerContext:
@@ -173,6 +201,11 @@ class GeometryFitWorkerContext:
         if self.cache_bundle_deps is None:
             raise RuntimeError("geometry-fit worker cache bundle deps are not configured")
         return self.cache_bundle_deps
+
+    def _require_prebuild_deps(self) -> GeometryFitWorkerPrebuildDeps:
+        if self.prebuild_deps is None:
+            raise RuntimeError("geometry-fit worker prebuild deps are not configured")
+        return self.prebuild_deps
 
     def caked_projection_payload_status(
         self,
@@ -937,3 +970,452 @@ class GeometryFitWorkerContext:
                 dict(cache_metadata) if isinstance(cache_metadata, Mapping) else None
             ),
         )
+
+    def prebuild_background_cache_bundle_worker(
+        self,
+        background_index: int,
+        *,
+        theta_base: float,
+        param_set: Mapping[str, object] | None = None,
+        consumer: str = "geometry_fit_preflight_cache",
+        prior_diagnostics: Mapping[str, object] | None = None,
+        required_pairs: Sequence[Mapping[str, object]] | None = None,
+        stage_callback: object | None = None,
+    ) -> object | None:
+        cache_deps = self._require_cache_bundle_deps()
+        prebuild_deps = self._require_prebuild_deps()
+        background_idx = int(background_index)
+        params_local = dict(self.job_data.get("params", {}) or {})
+        params_local["theta_initial"] = float(
+            prebuild_deps.theta_initial_for_background(int(background_idx))
+        )
+        if isinstance(param_set, Mapping):
+            params_local.update(dict(param_set))
+
+        requested_signature_map = prebuild_deps.int_keyed_mapping(
+            self.job_data.get("requested_signatures", {})
+        )
+        requested_signature_summary_map = prebuild_deps.int_keyed_mapping(
+            self.job_data.get("requested_signature_summaries", {})
+        )
+        base_requested_signature = requested_signature_map.get(int(background_idx))
+        base_requested_signature_summary = requested_signature_summary_map.get(
+            int(background_idx)
+        )
+        if base_requested_signature_summary is None:
+            base_requested_signature_summary = prebuild_deps.live_cache_signature_summary(
+                base_requested_signature
+            )
+        if isinstance(param_set, Mapping):
+            requested_signature = (
+                "geometry_fit_worker_trial_source_rows",
+                int(background_idx),
+                prebuild_deps.digest_payload(
+                    prebuild_deps.cache_jsonable(params_local)
+                ),
+                prebuild_deps.digest_payload(
+                    prebuild_deps.cache_jsonable(base_requested_signature)
+                ),
+            )
+            requested_signature_summary = prebuild_deps.live_cache_signature_summary(
+                requested_signature
+            )
+        else:
+            requested_signature = base_requested_signature
+            requested_signature_summary = base_requested_signature_summary
+        background_label = dict(self.job_data.get("background_labels", {}) or {}).get(
+            int(background_idx),
+            f"background {int(background_idx) + 1}",
+        )
+        required_manual_fit_targets = (
+            prebuild_deps.collect_required_manual_fit_targets(
+                required_pairs,
+                background_index=int(background_idx),
+            )
+            if required_pairs
+            else []
+        )
+        required_branch_group_keys = prebuild_deps.required_branch_group_keys(
+            required_manual_fit_targets
+        )
+        preflight_mode = "manual_geometry_targeted" if required_branch_group_keys else "full"
+        live_rows_signature_map = prebuild_deps.int_keyed_mapping(
+            self.job_data.get("live_rows_signature_by_background", {})
+        )
+        live_rows_signature = live_rows_signature_map.get(
+            int(background_idx),
+            self.job_data.get("live_rows_signature"),
+        )
+        live_rows_cache_metadata = dict(
+            copy.deepcopy(
+                prebuild_deps.int_keyed_mapping(
+                    self.job_data.get("live_rows_cache_metadata_by_background", {})
+                ).get(int(background_idx), {})
+            )
+            or {}
+        )
+        live_rows = cache_deps.copy_source_rows(
+            prebuild_deps.int_keyed_mapping(
+                self.job_data.get("live_rows_by_background", {})
+            ).get(int(background_idx), ())
+        )
+        live_rows_cache_metadata.setdefault("live_rows_raw_count", int(len(live_rows)))
+        live_rows_cache_metadata.setdefault("live_rows_payload_count", int(len(live_rows)))
+        live_rows_cache_metadata.setdefault(
+            "live_rows_source_counts",
+            prebuild_deps.live_row_source_counts(live_rows),
+        )
+        live_rows_cache_metadata.setdefault(
+            "live_rows_cache_source",
+            str(
+                live_rows_cache_metadata.get("cache_source", "live_preview_cache")
+                or "live_preview_cache"
+            ),
+        )
+        live_rows_cache_metadata.setdefault(
+            "geometry_fit_live_handoff_patch_marker",
+            str(prebuild_deps.live_handoff_patch_marker),
+        )
+        handoff_diag = dict(self.job_data.get("live_rows_handoff_diagnostics", {}) or {})
+        for diag_key in (
+            "q_group_cached_entries",
+            "manual_picker_candidates",
+            "live_preview_rows_count",
+            "live_rows_by_background_keys",
+            "live_rows_by_background_current_count",
+            "requested_signature_keys",
+            "requested_signature_by_background_keys",
+            "live_rows_signature_by_background_keys",
+        ):
+            if diag_key in handoff_diag:
+                live_rows_cache_metadata.setdefault(diag_key, handoff_diag.get(diag_key))
+
+        snapshot = dict(self.worker_source_row_snapshots.get(int(background_idx)) or {})
+        snapshot_signature = snapshot.get("simulation_signature")
+        snapshot_rows = cache_deps.copy_source_rows(snapshot.get("rows"))
+        snapshot_validation = (
+            prebuild_deps.validate_required_source_rows_for_fit_space(
+                snapshot_rows,
+                required_pairs=required_pairs,
+                background_index=int(background_idx),
+            )
+            if required_pairs
+            else {}
+        )
+        if (
+            snapshot_signature == requested_signature
+            and snapshot_rows
+            and (not required_pairs or bool(snapshot_validation.get("valid", False)))
+        ):
+            bundle = self.build_geometry_fit_background_cache_bundle(
+                background_index=int(background_idx),
+                background_label=str(background_label),
+                requested_signature=requested_signature,
+                requested_signature_summary=requested_signature_summary,
+                theta_base=float(theta_base),
+                theta_initial=float(params_local.get("theta_initial", 0.0)),
+                stored_rows=snapshot_rows,
+                cache_source=str(snapshot.get("created_from") or "source_snapshot"),
+                diagnostics={
+                    "created_from": snapshot.get("created_from"),
+                    "cache_source": str(snapshot.get("created_from") or "source_snapshot"),
+                    "live_runtime_cache_validation": snapshot_validation,
+                },
+            )
+            self.store_worker_background_cache_bundle(bundle)
+            self.set_worker_source_snapshot_diagnostics(**dict(bundle.diagnostics))
+            self.worker_simulation_diagnostics.clear()
+            self.worker_simulation_diagnostics.update(dict(bundle.diagnostics))
+            return bundle
+        if required_pairs and snapshot_signature == requested_signature and snapshot_rows:
+            self.set_worker_source_snapshot_diagnostics(
+                source="geometry_fit_background_cache",
+                cache_family="geometry_fit_background_cache",
+                action="lookup",
+                consumer=str(consumer or "geometry_fit_preflight_cache"),
+                status="background_cache_pair_validation_failed",
+                background_index=int(background_idx),
+                background_label=str(background_label),
+                requested_signature=requested_signature,
+                requested_signature_summary=requested_signature_summary,
+                snapshot_signature=snapshot_signature,
+                stored_signature_summary=prebuild_deps.live_cache_signature_summary(
+                    snapshot_signature
+                ),
+                raw_peak_count=int(len(snapshot_rows)),
+                projected_peak_count=0,
+                created_from=snapshot.get("created_from"),
+                signature_match=True,
+                live_cache_inventory=copy.deepcopy(
+                    self.job_data.get("live_cache_inventory", {})
+                ),
+                live_runtime_cache_validation=snapshot_validation,
+            )
+
+        def worker_live_rows_payload() -> dict[str, object] | list[dict[str, object]]:
+            signature_match = requested_signature == live_rows_signature
+            payload_metadata = dict(live_rows_cache_metadata)
+            payload_metadata.update(
+                {
+                    "live_rows_raw_count": int(len(live_rows)),
+                    "live_rows_payload_count": int(
+                        len(live_rows) if signature_match else 0
+                    ),
+                    "live_rows_signature_match": bool(signature_match),
+                    "live_rows_signature_reason": (
+                        "matched" if signature_match else "requested_signature_mismatch"
+                    ),
+                    "requested_signature_summary": requested_signature_summary,
+                    "live_rows_signature_summary": (
+                        prebuild_deps.live_cache_signature_summary(live_rows_signature)
+                    ),
+                    "live_rows_cache_source": str(
+                        payload_metadata.get("live_rows_cache_source")
+                        or payload_metadata.get("cache_source")
+                        or "live_preview_cache"
+                    ),
+                    "live_rows_source_counts": prebuild_deps.live_row_source_counts(
+                        live_rows
+                    ),
+                    "geometry_fit_live_handoff_patch_marker": (
+                        str(prebuild_deps.live_handoff_patch_marker)
+                    ),
+                }
+            )
+            if not signature_match:
+                payload_metadata["reason"] = "requested_signature_mismatch"
+                return {
+                    "rows": [],
+                    "cache_metadata": payload_metadata,
+                }
+            return {
+                "rows": [
+                    dict(entry) for entry in (live_rows or ()) if isinstance(entry, Mapping)
+                ],
+                "cache_metadata": payload_metadata,
+            }
+
+        def worker_current_hit_table_cache_payload() -> dict[str, object]:
+            cache_payload = prebuild_deps.int_keyed_mapping(
+                self.job_data.get("current_hit_table_cache_by_background", {})
+            ).get(int(background_idx))
+            if not isinstance(cache_payload, Mapping):
+                return {
+                    "hit_tables": [],
+                    "cache_metadata": {
+                        "background_index": int(background_idx),
+                        "reason": "missing_current_hit_table_cache",
+                    },
+                }
+            raw_metadata = cache_payload.get("cache_metadata")
+            metadata = (
+                copy.deepcopy(dict(raw_metadata)) if isinstance(raw_metadata, Mapping) else {}
+            )
+            metadata.setdefault("background_index", int(background_idx))
+            return {
+                "hit_tables": copy.deepcopy(list(cache_payload.get("hit_tables") or ())),
+                "cache_metadata": metadata,
+            }
+
+        projection_view_mode = (
+            str(self.job_data.get("projection_view_mode") or "detector").strip().lower()
+            or "detector"
+        )
+        try:
+            detector_shape_for_projection = tuple(
+                int(v)
+                for v in np.asarray(
+                    dict(self.job_data.get("background_images", {}) or {})
+                    .get(int(background_idx), {})
+                    .get("native"),
+                    dtype=np.float64,
+                ).shape[:2]
+            )
+        except Exception:
+            detector_shape_for_projection = None
+        ensured_projection_payload: dict[str, object] | None = None
+        if projection_view_mode == "caked":
+            ensured_projection_payload = self.ensure_worker_caked_projection_payload(
+                int(background_idx),
+                detector_shape=detector_shape_for_projection,
+                stage_callback=stage_callback,
+                emit_event=True,
+            )
+        projection_view_signature = prebuild_deps.projection_view_signature_for_background(
+            int(background_idx)
+        )
+        projection_payload = (
+            dict(
+                self.job_data.setdefault("projection_payload_by_background", {}).get(
+                    int(background_idx)
+                )
+                or {}
+            )
+            or None
+        )
+        candidate_state = "absent"
+        if projection_view_mode == "caked":
+            _projection_candidate, candidate_state = self.projection_candidate_state(
+                projection_payload,
+                detector_shape=detector_shape_for_projection,
+            )
+            if candidate_state != "ready":
+                projection_payload = None
+        if (
+            projection_view_mode == "caked"
+            and candidate_state == "absent"
+            and isinstance(ensured_projection_payload, Mapping)
+        ):
+            projection_payload = prebuild_deps.projection_payload_storage_copy(
+                ensured_projection_payload
+            )
+            if isinstance(projection_payload, Mapping):
+                self.job_data.setdefault("projection_payload_by_background", {})[
+                    int(background_idx)
+                ] = projection_payload
+        if (
+            projection_view_mode == "caked"
+            and candidate_state == "absent"
+            and not isinstance(projection_payload, Mapping)
+        ):
+            projection_payload = self.load_caked_projection_by_index_snapshot(
+                int(background_idx),
+                detector_shape=detector_shape_for_projection,
+                allow_generated_payload=True,
+            )
+        if projection_view_mode == "caked" and isinstance(projection_payload, Mapping):
+            projection_payload = prebuild_deps.hydrate_exact_caked_payload(
+                projection_payload,
+                detector_shape=detector_shape_for_projection,
+                params=params_local,
+                require_background=False,
+            )
+            if isinstance(projection_payload, Mapping):
+                stored_projection_payload = prebuild_deps.projection_payload_storage_copy(
+                    projection_payload
+                )
+                if isinstance(stored_projection_payload, Mapping):
+                    self.job_data.setdefault("projection_payload_by_background", {})[
+                        int(background_idx)
+                    ] = stored_projection_payload
+        if projection_view_mode == "caked" and (
+            not isinstance(projection_payload, Mapping)
+            or not prebuild_deps.is_transform_bundle(
+                projection_payload.get("transform_bundle")
+            )
+        ):
+            raise RuntimeError(
+                f"exact caked projector unavailable for background {int(background_idx) + 1}"
+            )
+        logged_cache_metadata_loader, logged_cache_loader = (
+            prebuild_deps.logged_intersection_cache_loaders()
+        )
+        solver_inputs = self.job_data.get("solver_inputs")
+        rebuild_result = prebuild_deps.rebuild_geometry_fit_source_rows(
+            background_index=int(background_idx),
+            background_label=str(background_label),
+            params_local=params_local,
+            consumer=str(consumer or "geometry_fit_preflight_cache"),
+            prior_diagnostics=(
+                dict(prior_diagnostics)
+                if isinstance(prior_diagnostics, Mapping)
+                else self.last_worker_source_snapshot_diagnostics()
+            ),
+            requested_signature=requested_signature,
+            requested_signature_summary=requested_signature_summary,
+            projection_view_mode=projection_view_mode,
+            projection_view_signature=projection_view_signature,
+            projection_payload=projection_payload,
+            can_use_live_runtime_cache=(
+                int(background_idx)
+                == int(self.job_data.get("current_background_index", -1))
+                or bool(live_rows)
+            ),
+            build_live_rows=worker_live_rows_payload,
+            get_memory_intersection_cache=(
+                lambda: prebuild_deps.copy_intersection_cache_tables(
+                    self.job_data.get("memory_intersection_cache", [])
+                )
+            ),
+            memory_cache_signature=self.job_data.get("memory_intersection_cache_signature"),
+            load_logged_intersection_cache_metadata=logged_cache_metadata_loader,
+            load_logged_intersection_cache=logged_cache_loader,
+            logged_cache_matches_params=prebuild_deps.logged_cache_matches_params,
+            build_source_rows_from_hit_tables=(
+                lambda source_tables, **kwargs: prebuild_deps.forward_source_rows_for_rebuild(
+                    prebuild_deps.build_source_rows_for_rebuild,
+                    source_tables,
+                    params_local=params_local,
+                    fallback_consumer=str(consumer or "geometry_fit_preflight_cache"),
+                    kwargs=kwargs,
+                )
+            ),
+            simulate_hit_tables=(
+                lambda normalized_params, **kwargs: prebuild_deps.simulate_hit_tables_for_fit(
+                    getattr(solver_inputs, "miller"),
+                    getattr(solver_inputs, "intensities"),
+                    int(getattr(solver_inputs, "image_size")),
+                    normalized_params,
+                    **kwargs,
+                )
+            ),
+            last_runtime_simulation_diagnostics=self.last_worker_simulation_diagnostics,
+            project_rows=(
+                lambda rows: self.project_source_rows_for_background(
+                    int(background_idx),
+                    rows,
+                )
+            ),
+            project_rows_for_background_view=(
+                lambda rows: self.project_source_rows_for_background(
+                    int(background_idx),
+                    rows,
+                )
+            ),
+            required_pairs=required_pairs,
+            required_branch_group_keys=required_branch_group_keys,
+            required_manual_fit_targets=required_manual_fit_targets,
+            preflight_mode=preflight_mode,
+            live_cache_inventory=self.job_data.get("live_cache_inventory", {}),
+            get_targeted_projected_cache=(
+                lambda key_digest: prebuild_deps.load_targeted_projected_cache_entry(
+                    background_index=int(background_idx),
+                    key_digest=str(key_digest),
+                )
+            ),
+            store_targeted_projected_cache=(
+                lambda key_digest, payload: prebuild_deps.store_targeted_projected_cache_entry(
+                    background_index=int(background_idx),
+                    key_digest=str(key_digest),
+                    payload=payload,
+                )
+            ),
+            get_current_hit_table_cache=worker_current_hit_table_cache_payload,
+            current_background_index=int(self.job_data.get("current_background_index", -1)),
+            stage_callback=stage_callback,
+        )
+        self.set_worker_source_snapshot_diagnostics(
+            **dict(rebuild_result.diagnostics or {})
+        )
+        self.worker_simulation_diagnostics.clear()
+        self.worker_simulation_diagnostics.update(dict(rebuild_result.diagnostics or {}))
+        if rebuild_result.stored_rows:
+            bundle = self.build_geometry_fit_background_cache_bundle(
+                background_index=int(background_idx),
+                background_label=str(background_label),
+                requested_signature=rebuild_result.requested_signature,
+                requested_signature_summary=rebuild_result.requested_signature_summary,
+                theta_base=float(theta_base),
+                theta_initial=float(params_local.get("theta_initial", 0.0)),
+                stored_rows=rebuild_result.stored_rows,
+                projected_rows=rebuild_result.projected_rows,
+                cache_source=str(rebuild_result.rebuild_source or "unknown"),
+                diagnostics=dict(rebuild_result.diagnostics or {}),
+                peak_table_lattice=rebuild_result.peak_table_lattice,
+                hit_tables=rebuild_result.hit_tables,
+                intersection_cache=rebuild_result.intersection_cache,
+                cache_metadata=rebuild_result.metadata,
+            )
+            self.store_worker_background_cache_bundle(bundle)
+            return bundle
+        return None
