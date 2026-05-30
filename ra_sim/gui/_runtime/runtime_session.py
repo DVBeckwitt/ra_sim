@@ -40304,11 +40304,7 @@ def _run_async_geometry_fit_worker_job(
     ) = None
     caked_view_timeout_s = 5.0
     _current_source_cache_generation = worker_context.current_source_cache_generation
-    _advance_source_cache_generation = worker_context.advance_source_cache_generation
     _source_cache_generation_matches = worker_context.source_cache_generation_matches
-    _set_worker_source_snapshot_diagnostics = (
-        worker_context.set_worker_source_snapshot_diagnostics
-    )
     _last_worker_source_snapshot_diagnostics = (
         worker_context.last_worker_source_snapshot_diagnostics
     )
@@ -40620,27 +40616,14 @@ def _run_async_geometry_fit_worker_job(
     _load_caked_projection_by_index_snapshot = (
         worker_context.load_caked_projection_by_index_snapshot
     )
-    _ensure_worker_caked_projection_payload = (
-        worker_context.ensure_worker_caked_projection_payload
-    )
     _project_source_rows_for_background = (
         worker_context.project_source_rows_for_background
     )
     _project_source_rows_by_row_background = (
         worker_context.project_source_rows_by_row_background
     )
-    _mark_worker_cached_projection_rows = (
-        worker_context.mark_worker_cached_projection_rows
-    )
     _worker_cached_projection_rows_match = (
         worker_context.worker_cached_projection_rows_match
-    )
-    _bundle_rows = worker_context.bundle_rows
-    _store_worker_background_cache_bundle = (
-        worker_context.store_worker_background_cache_bundle
-    )
-    _build_geometry_fit_background_cache_bundle = (
-        worker_context.build_geometry_fit_background_cache_bundle
     )
     _prebuild_background_cache_bundle_worker = (
         worker_context.prebuild_background_cache_bundle_worker
