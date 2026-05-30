@@ -73,7 +73,7 @@ class FakeRebuildResult:
         *,
         background_index: int = 0,
         requested_signature: object = ("rebuilt", 0),
-        requested_signature_summary: object = {"summary": "rebuilt"},
+        requested_signature_summary: object | None = None,
         stored_rows: list[dict[str, object]] | None = None,
         projected_rows: list[dict[str, object]] | None = None,
         rebuild_source: str = "fresh_rebuild",
@@ -85,7 +85,11 @@ class FakeRebuildResult:
     ) -> None:
         self.background_index = int(background_index)
         self.requested_signature = requested_signature
-        self.requested_signature_summary = requested_signature_summary
+        self.requested_signature_summary = (
+            {"summary": "rebuilt"}
+            if requested_signature_summary is None
+            else requested_signature_summary
+        )
         self.stored_rows = stored_rows if stored_rows is not None else []
         self.projected_rows = projected_rows if projected_rows is not None else []
         self.rebuild_source = rebuild_source

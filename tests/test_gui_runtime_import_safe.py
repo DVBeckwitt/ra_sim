@@ -19735,8 +19735,16 @@ def test_runtime_session_logged_cache_params_mismatch_rejects_before_heavy_hit_t
 
 def test_worker_prebuild_uses_background_specific_projection_signature() -> None:
     source = _source_text(GUI_SOURCE_ROOT / "_runtime" / "geometry_fit_worker.py")
-    helper_start = source.index("def prebuild_background_cache_bundle_worker(")
-    helper_source = source[helper_start:]
+    tree = ast.parse(source)
+    helper_node = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "prebuild_background_cache_bundle_worker"
+    )
+    helper_source = "".join(
+        source.splitlines(keepends=True)[helper_node.lineno - 1 : helper_node.end_lineno]
+    )
 
     assert (
         "projection_view_signature = prebuild_deps.projection_view_signature_for_background("
