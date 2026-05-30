@@ -13,7 +13,7 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: Patch D3.3c source-row cache lookup/rebuild extraction complete; Patch D3.3c.1 dead-alias cleanup ready for commit
+Status: Patch D3.3d required-background cache prebuild extraction complete; ready for review
 Bug/error/feature status: internal worker refactor only; no user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
@@ -140,6 +140,16 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Post-Patch-D3.3c.1 size report: `_run_async_geometry_fit_worker_job()` is 2,206
   lines, `ra_sim/gui/_runtime/runtime_session.py` is 44,887 lines, and
   `ra_sim/gui/_runtime/geometry_fit_worker.py` is 1,711 lines.
+- Patch D3.3d moved required-background source-cache prebuild orchestration
+  behind `GeometryFitWorkerContext.prebuild_required_background_caches()`.
+- Patch D3.3d injects only the runtime-local callbacks needed for locked-Qr
+  readiness, caked-view storage event emission, and caked-view wait/timeout
+  handling; manual validation, dataset, solver request, solver execution,
+  result packaging, optimizer, saved-state, CLI/env/debug, and UI behavior did
+  not move.
+- Post-Patch-D3.3d size report: `_run_async_geometry_fit_worker_job()` is 1,594
+  lines, `ra_sim/gui/_runtime/runtime_session.py` is 44,275 lines, and
+  `ra_sim/gui/_runtime/geometry_fit_worker.py` is 2,367 lines.
 
 ## Review status
 
@@ -472,6 +482,10 @@ Current validation status:
 - Patch D3.3c.1 validation passed: worker source-row cache tests,
   worker/job import-boundary tests, GUI runtime geometry tests, Ruff on
   `runtime_session.py`, and `git diff --check`.
+- Patch D3.3d validation passed: compileall, worker required-cache tests,
+  worker/job import-boundary tests, live-row/runtime/import-safe guard tests,
+  GUI workflow route tests, geometry fitting route tests, Ruff on touched files,
+  and `git diff --check`.
 - `python -m ra_sim.dev check` remains blocked only by the documented pre-existing formatting drift above.
 - No generated artifacts, raw data, local config, notebook output, dependency changes, release version changes, or public migration files are included.
 

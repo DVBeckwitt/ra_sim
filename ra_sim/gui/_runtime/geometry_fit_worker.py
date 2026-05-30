@@ -6,6 +6,7 @@ import copy
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from time import perf_counter
 
 import numpy as np
 
@@ -84,6 +85,14 @@ class GeometryFitWorkerSourceRowsDeps:
     theta_base_for_background: Callable[..., object]
 
 
+@dataclass(frozen=True)
+class GeometryFitWorkerRequiredCacheDeps:
+    locked_qr_fit_space_projection_readiness: Callable[..., object]
+    normalize_optics_mode_label: Callable[..., str]
+    start_non_gating_caked_view_task: Callable[..., object]
+    emit_source_cache_caked_view_event: Callable[..., object]
+
+
 @dataclass
 class GeometryFitWorkerContext:
     job_data: dict[str, object]
@@ -100,6 +109,7 @@ class GeometryFitWorkerContext:
     cache_bundle_deps: GeometryFitWorkerCacheBundleDeps | None = None
     prebuild_deps: GeometryFitWorkerPrebuildDeps | None = None
     source_rows_deps: GeometryFitWorkerSourceRowsDeps | None = None
+    required_cache_deps: GeometryFitWorkerRequiredCacheDeps | None = None
 
     @classmethod
     def from_job(cls, job: Mapping[str, object]) -> GeometryFitWorkerContext:
@@ -218,6 +228,11 @@ class GeometryFitWorkerContext:
         if self.source_rows_deps is None:
             raise RuntimeError("geometry-fit worker source-row deps are not configured")
         return self.source_rows_deps
+
+    def _require_required_cache_deps(self) -> GeometryFitWorkerRequiredCacheDeps:
+        if self.required_cache_deps is None:
+            raise RuntimeError("geometry-fit worker required-cache deps are not configured")
+        return self.required_cache_deps
 
     def caked_projection_payload_status(
         self,
@@ -1709,3 +1724,644 @@ class GeometryFitWorkerContext:
             live_runtime_cache_validation=bundle_validation,
         )
         return projected_rows
+
+    def prebuild_required_background_caches(
+        self,
+        *,
+        stage_callback: object = None,
+    ) -> None:
+        required_cache_deps = self._require_required_cache_deps()
+        source_projection_deps = self._require_source_projection_deps()
+        source_rows_deps = self._require_source_rows_deps()
+        cache_bundle_deps = self._require_cache_bundle_deps()
+        job_data = self.job_data
+        caked_view_timeout_s = 5.0
+
+        def _manual_fit_space_kind_for_background(background_index: int) -> str:
+            stored_spaces = job_data.get("manual_fit_space_by_background")
+            if isinstance(stored_spaces, Mapping):
+                raw_kind = stored_spaces.get(
+                    int(background_index),
+                    stored_spaces.get(str(int(background_index))),
+                )
+                kind = str(raw_kind or "").strip().lower()
+                if kind in {"caked", "mixed"}:
+                    return kind
+            if bool(job_data.get("pick_uses_caked_space", False)):
+                return "caked"
+            return "detector"
+
+        required_indices = [int(idx) for idx in (job_data.get("required_indices", ()) or ())]
+        for background_idx in required_indices:
+            prebuild_started_at = perf_counter()
+            background_label = dict(job_data.get("background_labels", {}) or {}).get(
+                int(background_idx),
+                f"background {int(background_idx) + 1}",
+            )
+            required_pairs = list(
+                dict(job_data.get("manual_pairs_by_background", {}) or {}).get(
+                    int(background_idx),
+                    (),
+                )
+                or ()
+            )
+            self.emit_event(
+                "source_cache_build_start",
+                {
+                    "background_index": int(background_idx),
+                    "background_label": str(background_label),
+                    "elapsed_s": 0.0,
+                    "message": (
+                        f"preflight: building source cache for background {int(background_idx) + 1}"
+                    ),
+                },
+            )
+            bundle_started_at = perf_counter()
+            self.emit_event(
+                "source_cache_bundle_start",
+                {
+                    "background_index": int(background_idx),
+                    "background_label": str(background_label),
+                    "elapsed_s": float(max(0.0, perf_counter() - prebuild_started_at)),
+                    "status": "starting",
+                    "required_pair_count": int(len(required_pairs)),
+                    "message": (
+                        "preflight: source cache bundle start for "
+                        f"background {int(background_idx) + 1}"
+                    ),
+                },
+            )
+            bundle = self.prebuild_background_cache_bundle_worker(
+                int(background_idx),
+                theta_base=float(source_rows_deps.theta_base_for_background(int(background_idx))),
+                required_pairs=required_pairs,
+                stage_callback=stage_callback,
+            )
+            if not cache_bundle_deps.is_background_cache_bundle(bundle):
+                failure_status = str(
+                    self.last_worker_source_snapshot_diagnostics().get(
+                        "status",
+                        "background_cache_build_failed",
+                    )
+                )
+                self.emit_event(
+                    "source_cache_bundle_failed",
+                    {
+                        "background_index": int(background_idx),
+                        "background_label": str(background_label),
+                        "status": failure_status,
+                        "elapsed_s": float(max(0.0, perf_counter() - prebuild_started_at)),
+                        "stage_elapsed_s": float(max(0.0, perf_counter() - bundle_started_at)),
+                        "message": (
+                            "preflight: source cache bundle failed for "
+                            f"background {int(background_idx) + 1} "
+                            f"(status={failure_status})"
+                        ),
+                    },
+                )
+                if failure_status in {
+                    "targeted_fresh_simulation_timeout",
+                    "fresh_simulation_timeout",
+                }:
+                    raise RuntimeError(
+                        "Geometry fit preflight timed out while rebuilding source cache "
+                        f"for background {int(background_idx) + 1}. Refresh the "
+                        "caked/source cache or reduce the fit simulation grid before rerunning."
+                    )
+                continue
+            projected_rows_len = int(len(bundle.projected_rows or ()))
+            stored_rows_len = int(len(bundle.stored_rows or ()))
+            bundle_row_count = int(projected_rows_len or stored_rows_len)
+            source_cache_generation_id = int(self.current_source_cache_generation(int(background_idx)))
+            bundle_payload = {
+                "background_index": int(background_idx),
+                "background_label": str(background_label),
+                "source_cache_generation_id": int(source_cache_generation_id),
+                "cache_source": str(bundle.cache_source or "unknown"),
+                "row_count": int(bundle_row_count),
+                "required_pair_count": int(len(required_pairs)),
+                "elapsed_s": float(max(0.0, perf_counter() - prebuild_started_at)),
+                "stage_elapsed_s": float(max(0.0, perf_counter() - bundle_started_at)),
+            }
+            manual_fit_space_kind = _manual_fit_space_kind_for_background(int(background_idx))
+            locked_qr_readiness = dict(
+                required_cache_deps.locked_qr_fit_space_projection_readiness(
+                    bundle.projected_rows,
+                    required_pairs=required_pairs,
+                    source_rows=bundle.stored_rows,
+                )
+            )
+            locked_qr_readiness.update(
+                {
+                    "readiness_input_source": (
+                        "projected_rows" if projected_rows_len > 0 else "none"
+                    ),
+                    "projected_rows_len": int(projected_rows_len),
+                    "stored_rows_len": int(stored_rows_len),
+                }
+            )
+            locked_qr_expected_rows = int(
+                locked_qr_readiness.get("expected_locked_qr_rows", 0) or 0
+            )
+            locked_qr_projection_ready = bool(
+                locked_qr_readiness.get("fit_space_projection_ready", False)
+            )
+
+            def _readiness_projection_payload_available() -> bool:
+                payload_map = job_data.get("projection_payload_by_background")
+                caked_view_map = job_data.get("caked_views_by_background")
+                return bool(
+                    (isinstance(payload_map, Mapping) and int(background_idx) in payload_map)
+                    or (
+                        isinstance(caked_view_map, Mapping)
+                        and int(background_idx) in caked_view_map
+                    )
+                )
+
+            def _refresh_locked_qr_readiness_from_caked_projection() -> None:
+                nonlocal locked_qr_readiness
+                nonlocal locked_qr_expected_rows
+                nonlocal locked_qr_projection_ready
+                if (
+                    manual_fit_space_kind == "caked"
+                    or locked_qr_expected_rows <= 0
+                    or locked_qr_projection_ready
+                    or stored_rows_len <= 0
+                    or not _readiness_projection_payload_available()
+                ):
+                    return
+                readiness_rows = source_projection_deps.rows_for_background(
+                    int(background_idx),
+                    self.project_source_rows_for_background(
+                        int(background_idx),
+                        bundle.stored_rows,
+                        mode_override="caked",
+                        strict_caked_projection=False,
+                    ),
+                )
+                if not readiness_rows:
+                    return
+                readiness_candidate = dict(
+                    required_cache_deps.locked_qr_fit_space_projection_readiness(
+                        readiness_rows,
+                        required_pairs=required_pairs,
+                        source_rows=bundle.stored_rows,
+                    )
+                )
+                if int(readiness_candidate.get("expected_locked_qr_rows", 0) or 0) <= 0:
+                    return
+                readiness_candidate.update(
+                    {
+                        "readiness_input_source": "readiness_caked_projection",
+                        "projected_rows_len": int(len(readiness_rows)),
+                        "stored_rows_len": int(stored_rows_len),
+                    }
+                )
+                locked_qr_readiness = readiness_candidate
+                locked_qr_expected_rows = int(
+                    locked_qr_readiness.get("expected_locked_qr_rows", 0) or 0
+                )
+                locked_qr_projection_ready = bool(
+                    locked_qr_readiness.get("fit_space_projection_ready", False)
+                )
+
+            def _locked_qr_projection_list_row_keys(
+                readiness: Mapping[str, object],
+                key_name: str,
+            ) -> list[dict[str, object]]:
+                return [
+                    dict(entry)
+                    for entry in readiness.get(key_name) or ()
+                    if isinstance(entry, Mapping)
+                ]
+
+            def _locked_qr_projection_is_nonfinite_failure(
+                readiness: Mapping[str, object],
+            ) -> bool:
+                reason = str(readiness.get("failure_reason") or "").strip().lower()
+                return reason.replace("-", "_") in {
+                    "nonfinite",
+                    "non_finite",
+                    "locked_qr_fit_space_projection_nonfinite",
+                    "locked_qr_fit_space_projection_non_finite",
+                }
+
+            def _locked_qr_projection_issue_row_keys(
+                readiness: Mapping[str, object],
+            ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+                return (
+                    _locked_qr_projection_list_row_keys(
+                        readiness,
+                        "missing_locked_qr_row_keys",
+                    ),
+                    _locked_qr_projection_list_row_keys(
+                        readiness,
+                        "nonfinite_locked_qr_row_keys",
+                    ),
+                )
+
+            def _locked_qr_projection_primary_row_keys(
+                readiness: Mapping[str, object],
+            ) -> list[dict[str, object]]:
+                missing_keys, nonfinite_keys = _locked_qr_projection_issue_row_keys(readiness)
+                if _locked_qr_projection_is_nonfinite_failure(readiness):
+                    return nonfinite_keys or missing_keys
+                return missing_keys or nonfinite_keys
+
+            def _locked_qr_projection_summary_row_keys(
+                readiness: Mapping[str, object],
+            ) -> list[dict[str, object]]:
+                missing_keys, nonfinite_keys = _locked_qr_projection_issue_row_keys(readiness)
+                issue_keys = [*missing_keys, *nonfinite_keys]
+                if issue_keys:
+                    return issue_keys
+                return _locked_qr_projection_list_row_keys(readiness, "locked_qr_row_keys")
+
+            def _locked_qr_projection_row_key_text(
+                row_keys: Sequence[Mapping[str, object]],
+            ) -> str:
+                resolved_row_keys = [
+                    dict(entry) for entry in row_keys if isinstance(entry, Mapping)
+                ]
+                if not resolved_row_keys:
+                    return "none"
+                labels: list[str] = []
+                for key in resolved_row_keys[:4]:
+                    labels.append(
+                        f"pair_id={key.get('pair_id') or 'unknown'} "
+                        f"hkl={key.get('hkl')} "
+                        f"branch={key.get('branch')} "
+                        f"table={key.get('table')} "
+                        f"row={key.get('row')} "
+                        f"peak={key.get('peak')} "
+                        f"stage={key.get('first_missing_stage') or 'unknown'}"
+                    )
+                if len(resolved_row_keys) > len(labels):
+                    labels.append(f"{len(resolved_row_keys) - len(labels)} more")
+                return "; ".join(labels)
+
+            def _locked_qr_projection_row_key_sections(
+                readiness: Mapping[str, object],
+            ) -> str:
+                missing_keys, nonfinite_keys = _locked_qr_projection_issue_row_keys(readiness)
+                nonfinite_failure = _locked_qr_projection_is_nonfinite_failure(readiness)
+                if nonfinite_failure:
+                    sections = [
+                        ("Nonfinite row keys", nonfinite_keys),
+                        ("Missing row keys", missing_keys),
+                    ]
+                else:
+                    sections = [
+                        ("Missing row keys", missing_keys),
+                        ("Nonfinite row keys", nonfinite_keys),
+                    ]
+                labeled_sections = [
+                    f"{label}: {_locked_qr_projection_row_key_text(row_keys)}."
+                    for label, row_keys in sections
+                    if row_keys
+                ]
+                if labeled_sections:
+                    return " ".join(labeled_sections)
+                fallback_label = "Nonfinite row keys" if nonfinite_failure else "Missing row keys"
+                fallback_keys = _locked_qr_projection_primary_row_keys(readiness)
+                return f"{fallback_label}: {_locked_qr_projection_row_key_text(fallback_keys)}."
+
+            def _locked_qr_projection_yes_no_partial(
+                readiness: Mapping[str, object],
+                key_name: str,
+            ) -> str:
+                row_keys = _locked_qr_projection_summary_row_keys(readiness)
+                if not row_keys:
+                    return "unknown"
+                values = [bool(entry.get(key_name, False)) for entry in row_keys]
+                if all(values):
+                    return "yes"
+                if any(values):
+                    return "partial"
+                return "no"
+
+            def _locked_qr_projection_diagnostic_summary(
+                readiness: Mapping[str, object],
+            ) -> dict[str, str]:
+                optics_mode = required_cache_deps.normalize_optics_mode_label(
+                    dict(job_data.get("params", {}) or {}).get(
+                        "optics_mode",
+                        job_data.get("optics_mode"),
+                    )
+                )
+                return {
+                    "source_rows_existed": _locked_qr_projection_yes_no_partial(
+                        readiness,
+                        "source_exists",
+                    ),
+                    "projected_rows_existed": _locked_qr_projection_yes_no_partial(
+                        readiness,
+                        "projected_exists",
+                    ),
+                    "projection_payload_status": (
+                        "ready" if _readiness_projection_payload_available() else "missing"
+                    ),
+                    "optics_mode": optics_mode,
+                }
+
+            def _locked_qr_projection_error_text(
+                readiness: Mapping[str, object],
+                *,
+                storage_status: str | None = None,
+                storage_timeout_fatal: bool | None = None,
+            ) -> str:
+                expected_rows = int(readiness.get("expected_locked_qr_rows", 0) or 0)
+                projected_rows = int(readiness.get("projected_locked_qr_rows", 0) or 0)
+                reason = str(
+                    readiness.get("failure_reason") or "locked_qr_fit_space_projection_missing"
+                )
+                resolved_storage_status = str(
+                    storage_status or readiness.get("caked_view_storage_status") or "unknown"
+                )
+                diagnostic_summary = _locked_qr_projection_diagnostic_summary(readiness)
+                timeout_text = (
+                    "unknown"
+                    if storage_timeout_fatal is None
+                    else str(bool(storage_timeout_fatal)).lower()
+                )
+                detail_text = (
+                    f" Source rows existed: {diagnostic_summary['source_rows_existed']}. "
+                    "Projected caked rows existed: "
+                    f"{diagnostic_summary['projected_rows_existed']}. "
+                    "Exact caked projection payload: "
+                    f"{diagnostic_summary['projection_payload_status']}. "
+                    f"Caked view storage: {resolved_storage_status}. "
+                    f"Storage timeout fatal: {timeout_text}. "
+                    f"Optics mode: {diagnostic_summary['optics_mode']}. "
+                    f"{_locked_qr_projection_row_key_sections(readiness)}"
+                )
+                if reason == "locked_qr_fit_space_projection_nonfinite":
+                    return (
+                        "exact caked fit-space projection has non-finite locked Qr/Qz "
+                        f"rows. Expected {expected_rows} finite projected rows, found "
+                        f"{projected_rows}." + detail_text
+                    )
+                return (
+                    "exact caked fit-space projection is missing for locked Qr/Qz "
+                    f"rows. Expected {expected_rows} projected rows, found {projected_rows}."
+                    + detail_text
+                )
+
+            def _emit_locked_qr_projection_readiness(
+                *,
+                storage_status: str,
+                storage_timeout_fatal: bool,
+                last_chance_poll_ready: bool | None = None,
+            ) -> None:
+                expected_rows = int(locked_qr_readiness.get("expected_locked_qr_rows", 0) or 0)
+                if expected_rows <= 0:
+                    return
+                projected_rows = int(locked_qr_readiness.get("projected_locked_qr_rows", 0) or 0)
+                finite_rows = int(locked_qr_readiness.get("finite_locked_qr_rows", 0) or 0)
+                projection_ready = bool(
+                    locked_qr_readiness.get("fit_space_projection_ready", False)
+                )
+                projection_degenerate = bool(
+                    locked_qr_readiness.get("projection_degenerate", False)
+                )
+                storage_required = bool(
+                    locked_qr_readiness.get("caked_view_storage_required_for_fit", True)
+                )
+                diagnostic_summary = _locked_qr_projection_diagnostic_summary(locked_qr_readiness)
+                message = (
+                    "locked_qr_projection_readiness "
+                    f"background={int(background_idx) + 1} "
+                    f"expected_rows={expected_rows} projected_rows={projected_rows} "
+                    f"finite_rows={finite_rows} "
+                    f"projection_ready={str(projection_ready).lower()} "
+                    f"projection_degenerate={str(projection_degenerate).lower()} "
+                    f"storage_required_for_fit={str(storage_required).lower()} "
+                    f"storage_status={str(storage_status)} "
+                    f"storage_timeout_fatal={str(bool(storage_timeout_fatal)).lower()} "
+                    f"source_rows_existed={diagnostic_summary['source_rows_existed']} "
+                    f"projected_rows_existed={diagnostic_summary['projected_rows_existed']} "
+                    f"projection_payload_status={diagnostic_summary['projection_payload_status']} "
+                    f"optics={diagnostic_summary['optics_mode']}"
+                )
+                payload = {
+                    **bundle_payload,
+                    **locked_qr_readiness,
+                    "projection_ready": bool(projection_ready),
+                    "caked_view_storage_required_for_fit": bool(storage_required),
+                    "caked_view_storage_status": str(storage_status),
+                    "storage_timeout_fatal": bool(storage_timeout_fatal),
+                    "source_rows_existed_for_locked_qr": diagnostic_summary["source_rows_existed"],
+                    "projected_rows_existed_for_locked_qr": diagnostic_summary[
+                        "projected_rows_existed"
+                    ],
+                    "exact_caked_projection_payload_status": diagnostic_summary[
+                        "projection_payload_status"
+                    ],
+                    "optics_mode": diagnostic_summary["optics_mode"],
+                    "full_cake_started": True,
+                    "storage_timeout_s": float(caked_view_timeout_s),
+                    "message": message,
+                }
+                if last_chance_poll_ready is not None:
+                    payload["last_chance_poll_ready"] = bool(last_chance_poll_ready)
+                self.emit_event("locked_qr_projection_readiness", payload)
+
+            self.emit_event(
+                "source_cache_bundle_ready",
+                {
+                    **bundle_payload,
+                    "status": "ready",
+                    "message": (
+                        "preflight: source cache bundle ready for "
+                        f"background {int(background_idx) + 1} "
+                        f"({int(bundle_row_count)} rows via {str(bundle.cache_source or 'unknown')})"
+                    ),
+                },
+            )
+            self.emit_event(
+                "source_cache_rows_ready",
+                {
+                    **bundle_payload,
+                    "status": "rows_ready",
+                    "message": (
+                        "preflight: source cache rows ready for "
+                        f"background {int(background_idx) + 1} "
+                        f"({int(bundle_row_count)} rows via {str(bundle.cache_source or 'unknown')})"
+                    ),
+                },
+            )
+            self.emit_event(
+                "source_cache_build_ready",
+                {
+                    **bundle_payload,
+                    "status": "ready",
+                    "message": (
+                        "preflight: source cache ready for "
+                        f"background {int(background_idx) + 1} "
+                        f"({int(bundle_row_count)} rows via "
+                        f"{str(bundle.cache_source or 'unknown')})"
+                    ),
+                },
+            )
+            caked_started_at = perf_counter()
+            self.emit_event(
+                "source_cache_caked_view_start",
+                {
+                    **bundle_payload,
+                    "status": "starting",
+                    "message": (
+                        "preflight: caked view storage start for "
+                        f"background {int(background_idx) + 1}"
+                    ),
+                },
+            )
+            await_caked_result, announce_caked_timeout = required_cache_deps.start_non_gating_caked_view_task(
+                bundle,
+                source_cache_generation_id=int(source_cache_generation_id),
+                started_at=caked_started_at,
+                stage_callback=stage_callback,
+            )
+            caked_outcome = await_caked_result(float(caked_view_timeout_s))
+            caked_required = source_rows_deps.manual_caked_fit_space_required_for_background(
+                int(background_idx)
+            )
+            locked_qr_projection_gate_required = (
+                locked_qr_expected_rows > 0 and manual_fit_space_kind != "caked"
+            )
+            locked_qr_caked_origin_baseline = bool(
+                locked_qr_expected_rows > 0 and manual_fit_space_kind == "caked"
+            )
+
+            def _locked_qr_projection_missing() -> bool:
+                return bool(
+                    locked_qr_projection_gate_required
+                    and locked_qr_expected_rows > 0
+                    and not locked_qr_projection_ready
+                )
+
+            def _caked_storage_timeout_fatal(caked_stored: bool) -> bool:
+                return bool(
+                    _locked_qr_projection_missing()
+                    or (
+                        caked_required
+                        and not caked_stored
+                        and not locked_qr_projection_ready
+                        and not locked_qr_caked_origin_baseline
+                    )
+                )
+
+            def _caked_storage_status(outcome: Mapping[str, object]) -> str:
+                if bool(outcome.get("caked_view_stored", False)):
+                    return "ready"
+                return str(outcome.get("status") or outcome.get("caked_view_status") or "failed")
+
+            def _handle_caked_storage_outcome(
+                outcome: Mapping[str, object],
+                *,
+                last_chance_poll_ready: bool | None = None,
+            ) -> bool:
+                resolved_outcome = dict(outcome)
+                caked_stored = bool(resolved_outcome.get("caked_view_stored", False))
+                if caked_stored or _readiness_projection_payload_available():
+                    _refresh_locked_qr_readiness_from_caked_projection()
+                required_cache_deps.emit_source_cache_caked_view_event(
+                    "source_cache_caked_view_ready"
+                    if caked_stored
+                    else "source_cache_caked_view_failed",
+                    bundle,
+                    source_cache_generation_id=int(source_cache_generation_id),
+                    started_at=caked_started_at,
+                    payload=resolved_outcome,
+                )
+                storage_status = _caked_storage_status(resolved_outcome)
+                locked_qr_projection_missing = _locked_qr_projection_missing()
+                storage_timeout_fatal = _caked_storage_timeout_fatal(caked_stored)
+                _emit_locked_qr_projection_readiness(
+                    storage_status=storage_status,
+                    storage_timeout_fatal=storage_timeout_fatal,
+                    last_chance_poll_ready=last_chance_poll_ready,
+                )
+                if locked_qr_projection_missing:
+                    raise RuntimeError(
+                        _locked_qr_projection_error_text(
+                            locked_qr_readiness,
+                            storage_status=storage_status,
+                            storage_timeout_fatal=storage_timeout_fatal,
+                        )
+                    )
+                if not caked_required or caked_stored:
+                    return False
+                if locked_qr_projection_ready or locked_qr_caked_origin_baseline:
+                    return True
+                if locked_qr_expected_rows > 0:
+                    raise RuntimeError(
+                        _locked_qr_projection_error_text(
+                            locked_qr_readiness,
+                            storage_status=storage_status,
+                            storage_timeout_fatal=storage_timeout_fatal,
+                        )
+                    )
+                raise RuntimeError(
+                    "exact caked fit-space projection/storage unavailable for "
+                    f"background {int(background_idx) + 1} "
+                    f"(status={str(resolved_outcome.get('status', 'failed'))})"
+                )
+
+            if isinstance(caked_outcome, Mapping):
+                if _handle_caked_storage_outcome(caked_outcome):
+                    continue
+            else:
+                last_chance_caked_outcome = await_caked_result(0.0)
+                if isinstance(last_chance_caked_outcome, Mapping):
+                    if _handle_caked_storage_outcome(
+                        last_chance_caked_outcome,
+                        last_chance_poll_ready=bool(
+                            last_chance_caked_outcome.get("caked_view_stored", False)
+                        ),
+                    ):
+                        continue
+                    continue
+                required_cache_deps.emit_source_cache_caked_view_event(
+                    "source_cache_caked_view_timeout",
+                    bundle,
+                    source_cache_generation_id=int(source_cache_generation_id),
+                    started_at=caked_started_at,
+                    payload={"status": "timeout"},
+                )
+                announce_caked_timeout()
+                _refresh_locked_qr_readiness_from_caked_projection()
+                locked_qr_projection_missing = _locked_qr_projection_missing()
+                storage_status = (
+                    "deferred"
+                    if locked_qr_projection_ready or locked_qr_caked_origin_baseline
+                    else "timeout"
+                )
+                storage_timeout_fatal = _caked_storage_timeout_fatal(False)
+                _emit_locked_qr_projection_readiness(
+                    storage_status=storage_status,
+                    storage_timeout_fatal=storage_timeout_fatal,
+                    last_chance_poll_ready=False,
+                )
+                if locked_qr_projection_missing:
+                    raise RuntimeError(
+                        _locked_qr_projection_error_text(
+                            locked_qr_readiness,
+                            storage_status=storage_status,
+                            storage_timeout_fatal=storage_timeout_fatal,
+                        )
+                    )
+                if caked_required:
+                    if locked_qr_projection_ready or locked_qr_caked_origin_baseline:
+                        continue
+                    if locked_qr_expected_rows > 0:
+                        raise RuntimeError(
+                            _locked_qr_projection_error_text(
+                                locked_qr_readiness,
+                                storage_status="timeout",
+                                storage_timeout_fatal=storage_timeout_fatal,
+                            )
+                        )
+                    raise RuntimeError(
+                        "exact caked fit-space projection/storage timed out for "
+                        f"background {int(background_idx) + 1}"
+                    )

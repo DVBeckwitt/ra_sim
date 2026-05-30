@@ -3932,9 +3932,18 @@ def test_runtime_impl_keeps_manual_pick_cache_restores_cache_only() -> None:
 def test_runtime_impl_worker_geometry_fit_rebuilds_source_rows_on_demand() -> None:
     source = _source_text(RUNTIME_SESSION_SOURCE_PATH)
     worker_source = _source_text(GUI_SOURCE_ROOT / "_runtime" / "geometry_fit_worker.py")
-    helper_start = source.index("def _prebuild_required_background_caches() -> None:")
-    helper_end = source.index("worker_manual_dataset_bindings =", helper_start)
-    helper_source = source[helper_start:helper_end]
+    worker_tree = ast.parse(worker_source)
+    required_helper_node = next(
+        node
+        for node in ast.walk(worker_tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "prebuild_required_background_caches"
+    )
+    required_helper_source = "".join(
+        worker_source.splitlines(keepends=True)[
+            required_helper_node.lineno - 1 : required_helper_node.end_lineno
+        ]
+    )
 
     assert "def rebuild_source_rows_for_background_worker(" in worker_source
     assert "def source_rows_for_background_worker(" in worker_source
@@ -3942,14 +3951,16 @@ def test_runtime_impl_worker_geometry_fit_rebuilds_source_rows_on_demand() -> No
     assert "_rebuild_source_rows_for_background_worker = (" in source
     assert "geometry_manual_rebuild_source_rows_for_background=(" in source
     assert "_rebuild_source_rows_for_background_worker" in source
-    assert helper_source.count("raise RuntimeError(") >= 5
-    assert "exact caked projector unavailable" in helper_source
-    assert "locked Qr/Qz" in helper_source
-    assert "projected rows" in helper_source
-    assert "exact caked fit-space projection/storage unavailable" in helper_source
-    assert "exact caked fit-space projection/storage timed out" in helper_source
-    assert "mixed detector/caked manual fit spaces are not supported" in helper_source
-    assert "Geometry fit preflight timed out" in helper_source
+    assert "def _prebuild_required_background_caches(" not in source
+    assert "worker_context.prebuild_required_background_caches(" in source
+    assert required_helper_source.count("raise RuntimeError(") >= 5
+    assert "exact caked projector unavailable" in worker_source
+    assert "locked Qr/Qz" in required_helper_source
+    assert "projected rows" in required_helper_source
+    assert "exact caked fit-space projection/storage unavailable" in required_helper_source
+    assert "exact caked fit-space projection/storage timed out" in required_helper_source
+    assert "mixed detector/caked manual fit spaces are not supported" in source
+    assert "Geometry fit preflight timed out" in required_helper_source
 
 
 def test_runtime_impl_keeps_qr_overlay_live_during_background_updates() -> None:

@@ -10,6 +10,7 @@ from ra_sim.gui._runtime.geometry_fit_worker import (
     GeometryFitWorkerCakedPayloadDeps,
     GeometryFitWorkerContext,
     GeometryFitWorkerPrebuildDeps,
+    GeometryFitWorkerRequiredCacheDeps,
     GeometryFitWorkerSourceProjectionDeps,
     GeometryFitWorkerSourceRowsDeps,
 )
@@ -531,6 +532,95 @@ class FakePrebuildDeps:
         return isinstance(value, FakeBundle)
 
 
+class FakeRequiredCacheDeps:
+    def __init__(self) -> None:
+        self.readiness: dict[str, object] = {
+            "expected_locked_qr_rows": 0,
+            "projected_locked_qr_rows": 0,
+            "finite_locked_qr_rows": 0,
+            "fit_space_projection_ready": True,
+        }
+        self.caked_outcome: dict[str, object] | None = {
+            "caked_view_stored": True,
+            "caked_view_status": "stored",
+            "status": "stored",
+        }
+        self.caked_events: list[dict[str, object]] = []
+        self.announced_timeouts: int = 0
+
+    @property
+    def deps(self) -> GeometryFitWorkerRequiredCacheDeps:
+        return GeometryFitWorkerRequiredCacheDeps(
+            locked_qr_fit_space_projection_readiness=(
+                self.locked_qr_fit_space_projection_readiness
+            ),
+            normalize_optics_mode_label=self.normalize_optics_mode_label,
+            start_non_gating_caked_view_task=self.start_non_gating_caked_view_task,
+            emit_source_cache_caked_view_event=self.emit_source_cache_caked_view_event,
+        )
+
+    def locked_qr_fit_space_projection_readiness(
+        self,
+        _projected_rows: object,
+        *,
+        required_pairs: object,
+        source_rows: object,
+    ) -> dict[str, object]:
+        return dict(
+            self.readiness,
+            required_pair_count=len(required_pairs or ()),
+            source_row_count=len(source_rows or ()),
+        )
+
+    def normalize_optics_mode_label(self, value: object) -> str:
+        return str(value or "exact").strip().lower() or "exact"
+
+    def start_non_gating_caked_view_task(
+        self,
+        bundle: FakeBackgroundCacheBundle,
+        *,
+        source_cache_generation_id: int,
+        started_at: float,
+        stage_callback: object = None,
+    ) -> tuple[object, object]:
+        def _await_result(_timeout_s: float) -> dict[str, object] | None:
+            if self.caked_outcome is None:
+                return None
+            return dict(
+                self.caked_outcome,
+                background_index=int(bundle.background_index),
+                source_cache_generation_id=int(source_cache_generation_id),
+                started_at=float(started_at),
+                stage_callback=stage_callback,
+            )
+
+        def _announce_timeout() -> None:
+            self.announced_timeouts += 1
+
+        return _await_result, _announce_timeout
+
+    def emit_source_cache_caked_view_event(
+        self,
+        kind: str,
+        bundle: FakeBackgroundCacheBundle,
+        *,
+        source_cache_generation_id: int,
+        started_at: float,
+        payload: Mapping[str, object] | None = None,
+        late: bool = False,
+    ) -> None:
+        self.caked_events.append(
+            {
+                "kind": str(kind),
+                "background_index": int(bundle.background_index),
+                "source_cache_generation_id": int(source_cache_generation_id),
+                "started_at": float(started_at),
+                "payload": dict(payload or {}),
+                "late": bool(late),
+            }
+        )
+
+
 def _ready_projection_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "radial_axis": [1.0, 2.0],
@@ -624,6 +714,42 @@ def _context_with_prebuild_deps(
     return context, fake_prebuild_deps
 
 
+def _context_with_required_cache_deps(
+    job: dict[str, object] | None = None,
+) -> tuple[GeometryFitWorkerContext, FakeRequiredCacheDeps]:
+    context, _prebuild_deps = _context_with_prebuild_deps(
+        {
+            "required_indices": [0],
+            "background_labels": {0: "background 1"},
+            "manual_pairs_by_background": {0: [{"pair_id": "pair-1"}]},
+            "source_cache_generation_by_background": {0: 4},
+            "params": {"optics_mode": "exact"},
+            **(job or {}),
+        }
+    )
+    fake_required_deps = FakeRequiredCacheDeps()
+    context.required_cache_deps = fake_required_deps.deps
+    bundle = FakeBackgroundCacheBundle(
+        background_index=0,
+        background_label="background 1",
+        stored_rows=[_source_row(background_index=0)],
+        projected_rows=[_source_row(background_index=0, projected=True)],
+        cache_source="prebuilt",
+    )
+
+    def _prebuild_background_cache_bundle_worker(
+        background_index: int,
+        **_kwargs: object,
+    ) -> FakeBackgroundCacheBundle:
+        bundle.background_index = int(background_index)
+        return bundle
+
+    context.prebuild_background_cache_bundle_worker = (  # type: ignore[method-assign]
+        _prebuild_background_cache_bundle_worker
+    )
+    return context, fake_required_deps
+
+
 def _source_row(**overrides: object) -> dict[str, object]:
     row: dict[str, object] = {
         "background_index": 0,
@@ -642,6 +768,14 @@ def _source_row(**overrides: object) -> dict[str, object]:
     }
     row.update(overrides)
     return row
+
+
+def _event_payloads(queue: RecordingQueue, kind: str) -> list[dict[str, object]]:
+    return [
+        dict(item.get("payload") or {})
+        for item in queue.items
+        if isinstance(item, Mapping) and item.get("kind") == kind
+    ]
 
 
 # D2 contract map: caked payload helpers return ready/invalid/absent status
@@ -667,6 +801,13 @@ def _source_row(**overrides: object) -> dict[str, object]:
 # generation unchanged on lookup, and delegates rebuilds through the existing
 # prebuild helper with the same background, params, signature, projection mode,
 # required-pair, and prior-diagnostic arguments.
+#
+# D3.3d contract map: required-cache prebuild iterates job required_indices in
+# order, emits source-cache start/bundle-start/ready/failure/caked-view events
+# with stable payload keys, preserves current source-cache generation ids,
+# derives locked-Qr readiness from projected/stored rows, treats timed-out caked
+# storage as fatal only when exact caked fit-space or locked-Qr readiness needs
+# it, and does not move manual validation, dataset, solver, or result packaging.
 
 
 def test_worker_context_from_job_copies_source_snapshots() -> None:
@@ -2228,4 +2369,118 @@ def test_ensure_caked_projection_failure_event_payload_fields() -> None:
                 ),
             },
         )
+    ]
+
+
+def test_prebuild_required_background_caches_emits_start_and_bundle_start() -> None:
+    queue = RecordingQueue()
+    context, _deps = _context_with_required_cache_deps({"event_queue": queue})
+
+    context.prebuild_required_background_caches(stage_callback="stage")
+
+    assert _event_payloads(queue, "source_cache_build_start") == [
+        {
+            "background_index": 0,
+            "background_label": "background 1",
+            "elapsed_s": 0.0,
+            "message": "preflight: building source cache for background 1",
+        }
+    ]
+    bundle_start = _event_payloads(queue, "source_cache_bundle_start")
+    assert len(bundle_start) == 1
+    assert bundle_start[0]["background_index"] == 0
+    assert bundle_start[0]["background_label"] == "background 1"
+    assert bundle_start[0]["status"] == "starting"
+    assert bundle_start[0]["required_pair_count"] == 1
+
+
+def test_prebuild_required_background_caches_failed_bundle_emits_failure_status() -> None:
+    queue = RecordingQueue()
+    context, _deps = _context_with_required_cache_deps({"event_queue": queue})
+    context.set_worker_source_snapshot_diagnostics(status="background_cache_empty")
+    context.prebuild_background_cache_bundle_worker = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: None
+    )
+
+    context.prebuild_required_background_caches(stage_callback="stage")
+
+    failures = _event_payloads(queue, "source_cache_bundle_failed")
+    assert len(failures) == 1
+    assert failures[0]["background_index"] == 0
+    assert failures[0]["background_label"] == "background 1"
+    assert failures[0]["status"] == "background_cache_empty"
+    assert failures[0]["message"] == (
+        "preflight: source cache bundle failed for background 1 "
+        "(status=background_cache_empty)"
+    )
+
+
+def test_prebuild_required_background_caches_success_emits_ready_status() -> None:
+    queue = RecordingQueue()
+    context, _deps = _context_with_required_cache_deps({"event_queue": queue})
+
+    context.prebuild_required_background_caches(stage_callback="stage")
+
+    assert _event_payloads(queue, "source_cache_bundle_ready")[0]["status"] == "ready"
+    assert _event_payloads(queue, "source_cache_rows_ready")[0]["status"] == "rows_ready"
+    assert _event_payloads(queue, "source_cache_build_ready")[0]["status"] == "ready"
+
+
+def test_prebuild_required_background_caches_preserves_source_cache_generation_id() -> None:
+    queue = RecordingQueue()
+    context, _deps = _context_with_required_cache_deps(
+        {
+            "event_queue": queue,
+            "source_cache_generation_by_background": {0: 9},
+        }
+    )
+
+    context.prebuild_required_background_caches(stage_callback="stage")
+
+    payload = _event_payloads(queue, "source_cache_bundle_ready")[0]
+    assert payload["source_cache_generation_id"] == 9
+
+
+def test_prebuild_required_background_caches_locked_qr_readiness_event_fields() -> None:
+    queue = RecordingQueue()
+    context, deps = _context_with_required_cache_deps({"event_queue": queue})
+    deps.readiness = {
+        "expected_locked_qr_rows": 1,
+        "projected_locked_qr_rows": 1,
+        "finite_locked_qr_rows": 1,
+        "fit_space_projection_ready": True,
+        "projection_degenerate": False,
+        "caked_view_storage_required_for_fit": True,
+        "locked_qr_row_keys": [{"pair_id": "pair-1", "source_exists": True}],
+    }
+
+    context.prebuild_required_background_caches(stage_callback="stage")
+
+    readiness = _event_payloads(queue, "locked_qr_projection_readiness")
+    assert len(readiness) == 1
+    assert readiness[0]["background_index"] == 0
+    assert readiness[0]["projection_ready"] is True
+    assert readiness[0]["caked_view_storage_status"] == "ready"
+    assert readiness[0]["storage_timeout_fatal"] is False
+    assert readiness[0]["full_cake_started"] is True
+    assert readiness[0]["exact_caked_projection_payload_status"] == "missing"
+
+
+def test_prebuild_required_background_caches_caked_timeout_event_fields() -> None:
+    queue = RecordingQueue()
+    context, deps = _context_with_required_cache_deps({"event_queue": queue})
+    deps.caked_outcome = None
+
+    context.prebuild_required_background_caches(stage_callback="stage")
+
+    assert deps.announced_timeouts == 1
+    assert deps.caked_events == [
+        {
+            "kind": "source_cache_caked_view_timeout",
+            "background_index": 0,
+            "source_cache_generation_id": 4,
+            "started_at": deps.caked_events[0]["started_at"],
+            "payload": {"status": "timeout"},
+            "late": False,
+        }
     ]
