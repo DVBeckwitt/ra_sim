@@ -40603,6 +40603,15 @@ def _run_async_geometry_fit_worker_job(
         is_transform_bundle=lambda value: isinstance(value, CakeTransformBundle),
         live_handoff_patch_marker=GEOMETRY_FIT_LIVE_HANDOFF_PATCH_MARKER,
     )
+    worker_context.source_rows_deps = _geometry_fit_worker.GeometryFitWorkerSourceRowsDeps(
+        manual_caked_fit_space_required_for_background=(
+            lambda *args, **kwargs: _worker_manual_caked_fit_space_required_for_background(
+                *args,
+                **kwargs,
+            )
+        ),
+        theta_base_for_background=_theta_base_for_background_worker,
+    )
     _caked_projection_payload_status = worker_context.caked_projection_payload_status
     _projection_candidate_state = worker_context.projection_candidate_state
     _load_caked_view_by_index_snapshot = (
@@ -40636,6 +40645,10 @@ def _run_async_geometry_fit_worker_job(
     _prebuild_background_cache_bundle_worker = (
         worker_context.prebuild_background_cache_bundle_worker
     )
+    _rebuild_source_rows_for_background_worker = (
+        worker_context.rebuild_source_rows_for_background_worker
+    )
+    _source_rows_for_background_worker = worker_context.source_rows_for_background_worker
 
     def _store_worker_caked_view_for_background(
         bundle: gui_geometry_fit.GeometryFitBackgroundCacheBundle,
@@ -41323,261 +41336,6 @@ def _run_async_geometry_fit_worker_job(
             return None
 
         return _await_initial_result, timeout_announced.set
-
-    def _rebuild_source_rows_for_background_worker(
-        background_index: int,
-        param_set: dict[str, object] | None = None,
-        *,
-        consumer: str | None = None,
-        prior_diagnostics: Mapping[str, object] | None = None,
-        required_pairs: Sequence[Mapping[str, object]] | None = None,
-    ) -> list[dict[str, object]]:
-        background_idx = int(background_index)
-        lookup_context = str(consumer or "geometry_fit_dataset")
-
-        def _trial_source_row_projection_mode() -> str:
-            base_mode = str(job_data.get("projection_view_mode") or "detector").strip().lower()
-            if base_mode not in {"detector", "caked", "q_space"}:
-                base_mode = "detector"
-            if _worker_manual_caked_fit_space_required_for_background(int(background_idx)):
-                return "caked"
-            manual_spaces = job_data.get("manual_fit_space_by_background")
-            manual_space = ""
-            if isinstance(manual_spaces, Mapping):
-                manual_space = (
-                    str(
-                        manual_spaces.get(
-                            int(background_idx),
-                            manual_spaces.get(str(int(background_idx)), ""),
-                        )
-                        or ""
-                    )
-                    .strip()
-                    .lower()
-                )
-            if bool(job_data.get("pick_uses_caked_space", False)) or manual_space == "caked":
-                return "caked"
-            return base_mode
-
-        def _trial_source_rows_from_prebuilt_cache() -> list[dict[str, object]]:
-            if lookup_context != "geometry_fit_trial_source_rows":
-                return []
-            cached_bundle = worker_background_cache_by_index.get(int(background_idx))
-            if not isinstance(
-                cached_bundle,
-                gui_geometry_fit.GeometryFitBackgroundCacheBundle,
-            ):
-                return []
-            normalized_mode = _trial_source_row_projection_mode()
-            caked_required = _worker_manual_caked_fit_space_required_for_background(
-                int(background_idx)
-            )
-            projected_rows = _geometry_fit_rows_for_background(
-                int(background_idx),
-                _project_source_rows_for_background(
-                    int(background_idx),
-                    cached_bundle.stored_rows,
-                    mode_override=normalized_mode,
-                    strict_caked_projection=bool(caked_required),
-                    params_override=param_set,
-                ),
-            )
-            if projected_rows:
-                return _mark_worker_cached_projection_rows(
-                    projected_rows,
-                    background_index=int(background_idx),
-                    mode=normalized_mode,
-                )
-            if caked_required:
-                return []
-            return _bundle_rows(
-                cached_bundle,
-                mode_override=normalized_mode,
-                params_override=param_set,
-            )
-
-        cached_trial_rows = _trial_source_rows_from_prebuilt_cache()
-        if cached_trial_rows:
-            return cached_trial_rows
-
-        bundle = _prebuild_background_cache_bundle_worker(
-            background_idx,
-            theta_base=float(_theta_base_for_background_worker(int(background_idx))),
-            param_set=param_set,
-            consumer=lookup_context,
-            prior_diagnostics=prior_diagnostics,
-            required_pairs=required_pairs,
-        )
-        if not isinstance(bundle, gui_geometry_fit.GeometryFitBackgroundCacheBundle):
-            return _trial_source_rows_from_prebuilt_cache()
-        rows = _bundle_rows(
-            bundle,
-            mode_override=(
-                _trial_source_row_projection_mode()
-                if lookup_context == "geometry_fit_trial_source_rows"
-                else None
-            ),
-            params_override=param_set,
-        )
-        if rows:
-            return rows
-        return _trial_source_rows_from_prebuilt_cache()
-
-    def _source_rows_for_background_worker(
-        background_index: int,
-        param_set: dict[str, object] | None = None,
-        *,
-        consumer: str | None = None,
-        required_pairs: Sequence[Mapping[str, object]] | None = None,
-    ) -> list[dict[str, object]]:
-        background_idx = int(background_index)
-        lookup_context = str(consumer or "unspecified")
-        requested_signature = dict(job_data.get("requested_signatures", {}) or {}).get(
-            int(background_idx)
-        )
-        requested_signature_summary = dict(
-            job_data.get("requested_signature_summaries", {}) or {}
-        ).get(int(background_idx))
-        if requested_signature_summary is None:
-            requested_signature_summary = _live_cache_signature_summary(requested_signature)
-        background_label = dict(job_data.get("background_labels", {}) or {}).get(
-            int(background_idx),
-            f"background {int(background_idx) + 1}",
-        )
-        live_cache_inventory = copy.deepcopy(job_data.get("live_cache_inventory", {}))
-        bundle = worker_background_cache_by_index.get(int(background_idx))
-        if not isinstance(bundle, gui_geometry_fit.GeometryFitBackgroundCacheBundle):
-            _set_worker_source_snapshot_diagnostics(
-                source="geometry_fit_background_cache",
-                cache_family="geometry_fit_background_cache",
-                action="lookup",
-                consumer=lookup_context,
-                status="background_cache_missing",
-                background_index=int(background_idx),
-                background_label=str(background_label),
-                requested_signature=requested_signature,
-                requested_signature_summary=requested_signature_summary,
-                raw_peak_count=0,
-                projected_peak_count=0,
-                signature_match=False,
-                live_cache_inventory=live_cache_inventory,
-            )
-            return []
-
-        stored_signature_summary = _live_cache_signature_summary(bundle.requested_signature)
-        if bundle.requested_signature != requested_signature:
-            _set_worker_source_snapshot_diagnostics(
-                source="geometry_fit_background_cache",
-                cache_family="geometry_fit_background_cache",
-                action="lookup",
-                consumer=lookup_context,
-                status="background_cache_signature_mismatch",
-                background_index=int(background_idx),
-                background_label=str(background_label),
-                requested_signature=requested_signature,
-                requested_signature_summary=requested_signature_summary,
-                snapshot_signature=bundle.requested_signature,
-                stored_signature_summary=stored_signature_summary,
-                raw_peak_count=int(len(bundle.stored_rows or ())),
-                projected_peak_count=0,
-                created_from=bundle.cache_source,
-                signature_match=False,
-                live_cache_inventory=live_cache_inventory,
-            )
-            return []
-
-        projected_rows = _bundle_rows(bundle)
-        if not projected_rows:
-            _set_worker_source_snapshot_diagnostics(
-                source="geometry_fit_background_cache",
-                cache_family="geometry_fit_background_cache",
-                action="lookup",
-                consumer=lookup_context,
-                status="background_cache_empty",
-                background_index=int(background_idx),
-                background_label=str(background_label),
-                requested_signature=requested_signature,
-                requested_signature_summary=requested_signature_summary,
-                snapshot_signature=bundle.requested_signature,
-                stored_signature_summary=stored_signature_summary,
-                raw_peak_count=int(len(bundle.stored_rows or ())),
-                projected_peak_count=0,
-                created_from=bundle.cache_source,
-                signature_match=True,
-                live_cache_inventory=live_cache_inventory,
-            )
-            return []
-        validation_rows = (
-            projected_rows
-            if _worker_manual_caked_fit_space_required_for_background(int(background_idx))
-            else bundle.stored_rows
-        )
-        bundle_validation = (
-            _worker_validate_required_source_rows_for_fit_space(
-                validation_rows,
-                required_pairs=required_pairs,
-                background_index=int(background_idx),
-            )
-            if required_pairs
-            else {}
-        )
-        if required_pairs and not bool(bundle_validation.get("valid", False)):
-            _set_worker_source_snapshot_diagnostics(
-                source="geometry_fit_background_cache",
-                cache_family="geometry_fit_background_cache",
-                action="lookup",
-                consumer=lookup_context,
-                status="background_cache_pair_validation_failed",
-                background_index=int(background_idx),
-                background_label=str(background_label),
-                requested_signature=requested_signature,
-                requested_signature_summary=requested_signature_summary,
-                snapshot_signature=bundle.requested_signature,
-                stored_signature_summary=stored_signature_summary,
-                raw_peak_count=int(len(bundle.stored_rows or ())),
-                projected_peak_count=0,
-                created_from=bundle.cache_source,
-                cache_source=bundle.cache_source,
-                signature_match=True,
-                theta_base=float(bundle.theta_base),
-                theta_initial=float(bundle.theta_initial),
-                live_cache_inventory=live_cache_inventory,
-                live_runtime_cache_validation=bundle_validation,
-            )
-            rebuilt_rows = _rebuild_source_rows_for_background_worker(
-                background_idx,
-                param_set,
-                consumer=lookup_context,
-                prior_diagnostics=_last_worker_source_snapshot_diagnostics(),
-                required_pairs=required_pairs,
-            )
-            if rebuilt_rows:
-                return rebuilt_rows
-            return []
-
-        _set_worker_source_snapshot_diagnostics(
-            source="geometry_fit_background_cache",
-            cache_family="geometry_fit_background_cache",
-            action="lookup",
-            consumer=lookup_context,
-            status="background_cache_hit",
-            background_index=int(background_idx),
-            background_label=str(background_label),
-            requested_signature=requested_signature,
-            requested_signature_summary=requested_signature_summary,
-            snapshot_signature=bundle.requested_signature,
-            stored_signature_summary=stored_signature_summary,
-            raw_peak_count=int(len(bundle.stored_rows or ())),
-            projected_peak_count=int(len(projected_rows)),
-            created_from=bundle.cache_source,
-            cache_source=bundle.cache_source,
-            signature_match=True,
-            theta_base=float(bundle.theta_base),
-            theta_initial=float(bundle.theta_initial),
-            live_cache_inventory=live_cache_inventory,
-            live_runtime_cache_validation=bundle_validation,
-        )
-        return projected_rows
 
     def _prebuild_required_background_caches() -> None:
         def _manual_fit_space_kind_for_background(background_index: int) -> str:

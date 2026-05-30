@@ -78,6 +78,12 @@ class GeometryFitWorkerPrebuildDeps:
     live_handoff_patch_marker: str
 
 
+@dataclass(frozen=True)
+class GeometryFitWorkerSourceRowsDeps:
+    manual_caked_fit_space_required_for_background: Callable[..., bool]
+    theta_base_for_background: Callable[..., object]
+
+
 @dataclass
 class GeometryFitWorkerContext:
     job_data: dict[str, object]
@@ -93,6 +99,7 @@ class GeometryFitWorkerContext:
     source_projection_deps: GeometryFitWorkerSourceProjectionDeps | None = None
     cache_bundle_deps: GeometryFitWorkerCacheBundleDeps | None = None
     prebuild_deps: GeometryFitWorkerPrebuildDeps | None = None
+    source_rows_deps: GeometryFitWorkerSourceRowsDeps | None = None
 
     @classmethod
     def from_job(cls, job: Mapping[str, object]) -> GeometryFitWorkerContext:
@@ -206,6 +213,11 @@ class GeometryFitWorkerContext:
         if self.prebuild_deps is None:
             raise RuntimeError("geometry-fit worker prebuild deps are not configured")
         return self.prebuild_deps
+
+    def _require_source_rows_deps(self) -> GeometryFitWorkerSourceRowsDeps:
+        if self.source_rows_deps is None:
+            raise RuntimeError("geometry-fit worker source-row deps are not configured")
+        return self.source_rows_deps
 
     def caked_projection_payload_status(
         self,
@@ -1419,3 +1431,281 @@ class GeometryFitWorkerContext:
             self.store_worker_background_cache_bundle(bundle)
             return bundle
         return None
+
+    def rebuild_source_rows_for_background_worker(
+        self,
+        background_index: int,
+        param_set: dict[str, object] | None = None,
+        *,
+        consumer: str | None = None,
+        prior_diagnostics: Mapping[str, object] | None = None,
+        required_pairs: Sequence[Mapping[str, object]] | None = None,
+    ) -> list[dict[str, object]]:
+        cache_deps = self._require_cache_bundle_deps()
+        source_deps = self._require_source_projection_deps()
+        source_rows_deps = self._require_source_rows_deps()
+        background_idx = int(background_index)
+        lookup_context = str(consumer or "geometry_fit_dataset")
+
+        def trial_source_row_projection_mode() -> str:
+            base_mode = str(
+                self.job_data.get("projection_view_mode") or "detector"
+            ).strip().lower()
+            if base_mode not in {"detector", "caked", "q_space"}:
+                base_mode = "detector"
+            if bool(
+                source_rows_deps.manual_caked_fit_space_required_for_background(
+                    int(background_idx)
+                )
+            ):
+                return "caked"
+            manual_spaces = self.job_data.get("manual_fit_space_by_background")
+            manual_space = ""
+            if isinstance(manual_spaces, Mapping):
+                manual_space = (
+                    str(
+                        manual_spaces.get(
+                            int(background_idx),
+                            manual_spaces.get(str(int(background_idx)), ""),
+                        )
+                        or ""
+                    )
+                    .strip()
+                    .lower()
+                )
+            if bool(self.job_data.get("pick_uses_caked_space", False)) or manual_space == "caked":
+                return "caked"
+            return base_mode
+
+        def trial_source_rows_from_prebuilt_cache() -> list[dict[str, object]]:
+            if lookup_context != "geometry_fit_trial_source_rows":
+                return []
+            cached_bundle = self.worker_background_cache_by_index.get(int(background_idx))
+            if not cache_deps.is_background_cache_bundle(cached_bundle):
+                return []
+            normalized_mode = trial_source_row_projection_mode()
+            caked_required = bool(
+                source_rows_deps.manual_caked_fit_space_required_for_background(
+                    int(background_idx)
+                )
+            )
+            projected_rows = source_deps.rows_for_background(
+                int(background_idx),
+                self.project_source_rows_for_background(
+                    int(background_idx),
+                    cached_bundle.stored_rows,
+                    mode_override=normalized_mode,
+                    strict_caked_projection=bool(caked_required),
+                    params_override=param_set,
+                ),
+            )
+            if projected_rows:
+                return self.mark_worker_cached_projection_rows(
+                    projected_rows,
+                    background_index=int(background_idx),
+                    mode=normalized_mode,
+                )
+            if caked_required:
+                return []
+            return self.bundle_rows(
+                cached_bundle,
+                mode_override=normalized_mode,
+                params_override=param_set,
+            )
+
+        cached_trial_rows = trial_source_rows_from_prebuilt_cache()
+        if cached_trial_rows:
+            return cached_trial_rows
+
+        bundle = self.prebuild_background_cache_bundle_worker(
+            background_idx,
+            theta_base=float(source_rows_deps.theta_base_for_background(int(background_idx))),
+            param_set=param_set,
+            consumer=lookup_context,
+            prior_diagnostics=prior_diagnostics,
+            required_pairs=required_pairs,
+        )
+        if not cache_deps.is_background_cache_bundle(bundle):
+            return trial_source_rows_from_prebuilt_cache()
+        rows = self.bundle_rows(
+            bundle,
+            mode_override=(
+                trial_source_row_projection_mode()
+                if lookup_context == "geometry_fit_trial_source_rows"
+                else None
+            ),
+            params_override=param_set,
+        )
+        if rows:
+            return rows
+        return trial_source_rows_from_prebuilt_cache()
+
+    def source_rows_for_background_worker(
+        self,
+        background_index: int,
+        param_set: dict[str, object] | None = None,
+        *,
+        consumer: str | None = None,
+        required_pairs: Sequence[Mapping[str, object]] | None = None,
+    ) -> list[dict[str, object]]:
+        cache_deps = self._require_cache_bundle_deps()
+        prebuild_deps = self._require_prebuild_deps()
+        source_rows_deps = self._require_source_rows_deps()
+        background_idx = int(background_index)
+        lookup_context = str(consumer or "unspecified")
+        requested_signature = dict(
+            self.job_data.get("requested_signatures", {}) or {}
+        ).get(int(background_idx))
+        requested_signature_summary = dict(
+            self.job_data.get("requested_signature_summaries", {}) or {}
+        ).get(int(background_idx))
+        if requested_signature_summary is None:
+            requested_signature_summary = prebuild_deps.live_cache_signature_summary(
+                requested_signature
+            )
+        background_label = dict(self.job_data.get("background_labels", {}) or {}).get(
+            int(background_idx),
+            f"background {int(background_idx) + 1}",
+        )
+        live_cache_inventory = copy.deepcopy(
+            self.job_data.get("live_cache_inventory", {})
+        )
+        bundle = self.worker_background_cache_by_index.get(int(background_idx))
+        if not cache_deps.is_background_cache_bundle(bundle):
+            self.set_worker_source_snapshot_diagnostics(
+                source="geometry_fit_background_cache",
+                cache_family="geometry_fit_background_cache",
+                action="lookup",
+                consumer=lookup_context,
+                status="background_cache_missing",
+                background_index=int(background_idx),
+                background_label=str(background_label),
+                requested_signature=requested_signature,
+                requested_signature_summary=requested_signature_summary,
+                raw_peak_count=0,
+                projected_peak_count=0,
+                signature_match=False,
+                live_cache_inventory=live_cache_inventory,
+            )
+            return []
+
+        stored_signature_summary = prebuild_deps.live_cache_signature_summary(
+            bundle.requested_signature
+        )
+        if bundle.requested_signature != requested_signature:
+            self.set_worker_source_snapshot_diagnostics(
+                source="geometry_fit_background_cache",
+                cache_family="geometry_fit_background_cache",
+                action="lookup",
+                consumer=lookup_context,
+                status="background_cache_signature_mismatch",
+                background_index=int(background_idx),
+                background_label=str(background_label),
+                requested_signature=requested_signature,
+                requested_signature_summary=requested_signature_summary,
+                snapshot_signature=bundle.requested_signature,
+                stored_signature_summary=stored_signature_summary,
+                raw_peak_count=int(len(bundle.stored_rows or ())),
+                projected_peak_count=0,
+                created_from=bundle.cache_source,
+                signature_match=False,
+                live_cache_inventory=live_cache_inventory,
+            )
+            return []
+
+        projected_rows = self.bundle_rows(bundle)
+        if not projected_rows:
+            self.set_worker_source_snapshot_diagnostics(
+                source="geometry_fit_background_cache",
+                cache_family="geometry_fit_background_cache",
+                action="lookup",
+                consumer=lookup_context,
+                status="background_cache_empty",
+                background_index=int(background_idx),
+                background_label=str(background_label),
+                requested_signature=requested_signature,
+                requested_signature_summary=requested_signature_summary,
+                snapshot_signature=bundle.requested_signature,
+                stored_signature_summary=stored_signature_summary,
+                raw_peak_count=int(len(bundle.stored_rows or ())),
+                projected_peak_count=0,
+                created_from=bundle.cache_source,
+                signature_match=True,
+                live_cache_inventory=live_cache_inventory,
+            )
+            return []
+        validation_rows = (
+            projected_rows
+            if bool(
+                source_rows_deps.manual_caked_fit_space_required_for_background(
+                    int(background_idx)
+                )
+            )
+            else bundle.stored_rows
+        )
+        bundle_validation = (
+            prebuild_deps.validate_required_source_rows_for_fit_space(
+                validation_rows,
+                required_pairs=required_pairs,
+                background_index=int(background_idx),
+            )
+            if required_pairs
+            else {}
+        )
+        if required_pairs and not bool(bundle_validation.get("valid", False)):
+            self.set_worker_source_snapshot_diagnostics(
+                source="geometry_fit_background_cache",
+                cache_family="geometry_fit_background_cache",
+                action="lookup",
+                consumer=lookup_context,
+                status="background_cache_pair_validation_failed",
+                background_index=int(background_idx),
+                background_label=str(background_label),
+                requested_signature=requested_signature,
+                requested_signature_summary=requested_signature_summary,
+                snapshot_signature=bundle.requested_signature,
+                stored_signature_summary=stored_signature_summary,
+                raw_peak_count=int(len(bundle.stored_rows or ())),
+                projected_peak_count=0,
+                created_from=bundle.cache_source,
+                cache_source=bundle.cache_source,
+                signature_match=True,
+                theta_base=float(bundle.theta_base),
+                theta_initial=float(bundle.theta_initial),
+                live_cache_inventory=live_cache_inventory,
+                live_runtime_cache_validation=bundle_validation,
+            )
+            rebuilt_rows = self.rebuild_source_rows_for_background_worker(
+                background_idx,
+                param_set,
+                consumer=lookup_context,
+                prior_diagnostics=self.last_worker_source_snapshot_diagnostics(),
+                required_pairs=required_pairs,
+            )
+            if rebuilt_rows:
+                return rebuilt_rows
+            return []
+
+        self.set_worker_source_snapshot_diagnostics(
+            source="geometry_fit_background_cache",
+            cache_family="geometry_fit_background_cache",
+            action="lookup",
+            consumer=lookup_context,
+            status="background_cache_hit",
+            background_index=int(background_idx),
+            background_label=str(background_label),
+            requested_signature=requested_signature,
+            requested_signature_summary=requested_signature_summary,
+            snapshot_signature=bundle.requested_signature,
+            stored_signature_summary=stored_signature_summary,
+            raw_peak_count=int(len(bundle.stored_rows or ())),
+            projected_peak_count=int(len(projected_rows)),
+            created_from=bundle.cache_source,
+            cache_source=bundle.cache_source,
+            signature_match=True,
+            theta_base=float(bundle.theta_base),
+            theta_initial=float(bundle.theta_initial),
+            live_cache_inventory=live_cache_inventory,
+            live_runtime_cache_validation=bundle_validation,
+        )
+        return projected_rows

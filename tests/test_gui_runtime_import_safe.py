@@ -3931,11 +3931,15 @@ def test_runtime_impl_keeps_manual_pick_cache_restores_cache_only() -> None:
 
 def test_runtime_impl_worker_geometry_fit_rebuilds_source_rows_on_demand() -> None:
     source = _source_text(RUNTIME_SESSION_SOURCE_PATH)
+    worker_source = _source_text(GUI_SOURCE_ROOT / "_runtime" / "geometry_fit_worker.py")
     helper_start = source.index("def _prebuild_required_background_caches() -> None:")
     helper_end = source.index("worker_manual_dataset_bindings =", helper_start)
     helper_source = source[helper_start:helper_end]
 
-    assert "def _rebuild_source_rows_for_background_worker(" in source
+    assert "def rebuild_source_rows_for_background_worker(" in worker_source
+    assert "def source_rows_for_background_worker(" in worker_source
+    assert "def _rebuild_source_rows_for_background_worker(" not in source
+    assert "_rebuild_source_rows_for_background_worker = (" in source
     assert "geometry_manual_rebuild_source_rows_for_background=(" in source
     assert "_rebuild_source_rows_for_background_worker" in source
     assert helper_source.count("raise RuntimeError(") >= 5

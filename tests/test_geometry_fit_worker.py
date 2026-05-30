@@ -11,6 +11,7 @@ from ra_sim.gui._runtime.geometry_fit_worker import (
     GeometryFitWorkerContext,
     GeometryFitWorkerPrebuildDeps,
     GeometryFitWorkerSourceProjectionDeps,
+    GeometryFitWorkerSourceRowsDeps,
 )
 
 
@@ -616,6 +617,10 @@ def _context_with_prebuild_deps(
     fake_prebuild_deps = FakePrebuildDeps()
     context.prebuild_deps = fake_prebuild_deps.deps
     context.caked_payload_deps = FakeCakedPayloadDeps().deps
+    context.source_rows_deps = GeometryFitWorkerSourceRowsDeps(
+        manual_caked_fit_space_required_for_background=lambda _idx: False,
+        theta_base_for_background=lambda idx: float(idx) + 20.0,
+    )
     return context, fake_prebuild_deps
 
 
@@ -655,6 +660,13 @@ def _source_row(**overrides: object) -> dict[str, object]:
 # detector/caked/q-space mode, records projection failure diagnostics without
 # raising for bundle construction, fills default cache diagnostics, and copies
 # optional table/cache metadata into the bundle constructor.
+#
+# D3.3c contract map: source-row cache lookup returns job-local background cache
+# rows when signatures match, reports exact source snapshot diagnostics for
+# missing/mismatched/empty caches and validation failures, leaves source-cache
+# generation unchanged on lookup, and delegates rebuilds through the existing
+# prebuild helper with the same background, params, signature, projection mode,
+# required-pair, and prior-diagnostic arguments.
 
 
 def test_worker_context_from_job_copies_source_snapshots() -> None:
@@ -1620,6 +1632,362 @@ def test_prebuild_background_cache_bundle_worker_empty_rebuild_returns_none() ->
         "status": "empty_rebuild",
         "reason": "no_rows",
     }
+
+
+def _assert_diagnostic_keys(
+    diagnostics: Mapping[str, object],
+    *,
+    status: str,
+    keys: set[str],
+) -> None:
+    assert set(diagnostics) == keys
+    assert diagnostics["status"] == status
+
+
+def test_source_rows_for_background_worker_missing_cache_records_diagnostics() -> None:
+    context, _prebuild_deps = _context_with_prebuild_deps(
+        {
+            "requested_signatures": {0: ("requested", 0)},
+            "requested_signature_summaries": {0: {"digest": "requested"}},
+            "background_labels": {0: "bg1"},
+            "live_cache_inventory": {"ready": 1},
+        }
+    )
+
+    rows = context.source_rows_for_background_worker(0, consumer="dataset")
+
+    assert rows == []
+    diagnostics = context.worker_source_snapshot_diagnostics
+    _assert_diagnostic_keys(
+        diagnostics,
+        status="background_cache_missing",
+        keys={
+            "source",
+            "cache_family",
+            "action",
+            "consumer",
+            "status",
+            "background_index",
+            "background_label",
+            "requested_signature",
+            "requested_signature_summary",
+            "raw_peak_count",
+            "projected_peak_count",
+            "signature_match",
+            "live_cache_inventory",
+        },
+    )
+    assert diagnostics["background_index"] == 0
+    assert diagnostics["background_label"] == "bg1"
+    assert diagnostics["requested_signature"] == ("requested", 0)
+    assert diagnostics["requested_signature_summary"] == {"digest": "requested"}
+    assert diagnostics["raw_peak_count"] == 0
+    assert diagnostics["projected_peak_count"] == 0
+    assert diagnostics["signature_match"] is False
+    assert diagnostics["live_cache_inventory"] == {"ready": 1}
+
+
+def test_source_rows_for_background_worker_signature_mismatch_records_diagnostics() -> None:
+    context, _prebuild_deps = _context_with_prebuild_deps(
+        {
+            "requested_signatures": {0: ("requested", 0)},
+            "requested_signature_summaries": {0: {"digest": "requested"}},
+            "background_labels": {0: "bg1"},
+            "live_cache_inventory": {"ready": 2},
+        }
+    )
+    context.worker_background_cache_by_index[0] = FakeBackgroundCacheBundle(
+        requested_signature=("stale", 0),
+        stored_rows=[_source_row(source_row_index=21)],
+        projected_rows=[_source_row(source_row_index=22, projected=True)],
+        cache_source="prebuilt",
+    )
+
+    rows = context.source_rows_for_background_worker(0, consumer="dataset")
+
+    assert rows == []
+    diagnostics = context.worker_source_snapshot_diagnostics
+    _assert_diagnostic_keys(
+        diagnostics,
+        status="background_cache_signature_mismatch",
+        keys={
+            "source",
+            "cache_family",
+            "action",
+            "consumer",
+            "status",
+            "background_index",
+            "background_label",
+            "requested_signature",
+            "requested_signature_summary",
+            "snapshot_signature",
+            "stored_signature_summary",
+            "raw_peak_count",
+            "projected_peak_count",
+            "created_from",
+            "signature_match",
+            "live_cache_inventory",
+        },
+    )
+    assert diagnostics["snapshot_signature"] == ("stale", 0)
+    assert diagnostics["stored_signature_summary"] == {"signature": ("stale", 0)}
+    assert diagnostics["raw_peak_count"] == 1
+    assert diagnostics["projected_peak_count"] == 0
+    assert diagnostics["created_from"] == "prebuilt"
+    assert diagnostics["signature_match"] is False
+
+
+def test_source_rows_for_background_worker_empty_projected_rows_records_diagnostics() -> None:
+    context, _prebuild_deps = _context_with_prebuild_deps(
+        {
+            "requested_signatures": {0: ("requested", 0)},
+            "requested_signature_summaries": {0: {"digest": "requested"}},
+            "background_labels": {0: "bg1"},
+            "live_cache_inventory": {"ready": 3},
+        }
+    )
+    context.worker_background_cache_by_index[0] = FakeBackgroundCacheBundle(
+        requested_signature=("requested", 0),
+        stored_rows=[],
+        projected_rows=[],
+        cache_source="prebuilt",
+    )
+
+    rows = context.source_rows_for_background_worker(0, consumer="dataset")
+
+    assert rows == []
+    diagnostics = context.worker_source_snapshot_diagnostics
+    _assert_diagnostic_keys(
+        diagnostics,
+        status="background_cache_empty",
+        keys={
+            "source",
+            "cache_family",
+            "action",
+            "consumer",
+            "status",
+            "background_index",
+            "background_label",
+            "requested_signature",
+            "requested_signature_summary",
+            "snapshot_signature",
+            "stored_signature_summary",
+            "raw_peak_count",
+            "projected_peak_count",
+            "created_from",
+            "signature_match",
+            "live_cache_inventory",
+        },
+    )
+    assert diagnostics["snapshot_signature"] == ("requested", 0)
+    assert diagnostics["stored_signature_summary"] == {"signature": ("requested", 0)}
+    assert diagnostics["raw_peak_count"] == 0
+    assert diagnostics["projected_peak_count"] == 0
+    assert diagnostics["signature_match"] is True
+
+
+def test_source_rows_for_background_worker_cache_hit_returns_projected_rows() -> None:
+    context, _prebuild_deps = _context_with_prebuild_deps(
+        {
+            "requested_signatures": {0: ("requested", 0)},
+            "requested_signature_summaries": {0: {"digest": "requested"}},
+            "background_labels": {0: "bg1"},
+            "live_cache_inventory": {"ready": 4},
+        }
+    )
+    projected_row = _source_row(source_row_index=24, projected=True)
+    context.worker_background_cache_by_index[0] = FakeBackgroundCacheBundle(
+        requested_signature=("requested", 0),
+        stored_rows=[_source_row(source_row_index=25)],
+        projected_rows=[projected_row],
+        cache_source="prebuilt",
+        theta_base=2.0,
+        theta_initial=3.0,
+    )
+
+    rows = context.source_rows_for_background_worker(0, consumer="dataset")
+    rows[0]["mutated"] = True
+
+    assert rows[0]["source_row_index"] == 24
+    assert "mutated" not in projected_row
+    diagnostics = context.worker_source_snapshot_diagnostics
+    _assert_diagnostic_keys(
+        diagnostics,
+        status="background_cache_hit",
+        keys={
+            "source",
+            "cache_family",
+            "action",
+            "consumer",
+            "status",
+            "background_index",
+            "background_label",
+            "requested_signature",
+            "requested_signature_summary",
+            "snapshot_signature",
+            "stored_signature_summary",
+            "raw_peak_count",
+            "projected_peak_count",
+            "created_from",
+            "cache_source",
+            "signature_match",
+            "theta_base",
+            "theta_initial",
+            "live_cache_inventory",
+            "live_runtime_cache_validation",
+        },
+    )
+    assert diagnostics["projected_peak_count"] == 1
+    assert diagnostics["theta_base"] == 2.0
+    assert diagnostics["theta_initial"] == 3.0
+    assert diagnostics["live_runtime_cache_validation"] == {}
+
+
+def test_source_rows_for_background_worker_generation_map_does_not_reject_cache_hit() -> None:
+    context, _prebuild_deps = _context_with_prebuild_deps(
+        {
+            "requested_signatures": {0: ("requested", 0)},
+            "source_cache_generation_by_background": {0: 7},
+        }
+    )
+    context.worker_background_cache_by_index[0] = FakeBackgroundCacheBundle(
+        requested_signature=("requested", 0),
+        stored_rows=[_source_row(source_row_index=26)],
+        projected_rows=[_source_row(source_row_index=27, projected=True)],
+    )
+
+    rows = context.source_rows_for_background_worker(0, consumer="dataset")
+
+    assert [row["source_row_index"] for row in rows] == [27]
+    assert context.source_cache_generation_by_background[0] == 7
+    assert context.job_data["source_cache_generation_by_background"][0] == 7
+
+
+def test_source_rows_for_background_worker_pair_validation_failure_rebuilds() -> None:
+    context, prebuild_deps = _context_with_prebuild_deps(
+        {
+            "requested_signatures": {0: ("requested", 0)},
+            "requested_signature_summaries": {0: {"digest": "requested"}},
+            "background_labels": {0: "bg1"},
+        }
+    )
+    context.worker_background_cache_by_index[0] = FakeBackgroundCacheBundle(
+        requested_signature=("requested", 0),
+        stored_rows=[_source_row(source_row_index=28)],
+        projected_rows=[_source_row(source_row_index=29, projected=True)],
+        cache_source="prebuilt",
+        theta_base=4.0,
+        theta_initial=5.0,
+    )
+    prebuild_deps.validation_result = {"valid": False, "reason": "missing_pair"}
+    prebuild_deps.rebuild_result = FakeRebuildResult(
+        stored_rows=[],
+        diagnostics={"status": "empty_rebuild"},
+    )
+
+    rows = context.source_rows_for_background_worker(
+        0,
+        consumer="dataset",
+        required_pairs=[{"manual_pair_id": "pair-1"}],
+    )
+
+    assert rows == []
+    assert prebuild_deps.rebuild_calls
+    prior_diagnostics = prebuild_deps.rebuild_calls[0]["prior_diagnostics"]
+    _assert_diagnostic_keys(
+        prior_diagnostics,
+        status="background_cache_pair_validation_failed",
+        keys={
+            "source",
+            "cache_family",
+            "action",
+            "consumer",
+            "status",
+            "background_index",
+            "background_label",
+            "requested_signature",
+            "requested_signature_summary",
+            "snapshot_signature",
+            "stored_signature_summary",
+            "raw_peak_count",
+            "projected_peak_count",
+            "created_from",
+            "cache_source",
+            "signature_match",
+            "theta_base",
+            "theta_initial",
+            "live_cache_inventory",
+            "live_runtime_cache_validation",
+        },
+    )
+    assert prior_diagnostics["live_runtime_cache_validation"]["valid"] is False
+    assert prior_diagnostics["live_runtime_cache_validation"]["reason"] == "missing_pair"
+
+
+def test_rebuild_source_rows_for_background_worker_uses_prebuilt_trial_rows() -> None:
+    context, prebuild_deps = _context_with_prebuild_deps(
+        {
+            "projection_view_mode": "detector",
+            "requested_signatures": {0: ("requested", 0)},
+        }
+    )
+    context.worker_background_cache_by_index[0] = FakeBackgroundCacheBundle(
+        requested_signature=("requested", 0),
+        stored_rows=[_source_row(source_row_index=30)],
+        projected_rows=[],
+    )
+
+    rows = context.rebuild_source_rows_for_background_worker(
+        0,
+        {"distance": 3.0},
+        consumer="geometry_fit_trial_source_rows",
+    )
+
+    assert [row["source_row_index"] for row in rows] == [30]
+    assert rows[0]["projected"] is True
+    assert prebuild_deps.rebuild_calls == []
+
+
+def test_rebuild_source_rows_for_background_worker_forwards_prebuild_call_arguments() -> None:
+    context, prebuild_deps = _context_with_prebuild_deps(
+        {
+            "params": {"theta_initial": 1.0, "distance": 2.0},
+            "requested_signatures": {0: ("requested", 0)},
+            "requested_signature_summaries": {0: {"digest": "requested"}},
+            "background_labels": {0: "bg1"},
+        }
+    )
+    prebuild_deps.rebuild_result = FakeRebuildResult(
+        stored_rows=[],
+        diagnostics={"status": "empty_rebuild"},
+    )
+
+    rows = context.rebuild_source_rows_for_background_worker(
+        0,
+        {"distance": 3.0},
+        consumer="geometry_fit_dataset",
+        prior_diagnostics={"status": "prior"},
+        required_pairs=[{"manual_pair_id": "pair-1"}],
+    )
+
+    assert rows == []
+    rebuild_call = prebuild_deps.rebuild_calls[0]
+    assert rebuild_call["background_index"] == 0
+    assert rebuild_call["background_label"] == "bg1"
+    assert rebuild_call["params_local"]["distance"] == 3.0
+    assert rebuild_call["params_local"]["theta_initial"] == 10.0
+    assert rebuild_call["consumer"] == "geometry_fit_dataset"
+    assert rebuild_call["prior_diagnostics"] == {"status": "prior"}
+    assert rebuild_call["requested_signature"][:2] == (
+        "geometry_fit_worker_trial_source_rows",
+        0,
+    )
+    assert rebuild_call["requested_signature_summary"] == {
+        "signature": rebuild_call["requested_signature"]
+    }
+    assert rebuild_call["projection_view_mode"] == "detector"
+    assert rebuild_call["required_pairs"] == [{"manual_pair_id": "pair-1"}]
+    assert rebuild_call["preflight_mode"] == "manual_geometry_targeted"
 
 
 def test_caked_projection_payload_status_reports_ready_payload() -> None:

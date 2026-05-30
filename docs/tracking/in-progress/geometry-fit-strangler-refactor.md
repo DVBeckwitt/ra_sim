@@ -5,7 +5,7 @@ Type: refactor
 Owner:
 Issue: none
 Priority: p1
-Last updated: 2026-05-29
+Last updated: 2026-05-30
 
 ## Summary
 
@@ -13,7 +13,7 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: Patch D3.3b single-background cache prebuild extraction complete; ready for review
+Status: Patch D3.3c source-row cache lookup/rebuild extraction complete; ready for review
 Bug/error/feature status: internal worker refactor only; no user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
@@ -130,6 +130,16 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Post-Patch-D3.3b size report: `_run_async_geometry_fit_worker_job()` is 2,465
   lines, `ra_sim/gui/_runtime/runtime_session.py` is 45,146 lines, and
   `ra_sim/gui/_runtime/geometry_fit_worker.py` is 1,421 lines.
+- Patch D3.3c moved source-row cache lookup/rebuild helpers behind
+  `GeometryFitWorkerContext`: `rebuild_source_rows_for_background_worker()` and
+  `source_rows_for_background_worker()`.
+- Patch D3.3c injects only the runtime-local callbacks needed by those moved
+  helpers; required-background prebuild, manual validation, dataset, solver,
+  optimizer, saved-state, CLI/env/debug, result packaging, and UI behavior did
+  not move.
+- Post-Patch-D3.3c size report: `_run_async_geometry_fit_worker_job()` is 2,223
+  lines, `ra_sim/gui/_runtime/runtime_session.py` is 44,904 lines, and
+  `ra_sim/gui/_runtime/geometry_fit_worker.py` is 1,711 lines.
 
 ## Review status
 
@@ -159,6 +169,9 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Patch D3.3a updated the movement guard so background cache bundle construction
   may exist in `geometry_fit_worker.py`; prebuild/source-row cache lookup helpers
   remain forbidden there until their later slices.
+- Patch D3.3c updated the movement guard so source-row cache lookup/rebuild
+  helpers may exist in `geometry_fit_worker.py`; required-background prebuild
+  remains nested in `runtime_session.py` until its later slice.
 
 ## D3 contract map
 
@@ -452,6 +465,10 @@ Current validation status:
   worker/job import-boundary tests, live-row/runtime/import-safe guard tests,
   GUI workflow route tests, geometry fitting route tests, Ruff on touched files,
   and `git diff --check`.
+- Patch D3.3c validation passed: compileall, worker source-row cache
+  lookup/rebuild tests, worker/job import-boundary tests,
+  live-row/runtime/import-safe guard tests, GUI workflow route tests, geometry
+  fitting route tests, Ruff on touched files, and `git diff --check`.
 - `python -m ra_sim.dev check` remains blocked only by the documented pre-existing formatting drift above.
 - No generated artifacts, raw data, local config, notebook output, dependency changes, release version changes, or public migration files are included.
 
