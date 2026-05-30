@@ -142,8 +142,12 @@ def test_geometry_fit_worker_has_moved_only_d3_source_projection_and_bundle_help
     pending_d3_helper_names = {
         "_prebuild_background_cache_bundle_worker",
         "_prebuild_required_background_caches",
+        "_rebuild_source_rows_for_background_worker",
+        "_source_rows_for_background_worker",
         "prebuild_background_cache_bundle_worker",
         "prebuild_required_background_caches",
+        "rebuild_source_rows_for_background_worker",
+        "source_rows_for_background_worker",
     }
     assert not (worker_function_names & pending_d3_helper_names)
 

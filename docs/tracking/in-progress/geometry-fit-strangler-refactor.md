@@ -199,7 +199,7 @@ D3.3a background cache bundle construction helper:
 - `_build_geometry_fit_background_cache_bundle(...) -> GeometryFitBackgroundCacheBundle`
   - Inputs: background metadata, requested signature data, theta values, stored rows, optional projected rows, cache source, diagnostics, peak/hit/intersection caches, and cache metadata.
   - Return shape: `GeometryFitBackgroundCacheBundle` with copied stored/projected rows and copied optional table/cache payloads.
-  - Projection rules: when mode is caked or q-space, projected rows are generated when absent or stale; projection failure status is recorded in diagnostics.
+  - Projection rules: when mode is caked or q-space, projected rows are generated when projected rows are absent; stale projected-row rejection remains upstream in cache reuse logic. Projection failure status is recorded in diagnostics.
   - Mutations: may update projection payload map through projection helpers; otherwise returns a bundle.
 
 D3.3b/D3.3c cache prebuild helpers:
