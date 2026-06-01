@@ -29,6 +29,7 @@ class GeometryFitWorkerCakedPayloadDeps:
 class GeometryFitWorkerSourceProjectionDeps:
     rows_for_background: Callable[..., object]
     group_rows_by_background: Callable[..., object]
+    overlay_state_finite_pair: Callable[..., object]
     make_projection_callbacks: Callable[..., object]
     native_detector_coords_to_bundle_detector_coords: Callable[..., object]
     raw_phi_to_gui_phi: Callable[..., object]
@@ -659,6 +660,158 @@ class GeometryFitWorkerContext:
             raise RuntimeError(
                 f"exact caked projector unavailable for background {int(background_idx) + 1}"
             )
+
+    def worker_native_detector_coords_to_detector_display_coords_for_background(
+        self,
+        background_index: int,
+    ) -> Callable[[float, float], tuple[float | None, float | None]] | None:
+        deps = self._require_source_projection_deps()
+        try:
+            bg_idx = int(background_index)
+        except Exception:
+            return None
+        background_payload = dict(
+            dict(self.job_data.get("background_images", {}) or {}).get(bg_idx) or {}
+        )
+        native_background = background_payload.get("native")
+        try:
+            shape = tuple(int(v) for v in np.asarray(native_background).shape[:2])
+        except Exception:
+            return None
+        if len(shape) < 2 or min(shape) <= 0:
+            return None
+        rotate_k = int(
+            self.job_data.get("display_rotate_k", deps.default_display_rotate_k)
+        )
+
+        def _to_display(col: float, row: float) -> tuple[float | None, float | None]:
+            return deps.rotate_point_for_display(float(col), float(row), shape, rotate_k)
+
+        _to_display.__name__ = (
+            f"_worker_native_detector_coords_to_detector_display_coords_bg_{bg_idx}"
+        )
+        return _to_display
+
+    def worker_geometry_manual_entry_display_coords(
+        self,
+        entry: Mapping[str, object] | None,
+    ) -> tuple[float, float] | None:
+        deps = self._require_source_projection_deps()
+        if not isinstance(entry, Mapping):
+            return None
+
+        def _entry_pair(
+            pair_keys: Sequence[tuple[str, str]],
+        ) -> tuple[float, float] | None:
+            for key_x, key_y in pair_keys:
+                try:
+                    col = float(entry.get(key_x, np.nan))
+                    row = float(entry.get(key_y, np.nan))
+                except Exception:
+                    continue
+                if np.isfinite(col) and np.isfinite(row):
+                    return float(col), float(row)
+            return None
+
+        def _tuple_pair(keys: Sequence[str]) -> tuple[float, float] | None:
+            for key in keys:
+                point = deps.overlay_state_finite_pair(entry.get(key))
+                if point is not None:
+                    return float(point[0]), float(point[1])
+            return None
+
+        if bool(self.job_data.get("pick_uses_caked_space", False)):
+            return _entry_pair(
+                (
+                    ("caked_x", "caked_y"),
+                    ("raw_caked_x", "raw_caked_y"),
+                    ("background_two_theta_deg", "background_phi_deg"),
+                    ("two_theta_deg", "phi_deg"),
+                    ("display_col", "display_row"),
+                    ("x", "y"),
+                )
+            )
+
+        display_point = _tuple_pair(("geometry_detector_display_px", "raw_detector_display_px"))
+        if display_point is not None:
+            return display_point
+
+        display_point = _entry_pair(
+            (
+                ("x", "y"),
+                ("display_col", "display_row"),
+                ("detector_display_x", "detector_display_y"),
+            )
+        )
+        if display_point is not None:
+            return display_point
+
+        try:
+            background_index = int(
+                entry.get(
+                    "background_index",
+                    self.job_data.get("current_background_index", 0),
+                )
+            )
+        except Exception:
+            background_index = int(self.job_data.get("current_background_index", 0))
+        native_to_display = (
+            self.worker_native_detector_coords_to_detector_display_coords_for_background(
+                int(background_index)
+            )
+        )
+        if not callable(native_to_display):
+            return None
+        native_point = _tuple_pair(("geometry_detector_native_px", "raw_detector_native_px"))
+        if native_point is None:
+            native_point = _entry_pair(
+                (
+                    ("detector_x", "detector_y"),
+                    ("background_detector_x", "background_detector_y"),
+                    ("detector_native_x", "detector_native_y"),
+                    ("refined_detector_native_col", "refined_detector_native_row"),
+                    ("native_col", "native_row"),
+                    ("refined_sim_native_x", "refined_sim_native_y"),
+                )
+            )
+        if native_point is None:
+            return None
+        display_point = deps.overlay_state_finite_pair(
+            native_to_display(float(native_point[0]), float(native_point[1]))
+        )
+        if display_point is None:
+            return None
+        return float(display_point[0]), float(display_point[1])
+
+    def project_source_rows_for_background_view_worker(
+        self,
+        background_index: int,
+        rows: Sequence[object] | None,
+        **kwargs: object,
+    ) -> Sequence[object]:
+        deps = self._require_source_projection_deps()
+        normalized_rows = deps.rows_for_background(int(background_index), rows)
+        normalized_mode = (
+            str(
+                kwargs.get("mode_override")
+                if kwargs.get("mode_override") is not None
+                else self.job_data.get("projection_view_mode") or "detector"
+            )
+            .strip()
+            .lower()
+        )
+        if self.worker_cached_projection_rows_match(
+            normalized_rows,
+            background_index=int(background_index),
+            mode=normalized_mode,
+        ):
+            return normalized_rows
+        return self.project_source_rows_for_background(
+            int(background_index),
+            normalized_rows,
+            mode_override=kwargs.get("mode_override"),
+            strict_caked_projection=bool(kwargs.get("strict_caked_projection", True)),
+        )
 
     def project_source_rows_for_background(
         self,

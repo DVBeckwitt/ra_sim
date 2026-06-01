@@ -13,7 +13,7 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: Patch E2.1 caked-view ensure cleanup complete; ready for E3 planning
+Status: Patch E3 display/projection adapter extraction complete; ready for review
 Bug/error/feature status: internal worker refactor only; no user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
@@ -194,6 +194,18 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Post-Patch-E2.1 size report: `_run_async_geometry_fit_worker_job()` is 1,466
   lines, `ra_sim/gui/_runtime/runtime_session.py` is 44,147 lines, and
   `ra_sim/gui/_runtime/geometry_fit_worker.py` is 2,562 lines.
+- Patch E3 moved display/projection adapter helpers behind
+  `GeometryFitWorkerContext`:
+  `worker_native_detector_coords_to_detector_display_coords_for_background()`,
+  `worker_geometry_manual_entry_display_coords()`, and
+  `project_source_rows_for_background_view_worker()`.
+- Patch E3 injects only the existing source-projection finite-pair and display
+  rotation callbacks; caked-view storage, dataset call, solver request, solver
+  execution, result packaging, optimizer, saved-state, CLI/env/debug, and UI
+  behavior did not move.
+- Post-Patch-E3 size report: `_run_async_geometry_fit_worker_job()` is 1,335
+  lines, `ra_sim/gui/_runtime/runtime_session.py` is 44,016 lines, and
+  `ra_sim/gui/_runtime/geometry_fit_worker.py` is 2,715 lines.
 
 ## Review status
 
@@ -323,14 +335,39 @@ E2 caked-view ensure helpers:
     `exact caked projector unavailable for background N` with one-based labels
     when a required exact caked payload is unavailable.
 
+E3 display/projection adapter helpers:
+
+- `_worker_native_detector_coords_to_detector_display_coords_for_background(background_index)`
+  - Inputs: job-local background image snapshots and display rotation.
+  - Shape behavior: returns `None` when the background cannot be resolved or
+    has no positive 2D native image shape.
+  - Output: returns a named callback that maps native detector coordinates into
+    display coordinates using the injected display-rotation callback and the
+    background-specific shape.
+- `_worker_geometry_manual_entry_display_coords(entry)`
+  - Inputs: manual entry mapping, pick-space mode, current background index,
+    finite-pair parser, and native-to-display callback.
+  - Caked-pick behavior: preserves scalar caked/raw-caked/two-theta/phi/display
+    fallback order before detector display fields.
+  - Detector-pick behavior: preserves tuple display fields, scalar display
+    fields, then native detector tuple/scalar projection fallback.
+  - Error behavior: returns `None` for non-mapping entries, nonfinite values,
+    missing native backgrounds, and invalid projection results.
+- `_project_source_rows_for_background_view_worker(background_index, rows, **kwargs)`
+  - Inputs: background index, source rows, optional `mode_override`, and optional
+    `strict_caked_projection`.
+  - Cache behavior: reuses matching cached projection rows before calling the
+    source-row projection helper.
+  - Projection behavior: falls back to
+    `project_source_rows_for_background()` with the same mode override and
+    default `strict_caked_projection=True`.
+
 ## Next actions
 
-1. Patch E3 should move display/projection callback adapters only:
-   `_worker_native_detector_coords_to_detector_display_coords_for_background`,
-   `_worker_geometry_manual_entry_display_coords`, and
-   `_project_source_rows_for_background_view_worker`.
-2. Keep caked-view storage, dataset, solver request, solver execution, result
-   packaging, optimizer, saved-state, CLI/env, and UI behavior out of E3.
+1. Patch E4 should move caked-view storage only:
+   `_store_worker_caked_view_for_background`.
+2. Keep dataset, solver request, solver execution, result packaging, optimizer,
+   saved-state, CLI/env, and UI behavior out of E4.
 3. Do not add hard debt gates yet.
 
 ## Validation
@@ -570,6 +607,10 @@ Current validation status:
   files, and `git diff --check`.
 - Patch E2.1 validation passed: worker/job import-boundary tests, GUI runtime
   geometry tests, Ruff on `runtime_session.py`, and `git diff --check`.
+- Patch E3 validation passed: compileall, worker display/projection adapter
+  tests, worker/job import-boundary tests, live-row/runtime/import-safe guard
+  tests, GUI workflow route tests, geometry fitting route tests, Ruff on touched
+  files, and `git diff --check`.
 - `python -m ra_sim.dev check` remains blocked only by the documented pre-existing formatting drift above.
 - No generated artifacts, raw data, local config, notebook output, dependency changes, release version changes, or public migration files are included.
 

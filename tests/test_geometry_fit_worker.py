@@ -247,18 +247,20 @@ class FakeProjectionCallbacks:
 class FakeSourceProjectionDeps:
     def __init__(self) -> None:
         self.callbacks = FakeProjectionCallbacks()
+        self.rotate_calls: list[dict[str, object]] = []
 
     @property
     def deps(self) -> GeometryFitWorkerSourceProjectionDeps:
         return GeometryFitWorkerSourceProjectionDeps(
             rows_for_background=self.rows_for_background,
             group_rows_by_background=self.group_rows_by_background,
+            overlay_state_finite_pair=self.overlay_state_finite_pair,
             make_projection_callbacks=self.make_projection_callbacks,
             native_detector_coords_to_bundle_detector_coords=(
                 self.native_detector_coords_to_bundle_detector_coords
             ),
             raw_phi_to_gui_phi=lambda value: float(value),
-            rotate_point_for_display=lambda col, row: (float(col), float(row)),
+            rotate_point_for_display=self.rotate_point_for_display,
             native_sim_to_display_coords=None,
             get_detector_angular_maps=lambda _ai: None,
             detector_pixel_to_scattering_angles=None,
@@ -317,6 +319,35 @@ class FakeSourceProjectionDeps:
 
     def make_projection_callbacks(self, **_kwargs: object) -> FakeProjectionCallbacks:
         return self.callbacks
+
+    def overlay_state_finite_pair(self, value: object) -> tuple[float, float] | None:
+        if not (isinstance(value, (tuple, list)) and len(value) >= 2):
+            return None
+        try:
+            col = float(value[0])
+            row = float(value[1])
+        except Exception:
+            return None
+        if not (np.isfinite(col) and np.isfinite(row)):
+            return None
+        return col, row
+
+    def rotate_point_for_display(
+        self,
+        col: float,
+        row: float,
+        shape: object = None,
+        rotate_k: object = None,
+    ) -> tuple[float, float]:
+        self.rotate_calls.append(
+            {
+                "col": float(col),
+                "row": float(row),
+                "shape": shape,
+                "rotate_k": rotate_k,
+            }
+        )
+        return float(col) + 10.0, float(row) + 20.0
 
     def native_detector_coords_to_bundle_detector_coords(
         self,
@@ -1487,6 +1518,220 @@ def test_project_source_rows_by_row_background_missing_row_background_matches_cu
 
     assert [row["background_index"] for row in projected] == [3, 2]
     assert [row["source_row_index"] for row in projected] == [1, 2]
+
+
+def test_worker_native_detector_to_display_returns_none_for_missing_background() -> None:
+    context, _fake_deps = _context_with_source_projection_deps(
+        {"background_images": {}}
+    )
+
+    assert (
+        context.worker_native_detector_coords_to_detector_display_coords_for_background(5)
+        is None
+    )
+
+
+def test_worker_native_detector_to_display_uses_background_shape() -> None:
+    context, fake_deps = _context_with_source_projection_deps(
+        {
+            "background_images": {
+                2: {"native": [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]}
+            }
+        }
+    )
+
+    to_display = (
+        context.worker_native_detector_coords_to_detector_display_coords_for_background(2)
+    )
+
+    assert callable(to_display)
+    assert to_display(7.0, 8.0) == (17.0, 28.0)
+    assert fake_deps.rotate_calls[-1]["shape"] == (2, 3)
+
+
+def test_worker_native_detector_to_display_uses_job_rotate_k() -> None:
+    context, fake_deps = _context_with_source_projection_deps(
+        {
+            "display_rotate_k": 3,
+            "background_images": {0: {"native": [[1.0, 2.0], [3.0, 4.0]]}},
+        }
+    )
+
+    to_display = (
+        context.worker_native_detector_coords_to_detector_display_coords_for_background(0)
+    )
+
+    assert callable(to_display)
+    to_display(1.0, 2.0)
+    assert fake_deps.rotate_calls[-1]["rotate_k"] == 3
+
+
+def test_worker_native_detector_to_display_sets_stable_name() -> None:
+    context, _fake_deps = _context_with_source_projection_deps()
+
+    to_display = (
+        context.worker_native_detector_coords_to_detector_display_coords_for_background(1)
+    )
+
+    assert callable(to_display)
+    assert (
+        to_display.__name__
+        == "_worker_native_detector_coords_to_detector_display_coords_bg_1"
+    )
+
+
+def test_worker_geometry_manual_entry_display_coords_returns_none_for_non_mapping() -> None:
+    context, _fake_deps = _context_with_source_projection_deps()
+
+    assert context.worker_geometry_manual_entry_display_coords(None) is None
+    assert context.worker_geometry_manual_entry_display_coords(["x", "y"]) is None
+
+
+def test_worker_geometry_manual_entry_display_coords_prefers_caked_fields_when_pick_uses_caked_space() -> None:
+    context, _fake_deps = _context_with_source_projection_deps(
+        {"pick_uses_caked_space": True}
+    )
+
+    point = context.worker_geometry_manual_entry_display_coords(
+        {
+            "caked_x": 11.0,
+            "caked_y": 12.0,
+            "x": 1.0,
+            "y": 2.0,
+        }
+    )
+
+    assert point == (11.0, 12.0)
+
+
+def test_worker_geometry_manual_entry_display_coords_prefers_detector_display_tuple_fields() -> None:
+    context, _fake_deps = _context_with_source_projection_deps()
+
+    point = context.worker_geometry_manual_entry_display_coords(
+        {
+            "geometry_detector_display_px": (21.0, 22.0),
+            "x": 1.0,
+            "y": 2.0,
+        }
+    )
+
+    assert point == (21.0, 22.0)
+
+
+def test_worker_geometry_manual_entry_display_coords_falls_back_to_native_projection() -> None:
+    context, fake_deps = _context_with_source_projection_deps(
+        {
+            "background_images": {
+                1: {"native": [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]}
+            }
+        }
+    )
+
+    point = context.worker_geometry_manual_entry_display_coords(
+        {
+            "background_index": 1,
+            "geometry_detector_native_px": (3.0, 4.0),
+        }
+    )
+
+    assert point == (13.0, 24.0)
+    assert fake_deps.rotate_calls[-1]["shape"] == (2, 3)
+
+
+def test_worker_geometry_manual_entry_display_coords_uses_current_background_fallback() -> None:
+    context, fake_deps = _context_with_source_projection_deps(
+        {
+            "current_background_index": 1,
+            "background_images": {
+                1: {"native": [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]}
+            },
+        }
+    )
+
+    point = context.worker_geometry_manual_entry_display_coords(
+        {"geometry_detector_native_px": (5.0, 6.0)}
+    )
+
+    assert point == (15.0, 26.0)
+    assert fake_deps.rotate_calls[-1]["shape"] == (2, 3)
+
+
+def test_project_source_rows_for_background_view_reuses_matching_cached_rows() -> None:
+    context, fake_deps = _context_with_source_projection_deps(
+        {"projection_view_mode": "caked"}
+    )
+    rows = context.mark_worker_cached_projection_rows(
+        [_source_row(background_index=0, source_row_index=1)],
+        background_index=0,
+        mode="caked",
+    )
+
+    projected = context.project_source_rows_for_background_view_worker(0, rows)
+
+    assert projected is not rows
+    assert projected == rows
+    assert fake_deps.callbacks.calls == []
+
+
+def test_project_source_rows_for_background_view_projects_when_cache_mismatch() -> None:
+    context, fake_deps = _context_with_source_projection_deps(
+        {
+            "projection_view_mode": "caked",
+            "background_images": {
+                0: {"native": [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]}
+            },
+        }
+    )
+    context.caked_payload_deps = FakeCakedPayloadDeps().deps
+    rows = context.mark_worker_cached_projection_rows(
+        [_source_row(background_index=1, source_row_index=1)],
+        background_index=1,
+        mode="caked",
+    )
+    context.job_data["projection_payload_by_background"] = {
+        0: _ready_projection_payload()
+    }
+
+    projected = context.project_source_rows_for_background_view_worker(0, rows)
+
+    assert projected[0]["projected"] is True
+    assert len(fake_deps.callbacks.calls) == 1
+
+
+def test_project_source_rows_for_background_view_uses_mode_override() -> None:
+    context, _fake_deps = _context_with_source_projection_deps(
+        {"projection_view_mode": "detector"}
+    )
+    rows = context.mark_worker_cached_projection_rows(
+        [_source_row(background_index=0, source_row_index=1)],
+        background_index=0,
+        mode="q_space",
+    )
+
+    projected = context.project_source_rows_for_background_view_worker(
+        0,
+        rows,
+        mode_override="q_space",
+    )
+
+    assert projected == rows
+
+
+def test_project_source_rows_for_background_view_defaults_strict_caked_projection_true() -> None:
+    context, _fake_deps = _context_with_source_projection_deps(
+        {"projection_view_mode": "caked"}
+    )
+    context.caked_payload_deps = FakeCakedPayloadDeps().deps
+
+    try:
+        context.project_source_rows_for_background_view_worker(
+            0,
+            [_source_row(background_index=0, source_row_index=1)],
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "exact caked projector unavailable for background 1"
+    else:
+        raise AssertionError("expected strict caked projection failure")
 
 
 def test_mark_worker_cached_projection_rows_noops_for_detector_mode() -> None:

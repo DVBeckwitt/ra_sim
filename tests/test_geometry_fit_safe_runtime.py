@@ -110,6 +110,7 @@ def test_geometry_fit_worker_context_helpers_are_not_duplicated_in_runtime_worke
         "_mark_worker_cached_projection_rows",
         "_projection_candidate_state",
         "_project_source_rows_by_row_background",
+        "_project_source_rows_for_background_view_worker",
         "_project_source_rows_for_background",
         "_prebuild_required_background_caches",
         "_rebuild_source_rows_for_background_worker",
@@ -125,13 +126,15 @@ def test_geometry_fit_worker_context_helpers_are_not_duplicated_in_runtime_worke
         "_worker_caked_view_payload_ready",
         "_ensure_worker_geometry_fit_caked_view",
         "_worker_cached_projection_rows_match",
+        "_worker_geometry_manual_entry_display_coords",
+        "_worker_native_detector_coords_to_detector_display_coords_for_background",
         "_bundle_rows",
         "_build_geometry_fit_background_cache_bundle",
     }
     assert not (nested_function_names & moved_helper_names)
 
 
-def test_geometry_fit_worker_has_moved_only_cache_manual_and_caked_ensure_helpers() -> None:
+def test_geometry_fit_worker_has_moved_only_cache_manual_caked_and_display_helpers() -> None:
     tree = ast.parse(GEOMETRY_FIT_WORKER_PATH.read_text(encoding="utf-8"))
     worker_function_names = {
         node.name
@@ -146,6 +149,7 @@ def test_geometry_fit_worker_has_moved_only_cache_manual_and_caked_ensure_helper
         "prebuild_background_cache_bundle_worker",
         "prebuild_required_background_caches",
         "project_source_rows_by_row_background",
+        "project_source_rows_for_background_view_worker",
         "project_source_rows_for_background",
         "rebuild_source_rows_for_background_worker",
         "source_rows_for_background_worker",
@@ -158,13 +162,12 @@ def test_geometry_fit_worker_has_moved_only_cache_manual_and_caked_ensure_helper
         "worker_caked_view_payload_ready",
         "ensure_worker_geometry_fit_caked_view",
         "worker_cached_projection_rows_match",
+        "worker_geometry_manual_entry_display_coords",
+        "worker_native_detector_coords_to_detector_display_coords_for_background",
     } <= worker_function_names
 
     pending_worker_helper_names = {
-        "_store_worker_caked_view_for_background",
-        "_worker_native_detector_coords_to_detector_display_coords_for_background",
-        "_worker_geometry_manual_entry_display_coords",
-        "_project_source_rows_for_background_view_worker",
+        "store_worker_caked_view_for_background",
     }
     assert not (worker_function_names & pending_worker_helper_names)
 
