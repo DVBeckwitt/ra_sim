@@ -40642,15 +40642,11 @@ def _run_async_geometry_fit_worker_job(
         worker_context.rebuild_source_rows_for_background_worker
     )
     _source_rows_for_background_worker = worker_context.source_rows_for_background_worker
-    _worker_manual_pairs_for_background = worker_context.worker_manual_pairs_for_background
     _worker_manual_fit_space_by_background = (
         worker_context.worker_manual_fit_space_by_background
     )
     _worker_manual_caked_fit_space_required_for_background = (
         worker_context.worker_manual_caked_fit_space_required_for_background
-    )
-    _worker_validate_required_source_rows_for_fit_space = (
-        worker_context.worker_validate_required_source_rows_for_fit_space
     )
     _reject_worker_mixed_manual_fit_spaces = (
         worker_context.reject_worker_mixed_manual_fit_spaces
