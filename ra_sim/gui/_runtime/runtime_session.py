@@ -41350,11 +41350,6 @@ def _run_async_geometry_fit_worker_job(
         )
     )
 
-
-
-
-
-
     def _worker_caked_view_payload_ready(background_index: int) -> bool:
         background_payload = dict(
             dict(job_data.get("background_images", {}) or {}).get(int(background_index)) or {}
