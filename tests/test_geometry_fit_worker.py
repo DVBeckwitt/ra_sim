@@ -1531,6 +1531,17 @@ def test_worker_native_detector_to_display_returns_none_for_missing_background()
     )
 
 
+def test_worker_native_detector_to_display_returns_none_before_requiring_deps() -> None:
+    context = GeometryFitWorkerContext.from_job({})
+
+    assert (
+        context.worker_native_detector_coords_to_detector_display_coords_for_background(
+            "bad"
+        )
+        is None
+    )
+
+
 def test_worker_native_detector_to_display_uses_background_shape() -> None:
     context, fake_deps = _context_with_source_projection_deps(
         {
@@ -1585,6 +1596,12 @@ def test_worker_geometry_manual_entry_display_coords_returns_none_for_non_mappin
 
     assert context.worker_geometry_manual_entry_display_coords(None) is None
     assert context.worker_geometry_manual_entry_display_coords(["x", "y"]) is None
+
+
+def test_worker_geometry_manual_entry_display_coords_returns_none_before_requiring_deps() -> None:
+    context = GeometryFitWorkerContext.from_job({})
+
+    assert context.worker_geometry_manual_entry_display_coords(None) is None
 
 
 def test_worker_geometry_manual_entry_display_coords_prefers_caked_fields_when_pick_uses_caked_space() -> None:

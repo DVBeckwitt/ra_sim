@@ -665,7 +665,6 @@ class GeometryFitWorkerContext:
         self,
         background_index: int,
     ) -> Callable[[float, float], tuple[float | None, float | None]] | None:
-        deps = self._require_source_projection_deps()
         try:
             bg_idx = int(background_index)
         except Exception:
@@ -680,6 +679,7 @@ class GeometryFitWorkerContext:
             return None
         if len(shape) < 2 or min(shape) <= 0:
             return None
+        deps = self._require_source_projection_deps()
         rotate_k = int(
             self.job_data.get("display_rotate_k", deps.default_display_rotate_k)
         )
@@ -696,9 +696,9 @@ class GeometryFitWorkerContext:
         self,
         entry: Mapping[str, object] | None,
     ) -> tuple[float, float] | None:
-        deps = self._require_source_projection_deps()
         if not isinstance(entry, Mapping):
             return None
+        deps = self._require_source_projection_deps()
 
         def _entry_pair(
             pair_keys: Sequence[tuple[str, str]],

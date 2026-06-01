@@ -13,7 +13,7 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: Patch E3 display/projection adapter extraction complete; ready for review
+Status: Patch E3.1 display-adapter guard cleanup complete; ready for E4 planning
 Bug/error/feature status: internal worker refactor only; no user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
@@ -206,6 +206,13 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Post-Patch-E3 size report: `_run_async_geometry_fit_worker_job()` is 1,335
   lines, `ra_sim/gui/_runtime/runtime_session.py` is 44,016 lines, and
   `ra_sim/gui/_runtime/geometry_fit_worker.py` is 2,715 lines.
+- Patch E3.1 moved source-projection dependency lookups behind the early
+  invalid-input guard returns in the display adapter helpers. Invalid
+  background identifiers and non-mapping manual entries now return `None`
+  before dependency checks, matching the old nested helper edge behavior.
+- Patch E3.1 added focused worker tests for those guard paths. No behavior,
+  public payload, saved-state, CLI/env, UI, dataset, solver, optimizer, or
+  diagnostic contract changed.
 
 ## Review status
 
@@ -611,6 +618,9 @@ Current validation status:
   tests, worker/job import-boundary tests, live-row/runtime/import-safe guard
   tests, GUI workflow route tests, geometry fitting route tests, Ruff on touched
   files, and `git diff --check`.
+- Patch E3.1 validation passed: worker display/projection adapter tests,
+  full worker tests, worker/job import-boundary tests, Ruff on touched files,
+  and `git diff --check`.
 - `python -m ra_sim.dev check` remains blocked only by the documented pre-existing formatting drift above.
 - No generated artifacts, raw data, local config, notebook output, dependency changes, release version changes, or public migration files are included.
 
