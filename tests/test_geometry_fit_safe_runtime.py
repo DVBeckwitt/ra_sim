@@ -122,6 +122,8 @@ def test_geometry_fit_worker_context_helpers_are_not_duplicated_in_runtime_worke
         "_worker_manual_caked_fit_space_required_for_background",
         "_worker_validate_required_source_rows_for_fit_space",
         "_reject_worker_mixed_manual_fit_spaces",
+        "_worker_caked_view_payload_ready",
+        "_ensure_worker_geometry_fit_caked_view",
         "_worker_cached_projection_rows_match",
         "_bundle_rows",
         "_build_geometry_fit_background_cache_bundle",
@@ -129,7 +131,7 @@ def test_geometry_fit_worker_context_helpers_are_not_duplicated_in_runtime_worke
     assert not (nested_function_names & moved_helper_names)
 
 
-def test_geometry_fit_worker_has_moved_only_cache_and_manual_fit_helpers() -> None:
+def test_geometry_fit_worker_has_moved_only_cache_manual_and_caked_ensure_helpers() -> None:
     tree = ast.parse(GEOMETRY_FIT_WORKER_PATH.read_text(encoding="utf-8"))
     worker_function_names = {
         node.name
@@ -153,12 +155,16 @@ def test_geometry_fit_worker_has_moved_only_cache_and_manual_fit_helpers() -> No
         "worker_manual_caked_fit_space_required_for_background",
         "worker_validate_required_source_rows_for_fit_space",
         "reject_worker_mixed_manual_fit_spaces",
+        "worker_caked_view_payload_ready",
+        "ensure_worker_geometry_fit_caked_view",
         "worker_cached_projection_rows_match",
     } <= worker_function_names
 
     pending_worker_helper_names = {
-        "_worker_caked_view_payload_ready",
-        "_ensure_worker_geometry_fit_caked_view",
+        "_store_worker_caked_view_for_background",
+        "_worker_native_detector_coords_to_detector_display_coords_for_background",
+        "_worker_geometry_manual_entry_display_coords",
+        "_project_source_rows_for_background_view_worker",
     }
     assert not (worker_function_names & pending_worker_helper_names)
 

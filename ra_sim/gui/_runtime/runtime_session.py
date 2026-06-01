@@ -40651,6 +40651,10 @@ def _run_async_geometry_fit_worker_job(
     _reject_worker_mixed_manual_fit_spaces = (
         worker_context.reject_worker_mixed_manual_fit_spaces
     )
+    _worker_caked_view_payload_ready = worker_context.worker_caked_view_payload_ready
+    _ensure_worker_geometry_fit_caked_view = (
+        worker_context.ensure_worker_geometry_fit_caked_view
+    )
 
     def _store_worker_caked_view_for_background(
         bundle: gui_geometry_fit.GeometryFitBackgroundCacheBundle,
@@ -41349,50 +41353,6 @@ def _run_async_geometry_fit_worker_job(
             emit_source_cache_caked_view_event=_emit_source_cache_caked_view_event,
         )
     )
-
-    def _worker_caked_view_payload_ready(background_index: int) -> bool:
-        background_payload = dict(
-            dict(job_data.get("background_images", {}) or {}).get(int(background_index)) or {}
-        )
-        try:
-            detector_shape = tuple(
-                int(v)
-                for v in np.asarray(background_payload.get("native"), dtype=np.float64).shape[:2]
-            )
-        except Exception:
-            detector_shape = None
-        payload = _load_caked_projection_by_index_snapshot(
-            int(background_index),
-            detector_shape=detector_shape,
-            allow_generated_payload=True,
-        )
-        return isinstance(
-            gui_geometry_fit._geometry_fit_caked_payload_exact_bundle(
-                payload,
-                detector_shape=(
-                    payload.get("detector_shape") if isinstance(payload, Mapping) else None
-                ),
-                params=dict(job_data.get("params", {}) or {}),
-                require_background=False,
-            ),
-            CakeTransformBundle,
-        )
-
-
-    def _ensure_worker_geometry_fit_caked_view() -> None:
-        manual_spaces = _worker_manual_fit_space_by_background()
-        _reject_worker_mixed_manual_fit_spaces(manual_spaces)
-        caked_backgrounds = [
-            int(background_idx)
-            for background_idx in (job_data.get("required_indices", ()) or ())
-            if _worker_manual_caked_fit_space_required_for_background(int(background_idx))
-        ]
-        for background_idx in caked_backgrounds:
-            if _worker_caked_view_payload_ready(int(background_idx)):
-                continue
-            raise RuntimeError(
-                f"exact caked projector unavailable for background {int(background_idx) + 1}"
-            )
 
     def _worker_native_detector_coords_to_detector_display_coords_for_background(
         background_index: int,

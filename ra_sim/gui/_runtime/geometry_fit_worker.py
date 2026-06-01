@@ -608,6 +608,58 @@ class GeometryFitWorkerContext:
             return None
         return projection_payload
 
+    def worker_caked_view_payload_ready(self, background_index: int) -> bool:
+        deps = self._require_caked_payload_deps()
+        background_payload = dict(
+            dict(self.job_data.get("background_images", {}) or {}).get(
+                int(background_index)
+            )
+            or {}
+        )
+        try:
+            detector_shape = tuple(
+                int(v)
+                for v in np.asarray(
+                    background_payload.get("native"),
+                    dtype=np.float64,
+                ).shape[:2]
+            )
+        except Exception:
+            detector_shape = None
+        payload = self.load_caked_projection_by_index_snapshot(
+            int(background_index),
+            detector_shape=detector_shape,
+            allow_generated_payload=True,
+        )
+        hydrated_payload = deps.hydrate_exact_caked_payload(
+            payload,
+            detector_shape=(
+                payload.get("detector_shape") if isinstance(payload, Mapping) else None
+            ),
+            params=dict(self.job_data.get("params", {}) or {}),
+            require_background=False,
+        )
+        return isinstance(hydrated_payload, Mapping) and deps.is_transform_bundle(
+            hydrated_payload.get("transform_bundle")
+        )
+
+    def ensure_worker_geometry_fit_caked_view(self) -> None:
+        manual_spaces = self.worker_manual_fit_space_by_background()
+        self.reject_worker_mixed_manual_fit_spaces(manual_spaces)
+        caked_backgrounds = [
+            int(background_idx)
+            for background_idx in (self.job_data.get("required_indices", ()) or ())
+            if self.worker_manual_caked_fit_space_required_for_background(
+                int(background_idx)
+            )
+        ]
+        for background_idx in caked_backgrounds:
+            if self.worker_caked_view_payload_ready(int(background_idx)):
+                continue
+            raise RuntimeError(
+                f"exact caked projector unavailable for background {int(background_idx) + 1}"
+            )
+
     def project_source_rows_for_background(
         self,
         background_index: int,

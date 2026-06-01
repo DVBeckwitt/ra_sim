@@ -13,7 +13,7 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: Patch E1 manual fit-space validation extraction reviewed and cleaned up; ready for E2 planning
+Status: Patch E2 caked-view ensure extraction complete; ready for review
 Bug/error/feature status: internal worker refactor only; no user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
@@ -176,6 +176,17 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Post-Patch-E1.1 size report: `_run_async_geometry_fit_worker_job()` is 1,507
   lines, `ra_sim/gui/_runtime/runtime_session.py` is 44,188 lines, and
   `ra_sim/gui/_runtime/geometry_fit_worker.py` is 2,510 lines.
+- Patch E2 moved caked-view readiness and ensure helpers behind
+  `GeometryFitWorkerContext`: `worker_caked_view_payload_ready()` and
+  `ensure_worker_geometry_fit_caked_view()`.
+- Patch E2 uses existing caked payload and manual fit-space dependency
+  injection only; caked-view storage, display-coordinate adapters,
+  background-view source-row projection, dataset call, solver request, solver
+  execution, result packaging, optimizer, saved-state, CLI/env/debug, and UI
+  behavior did not move.
+- Post-Patch-E2 size report: `_run_async_geometry_fit_worker_job()` is 1,467
+  lines, `ra_sim/gui/_runtime/runtime_session.py` is 44,148 lines, and
+  `ra_sim/gui/_runtime/geometry_fit_worker.py` is 2,562 lines.
 
 ## Review status
 
@@ -283,13 +294,36 @@ D3.3b/D3.3c cache prebuild helpers:
   - Mutations/events: emits source-cache build/bundle start, ready, failed, and locked-Qr readiness diagnostics; stores successful bundles; advances cache generation through storage.
   - Fallback/error behavior: continues after ordinary failed bundle builds, but raises runtime timeout errors for targeted/fresh simulation timeout statuses.
 
+E2 caked-view ensure helpers:
+
+- `_worker_caked_view_payload_ready(background_index) -> bool`
+  - Inputs: job-local background image snapshot, caked projection payload maps,
+    caked view maps, generated payload resolver, and params.
+  - Detector shape: derived from
+    `job_data["background_images"][idx]["native"]` when available.
+  - Payload lookup: calls projection snapshot loading with
+    `allow_generated_payload=True`.
+  - Exact bundle check: hydrates the caked payload with
+    `require_background=False` and returns whether the injected transform-bundle
+    predicate accepts the hydrated payload.
+- `_ensure_worker_geometry_fit_caked_view() -> None`
+  - Inputs: required indices, manual fit-space map, caked-required classifier,
+    and caked-view readiness helper.
+  - Ordering: rejects unsupported mixed manual fit spaces before caked readiness
+    checks.
+  - Filter: checks only required backgrounds that need caked fit-space.
+  - Error behavior: raises
+    `exact caked projector unavailable for background N` with one-based labels
+    when a required exact caked payload is unavailable.
+
 ## Next actions
 
-1. Patch D3.3c should move source-row cache lookup/rebuild helpers only:
-   `_rebuild_source_rows_for_background_worker` and
-   `_source_rows_for_background_worker`.
-2. Keep required-background prebuild, manual validation, dataset, solver,
-   optimizer, saved-state, CLI/env, and UI behavior out of D3.3c.
+1. Patch E3 should move display/projection callback adapters only:
+   `_worker_native_detector_coords_to_detector_display_coords_for_background`,
+   `_worker_geometry_manual_entry_display_coords`, and
+   `_project_source_rows_for_background_view_worker`.
+2. Keep caked-view storage, dataset, solver request, solver execution, result
+   packaging, optimizer, saved-state, CLI/env, and UI behavior out of E3.
 3. Do not add hard debt gates yet.
 
 ## Validation
@@ -523,6 +557,10 @@ Current validation status:
 - Patch E1.1 validation passed: worker/job import-boundary tests, targeted
   runtime import-safe guards, Ruff on `runtime_session.py`, and
   `git diff --check`.
+- Patch E2 validation passed: compileall, worker caked-view readiness/ensure
+  tests, worker/job import-boundary tests, live-row/runtime/import-safe guard
+  tests, GUI workflow route tests, geometry fitting route tests, Ruff on touched
+  files, and `git diff --check`.
 - `python -m ra_sim.dev check` remains blocked only by the documented pre-existing formatting drift above.
 - No generated artifacts, raw data, local config, notebook output, dependency changes, release version changes, or public migration files are included.
 

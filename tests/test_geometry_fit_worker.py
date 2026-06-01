@@ -940,6 +940,13 @@ def _event_payloads(queue: RecordingQueue, kind: str) -> list[dict[str, object]]
 # preserve required-index order, honor explicit caked-required overrides before
 # fallback classification, add manual caked validation diagnostics, and reject
 # unsupported mixed detector/caked backgrounds with one-based labels.
+#
+# E2 contract map: caked-view ensure first rejects unsupported mixed manual
+# spaces, then checks only required backgrounds that need caked fit-space. Caked
+# readiness derives detector shape from the job-local native background image,
+# loads projection payloads with generated fallback enabled, hydrates exact
+# caked payloads without requiring background image data, and raises the existing
+# one-based exact-projector RuntimeError when a required payload is unavailable.
 
 
 def test_worker_context_from_job_copies_source_snapshots() -> None:
@@ -2733,6 +2740,145 @@ def test_ensure_caked_projection_failure_event_payload_fields() -> None:
             },
         )
     ]
+
+
+def test_worker_caked_view_payload_ready_true_for_exact_bundle() -> None:
+    context, fake_deps = _context_with_caked_deps(
+        {
+            "background_images": {
+                0: {"native": [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]}
+            },
+            "projection_payload_by_background": {0: _ready_projection_payload()},
+            "params": {"center_x": 10.0},
+        }
+    )
+
+    assert context.worker_caked_view_payload_ready(0) is True
+    assert fake_deps.hydrate_calls[-1] == {
+        "detector_shape": (2, 3),
+        "params": {"center_x": 10.0},
+        "require_background": False,
+    }
+
+
+def test_worker_caked_view_payload_ready_false_for_missing_payload() -> None:
+    context, _fake_deps = _context_with_caked_deps(
+        {"background_images": {0: {"native": [[1.0, 2.0], [3.0, 4.0]]}}}
+    )
+
+    assert context.worker_caked_view_payload_ready(0) is False
+
+
+def test_worker_caked_view_payload_ready_uses_background_detector_shape() -> None:
+    context, fake_deps = _context_with_caked_deps(
+        {
+            "background_images": {
+                2: {"native": [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]}
+            },
+            "analysis_bins": (4, 5),
+        }
+    )
+    fake_deps.generated_payload = _ready_projection_payload(detector_shape=(2, 3))
+
+    assert context.worker_caked_view_payload_ready(2) is True
+    assert fake_deps.generated_calls == [
+        {
+            "background_index": 2,
+            "detector_shape": (2, 3),
+            "ai": "fake-ai",
+            "analysis_preview_bins": (4, 5),
+            "allow_generated_payload": True,
+        }
+    ]
+
+
+def test_worker_caked_view_payload_ready_requests_generated_payload() -> None:
+    context, fake_deps = _context_with_caked_deps(
+        {"background_images": {1: {"native": [[1.0]]}}}
+    )
+    fake_deps.generated_payload = _ready_projection_payload(detector_shape=(1, 1))
+
+    assert context.worker_caked_view_payload_ready(1) is True
+    assert fake_deps.generated_calls[0]["allow_generated_payload"] is True
+
+
+def test_ensure_worker_geometry_fit_caked_view_noops_without_required_caked_backgrounds() -> None:
+    context, _fake_deps = _context_with_caked_deps(
+        {
+            "required_indices": [0, 1],
+            "manual_fit_space_by_background": {0: "detector", 1: "detector"},
+        }
+    )
+    manual_deps = FakeManualFitSpaceDeps()
+    context.manual_fit_space_deps = manual_deps.deps
+
+    context.ensure_worker_geometry_fit_caked_view()
+
+
+def test_ensure_worker_geometry_fit_caked_view_calls_mixed_space_rejection_first() -> None:
+    context, _fake_deps = _context_with_caked_deps(
+        {
+            "required_indices": [0],
+            "manual_fit_space_by_background": {0: "mixed"},
+        }
+    )
+    manual_deps = FakeManualFitSpaceDeps()
+    context.manual_fit_space_deps = manual_deps.deps
+
+    try:
+        context.ensure_worker_geometry_fit_caked_view()
+    except RuntimeError as exc:
+        assert str(exc) == (
+            "mixed detector/caked manual fit spaces are not supported "
+            "for background(s) 1; rebuild manual pairs in one fit space"
+        )
+    else:
+        raise AssertionError("expected mixed manual fit-space rejection")
+    assert manual_deps.caked_required_calls == [
+        {
+            "pairs": [],
+            "manual_fit_space_kind": "mixed",
+            "projection_view_mode": None,
+            "pick_uses_caked_space": False,
+            "pick_applies_to_background": True,
+        }
+    ]
+
+
+def test_ensure_worker_geometry_fit_caked_view_checks_only_caked_required_backgrounds() -> None:
+    context, _fake_deps = _context_with_caked_deps(
+        {
+            "required_indices": [0, 1],
+            "manual_caked_fit_space_required_by_background": {0: False, 1: True},
+            "background_images": {1: {"native": [[1.0]]}},
+            "projection_payload_by_background": {
+                1: _ready_projection_payload(detector_shape=(1, 1))
+            },
+        }
+    )
+    manual_deps = FakeManualFitSpaceDeps()
+    context.manual_fit_space_deps = manual_deps.deps
+
+    context.ensure_worker_geometry_fit_caked_view()
+
+
+def test_ensure_worker_geometry_fit_caked_view_raises_with_one_based_background_label() -> None:
+    context, _fake_deps = _context_with_caked_deps(
+        {
+            "required_indices": [2],
+            "manual_caked_fit_space_required_by_background": {2: True},
+            "background_images": {2: {"native": [[1.0]]}},
+        }
+    )
+    manual_deps = FakeManualFitSpaceDeps()
+    context.manual_fit_space_deps = manual_deps.deps
+
+    try:
+        context.ensure_worker_geometry_fit_caked_view()
+    except RuntimeError as exc:
+        assert str(exc) == "exact caked projector unavailable for background 3"
+    else:
+        raise AssertionError("expected exact caked projector failure")
 
 
 def test_prebuild_required_background_caches_emits_start_and_bundle_start() -> None:
