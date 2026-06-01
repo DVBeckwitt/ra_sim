@@ -3959,7 +3959,8 @@ def test_runtime_impl_worker_geometry_fit_rebuilds_source_rows_on_demand() -> No
     assert "projected rows" in required_helper_source
     assert "exact caked fit-space projection/storage unavailable" in required_helper_source
     assert "exact caked fit-space projection/storage timed out" in required_helper_source
-    assert "mixed detector/caked manual fit spaces are not supported" in source
+    assert "mixed detector/caked manual fit spaces are not supported" in worker_source
+    assert "_reject_worker_mixed_manual_fit_spaces = (" in source
     assert "Geometry fit preflight timed out" in required_helper_source
 
 
@@ -15597,19 +15598,21 @@ def test_runtime_impl_does_not_raw_preflight_detector_origin_caked_pairs() -> No
 
 
 def test_runtime_manual_caked_requirement_keeps_caked_space_fast_path() -> None:
-    source = _source_text(RUNTIME_SESSION_SOURCE_PATH)
-    helper_start = source.index(
-        "def _worker_manual_caked_fit_space_required_for_background"
+    worker_source = _source_text(GUI_SOURCE_ROOT / "_runtime" / "geometry_fit_worker.py")
+    worker_tree = ast.parse(worker_source)
+    helper_node = next(
+        node
+        for node in ast.walk(worker_tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "worker_manual_caked_fit_space_required_for_background"
     )
-    helper_end = source.index(
-        "def _worker_validate_required_source_rows_for_fit_space",
-        helper_start,
+    helper_source = "".join(
+        worker_source.splitlines(keepends=True)[helper_node.lineno - 1 : helper_node.end_lineno]
     )
-    helper_source = source[helper_start:helper_end]
 
     assert 'if manual_space == "caked":\n            return True' in helper_source
     assert helper_source.index('if manual_space == "caked":') < helper_source.index(
-        "pairs = _worker_manual_pairs_for_background"
+        "pairs = self.worker_manual_pairs_for_background"
     )
 
 

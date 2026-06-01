@@ -40561,6 +40561,22 @@ def _run_async_geometry_fit_worker_job(
             copy_optional_values=_copy_optional_values,
         )
     )
+    worker_context.manual_fit_space_deps = (
+        _geometry_fit_worker.GeometryFitWorkerManualFitSpaceDeps(
+            geometry_manual_fit_space_by_background=(
+                gui_geometry_fit.geometry_manual_fit_space_by_background
+            ),
+            geometry_manual_caked_fit_space_required_from_context=(
+                gui_geometry_fit.geometry_manual_caked_fit_space_required_from_context
+            ),
+            validate_geometry_fit_live_source_rows=(
+                gui_geometry_fit.validate_geometry_fit_live_source_rows
+            ),
+            collect_required_manual_fit_targets=(
+                gui_geometry_fit.collect_geometry_fit_required_manual_fit_targets
+            ),
+        )
+    )
     worker_context.prebuild_deps = _geometry_fit_worker.GeometryFitWorkerPrebuildDeps(
         theta_initial_for_background=_theta_initial_for_background_worker,
         int_keyed_mapping=_geometry_fit_int_keyed_mapping,
@@ -40573,10 +40589,7 @@ def _run_async_geometry_fit_worker_job(
         required_branch_group_keys=gui_geometry_fit._geometry_fit_required_branch_group_keys,
         live_row_source_counts=_geometry_fit_live_row_source_counts,
         validate_required_source_rows_for_fit_space=(
-            lambda *args, **kwargs: _worker_validate_required_source_rows_for_fit_space(
-                *args,
-                **kwargs,
-            )
+            worker_context.worker_validate_required_source_rows_for_fit_space
         ),
         projection_view_signature_for_background=(
             _worker_projection_view_signature_for_background
@@ -40601,10 +40614,7 @@ def _run_async_geometry_fit_worker_job(
     )
     worker_context.source_rows_deps = _geometry_fit_worker.GeometryFitWorkerSourceRowsDeps(
         manual_caked_fit_space_required_for_background=(
-            lambda *args, **kwargs: _worker_manual_caked_fit_space_required_for_background(
-                *args,
-                **kwargs,
-            )
+            worker_context.worker_manual_caked_fit_space_required_for_background
         ),
         theta_base_for_background=_theta_base_for_background_worker,
     )
@@ -40632,6 +40642,19 @@ def _run_async_geometry_fit_worker_job(
         worker_context.rebuild_source_rows_for_background_worker
     )
     _source_rows_for_background_worker = worker_context.source_rows_for_background_worker
+    _worker_manual_pairs_for_background = worker_context.worker_manual_pairs_for_background
+    _worker_manual_fit_space_by_background = (
+        worker_context.worker_manual_fit_space_by_background
+    )
+    _worker_manual_caked_fit_space_required_for_background = (
+        worker_context.worker_manual_caked_fit_space_required_for_background
+    )
+    _worker_validate_required_source_rows_for_fit_space = (
+        worker_context.worker_validate_required_source_rows_for_fit_space
+    )
+    _reject_worker_mixed_manual_fit_spaces = (
+        worker_context.reject_worker_mixed_manual_fit_spaces
+    )
 
     def _store_worker_caked_view_for_background(
         bundle: gui_geometry_fit.GeometryFitBackgroundCacheBundle,
@@ -41332,92 +41355,9 @@ def _run_async_geometry_fit_worker_job(
     )
 
 
-    def _worker_manual_pairs_for_background(background_index: int) -> list[dict[str, object]]:
-        pairs_by_background = job_data.get("manual_pairs_by_background")
-        if not isinstance(pairs_by_background, Mapping):
-            return []
-        pairs = pairs_by_background.get(int(background_index), ())
-        return [dict(entry) for entry in pairs or () if isinstance(entry, Mapping)]
 
-    def _worker_manual_fit_space_by_background() -> dict[int, str]:
-        required_indices = [int(idx) for idx in (job_data.get("required_indices", ()) or ())]
-        stored_spaces = job_data.get("manual_fit_space_by_background")
-        normalized: dict[int, str] = {}
-        if isinstance(stored_spaces, Mapping):
-            for background_idx in required_indices:
-                raw_kind = stored_spaces.get(
-                    int(background_idx),
-                    stored_spaces.get(str(int(background_idx))),
-                )
-                kind = str(raw_kind or "detector").strip().lower()
-                normalized[int(background_idx)] = kind if kind in {"caked", "mixed"} else "detector"
-            if len(normalized) == len(required_indices):
-                return normalized
-        return gui_geometry_fit.geometry_manual_fit_space_by_background(
-            required_indices,
-            _worker_manual_pairs_for_background,
-            pick_uses_caked_space=bool(job_data.get("pick_uses_caked_space", False)),
-            current_background_index=int(job_data.get("current_background_index", 0)),
-        )
 
-    def _worker_manual_caked_fit_space_required_for_background(background_index: int) -> bool:
-        background_idx = int(background_index)
-        required_by_background = job_data.get("manual_caked_fit_space_required_by_background")
-        if isinstance(required_by_background, Mapping):
-            raw_value = required_by_background.get(
-                background_idx,
-                required_by_background.get(str(background_idx)),
-            )
-            if raw_value is not None:
-                return bool(raw_value)
-        manual_spaces = _worker_manual_fit_space_by_background()
-        manual_space = str(manual_spaces.get(background_idx, "")).strip().lower()
-        if manual_space == "caked":
-            return True
-        pairs = _worker_manual_pairs_for_background(background_idx)
-        try:
-            pick_applies_to_background = background_idx == int(
-                job_data.get("current_background_index", background_idx),
-            )
-        except Exception:
-            pick_applies_to_background = True
-        return gui_geometry_fit.geometry_manual_caked_fit_space_required_from_context(
-            pairs,
-            manual_fit_space_kind=manual_space,
-            projection_view_mode=job_data.get("projection_view_mode"),
-            pick_uses_caked_space=bool(job_data.get("pick_uses_caked_space", False)),
-            pick_applies_to_background=pick_applies_to_background,
-        )
 
-    def _worker_validate_required_source_rows_for_fit_space(
-        rows: Sequence[object] | None,
-        *,
-        required_pairs: Sequence[Mapping[str, object]] | None,
-        background_index: int,
-    ) -> dict[str, object]:
-        caked_required = _worker_manual_caked_fit_space_required_for_background(
-            int(background_index)
-        )
-        validation = dict(
-            gui_geometry_fit.validate_geometry_fit_live_source_rows(
-                rows,
-                required_pairs=required_pairs,
-                require_caked_fit_space=bool(caked_required),
-            )
-        )
-        validation["manual_caked_fit_space_required"] = bool(caked_required)
-        if caked_required:
-            validation["manual_caked_required_pair_count"] = int(
-                validation.get("required_pair_count")
-                or len(
-                    gui_geometry_fit.collect_geometry_fit_required_manual_fit_targets(
-                        required_pairs,
-                        background_index=int(background_index),
-                    )
-                )
-                or len(required_pairs or ())
-            )
-        return validation
 
     def _worker_caked_view_payload_ready(background_index: int) -> bool:
         background_payload = dict(
@@ -41447,20 +41387,6 @@ def _run_async_geometry_fit_worker_job(
             CakeTransformBundle,
         )
 
-    def _reject_worker_mixed_manual_fit_spaces(manual_spaces: Mapping[int, str]) -> None:
-        mixed_backgrounds = [
-            int(background_idx)
-            for background_idx, kind in manual_spaces.items()
-            if str(kind) == "mixed"
-            and not _worker_manual_caked_fit_space_required_for_background(int(background_idx))
-        ]
-        if not mixed_backgrounds:
-            return
-        labels = ", ".join(str(idx + 1) for idx in sorted(mixed_backgrounds))
-        raise RuntimeError(
-            "mixed detector/caked manual fit spaces are not supported "
-            f"for background(s) {labels}; rebuild manual pairs in one fit space"
-        )
 
     def _ensure_worker_geometry_fit_caked_view() -> None:
         manual_spaces = _worker_manual_fit_space_by_background()

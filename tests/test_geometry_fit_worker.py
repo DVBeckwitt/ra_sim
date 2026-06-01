@@ -9,6 +9,7 @@ from ra_sim.gui._runtime.geometry_fit_worker import (
     GeometryFitWorkerCacheBundleDeps,
     GeometryFitWorkerCakedPayloadDeps,
     GeometryFitWorkerContext,
+    GeometryFitWorkerManualFitSpaceDeps,
     GeometryFitWorkerPrebuildDeps,
     GeometryFitWorkerRequiredCacheDeps,
     GeometryFitWorkerSourceProjectionDeps,
@@ -621,6 +622,111 @@ class FakeRequiredCacheDeps:
         )
 
 
+class FakeManualFitSpaceDeps:
+    def __init__(self) -> None:
+        self.space_map: dict[int, str] = {}
+        self.caked_required_result = False
+        self.validation_result: dict[str, object] = {"valid": True}
+        self.required_targets: list[dict[str, object]] = []
+        self.fit_space_calls: list[dict[str, object]] = []
+        self.caked_required_calls: list[dict[str, object]] = []
+        self.validation_calls: list[dict[str, object]] = []
+        self.required_target_calls: list[dict[str, object]] = []
+
+    @property
+    def deps(self) -> GeometryFitWorkerManualFitSpaceDeps:
+        return GeometryFitWorkerManualFitSpaceDeps(
+            geometry_manual_fit_space_by_background=(
+                self.geometry_manual_fit_space_by_background
+            ),
+            geometry_manual_caked_fit_space_required_from_context=(
+                self.geometry_manual_caked_fit_space_required_from_context
+            ),
+            validate_geometry_fit_live_source_rows=(
+                self.validate_geometry_fit_live_source_rows
+            ),
+            collect_required_manual_fit_targets=(
+                self.collect_required_manual_fit_targets
+            ),
+        )
+
+    def geometry_manual_fit_space_by_background(
+        self,
+        required_indices: object,
+        pairs_for_background: object,
+        *,
+        pick_uses_caked_space: bool,
+        current_background_index: int,
+    ) -> dict[int, str]:
+        self.fit_space_calls.append(
+            {
+                "required_indices": [int(idx) for idx in (required_indices or ())],
+                "pairs": {
+                    int(idx): pairs_for_background(int(idx))
+                    for idx in (required_indices or ())
+                    if callable(pairs_for_background)
+                },
+                "pick_uses_caked_space": bool(pick_uses_caked_space),
+                "current_background_index": int(current_background_index),
+            }
+        )
+        return dict(self.space_map)
+
+    def geometry_manual_caked_fit_space_required_from_context(
+        self,
+        pairs: object,
+        *,
+        manual_fit_space_kind: str,
+        projection_view_mode: object,
+        pick_uses_caked_space: bool,
+        pick_applies_to_background: bool,
+    ) -> bool:
+        self.caked_required_calls.append(
+            {
+                "pairs": [dict(entry) for entry in (pairs or ())],
+                "manual_fit_space_kind": str(manual_fit_space_kind),
+                "projection_view_mode": projection_view_mode,
+                "pick_uses_caked_space": bool(pick_uses_caked_space),
+                "pick_applies_to_background": bool(pick_applies_to_background),
+            }
+        )
+        return bool(self.caked_required_result)
+
+    def validate_geometry_fit_live_source_rows(
+        self,
+        rows: object,
+        *,
+        required_pairs: object,
+        require_caked_fit_space: bool,
+    ) -> dict[str, object]:
+        self.validation_calls.append(
+            {
+                "rows": [dict(row) for row in (rows or ()) if isinstance(row, Mapping)],
+                "required_pairs": [
+                    dict(pair) for pair in (required_pairs or ()) if isinstance(pair, Mapping)
+                ],
+                "require_caked_fit_space": bool(require_caked_fit_space),
+            }
+        )
+        return dict(self.validation_result)
+
+    def collect_required_manual_fit_targets(
+        self,
+        required_pairs: object,
+        *,
+        background_index: int,
+    ) -> list[dict[str, object]]:
+        self.required_target_calls.append(
+            {
+                "required_pairs": [
+                    dict(pair) for pair in (required_pairs or ()) if isinstance(pair, Mapping)
+                ],
+                "background_index": int(background_index),
+            }
+        )
+        return [dict(entry) for entry in self.required_targets]
+
+
 def _ready_projection_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "radial_axis": [1.0, 2.0],
@@ -750,6 +856,26 @@ def _context_with_required_cache_deps(
     return context, fake_required_deps
 
 
+def _context_with_manual_fit_space_deps(
+    job: dict[str, object] | None = None,
+) -> tuple[GeometryFitWorkerContext, FakeManualFitSpaceDeps]:
+    context = GeometryFitWorkerContext.from_job(
+        {
+            "required_indices": [0, 1],
+            "current_background_index": 0,
+            "projection_view_mode": "detector",
+            "manual_pairs_by_background": {
+                0: [{"pair_id": "pair-0", "background_index": 0}],
+                1: [{"pair_id": "pair-1", "background_index": 1}],
+            },
+            **(job or {}),
+        }
+    )
+    fake_deps = FakeManualFitSpaceDeps()
+    context.manual_fit_space_deps = fake_deps.deps
+    return context, fake_deps
+
+
 def _source_row(**overrides: object) -> dict[str, object]:
     row: dict[str, object] = {
         "background_index": 0,
@@ -808,6 +934,12 @@ def _event_payloads(queue: RecordingQueue, kind: str) -> list[dict[str, object]]
 # derives locked-Qr readiness from projected/stored rows, treats timed-out caked
 # storage as fatal only when exact caked fit-space or locked-Qr readiness needs
 # it, and does not move manual validation, dataset, solver, or result packaging.
+#
+# E1 contract map: worker manual fit-space helpers read only job-local manual
+# pair/space maps and injected manual-fit callbacks, copy manual-pair dicts,
+# preserve required-index order, honor explicit caked-required overrides before
+# fallback classification, add manual caked validation diagnostics, and reject
+# unsupported mixed detector/caked backgrounds with one-based labels.
 
 
 def test_worker_context_from_job_copies_source_snapshots() -> None:
@@ -817,6 +949,237 @@ def test_worker_context_from_job_copies_source_snapshots() -> None:
 
     source_snapshots[0]["rows"][0]["source"] = "mutated"
     assert context.worker_source_row_snapshots[0]["rows"][0]["source"] == "cached"
+
+
+def test_worker_manual_pairs_for_background_returns_copied_pairs() -> None:
+    pairs_by_background = {0: [{"pair_id": "pair-0", "value": {"nested": True}}]}
+    context, _deps = _context_with_manual_fit_space_deps(
+        {"manual_pairs_by_background": pairs_by_background}
+    )
+
+    pairs = context.worker_manual_pairs_for_background(0)
+    pairs[0]["pair_id"] = "mutated"
+
+    assert pairs == [{"pair_id": "mutated", "value": {"nested": True}}]
+    assert pairs_by_background[0][0]["pair_id"] == "pair-0"
+
+
+def test_worker_manual_pairs_for_background_missing_map_returns_empty() -> None:
+    context, _deps = _context_with_manual_fit_space_deps(
+        {"manual_pairs_by_background": None}
+    )
+
+    assert context.worker_manual_pairs_for_background(0) == []
+
+
+def test_worker_manual_fit_space_by_background_uses_complete_stored_map() -> None:
+    context, fake_deps = _context_with_manual_fit_space_deps(
+        {
+            "required_indices": [0, 1],
+            "manual_fit_space_by_background": {0: "caked", "1": "mixed"},
+            "pick_uses_caked_space": True,
+        }
+    )
+
+    assert context.worker_manual_fit_space_by_background() == {0: "caked", 1: "mixed"}
+    assert fake_deps.fit_space_calls == []
+
+
+def test_worker_manual_fit_space_by_background_defaults_missing_stored_entries_to_detector() -> None:
+    context, fake_deps = _context_with_manual_fit_space_deps(
+        {
+            "required_indices": [0, 1],
+            "manual_fit_space_by_background": {0: "caked"},
+            "pick_uses_caked_space": True,
+            "current_background_index": 1,
+        }
+    )
+    fake_deps.space_map = {0: "detector", 1: "caked"}
+
+    assert context.worker_manual_fit_space_by_background() == {0: "caked", 1: "detector"}
+    assert fake_deps.fit_space_calls == []
+
+
+def test_worker_manual_fit_space_by_background_falls_back_without_stored_map() -> None:
+    context, fake_deps = _context_with_manual_fit_space_deps(
+        {
+            "required_indices": [0, 1],
+            "manual_fit_space_by_background": None,
+            "pick_uses_caked_space": True,
+            "current_background_index": 1,
+        }
+    )
+    fake_deps.space_map = {0: "detector", 1: "caked"}
+
+    assert context.worker_manual_fit_space_by_background() == {0: "detector", 1: "caked"}
+    assert fake_deps.fit_space_calls == [
+        {
+            "required_indices": [0, 1],
+            "pairs": {
+                0: [{"pair_id": "pair-0", "background_index": 0}],
+                1: [{"pair_id": "pair-1", "background_index": 1}],
+            },
+            "pick_uses_caked_space": True,
+            "current_background_index": 1,
+        }
+    ]
+
+
+def test_worker_manual_fit_space_by_background_normalizes_unknown_to_detector() -> None:
+    context, _deps = _context_with_manual_fit_space_deps(
+        {
+            "required_indices": [0, 1],
+            "manual_fit_space_by_background": {0: "unknown", 1: ""},
+        }
+    )
+
+    assert context.worker_manual_fit_space_by_background() == {0: "detector", 1: "detector"}
+
+
+def test_worker_manual_caked_fit_space_required_uses_explicit_override() -> None:
+    context, fake_deps = _context_with_manual_fit_space_deps(
+        {"manual_caked_fit_space_required_by_background": {"1": True}}
+    )
+
+    assert context.worker_manual_caked_fit_space_required_for_background(1) is True
+    assert fake_deps.caked_required_calls == []
+
+
+def test_worker_manual_caked_fit_space_required_true_for_caked_space() -> None:
+    context, fake_deps = _context_with_manual_fit_space_deps(
+        {
+            "required_indices": [0],
+            "manual_fit_space_by_background": {0: "caked"},
+        }
+    )
+
+    assert context.worker_manual_caked_fit_space_required_for_background(0) is True
+    assert fake_deps.caked_required_calls == []
+
+
+def test_worker_manual_caked_fit_space_required_calls_context_fallback() -> None:
+    context, fake_deps = _context_with_manual_fit_space_deps(
+        {
+            "required_indices": [0],
+            "manual_fit_space_by_background": {0: "detector"},
+            "projection_view_mode": "caked",
+            "pick_uses_caked_space": True,
+            "current_background_index": 0,
+        }
+    )
+    fake_deps.caked_required_result = True
+
+    assert context.worker_manual_caked_fit_space_required_for_background(0) is True
+    assert fake_deps.caked_required_calls == [
+        {
+            "pairs": [{"pair_id": "pair-0", "background_index": 0}],
+            "manual_fit_space_kind": "detector",
+            "projection_view_mode": "caked",
+            "pick_uses_caked_space": True,
+            "pick_applies_to_background": True,
+        }
+    ]
+
+
+def test_worker_manual_caked_fit_space_required_computes_pick_applies_to_background() -> None:
+    context, fake_deps = _context_with_manual_fit_space_deps(
+        {
+            "required_indices": [1],
+            "manual_fit_space_by_background": {1: "detector"},
+            "current_background_index": 0,
+        }
+    )
+
+    assert context.worker_manual_caked_fit_space_required_for_background(1) is False
+    assert fake_deps.caked_required_calls[0]["pick_applies_to_background"] is False
+
+
+def test_worker_validate_required_source_rows_adds_caked_required_flag() -> None:
+    context, fake_deps = _context_with_manual_fit_space_deps(
+        {
+            "required_indices": [0],
+            "manual_fit_space_by_background": {0: "detector"},
+        }
+    )
+
+    validation = context.worker_validate_required_source_rows_for_fit_space(
+        [_source_row()],
+        required_pairs=[{"pair_id": "pair-0"}],
+        background_index=0,
+    )
+
+    assert validation["manual_caked_fit_space_required"] is False
+    assert fake_deps.validation_calls[0]["require_caked_fit_space"] is False
+
+
+def test_worker_validate_required_source_rows_adds_required_pair_count_when_caked() -> None:
+    context, fake_deps = _context_with_manual_fit_space_deps(
+        {
+            "required_indices": [0],
+            "manual_fit_space_by_background": {0: "caked"},
+        }
+    )
+    fake_deps.validation_result = {"valid": False}
+    fake_deps.required_targets = [{"pair_id": "target-0"}, {"pair_id": "target-1"}]
+
+    validation = context.worker_validate_required_source_rows_for_fit_space(
+        [_source_row()],
+        required_pairs=[{"pair_id": "pair-0"}],
+        background_index=0,
+    )
+
+    assert validation["manual_caked_fit_space_required"] is True
+    assert validation["manual_caked_required_pair_count"] == 2
+    assert fake_deps.validation_calls[0]["require_caked_fit_space"] is True
+    assert fake_deps.required_target_calls[0]["background_index"] == 0
+
+
+def test_worker_validate_required_source_rows_preserves_validator_payload() -> None:
+    context, fake_deps = _context_with_manual_fit_space_deps(
+        {
+            "required_indices": [0],
+            "manual_fit_space_by_background": {0: "detector"},
+        }
+    )
+    fake_deps.validation_result = {"valid": False, "required_pair_count": 5}
+
+    validation = context.worker_validate_required_source_rows_for_fit_space(
+        [],
+        required_pairs=[],
+        background_index=0,
+    )
+
+    assert validation["valid"] is False
+    assert validation["required_pair_count"] == 5
+    assert validation["manual_caked_fit_space_required"] is False
+
+
+def test_reject_worker_mixed_manual_fit_spaces_noops_without_mixed() -> None:
+    context, _deps = _context_with_manual_fit_space_deps({})
+
+    context.reject_worker_mixed_manual_fit_spaces({0: "detector", 1: "caked"})
+
+
+def test_reject_worker_mixed_manual_fit_spaces_allows_mixed_when_caked_required() -> None:
+    context, _deps = _context_with_manual_fit_space_deps(
+        {"manual_caked_fit_space_required_by_background": {1: True}}
+    )
+
+    context.reject_worker_mixed_manual_fit_spaces({1: "mixed"})
+
+
+def test_reject_worker_mixed_manual_fit_spaces_raises_with_one_based_background_labels() -> None:
+    context, _deps = _context_with_manual_fit_space_deps({})
+
+    try:
+        context.reject_worker_mixed_manual_fit_spaces({1: "mixed", 3: "mixed"})
+    except RuntimeError as exc:
+        assert str(exc) == (
+            "mixed detector/caked manual fit spaces are not supported "
+            "for background(s) 2, 4; rebuild manual pairs in one fit space"
+        )
+    else:
+        raise AssertionError("expected mixed manual fit-space rejection")
 
 
 def test_worker_context_from_job_copies_diagnostics() -> None:

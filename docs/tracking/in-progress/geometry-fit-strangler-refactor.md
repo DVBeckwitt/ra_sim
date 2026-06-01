@@ -13,7 +13,7 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: Patch D3.3d required-background cache prebuild extraction complete; Patch D3.3d.1 direct-call cleanup ready for commit
+Status: Patch E1 manual fit-space validation extraction complete; ready for review
 Bug/error/feature status: internal worker refactor only; no user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
@@ -156,6 +156,19 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Post-Patch-D3.3d.1 size report: `_run_async_geometry_fit_worker_job()` is
   1,590 lines, `ra_sim/gui/_runtime/runtime_session.py` is 44,271 lines, and
   `ra_sim/gui/_runtime/geometry_fit_worker.py` is 2,367 lines.
+- Patch E1 moved manual fit-space validation helpers behind
+  `GeometryFitWorkerContext`: `worker_manual_pairs_for_background()`,
+  `worker_manual_fit_space_by_background()`,
+  `worker_manual_caked_fit_space_required_for_background()`,
+  `worker_validate_required_source_rows_for_fit_space()`, and
+  `reject_worker_mixed_manual_fit_spaces()`.
+- Patch E1 injects only the runtime-local manual fit-space classification and
+  validation callbacks; caked-view ensure, dataset call, solver request, solver
+  execution, result packaging, optimizer, saved-state, CLI/env/debug, and UI
+  behavior did not move.
+- Post-Patch-E1 size report: `_run_async_geometry_fit_worker_job()` is 1,516
+  lines, `ra_sim/gui/_runtime/runtime_session.py` is 44,197 lines, and
+  `ra_sim/gui/_runtime/geometry_fit_worker.py` is 2,510 lines.
 
 ## Review status
 
@@ -496,6 +509,10 @@ Current validation status:
   worker/job import-boundary tests, GUI runtime geometry tests, the targeted
   runtime import-safe source-row guard, Ruff on touched files, and
   `git diff --check`.
+- Patch E1 validation passed: compileall, worker manual fit-space tests,
+  worker/job import-boundary tests, live-row/runtime/import-safe guard tests,
+  GUI workflow route tests, geometry fitting route tests, Ruff on touched files,
+  and `git diff --check`.
 - `python -m ra_sim.dev check` remains blocked only by the documented pre-existing formatting drift above.
 - No generated artifacts, raw data, local config, notebook output, dependency changes, release version changes, or public migration files are included.
 
