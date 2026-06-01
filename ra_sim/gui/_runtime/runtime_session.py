@@ -40651,7 +40651,6 @@ def _run_async_geometry_fit_worker_job(
     _reject_worker_mixed_manual_fit_spaces = (
         worker_context.reject_worker_mixed_manual_fit_spaces
     )
-    _worker_caked_view_payload_ready = worker_context.worker_caked_view_payload_ready
     _ensure_worker_geometry_fit_caked_view = (
         worker_context.ensure_worker_geometry_fit_caked_view
     )

@@ -13,7 +13,7 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: Patch E2 caked-view ensure extraction complete; ready for review
+Status: Patch E2.1 caked-view ensure cleanup complete; ready for E3 planning
 Bug/error/feature status: internal worker refactor only; no user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
@@ -186,6 +186,13 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
   behavior did not move.
 - Post-Patch-E2 size report: `_run_async_geometry_fit_worker_job()` is 1,467
   lines, `ra_sim/gui/_runtime/runtime_session.py` is 44,148 lines, and
+  `ra_sim/gui/_runtime/geometry_fit_worker.py` is 2,562 lines.
+- Patch E2.1 removed the dead `_worker_caked_view_payload_ready` runtime alias
+  left after Patch E2 moved caked-view readiness into
+  `GeometryFitWorkerContext`. No behavior, public payload, saved-state,
+  CLI/env, UI, dataset, solver, optimizer, or diagnostic contract changed.
+- Post-Patch-E2.1 size report: `_run_async_geometry_fit_worker_job()` is 1,466
+  lines, `ra_sim/gui/_runtime/runtime_session.py` is 44,147 lines, and
   `ra_sim/gui/_runtime/geometry_fit_worker.py` is 2,562 lines.
 
 ## Review status
@@ -561,6 +568,8 @@ Current validation status:
   tests, worker/job import-boundary tests, live-row/runtime/import-safe guard
   tests, GUI workflow route tests, geometry fitting route tests, Ruff on touched
   files, and `git diff --check`.
+- Patch E2.1 validation passed: worker/job import-boundary tests, GUI runtime
+  geometry tests, Ruff on `runtime_session.py`, and `git diff --check`.
 - `python -m ra_sim.dev check` remains blocked only by the documented pre-existing formatting drift above.
 - No generated artifacts, raw data, local config, notebook output, dependency changes, release version changes, or public migration files are included.
 
