@@ -13,7 +13,7 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: Patch E3.1 display-adapter guard cleanup complete; ready for E4 planning
+Status: Patch E3.2 caked display-adapter guard cleanup complete; ready for E4 planning
 Bug/error/feature status: internal worker refactor only; no user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
@@ -211,6 +211,13 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
   background identifiers and non-mapping manual entries now return `None`
   before dependency checks, matching the old nested helper edge behavior.
 - Patch E3.1 added focused worker tests for those guard paths. No behavior,
+  public payload, saved-state, CLI/env, UI, dataset, solver, optimizer, or
+  diagnostic contract changed.
+- Patch E3.2 moved the source-projection dependency lookup in
+  `worker_geometry_manual_entry_display_coords()` behind the caked-pick scalar
+  fallback. Caked manual entries with finite `caked_x`/`caked_y` now return
+  before dependency checks, matching the old nested helper edge behavior.
+- Patch E3.2 added a focused worker test for that caked scalar guard path. No
   public payload, saved-state, CLI/env, UI, dataset, solver, optimizer, or
   diagnostic contract changed.
 
@@ -619,6 +626,9 @@ Current validation status:
   tests, GUI workflow route tests, geometry fitting route tests, Ruff on touched
   files, and `git diff --check`.
 - Patch E3.1 validation passed: worker display/projection adapter tests,
+  full worker tests, worker/job import-boundary tests, Ruff on touched files,
+  and `git diff --check`.
+- Patch E3.2 validation passed: worker display/projection adapter tests,
   full worker tests, worker/job import-boundary tests, Ruff on touched files,
   and `git diff --check`.
 - `python -m ra_sim.dev check` remains blocked only by the documented pre-existing formatting drift above.

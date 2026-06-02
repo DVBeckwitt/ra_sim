@@ -698,7 +698,6 @@ class GeometryFitWorkerContext:
     ) -> tuple[float, float] | None:
         if not isinstance(entry, Mapping):
             return None
-        deps = self._require_source_projection_deps()
 
         def _entry_pair(
             pair_keys: Sequence[tuple[str, str]],
@@ -732,6 +731,7 @@ class GeometryFitWorkerContext:
                 )
             )
 
+        deps = self._require_source_projection_deps()
         display_point = _tuple_pair(("geometry_detector_display_px", "raw_detector_display_px"))
         if display_point is not None:
             return display_point

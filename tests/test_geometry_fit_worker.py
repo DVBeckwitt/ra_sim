@@ -1604,6 +1604,16 @@ def test_worker_geometry_manual_entry_display_coords_returns_none_before_requiri
     assert context.worker_geometry_manual_entry_display_coords(None) is None
 
 
+def test_worker_geometry_manual_entry_display_coords_returns_caked_fields_before_requiring_deps() -> None:
+    context = GeometryFitWorkerContext.from_job({"pick_uses_caked_space": True})
+
+    point = context.worker_geometry_manual_entry_display_coords(
+        {"caked_x": 11.0, "caked_y": 12.0}
+    )
+
+    assert point == (11.0, 12.0)
+
+
 def test_worker_geometry_manual_entry_display_coords_prefers_caked_fields_when_pick_uses_caked_space() -> None:
     context, _fake_deps = _context_with_source_projection_deps(
         {"pick_uses_caked_space": True}
