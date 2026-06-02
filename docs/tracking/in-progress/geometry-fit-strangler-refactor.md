@@ -405,11 +405,17 @@ E3 display/projection adapter helpers:
 
 ## Next actions
 
-1. Patch E4 should move caked-view storage only:
-   `_store_worker_caked_view_for_background`.
-2. Keep dataset, solver request, solver execution, result packaging, optimizer,
-   saved-state, CLI/env, and UI behavior out of E4.
-3. Do not add hard debt gates yet.
+1. Patch E5 should move the worker dataset preparation/call boundary only:
+   `worker_manual_dataset_bindings` construction, the
+   `prepare_geometry_fit_run(...)` call, and the `build_dataset` callback that
+   delegates to `build_geometry_manual_fit_dataset(...)`.
+2. Keep preflight failure log persistence, solver request assembly, solver
+   execution, result packaging, optimizer, saved-state, CLI/env, and UI
+   behavior out of E5.
+3. Current E4.1 measured size before E5: `runtime_session.py` 43,537 lines;
+   `geometry_fit_worker.py` 3,313 lines; `_run_async_geometry_fit_worker_job()`
+   856 lines.
+4. Do not add hard debt gates yet.
 
 ## Validation
 
