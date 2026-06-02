@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Mapping
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -1255,6 +1256,12 @@ def _event_payloads(queue: RecordingQueue, kind: str) -> list[dict[str, object]]
 # loads projection payloads with generated fallback enabled, hydrates exact
 # caked payloads without requiring background image data, and raises the existing
 # one-based exact-projector RuntimeError when a required payload is unavailable.
+#
+# E6 contract map: worker solver-phase input assembly mutates only the prepared
+# run fit-params mosaic_params copy, forwards job-local solver inputs/var names/
+# solve_fit/stamp/log_path into the existing solver phase call, emits worker
+# events through the established event shape, gates live-cache update events from
+# enable_live_update_events, and does not execute the solver or package results.
 
 
 def test_worker_context_from_job_copies_source_snapshots() -> None:
@@ -1365,6 +1372,100 @@ def test_worker_prepare_geometry_fit_run_preserves_callbacks_and_error_lambdas()
         assert str(exc) == "bad selection"
     else:
         raise AssertionError("expected selection error")
+
+
+def test_worker_solver_phase_kwargs_passes_job_solver_inputs() -> None:
+    solve_fit = object()
+    solver_inputs = object()
+    prepared_run = SimpleNamespace(fit_params={})
+    context = GeometryFitWorkerContext.from_job(
+        {
+            "var_names": ("center_x", "theta_initial"),
+            "solve_fit": solve_fit,
+            "solver_inputs": solver_inputs,
+            "stamp": 20260420,
+            "log_path": "fit.log",
+        }
+    )
+
+    kwargs = context.build_solver_phase_kwargs_for_worker(prepared_run)
+
+    assert kwargs["prepared_run"] is prepared_run
+    assert kwargs["var_names"] == ["center_x", "theta_initial"]
+    assert kwargs["solve_fit"] is solve_fit
+    assert kwargs["solver_inputs"] is solver_inputs
+    assert kwargs["stamp"] == "20260420"
+    assert kwargs["log_path"] == "fit.log"
+
+
+def test_worker_solver_phase_kwargs_applies_mosaic_params_copy() -> None:
+    mosaic_params = {"profile": {"sigma": 0.25}}
+    prepared_run = SimpleNamespace(fit_params={"existing": True})
+    context = GeometryFitWorkerContext.from_job(
+        {"fit_solver_mosaic_params": mosaic_params}
+    )
+
+    context.build_solver_phase_kwargs_for_worker(prepared_run)
+
+    assert prepared_run.fit_params["mosaic_params"] == {"profile": {"sigma": 0.25}}
+    assert prepared_run.fit_params["mosaic_params"] is not mosaic_params
+    mosaic_params["profile"]["sigma"] = 0.5
+    assert prepared_run.fit_params["mosaic_params"]["profile"]["sigma"] == 0.25
+    assert prepared_run.fit_params["existing"] is True
+
+
+def test_worker_solver_phase_kwargs_event_callback_emits_worker_event() -> None:
+    queue = RecordingQueue()
+    context = GeometryFitWorkerContext.from_job(
+        {"job_id": "7", "event_queue": queue}
+    )
+    kwargs = context.build_solver_phase_kwargs_for_worker(
+        SimpleNamespace(fit_params={})
+    )
+    payload = {"message": {"text": "running"}}
+
+    kwargs["event_callback"]("cmd_line", payload)
+    payload["message"]["text"] = "mutated"
+
+    assert queue.items == [
+        {
+            "job_id": 7,
+            "kind": "cmd_line",
+            "payload": {"message": {"text": "running"}},
+        }
+    ]
+
+
+def test_worker_solver_phase_kwargs_live_update_callback_emits_live_cache_update() -> None:
+    queue = RecordingQueue()
+    context = GeometryFitWorkerContext.from_job(
+        {"job_id": 8, "event_queue": queue, "enable_live_update_events": True}
+    )
+    kwargs = context.build_solver_phase_kwargs_for_worker(
+        SimpleNamespace(fit_params={})
+    )
+    payload = {"background_index": 1, "rows": [{"row_id": "r1"}]}
+
+    kwargs["live_update_callback"](payload)
+    payload["rows"][0]["row_id"] = "mutated"
+
+    assert queue.items == [
+        {
+            "job_id": 8,
+            "kind": "live_cache_update",
+            "payload": {"background_index": 1, "rows": [{"row_id": "r1"}]},
+        }
+    ]
+
+
+def test_worker_solver_phase_kwargs_disables_live_update_callback_when_requested() -> None:
+    context = GeometryFitWorkerContext.from_job({"enable_live_update_events": False})
+
+    kwargs = context.build_solver_phase_kwargs_for_worker(
+        SimpleNamespace(fit_params={})
+    )
+
+    assert kwargs["live_update_callback"] is None
 
 
 def test_worker_manual_pairs_for_background_returns_copied_pairs() -> None:

@@ -13,8 +13,8 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: Patch E5.1 dataset-preparation test fixture cleanup complete; ready for E6 planning
-Bug/error/feature status: Patch E5.1 is a test/docs cleanup after the E5 dataset preparation boundary extraction. It removes dead fake dataset binding fixture state while preserving the old manual dataset binding callbacks, preparation inputs, build-dataset delegation, and stage callback behavior. No user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
+Status: Patch E6 solver-phase input boundary complete; ready for review
+Bug/error/feature status: Patch E6 moves worker-side solver-phase keyword assembly into `GeometryFitWorkerContext.build_solver_phase_kwargs_for_worker()` while preserving the existing solver call, solver request construction inside `geometry_fit.py`, action-result packaging, logs, events, and diagnostics. No user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
 Shipping status: no runtime rollout or feature flag is needed because behavior is preserved behind existing public wrappers. Rollback is a normal commit revert.
@@ -264,6 +264,16 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
   state. No production code, public payload, saved-state, CLI/env/debug
   behavior, UI behavior, dataset, solver, optimizer, migration surface, or
   rollout surface changed.
+- Patch E6 moved the worker-side solver-phase keyword assembly into
+  `GeometryFitWorkerContext.build_solver_phase_kwargs_for_worker()`.
+- Patch E6 preserves the exact solver-phase call site in `runtime_session.py`
+  via `gui_geometry_fit.execute_runtime_geometry_fit_solver_phase(...)`;
+  solver request construction, solver execution, action-result packaging,
+  optimizer behavior, saved-state behavior, CLI/env/debug behavior, and UI
+  behavior did not move.
+- Post-Patch-E6 size report: `runtime_session.py` 43,411 lines;
+  `geometry_fit_worker.py` 3,521 lines; `_run_async_geometry_fit_worker_job()`
+  730 lines.
 
 ## Review status
 
@@ -420,6 +430,26 @@ E5 dataset preparation boundary:
     assembly, solver execution, result packaging, optimizer, saved-state,
     CLI/env, and UI behavior remain in `runtime_session.py`.
 
+E6 solver-phase input boundary:
+
+- `build_solver_phase_kwargs_for_worker(prepared_run)`
+  - Inputs: worker job data and the already prepared runtime dataset object.
+  - Mutations: copies `fit_solver_mosaic_params` into
+    `prepared_run.fit_params["mosaic_params"]` only when the job value is a
+    mapping, matching the prior inline worker behavior.
+  - Return shape: keyword dictionary for the existing
+    `execute_runtime_geometry_fit_solver_phase(...)` call:
+    `prepared_run`, `var_names`, `solve_fit`, `solver_inputs`, `stamp`,
+    `log_path`, `event_callback`, and `live_update_callback`.
+  - Event behavior: stage events flow through
+    `GeometryFitWorkerContext.emit_event` with the same `job_id`, `kind`, and
+    deep-copied `payload` shape; live cache update events are emitted only when
+    `enable_live_update_events` is true.
+  - Out-of-scope behavior: solver request construction, solver execution,
+    result/action packaging, preflight failure handling, optimizer,
+    saved-state, CLI/env, and UI behavior remain outside
+    `geometry_fit_worker.py`.
+
 E3 display/projection adapter helpers:
 
 - `_worker_native_detector_coords_to_detector_display_coords_for_background(background_index)`
@@ -449,12 +479,12 @@ E3 display/projection adapter helpers:
 
 ## Next actions
 
-1. Patch E6 should move solver request assembly only.
+1. Review Patch E6 before planning the next worker boundary.
 2. Keep solver execution, result packaging, optimizer, saved-state, CLI/env,
-   and UI behavior out of E6.
-3. Current measured size after E5: `runtime_session.py` 43,428 lines;
-   `geometry_fit_worker.py` 3,488 lines; `_run_async_geometry_fit_worker_job()`
-   747 lines.
+   and UI behavior out of the next slice unless explicitly scoped.
+3. Current measured size after E6: `runtime_session.py` 43,411 lines;
+   `geometry_fit_worker.py` 3,521 lines; `_run_async_geometry_fit_worker_job()`
+   730 lines.
 4. Do not add hard debt gates yet.
 
 ## Validation
@@ -719,6 +749,11 @@ Current validation status:
   files, and `git diff --check`.
 - Patch E5.1 validation passed: focused worker dataset-boundary tests, full
   worker tests, Ruff on touched tests, and `git diff --check`.
+- Patch E6 validation passed: compileall, focused solver-phase input tests,
+  full worker tests, worker/job import-boundary tests, GUI runtime tests, full
+  GUI runtime import-safe tests, live-row/signature handoff tests, GUI workflow
+  caked/dataset route tests, geometry fitting route tests, Ruff on touched
+  files, and `git diff --check`.
 - `python -m ra_sim.dev check` remains blocked only by the documented pre-existing formatting drift above.
 - No generated artifacts, raw data, local config, notebook output, dependency changes, release version changes, or public migration files are included.
 

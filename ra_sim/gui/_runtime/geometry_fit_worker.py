@@ -290,6 +290,39 @@ class GeometryFitWorkerContext:
             )
         return self.manual_fit_space_deps
 
+    def build_solver_phase_kwargs_for_worker(
+        self,
+        prepared_run: object,
+    ) -> dict[str, object]:
+        job_data = self.job_data
+        fit_solver_mosaic_params = job_data.get("fit_solver_mosaic_params")
+        if isinstance(fit_solver_mosaic_params, Mapping):
+            prepared_run.fit_params["mosaic_params"] = copy.deepcopy(
+                dict(fit_solver_mosaic_params)
+            )
+
+        def _event_callback(kind: object, payload: object) -> None:
+            self.emit_event(str(kind), dict(payload or {}))
+
+        live_update_callback: Callable[[object], None] | None = None
+        if bool(job_data.get("enable_live_update_events", True)):
+
+            def _live_update_callback(payload: object) -> None:
+                self.emit_event("live_cache_update", dict(payload or {}))
+
+            live_update_callback = _live_update_callback
+
+        return {
+            "prepared_run": prepared_run,
+            "var_names": list(job_data.get("var_names", ()) or ()),
+            "solve_fit": job_data.get("solve_fit"),
+            "solver_inputs": job_data.get("solver_inputs"),
+            "stamp": str(job_data.get("stamp", "")),
+            "log_path": job_data.get("log_path"),
+            "event_callback": _event_callback,
+            "live_update_callback": live_update_callback,
+        }
+
     def prepare_geometry_fit_run_for_worker(
         self,
         *,

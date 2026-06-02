@@ -40982,28 +40982,11 @@ def _run_async_geometry_fit_worker_job(
             error_text=prepare_result.error_text,
         )
 
-    fit_solver_mosaic_params = job_data.get("fit_solver_mosaic_params")
-    if isinstance(fit_solver_mosaic_params, Mapping):
-        prepare_result.prepared_run.fit_params["mosaic_params"] = copy.deepcopy(
-            dict(fit_solver_mosaic_params)
-        )
-
+    solver_phase_kwargs = worker_context.build_solver_phase_kwargs_for_worker(
+        prepare_result.prepared_run
+    )
     execution_result = gui_geometry_fit.execute_runtime_geometry_fit_solver_phase(
-        prepared_run=prepare_result.prepared_run,
-        var_names=list(job_data.get("var_names", ()) or ()),
-        solve_fit=job_data.get("solve_fit"),
-        solver_inputs=job_data.get("solver_inputs"),
-        stamp=str(job_data.get("stamp", "")),
-        log_path=job_data.get("log_path"),
-        event_callback=(lambda kind, payload: _emit_worker_event(str(kind), dict(payload or {}))),
-        live_update_callback=(
-            lambda payload: _emit_worker_event(
-                "live_cache_update",
-                dict(payload or {}),
-            )
-        )
-        if bool(job_data.get("enable_live_update_events", True))
-        else None,
+        **solver_phase_kwargs,
     )
     worker_background_cache_by_index.clear()
     return _geometry_fit_worker_action_result(
