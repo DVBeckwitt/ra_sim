@@ -119,6 +119,7 @@ class FakeCakedPayloadDeps:
         self.stage_events: list[tuple[object, str, dict[str, object]]] = []
         self.hydrate_calls: list[dict[str, object]] = []
         self.normalize_calls: list[dict[str, object]] = []
+        self.integrator: object | None = "fake-ai"
 
     @property
     def deps(self) -> GeometryFitWorkerCakedPayloadDeps:
@@ -221,7 +222,7 @@ class FakeCakedPayloadDeps:
         return self.generated_payload
 
     def caking_integrator(self) -> object:
-        return "fake-ai"
+        return self.integrator
 
     def emit_stage_event(
         self,
@@ -259,7 +260,6 @@ class FakeCakedViewStorageDeps:
             "half_width_px": 0.0,
             "fallback_reason": None,
         }
-        self.integrator: object | None = "fake-ai"
         self.caking_result: object = {"cake": "result"}
         self.prepared_payload: object = _valid_caked_display_payload()
         self.sanitized_payload: object | None = None
@@ -1005,6 +1005,8 @@ def _context_with_cache_bundle_deps(
 
 def _context_with_caked_view_storage_deps(
     job: dict[str, object] | None = None,
+    *,
+    caked_payload_deps: FakeCakedPayloadDeps | None = None,
 ) -> tuple[GeometryFitWorkerContext, FakeCakedViewStorageDeps]:
     context, _source_deps = _context_with_cache_bundle_deps(
         {
@@ -1013,7 +1015,8 @@ def _context_with_caked_view_storage_deps(
             **(job or {}),
         }
     )
-    context.caked_payload_deps = FakeCakedPayloadDeps().deps
+    caked_payload_deps = caked_payload_deps or FakeCakedPayloadDeps()
+    context.caked_payload_deps = caked_payload_deps.deps
     fake_storage_deps = FakeCakedViewStorageDeps()
     context.caked_view_storage_deps = fake_storage_deps.deps
     return context, fake_storage_deps
@@ -2350,6 +2353,24 @@ def test_store_worker_caked_view_for_background_missing_native_background_result
     assert result["caked_view_stored"] is False
     assert result["caked_view_status"] == "missing_native_background"
     assert result["roi_fallback_reason"] == "missing_native_background"
+
+
+def test_store_worker_caked_view_for_background_missing_integrator_result_shape() -> None:
+    caked_payload_deps = FakeCakedPayloadDeps()
+    caked_payload_deps.integrator = None
+    context, _storage_deps = _context_with_caked_view_storage_deps(
+        {"background_images": {0: {"native": np.ones((2, 2), dtype=np.float64)}}},
+        caked_payload_deps=caked_payload_deps,
+    )
+
+    result = context.store_worker_caked_view_for_background(
+        FakeBackgroundCacheBundle(background_index=0, stored_rows=[{"row": 1}])
+    )
+
+    assert set(result) == _caked_storage_result_keys()
+    assert result["caked_view_stored"] is False
+    assert result["caked_view_status"] == "missing_integrator"
+    assert result["roi_fallback_reason"] == "missing_integrator"
 
 
 def test_store_worker_caked_view_for_background_invalid_caked_payload_result_shape() -> None:

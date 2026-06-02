@@ -5,7 +5,7 @@ Type: refactor
 Owner:
 Issue: none
 Priority: p1
-Last updated: 2026-06-01
+Last updated: 2026-06-02
 
 ## Summary
 
@@ -13,8 +13,8 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: Patch E4 caked-view storage extraction complete; ready for E5 planning
-Bug/error/feature status: Patch E4 moves caked-view storage into the internal worker context while preserving the old storage, ROI, projection-payload, and event contracts; no user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
+Status: Patch E4.1 caked-view storage test hardening complete; ready for E5 planning
+Bug/error/feature status: Patch E4.1 is a test/docs cleanup after the E4 caked-view storage extraction. It removes dead fake fixture state and pins the existing missing-integrator failure result; no user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
 Shipping status: no runtime rollout or feature flag is needed because behavior is preserved behind existing public wrappers. Rollback is a normal commit revert.
@@ -240,6 +240,13 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Current measured size after Patch E4: `runtime_session.py` 43,538 lines;
   `geometry_fit_worker.py` 3,313 lines; `_run_async_geometry_fit_worker_job()`
   857 lines.
+- Patch E4.1 removed unused fake caked-view storage integrator state from the
+  worker tests and moved the missing-integrator control to the fake caked
+  payload dependency, matching the production dependency owner.
+- Patch E4.1 added direct worker coverage for the caked-view storage
+  `missing_integrator` failure result shape and status. No production code,
+  public payload, saved-state, CLI/env/debug behavior, UI behavior, dataset,
+  solver, optimizer, or migration surface changed.
 
 ## Review status
 
@@ -655,6 +662,10 @@ Current validation status:
   import-boundary tests, GUI runtime tests, GUI runtime import-safe tests,
   live-row/signature handoff tests, GUI workflow caked/dataset route tests,
   geometry fitting route tests, Ruff on touched files, and `git diff --check`.
+- Patch E4.1 validation passed: focused caked-view storage worker tests,
+  full worker tests, worker/job import-boundary tests, the targeted GUI runtime
+  import-safe caked-storage ordering guard, Ruff on touched tests, and
+  `git diff --check`.
 - `python -m ra_sim.dev check` remains blocked only by the documented pre-existing formatting drift above.
 - No generated artifacts, raw data, local config, notebook output, dependency changes, release version changes, or public migration files are included.
 
