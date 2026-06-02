@@ -40302,13 +40302,7 @@ def _run_async_geometry_fit_worker_job(
         tuple[float | None, float | None, float | None, float | None] | None
     ) = None
     caked_view_timeout_s = 5.0
-    _current_source_cache_generation = worker_context.current_source_cache_generation
     _source_cache_generation_matches = worker_context.source_cache_generation_matches
-    _last_worker_source_snapshot_diagnostics = (
-        worker_context.last_worker_source_snapshot_diagnostics
-    )
-    _last_worker_simulation_diagnostics = worker_context.last_worker_simulation_diagnostics
-    _load_background_by_index_snapshot = worker_context.load_background_by_index_snapshot
 
     def _copy_source_rows(raw_rows: Sequence[object] | None) -> list[dict[str, object]]:
         return [dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)]
@@ -40646,50 +40640,18 @@ def _run_async_geometry_fit_worker_job(
         ),
         theta_base_for_background=_theta_base_for_background_worker,
     )
-    _caked_projection_payload_status = worker_context.caked_projection_payload_status
     _projection_candidate_state = worker_context.projection_candidate_state
-    _load_caked_view_by_index_snapshot = (
-        worker_context.load_caked_view_by_index_snapshot
-    )
     _load_caked_projection_by_index_snapshot = (
         worker_context.load_caked_projection_by_index_snapshot
     )
-    _project_source_rows_for_background = (
-        worker_context.project_source_rows_for_background
-    )
-    _project_source_rows_by_row_background = (
-        worker_context.project_source_rows_by_row_background
-    )
-    _worker_cached_projection_rows_match = (
-        worker_context.worker_cached_projection_rows_match
-    )
-    _prebuild_background_cache_bundle_worker = (
-        worker_context.prebuild_background_cache_bundle_worker
-    )
-    _rebuild_source_rows_for_background_worker = (
-        worker_context.rebuild_source_rows_for_background_worker
-    )
-    _source_rows_for_background_worker = worker_context.source_rows_for_background_worker
     _worker_manual_fit_space_by_background = (
         worker_context.worker_manual_fit_space_by_background
-    )
-    _worker_manual_caked_fit_space_required_for_background = (
-        worker_context.worker_manual_caked_fit_space_required_for_background
     )
     _reject_worker_mixed_manual_fit_spaces = (
         worker_context.reject_worker_mixed_manual_fit_spaces
     )
     _ensure_worker_geometry_fit_caked_view = (
         worker_context.ensure_worker_geometry_fit_caked_view
-    )
-    _worker_native_detector_coords_to_detector_display_coords_for_background = (
-        worker_context.worker_native_detector_coords_to_detector_display_coords_for_background
-    )
-    _worker_geometry_manual_entry_display_coords = (
-        worker_context.worker_geometry_manual_entry_display_coords
-    )
-    _project_source_rows_for_background_view_worker = (
-        worker_context.project_source_rows_for_background_view_worker
     )
     _store_worker_caked_view_for_background = (
         worker_context.store_worker_caked_view_for_background
