@@ -40380,7 +40380,7 @@ def _run_async_geometry_fit_worker_job(
                     detector_shape=detector_shape,
                     allow_generated_payload=True,
                 )
-                _unused_projection, candidate_state = worker_context.projection_candidate_state(
+                _, candidate_state = worker_context.projection_candidate_state(
                     caked_payload,
                     detector_shape=detector_shape,
                 )
@@ -40654,7 +40654,7 @@ def _run_async_geometry_fit_worker_job(
         else:
             hit_tables_local = _copy_hit_tables(table_list)
         if str(preflight_mode or "full") == "manual_geometry_targeted":
-            hit_tables_local, _filter_diag = (
+            hit_tables_local, _ = (
                 _geometry_fit_filter_hit_tables_for_required_branch_groups(
                     hit_tables_local,
                     required_branch_group_keys=required_branch_group_keys,

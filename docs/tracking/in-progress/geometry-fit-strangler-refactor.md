@@ -13,8 +13,8 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: Patch F1 caked-storage event/task move implemented, reviewed, and validated; ready for next-slice planning
-Bug/error/feature status: Patch F0 audited `_run_async_geometry_fit_worker_job()` after E8 and deleted proven-dead worker-context alias assignments. Patch F0.1 then inlined the remaining one-use worker-context method aliases that were only wrapper glue. Patch F0.2 fixed the stale import-safe guard that still expected the deleted `_rebuild_source_rows_for_background_worker` alias. Patch F1 moved caked-storage event emission and non-gating caked-view task support into `GeometryFitWorkerContext` and deleted the corresponding runtime-local helpers and dependency callback seam. The result builder still lives in `runtime_session.py`; cache clearing, preflight handling, async polling result application, solver execution, optimizer behavior, saved-state schema, CLI/env/debug behavior, UI callbacks, and diagnostics remain unchanged. No user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
+Status: Patch F1 caked-storage event/task move implemented, reviewed, and validated; post-F1 wrapper-name cleanup implemented and validated; ready for next-slice planning
+Bug/error/feature status: Patch F0 audited `_run_async_geometry_fit_worker_job()` after E8 and deleted proven-dead worker-context alias assignments. Patch F0.1 then inlined the remaining one-use worker-context method aliases that were only wrapper glue. Patch F0.2 fixed the stale import-safe guard that still expected the deleted `_rebuild_source_rows_for_background_worker` alias. Patch F1 moved caked-storage event emission and non-gating caked-view task support into `GeometryFitWorkerContext` and deleted the corresponding runtime-local helpers and dependency callback seam. The post-F1 cleanup renamed two unused local unpack placeholders in the runtime wrapper to `_` without changing calls, call order, side effects, or behavior. The result builder still lives in `runtime_session.py`; cache clearing, preflight handling, async polling result application, solver execution, optimizer behavior, saved-state schema, CLI/env/debug behavior, UI callbacks, and diagnostics remain unchanged. No user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
 Shipping status: no runtime rollout or feature flag is needed because behavior is preserved behind existing public wrappers. Rollback is a normal commit revert.
@@ -38,6 +38,22 @@ Deprecation/migration status: only an internal callback seam was removed. No
 public API, artifact schema, config key, command, or saved-state field is
 deprecated or migrated.
 
+## Patch F1 post-review cleanup handoff
+
+What was done: replaced two unused local unpack names inside
+`_run_async_geometry_fit_worker_job()` with `_`.
+
+Bug/error/feature status: this is a readability-only internal cleanup. It
+preserves projection candidate-state checks, manual-targeted hit-table
+filtering, and all wrapper side effects exactly.
+
+CI/shipping status: targeted worker/runtime tests, Ruff on the touched runtime
+file, and whitespace checks passed. No CI config, dependency, version, rollout,
+feature flag, migration, or release work is needed.
+
+Deprecation/migration status: no public API, artifact schema, config key,
+command, saved-state field, or compatibility surface changed.
+
 ## Current state
 
 - Added canonical snapshot normalization for geometry-fit comparison tests.
@@ -53,6 +69,7 @@ deprecated or migrated.
 - Extracted async job selection/theta decisions into `resolve_geometry_fit_selection()`.
 - Fixed snapshot normalization so integer background keys and string keys cannot collapse.
 - Moved caked-storage event/task support into `GeometryFitWorkerContext`.
+- Cleaned unused local unpack placeholder names in the runtime wrapper.
 - Fixed snapshot normalization to fail closed when any normalized mapping keys collide, including typed aliases such as `0` versus `"int:0"` and unstable timestamp-like string keys.
 - Removed the unused snapshot JSON helper.
 - Added a caked projection-authority snapshot that pins exact-projector use over stale saved caked aliases.
@@ -895,6 +912,9 @@ Current validation status:
   import-boundary tests, live-row/runtime/import-safe guard tests, GUI workflow
   caked/dataset route tests, geometry fitting route tests, Ruff on touched
   files, and `git diff --check`.
+- Patch F1 post-review cleanup validation passed: targeted worker/job
+  import-boundary tests, focused worker projection/prebuild/rebuild tests, Ruff
+  on `runtime_session.py`, and `git diff --check`.
 - `python -m ra_sim.dev check` remains blocked only by the documented pre-existing formatting drift above.
 - No generated artifacts, raw data, local config, notebook output, dependency changes, release version changes, or public migration files are included.
 
