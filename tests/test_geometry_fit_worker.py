@@ -527,7 +527,6 @@ class FakeSourceProjectionDeps:
 
 class FakeManualDatasetBindings:
     def __init__(self, **kwargs: object) -> None:
-        self.kwargs = dict(kwargs)
         self.geometry_manual_pairs_for_index = kwargs["geometry_manual_pairs_for_index"]
 
 
