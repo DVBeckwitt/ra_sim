@@ -3955,10 +3955,8 @@ def test_runtime_impl_worker_geometry_fit_rebuilds_source_rows_on_demand() -> No
     assert "def rebuild_source_rows_for_background_worker(" in worker_source
     assert "def source_rows_for_background_worker(" in worker_source
     assert "def _rebuild_source_rows_for_background_worker(" not in source
-    assert "_rebuild_source_rows_for_background_worker = (" in source
     assert "geometry_manual_rebuild_source_rows_for_background=(" in worker_source
     assert "worker_context.prepare_geometry_fit_run_for_worker(" in source
-    assert "_rebuild_source_rows_for_background_worker" in source
     assert "def _prebuild_required_background_caches(" not in source
     assert "worker_context.prebuild_required_background_caches(" in source
     assert required_helper_source.count("raise RuntimeError(") >= 5
