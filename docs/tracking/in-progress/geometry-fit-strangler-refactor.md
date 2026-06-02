@@ -13,11 +13,30 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: Patch F0/F0.1/F0.2 validated; ready for F1 planning
-Bug/error/feature status: Patch F0 audited `_run_async_geometry_fit_worker_job()` after E8 and deleted proven-dead worker-context alias assignments. Patch F0.1 then inlined the remaining one-use worker-context method aliases that were only wrapper glue. Patch F0.2 fixed the stale import-safe guard that still expected the deleted `_rebuild_source_rows_for_background_worker` alias. The result builder still lives in `runtime_session.py`; cache clearing, preflight handling, async polling, UI result application, solver execution, optimizer behavior, saved-state schema, CLI/env/debug behavior, UI callbacks, and diagnostics remain unchanged. No user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
+Status: Patch F1 caked-storage event/task move implemented, reviewed, and validated; ready for next-slice planning
+Bug/error/feature status: Patch F0 audited `_run_async_geometry_fit_worker_job()` after E8 and deleted proven-dead worker-context alias assignments. Patch F0.1 then inlined the remaining one-use worker-context method aliases that were only wrapper glue. Patch F0.2 fixed the stale import-safe guard that still expected the deleted `_rebuild_source_rows_for_background_worker` alias. Patch F1 moved caked-storage event emission and non-gating caked-view task support into `GeometryFitWorkerContext` and deleted the corresponding runtime-local helpers and dependency callback seam. The result builder still lives in `runtime_session.py`; cache clearing, preflight handling, async polling result application, solver execution, optimizer behavior, saved-state schema, CLI/env/debug behavior, UI callbacks, and diagnostics remain unchanged. No user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
 Shipping status: no runtime rollout or feature flag is needed because behavior is preserved behind existing public wrappers. Rollback is a normal commit revert.
+
+## Patch F1 handoff
+
+What was done: moved caked-storage event emission and non-gating
+caked-view task support from the runtime worker closure into
+`GeometryFitWorkerContext`, then deleted the matching runtime-local helpers and
+required-cache dependency callbacks.
+
+Bug/error/feature status: this is an internal refactor slice. It should not
+change geometry-fit results, caked fit-space behavior, saved GUI-state format,
+CLI behavior, environment flags, diagnostics, or user-visible GUI behavior.
+
+CI/shipping status: targeted worker, runtime guard, GUI workflow, geometry
+fitting, Ruff, compileall, and whitespace checks passed. No CI configuration,
+dependency, release-version, rollout, feature-flag, or migration work is needed.
+
+Deprecation/migration status: only an internal callback seam was removed. No
+public API, artifact schema, config key, command, or saved-state field is
+deprecated or migrated.
 
 ## Current state
 
@@ -33,6 +52,7 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Added `ra_sim/gui/_runtime/geometry_fit_job.py`.
 - Extracted async job selection/theta decisions into `resolve_geometry_fit_selection()`.
 - Fixed snapshot normalization so integer background keys and string keys cannot collapse.
+- Moved caked-storage event/task support into `GeometryFitWorkerContext`.
 - Fixed snapshot normalization to fail closed when any normalized mapping keys collide, including typed aliases such as `0` versus `"int:0"` and unstable timestamp-like string keys.
 - Removed the unused snapshot JSON helper.
 - Added a caked projection-authority snapshot that pins exact-projector use over stale saved caked aliases.
@@ -544,13 +564,44 @@ E3 display/projection adapter helpers:
 
 1. Resolve unrelated plotting files before the next production refactor by
    removing them from this branch or committing them separately.
-2. Plan Patch F1 as caked-storage event/task support only:
-   `_emit_source_cache_caked_view_event` and
-   `_start_non_gating_caked_view_task`.
+2. Plan the next worker-runtime slice after F1. Do not move dataset internals,
+   solver request/execution, result packaging, optimizer, saved-state,
+   CLI/env/debug behavior, or UI behavior without a fresh plan.
 3. Current measured size after F0: `runtime_session.py` 43,373 lines;
    `geometry_fit_worker.py` 3,562 lines; `_run_async_geometry_fit_worker_job()`
    692 lines.
 4. Do not add hard debt gates yet.
+
+## Patch F1 behavior map
+
+Patch F1 may move only caked-storage event/task support from the runtime
+worker closure into `GeometryFitWorkerContext`.
+
+Behavior to preserve:
+
+- Event kinds remain `source_cache_caked_view_ready`,
+  `source_cache_caked_view_timeout`, and `source_cache_caked_view_failed`.
+- Event payload defaults remain `background_index`, `background_label`,
+  `source_cache_generation_id`, `row_count`, `elapsed_s`, and `message`.
+- Timeout events still set `status=timeout` and use the existing
+  `caked_view_timeout_s` wait text.
+- Ready and failure message text still reports the current background number
+  and the stored/failed status fallback.
+- `late=True` still adds `late` to the emitted payload only for late events.
+- Background label and row-count fallbacks still use the cache bundle fields.
+- Non-gating storage still calls `store_worker_caked_view_for_background()`
+  with the original `stage_callback` and `source_cache_generation_id`.
+- Storage exceptions still map to a failed outcome with
+  `exception:<ExceptionClass>` status fields.
+- Initial result polling still waits in 0.01 second intervals until timeout.
+- Timeout announcement still happens through the returned callback.
+- Late events still emit only after timeout was observed, timeout was
+  announced, and the source-cache generation still matches.
+- Stale-generation late outcomes are still suppressed.
+
+Patch F1 must not move dataset internals, solver request/execution, result
+packaging, optimizer behavior, saved-state handling, CLI/env/debug behavior,
+or UI behavior.
 
 ## Validation
 
@@ -840,6 +891,10 @@ Current validation status:
   targeted GUI runtime import-safe worker guards, full worker tests, worker/job
   import-boundary tests, GUI runtime geometry tests, Ruff on touched tests, and
   `git diff --check`.
+- Patch F1 validation passed: compileall, full worker tests, worker/job
+  import-boundary tests, live-row/runtime/import-safe guard tests, GUI workflow
+  caked/dataset route tests, geometry fitting route tests, Ruff on touched
+  files, and `git diff --check`.
 - `python -m ra_sim.dev check` remains blocked only by the documented pre-existing formatting drift above.
 - No generated artifacts, raw data, local config, notebook output, dependency changes, release version changes, or public migration files are included.
 

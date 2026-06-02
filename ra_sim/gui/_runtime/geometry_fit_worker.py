@@ -108,8 +108,6 @@ class GeometryFitWorkerSourceRowsDeps:
 class GeometryFitWorkerRequiredCacheDeps:
     locked_qr_fit_space_projection_readiness: Callable[..., object]
     normalize_optics_mode_label: Callable[..., str]
-    start_non_gating_caked_view_task: Callable[..., object]
-    emit_source_cache_caked_view_event: Callable[..., object]
 
 
 @dataclass(frozen=True)
@@ -148,6 +146,7 @@ class GeometryFitWorkerContext:
     worker_background_cache_by_index: dict[int, object]
     source_cache_generation_by_background: dict[int, object]
     source_cache_generation_lock: threading.Lock = field(default_factory=threading.Lock)
+    perf_counter_fn: Callable[[], float] = perf_counter
     caked_payload_deps: GeometryFitWorkerCakedPayloadDeps | None = None
     caked_view_storage_deps: GeometryFitWorkerCakedViewStorageDeps | None = None
     source_projection_deps: GeometryFitWorkerSourceProjectionDeps | None = None
@@ -200,6 +199,151 @@ class GeometryFitWorkerContext:
             )
         except Exception:
             return
+
+    def emit_source_cache_caked_view_event(
+        self,
+        kind: str,
+        bundle: object,
+        *,
+        source_cache_generation_id: int,
+        started_at: float,
+        payload: Mapping[str, object] | None = None,
+        late: bool = False,
+    ) -> None:
+        caked_view_timeout_s = 5.0
+        resolved_payload = dict(payload or {})
+        resolved_payload.setdefault("background_index", int(bundle.background_index))
+        resolved_payload.setdefault("background_label", str(bundle.background_label))
+        resolved_payload.setdefault(
+            "source_cache_generation_id",
+            int(source_cache_generation_id),
+        )
+        resolved_payload.setdefault(
+            "row_count",
+            int(len(bundle.projected_rows or bundle.stored_rows or ())),
+        )
+        resolved_payload.setdefault(
+            "elapsed_s",
+            float(max(0.0, self.perf_counter_fn() - started_at)),
+        )
+        if late:
+            resolved_payload["late"] = True
+        if kind == "source_cache_caked_view_ready":
+            resolved_payload.setdefault(
+                "message",
+                (
+                    "preflight: caked view storage ready for "
+                    f"background {int(bundle.background_index) + 1} "
+                    f"(status={str(resolved_payload.get('caked_view_status', 'stored'))})"
+                ),
+            )
+        elif kind == "source_cache_caked_view_timeout":
+            resolved_payload.setdefault("status", "timeout")
+            resolved_payload.setdefault(
+                "message",
+                (
+                    "preflight: caked view storage timeout for "
+                    f"background {int(bundle.background_index) + 1} "
+                    f"(waited {float(caked_view_timeout_s):.1f}s)"
+                ),
+            )
+        else:
+            resolved_payload.setdefault(
+                "message",
+                (
+                    "preflight: caked view storage failed for "
+                    f"background {int(bundle.background_index) + 1} "
+                    f"(status={str(resolved_payload.get('caked_view_status', resolved_payload.get('status', 'failed')))})"
+                ),
+            )
+        self.emit_event(str(kind), resolved_payload)
+
+    def start_non_gating_caked_view_task(
+        self,
+        bundle: object,
+        *,
+        source_cache_generation_id: int,
+        started_at: float,
+        stage_callback: object | None = None,
+    ) -> tuple[Callable[[float], dict[str, object] | None], Callable[[], None]]:
+        task_state_lock = threading.Lock()
+        timeout_announced = threading.Event()
+        task_state: dict[str, object] = {
+            "done": False,
+            "timed_out": False,
+            "outcome": None,
+        }
+
+        def _worker() -> None:
+            try:
+                outcome = self.store_worker_caked_view_for_background(
+                    bundle,
+                    stage_callback=stage_callback,
+                    source_cache_generation_id=source_cache_generation_id,
+                )
+            except Exception as exc:
+                outcome = {
+                    "caked_view_stored": False,
+                    "caked_view_status": f"exception:{type(exc).__name__}",
+                    "status": f"exception:{type(exc).__name__}",
+                    "background_index": int(bundle.background_index),
+                    "background_label": str(bundle.background_label),
+                    "source_cache_generation_id": int(source_cache_generation_id),
+                    "row_count": int(len(bundle.projected_rows or bundle.stored_rows or ())),
+                    "elapsed_s": float(max(0.0, self.perf_counter_fn() - started_at)),
+                }
+
+            with task_state_lock:
+                task_state["done"] = True
+                task_state["outcome"] = dict(outcome or {})
+                should_emit_late = bool(task_state.get("timed_out", False))
+            if not should_emit_late:
+                return
+            if not self.source_cache_generation_matches(
+                int(bundle.background_index),
+                int(source_cache_generation_id),
+            ):
+                return
+            timeout_announced.wait()
+            resolved_outcome = dict(outcome or {})
+            event_kind = (
+                "source_cache_caked_view_ready"
+                if bool(resolved_outcome.get("caked_view_stored", False))
+                else "source_cache_caked_view_failed"
+            )
+            self.emit_source_cache_caked_view_event(
+                event_kind,
+                bundle,
+                source_cache_generation_id=int(source_cache_generation_id),
+                started_at=started_at,
+                payload=resolved_outcome,
+                late=True,
+            )
+
+        threading.Thread(
+            target=_worker,
+            name=f"geometry-fit-caked-{self.job_id}-{int(bundle.background_index)}",
+            daemon=True,
+        ).start()
+
+        def _await_initial_result(timeout_s: float) -> dict[str, object] | None:
+            deadline = self.perf_counter_fn() + max(0.0, float(timeout_s))
+            while self.perf_counter_fn() < deadline:
+                with task_state_lock:
+                    if bool(task_state.get("done", False)):
+                        outcome = dict(task_state.get("outcome") or {})
+                        task_state["outcome"] = None
+                        return outcome
+                threading.Event().wait(0.01)
+            with task_state_lock:
+                if bool(task_state.get("done", False)):
+                    outcome = dict(task_state.get("outcome") or {})
+                    task_state["outcome"] = None
+                    return outcome
+                task_state["timed_out"] = True
+            return None
+
+        return _await_initial_result, timeout_announced.set
 
     def current_source_cache_generation(self, background_index: int) -> int:
         with self.source_cache_generation_lock:
@@ -3410,7 +3554,7 @@ class GeometryFitWorkerContext:
                     ),
                 },
             )
-            await_caked_result, announce_caked_timeout = required_cache_deps.start_non_gating_caked_view_task(
+            await_caked_result, announce_caked_timeout = self.start_non_gating_caked_view_task(
                 bundle,
                 source_cache_generation_id=int(source_cache_generation_id),
                 started_at=caked_started_at,
@@ -3459,7 +3603,7 @@ class GeometryFitWorkerContext:
                 caked_stored = bool(resolved_outcome.get("caked_view_stored", False))
                 if caked_stored or _readiness_projection_payload_available():
                     _refresh_locked_qr_readiness_from_caked_projection()
-                required_cache_deps.emit_source_cache_caked_view_event(
+                self.emit_source_cache_caked_view_event(
                     "source_cache_caked_view_ready"
                     if caked_stored
                     else "source_cache_caked_view_failed",
@@ -3516,7 +3660,7 @@ class GeometryFitWorkerContext:
                     ):
                         continue
                     continue
-                required_cache_deps.emit_source_cache_caked_view_event(
+                self.emit_source_cache_caked_view_event(
                     "source_cache_caked_view_timeout",
                     bundle,
                     source_cache_generation_id=int(source_cache_generation_id),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import threading
 from collections.abc import Mapping
 from types import SimpleNamespace
 
@@ -824,7 +825,6 @@ class FakeRequiredCacheDeps:
             "caked_view_status": "stored",
             "status": "stored",
         }
-        self.caked_events: list[dict[str, object]] = []
         self.announced_timeouts: int = 0
 
     @property
@@ -834,8 +834,6 @@ class FakeRequiredCacheDeps:
                 self.locked_qr_fit_space_projection_readiness
             ),
             normalize_optics_mode_label=self.normalize_optics_mode_label,
-            start_non_gating_caked_view_task=self.start_non_gating_caked_view_task,
-            emit_source_cache_caked_view_event=self.emit_source_cache_caked_view_event,
         )
 
     def locked_qr_fit_space_projection_readiness(
@@ -853,51 +851,6 @@ class FakeRequiredCacheDeps:
 
     def normalize_optics_mode_label(self, value: object) -> str:
         return str(value or "exact").strip().lower() or "exact"
-
-    def start_non_gating_caked_view_task(
-        self,
-        bundle: FakeBackgroundCacheBundle,
-        *,
-        source_cache_generation_id: int,
-        started_at: float,
-        stage_callback: object = None,
-    ) -> tuple[object, object]:
-        def _await_result(_timeout_s: float) -> dict[str, object] | None:
-            if self.caked_outcome is None:
-                return None
-            return dict(
-                self.caked_outcome,
-                background_index=int(bundle.background_index),
-                source_cache_generation_id=int(source_cache_generation_id),
-                started_at=float(started_at),
-                stage_callback=stage_callback,
-            )
-
-        def _announce_timeout() -> None:
-            self.announced_timeouts += 1
-
-        return _await_result, _announce_timeout
-
-    def emit_source_cache_caked_view_event(
-        self,
-        kind: str,
-        bundle: FakeBackgroundCacheBundle,
-        *,
-        source_cache_generation_id: int,
-        started_at: float,
-        payload: Mapping[str, object] | None = None,
-        late: bool = False,
-    ) -> None:
-        self.caked_events.append(
-            {
-                "kind": str(kind),
-                "background_index": int(bundle.background_index),
-                "source_cache_generation_id": int(source_cache_generation_id),
-                "started_at": float(started_at),
-                "payload": dict(payload or {}),
-                "late": bool(late),
-            }
-        )
 
 
 class FakeManualFitSpaceDeps:
@@ -1150,6 +1103,25 @@ def _context_with_required_cache_deps(
     context.prebuild_background_cache_bundle_worker = (  # type: ignore[method-assign]
         _prebuild_background_cache_bundle_worker
     )
+
+    def _store_worker_caked_view_for_background(
+        _bundle: object,
+        *,
+        stage_callback: object = None,
+        source_cache_generation_id: object = None,
+    ) -> dict[str, object] | None:
+        if fake_required_deps.caked_outcome is None:
+            return None
+        return dict(
+            fake_required_deps.caked_outcome,
+            background_index=int(bundle.background_index),
+            source_cache_generation_id=int(source_cache_generation_id or 0),
+            stage_callback=stage_callback,
+        )
+
+    context.store_worker_caked_view_for_background = (  # type: ignore[method-assign]
+        _store_worker_caked_view_for_background
+    )
     return context, fake_required_deps
 
 
@@ -1245,6 +1217,297 @@ def _event_payloads(queue: RecordingQueue, kind: str) -> list[dict[str, object]]
         for item in queue.items
         if isinstance(item, Mapping) and item.get("kind") == kind
     ]
+
+
+def test_emit_source_cache_caked_view_event_ready_payload_fields() -> None:
+    queue = RecordingQueue()
+    context = GeometryFitWorkerContext.from_job({"event_queue": queue, "job_id": 12})
+    bundle = FakeBackgroundCacheBundle(
+        background_index=2,
+        background_label="sample bg",
+        stored_rows=[_source_row(background_index=2)],
+        projected_rows=[_source_row(background_index=2, projected=True)],
+    )
+
+    context.emit_source_cache_caked_view_event(
+        "source_cache_caked_view_ready",
+        bundle,
+        source_cache_generation_id=9,
+        started_at=0.0,
+        payload={"caked_view_status": "stored"},
+    )
+
+    payload = _event_payloads(queue, "source_cache_caked_view_ready")[0]
+    assert payload["background_index"] == 2
+    assert payload["background_label"] == "sample bg"
+    assert payload["source_cache_generation_id"] == 9
+    assert payload["row_count"] == 1
+    assert payload["caked_view_status"] == "stored"
+    assert payload["elapsed_s"] >= 0.0
+    assert payload["message"] == (
+        "preflight: caked view storage ready for background 3 (status=stored)"
+    )
+
+
+def test_emit_source_cache_caked_view_event_timeout_payload_fields() -> None:
+    queue = RecordingQueue()
+    context = GeometryFitWorkerContext.from_job({"event_queue": queue})
+    bundle = FakeBackgroundCacheBundle(
+        background_index=0,
+        background_label="background 1",
+        stored_rows=[_source_row(background_index=0)],
+        projected_rows=[],
+    )
+
+    context.emit_source_cache_caked_view_event(
+        "source_cache_caked_view_timeout",
+        bundle,
+        source_cache_generation_id=4,
+        started_at=0.0,
+        payload={"status": "custom"},
+    )
+
+    payload = _event_payloads(queue, "source_cache_caked_view_timeout")[0]
+    assert payload["background_index"] == 0
+    assert payload["background_label"] == "background 1"
+    assert payload["source_cache_generation_id"] == 4
+    assert payload["row_count"] == 1
+    assert payload["status"] == "custom"
+    assert payload["message"] == (
+        "preflight: caked view storage timeout for background 1 (waited 5.0s)"
+    )
+
+
+def test_emit_source_cache_caked_view_event_failed_payload_fields() -> None:
+    queue = RecordingQueue()
+    context = GeometryFitWorkerContext.from_job({"event_queue": queue})
+    bundle = FakeBackgroundCacheBundle(
+        background_index=1,
+        background_label="background 2",
+        stored_rows=[],
+        projected_rows=[_source_row(background_index=1, projected=True)],
+    )
+
+    context.emit_source_cache_caked_view_event(
+        "source_cache_caked_view_failed",
+        bundle,
+        source_cache_generation_id=5,
+        started_at=0.0,
+        payload={"status": "missing_projection"},
+    )
+
+    payload = _event_payloads(queue, "source_cache_caked_view_failed")[0]
+    assert payload["background_index"] == 1
+    assert payload["background_label"] == "background 2"
+    assert payload["source_cache_generation_id"] == 5
+    assert payload["row_count"] == 1
+    assert payload["status"] == "missing_projection"
+    assert payload["message"] == (
+        "preflight: caked view storage failed for background 2 "
+        "(status=missing_projection)"
+    )
+
+
+def test_emit_source_cache_caked_view_event_late_flag() -> None:
+    queue = RecordingQueue()
+    context = GeometryFitWorkerContext.from_job({"event_queue": queue})
+    bundle = FakeBackgroundCacheBundle(background_index=0)
+
+    context.emit_source_cache_caked_view_event(
+        "source_cache_caked_view_ready",
+        bundle,
+        source_cache_generation_id=4,
+        started_at=0.0,
+        payload={"caked_view_stored": True},
+        late=True,
+    )
+
+    payload = _event_payloads(queue, "source_cache_caked_view_ready")[0]
+    assert payload["late"] is True
+
+
+def test_start_non_gating_caked_view_task_returns_initial_ready_outcome() -> None:
+    context = GeometryFitWorkerContext.from_job({"job_id": 3})
+    bundle = FakeBackgroundCacheBundle(
+        background_index=0,
+        background_label="background 1",
+        stored_rows=[_source_row(background_index=0)],
+    )
+    stage_callbacks: list[object] = []
+
+    def _store(
+        _bundle: object,
+        *,
+        stage_callback: object = None,
+        source_cache_generation_id: object = None,
+    ) -> dict[str, object]:
+        stage_callbacks.append(stage_callback)
+        return {
+            "caked_view_stored": True,
+            "caked_view_status": "stored",
+            "status": "stored",
+            "source_cache_generation_id": source_cache_generation_id,
+        }
+
+    context.store_worker_caked_view_for_background = _store  # type: ignore[method-assign]
+
+    await_result, _announce_timeout = context.start_non_gating_caked_view_task(
+        bundle,
+        source_cache_generation_id=4,
+        started_at=0.0,
+        stage_callback="stage-callback",
+    )
+
+    outcome = await_result(1.0)
+    assert isinstance(outcome, Mapping)
+    assert outcome["caked_view_stored"] is True
+    assert outcome["caked_view_status"] == "stored"
+    assert outcome["source_cache_generation_id"] == 4
+    assert stage_callbacks == ["stage-callback"]
+
+
+def _install_blocking_caked_store(
+    context: GeometryFitWorkerContext,
+    *,
+    release_storage: threading.Event,
+    storage_finished: threading.Event,
+) -> None:
+    def _store(
+        _bundle: object,
+        *,
+        stage_callback: object = None,
+        source_cache_generation_id: object = None,
+    ) -> dict[str, object]:
+        release_storage.wait(1.0)
+        storage_finished.set()
+        return {
+            "caked_view_stored": True,
+            "caked_view_status": "stored",
+            "status": "stored",
+            "source_cache_generation_id": source_cache_generation_id,
+        }
+
+    context.store_worker_caked_view_for_background = _store  # type: ignore[method-assign]
+
+
+def test_start_non_gating_caked_view_task_timeout_emits_late_ready_when_generation_matches() -> None:
+    queue = RecordingQueue()
+    release_storage = threading.Event()
+    storage_finished = threading.Event()
+    context = GeometryFitWorkerContext.from_job(
+        {
+            "event_queue": queue,
+            "job_id": 3,
+            "source_cache_generation_by_background": {0: 4},
+        }
+    )
+    bundle = FakeBackgroundCacheBundle(
+        background_index=0,
+        background_label="background 1",
+        stored_rows=[_source_row(background_index=0)],
+    )
+    _install_blocking_caked_store(
+        context,
+        release_storage=release_storage,
+        storage_finished=storage_finished,
+    )
+
+    await_result, announce_timeout = context.start_non_gating_caked_view_task(
+        bundle,
+        source_cache_generation_id=4,
+        started_at=0.0,
+        stage_callback="stage-callback",
+    )
+
+    assert await_result(0.01) is None
+    announce_timeout()
+    release_storage.set()
+    assert storage_finished.wait(1.0)
+    for _ in range(100):
+        if _event_payloads(queue, "source_cache_caked_view_ready"):
+            break
+        threading.Event().wait(0.01)
+    payload = _event_payloads(queue, "source_cache_caked_view_ready")[0]
+    assert payload["background_index"] == 0
+    assert payload["source_cache_generation_id"] == 4
+    assert payload["late"] is True
+    assert payload["message"] == (
+        "preflight: caked view storage ready for background 1 (status=stored)"
+    )
+
+
+def test_start_non_gating_caked_view_task_suppresses_late_event_when_generation_stale() -> None:
+    queue = RecordingQueue()
+    release_storage = threading.Event()
+    storage_finished = threading.Event()
+    context = GeometryFitWorkerContext.from_job(
+        {
+            "event_queue": queue,
+            "job_id": 3,
+            "source_cache_generation_by_background": {0: 4},
+        }
+    )
+    bundle = FakeBackgroundCacheBundle(
+        background_index=0,
+        background_label="background 1",
+        stored_rows=[_source_row(background_index=0)],
+    )
+    _install_blocking_caked_store(
+        context,
+        release_storage=release_storage,
+        storage_finished=storage_finished,
+    )
+
+    await_result, announce_timeout = context.start_non_gating_caked_view_task(
+        bundle,
+        source_cache_generation_id=4,
+        started_at=0.0,
+        stage_callback="stage-callback",
+    )
+
+    assert await_result(0.01) is None
+    context.advance_source_cache_generation(0)
+    announce_timeout()
+    release_storage.set()
+    assert storage_finished.wait(1.0)
+    threading.Event().wait(0.05)
+    assert _event_payloads(queue, "source_cache_caked_view_ready") == []
+
+
+def test_start_non_gating_caked_view_task_maps_storage_exception_to_failed_outcome() -> None:
+    context = GeometryFitWorkerContext.from_job({"job_id": 3})
+    bundle = FakeBackgroundCacheBundle(
+        background_index=1,
+        background_label="background 2",
+        stored_rows=[_source_row(background_index=1)],
+    )
+
+    def _store(
+        _bundle: object,
+        *,
+        stage_callback: object = None,
+        source_cache_generation_id: object = None,
+    ) -> dict[str, object]:
+        raise RuntimeError("storage failed")
+
+    context.store_worker_caked_view_for_background = _store  # type: ignore[method-assign]
+
+    await_result, _announce_timeout = context.start_non_gating_caked_view_task(
+        bundle,
+        source_cache_generation_id=8,
+        started_at=0.0,
+        stage_callback="stage-callback",
+    )
+
+    outcome = await_result(1.0)
+    assert isinstance(outcome, Mapping)
+    assert outcome["caked_view_stored"] is False
+    assert outcome["caked_view_status"] == "exception:RuntimeError"
+    assert outcome["status"] == "exception:RuntimeError"
+    assert outcome["background_index"] == 1
+    assert outcome["background_label"] == "background 2"
+    assert outcome["source_cache_generation_id"] == 8
+    assert outcome["row_count"] == 1
 
 
 # D2 contract map: caked payload helpers return ready/invalid/absent status
@@ -4100,16 +4363,34 @@ def test_prebuild_required_background_caches_caked_timeout_event_fields() -> Non
     context, deps = _context_with_required_cache_deps({"event_queue": queue})
     deps.caked_outcome = None
 
+    def _start_non_gating_caked_view_task(
+        _bundle: object,
+        *,
+        source_cache_generation_id: int,
+        started_at: float,
+        stage_callback: object = None,
+    ) -> tuple[object, object]:
+        def _await_result(_timeout_s: float) -> None:
+            return None
+
+        def _announce_timeout() -> None:
+            deps.announced_timeouts += 1
+
+        return _await_result, _announce_timeout
+
+    context.start_non_gating_caked_view_task = (  # type: ignore[method-assign]
+        _start_non_gating_caked_view_task
+    )
+
     context.prebuild_required_background_caches(stage_callback="stage")
 
     assert deps.announced_timeouts == 1
-    assert deps.caked_events == [
-        {
-            "kind": "source_cache_caked_view_timeout",
-            "background_index": 0,
-            "source_cache_generation_id": 4,
-            "started_at": deps.caked_events[0]["started_at"],
-            "payload": {"status": "timeout"},
-            "late": False,
-        }
-    ]
+    payload = _event_payloads(queue, "source_cache_caked_view_timeout")[0]
+    assert payload["background_index"] == 0
+    assert payload["background_label"] == "background 1"
+    assert payload["source_cache_generation_id"] == 4
+    assert payload["row_count"] == 1
+    assert payload["status"] == "timeout"
+    assert payload["message"] == (
+        "preflight: caked view storage timeout for background 1 (waited 5.0s)"
+    )

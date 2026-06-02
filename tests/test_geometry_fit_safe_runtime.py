@@ -131,6 +131,8 @@ def test_geometry_fit_worker_context_helpers_are_not_duplicated_in_runtime_worke
         "_worker_native_detector_coords_to_detector_display_coords_for_background",
         "_bundle_rows",
         "_build_geometry_fit_background_cache_bundle",
+        "_emit_source_cache_caked_view_event",
+        "_start_non_gating_caked_view_task",
     }
     assert not (nested_function_names & moved_helper_names)
 
@@ -170,6 +172,8 @@ def test_geometry_fit_worker_has_moved_only_expected_worker_helpers() -> None:
         "worker_cached_projection_rows_match",
         "worker_geometry_manual_entry_display_coords",
         "worker_native_detector_coords_to_detector_display_coords_for_background",
+        "emit_source_cache_caked_view_event",
+        "start_non_gating_caked_view_task",
     } <= worker_function_names
     assert "execute_runtime_geometry_fit_solver_phase" not in worker_function_names
     assert "_geometry_fit_worker_action_result" not in worker_function_names
