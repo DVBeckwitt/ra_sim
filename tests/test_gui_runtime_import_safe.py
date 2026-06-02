@@ -32,6 +32,13 @@ RUNTIME_SESSION_SOURCE_PATH = (
 GEOMETRY_FIT_JOB_SOURCE_PATH = (
     Path(__file__).resolve().parent.parent / "ra_sim" / "gui" / "_runtime" / "geometry_fit_job.py"
 )
+GEOMETRY_FIT_WORKER_SOURCE_PATH = (
+    Path(__file__).resolve().parent.parent
+    / "ra_sim"
+    / "gui"
+    / "_runtime"
+    / "geometry_fit_worker.py"
+)
 PRIMARY_CACHE_HELPERS_SOURCE_PATH = (
     Path(__file__).resolve().parent.parent
     / "ra_sim"
@@ -5141,19 +5148,24 @@ def test_runtime_geometry_fit_caked_roi_preview_mask_returns_none_without_valid_
 
 
 def test_runtime_impl_worker_roi_precomputes_projection_context_before_selection() -> None:
-    source = _source_text(RUNTIME_SESSION_SOURCE_PATH)
-    store_start = source.index("def _store_worker_caked_view_for_background(")
-    store_end = source.index("def _build_source_rows_for_rebuild(", store_start)
+    source = _source_text(GEOMETRY_FIT_WORKER_SOURCE_PATH)
+    store_start = source.index("def store_worker_caked_view_for_background(")
+    store_end = source.index(
+        "def worker_native_detector_coords_to_detector_display_coords_for_background(",
+        store_start,
+    )
     store_source = source[store_start:store_end]
 
-    helper_idx = store_source.index("_geometry_fit_worker_caked_projection_view(")
+    helper_idx = store_source.index(
+        "storage_deps.geometry_fit_worker_caked_projection_view("
+    )
     selection_idx = store_source.index(
-        "roi_selection = gui_geometry_fit.build_geometry_fit_caked_roi_selection("
+        "roi_selection = storage_deps.build_caked_roi_selection("
     )
 
     assert helper_idx < selection_idx
     assert "background_caked_view.update(precomputed_caked_view)" in store_source
-    assert "_worker_projection_analysis_bins()" in store_source
+    assert "storage_deps.worker_projection_analysis_bins()" in store_source
     assert "npt_rad=precompute_npt_rad" in store_source
     assert "npt_azim=precompute_npt_azim" in store_source
 

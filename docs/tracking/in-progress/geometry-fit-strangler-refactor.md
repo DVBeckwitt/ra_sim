@@ -13,8 +13,8 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: Patch E3.2 caked display-adapter guard cleanup reviewed; ready for E4 planning
-Bug/error/feature status: Patch E3.2 preserves the old caked manual-entry display-adapter guard inside the internal worker refactor; no user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
+Status: Patch E4 caked-view storage extraction complete; ready for E5 planning
+Bug/error/feature status: Patch E4 moves caked-view storage into the internal worker context while preserving the old storage, ROI, projection-payload, and event contracts; no user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
 Shipping status: no runtime rollout or feature flag is needed because behavior is preserved behind existing public wrappers. Rollback is a normal commit revert.
@@ -224,6 +224,22 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
   performance, test-quality, unnecessary-file, or avoidable-abstraction issues.
   No migration, deprecation, rollout, feature flag, CI pipeline, or public
   documentation change is required beyond this tracking-note status update.
+- Patch E4 moved `_store_worker_caked_view_for_background` into
+  `GeometryFitWorkerContext.store_worker_caked_view_for_background()` behind
+  explicit injected dependencies. `_run_async_geometry_fit_worker_job(job)`
+  remains the runtime wrapper and aliases the moved method back to the old
+  local helper name.
+- Patch E4 moved caked-view storage only. Dataset construction, solver request
+  assembly, solver execution, result packaging, optimizer code, saved-state
+  code, CLI/env/debug behavior, UI behavior, manual validation, and display
+  adapters did not move.
+- Patch E4 added direct worker coverage for missing native backgrounds, invalid
+  caked payloads, stale source-cache generations, successful payload/side-store
+  writes, stage event keys/order, caked-mode projection-signature refresh, and
+  projected-row cache refresh.
+- Current measured size after Patch E4: `runtime_session.py` 43,538 lines;
+  `geometry_fit_worker.py` 3,313 lines; `_run_async_geometry_fit_worker_job()`
+  857 lines.
 
 ## Review status
 
@@ -635,6 +651,10 @@ Current validation status:
 - Patch E3.2 validation passed: worker display/projection adapter tests,
   full worker tests, worker/job import-boundary tests, Ruff on touched files,
   and `git diff --check`.
+- Patch E4 validation passed: compileall, full worker tests, worker/job
+  import-boundary tests, GUI runtime tests, GUI runtime import-safe tests,
+  live-row/signature handoff tests, GUI workflow caked/dataset route tests,
+  geometry fitting route tests, Ruff on touched files, and `git diff --check`.
 - `python -m ra_sim.dev check` remains blocked only by the documented pre-existing formatting drift above.
 - No generated artifacts, raw data, local config, notebook output, dependency changes, release version changes, or public migration files are included.
 

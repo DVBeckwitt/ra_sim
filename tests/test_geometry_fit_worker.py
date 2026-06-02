@@ -8,6 +8,7 @@ import numpy as np
 from ra_sim.gui._runtime.geometry_fit_worker import (
     GeometryFitWorkerCacheBundleDeps,
     GeometryFitWorkerCakedPayloadDeps,
+    GeometryFitWorkerCakedViewStorageDeps,
     GeometryFitWorkerContext,
     GeometryFitWorkerManualFitSpaceDeps,
     GeometryFitWorkerPrebuildDeps,
@@ -33,6 +34,14 @@ class FailingQueue:
 class FakeBundle:
     def __init__(self, detector_shape: tuple[int, int] = (2, 3)) -> None:
         self.detector_shape = detector_shape
+
+
+class FakeContextManager:
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(self, *_args: object) -> bool:
+        return False
 
 
 class FakeBackgroundCacheBundle:
@@ -224,6 +233,163 @@ class FakeCakedPayloadDeps:
 
     def is_transform_bundle(self, value: object) -> bool:
         return isinstance(value, FakeBundle)
+
+
+def _valid_caked_display_payload() -> dict[str, object]:
+    return {
+        "image": np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float64),
+        "radial": np.array([1.0, 2.0], dtype=np.float64),
+        "azimuth": np.array([3.0, 4.0], dtype=np.float64),
+        "raw_azimuth_axis": np.array([3.0, 4.0], dtype=np.float64),
+        "raw_to_gui_row_permutation": np.array([0, 1], dtype=np.int32),
+        "transform_bundle": FakeBundle(detector_shape=(2, 2)),
+        "detector_shape": (2, 2),
+        "digest": "projection-digest",
+    }
+
+
+class FakeCakedViewStorageDeps:
+    def __init__(self) -> None:
+        self.stage_events: list[tuple[object, str, dict[str, object]]] = []
+        self.roi_selection: dict[str, object] = {
+            "enabled": False,
+            "valid": False,
+            "pixel_count": 0,
+            "fraction": 0.0,
+            "half_width_px": 0.0,
+            "fallback_reason": None,
+        }
+        self.integrator: object | None = "fake-ai"
+        self.caking_result: object = {"cake": "result"}
+        self.prepared_payload: object = _valid_caked_display_payload()
+        self.sanitized_payload: object | None = None
+        self.sanitize_diag: dict[str, object] = {
+            "status": "stored",
+            "sanitized_empty_bin_count": 1,
+            "nonfinite_supported_bin_count": 2,
+        }
+        self.caking_calls: list[dict[str, object]] = []
+
+    @property
+    def deps(self) -> GeometryFitWorkerCakedViewStorageDeps:
+        return GeometryFitWorkerCakedViewStorageDeps(
+            emit_geometry_fit_stage_event=self.emit_geometry_fit_stage_event,
+            build_caked_roi_selection=self.build_caked_roi_selection,
+            caked_roi_fit_space_to_detector_point=(
+                self.caked_roi_fit_space_to_detector_point
+            ),
+            worker_projection_analysis_bins=self.worker_projection_analysis_bins,
+            geometry_fit_worker_caked_projection_view=(
+                self.geometry_fit_worker_caked_projection_view
+            ),
+            temporary_numba_thread_limit=self.temporary_numba_thread_limit,
+            default_reserved_cpu_worker_count=self.default_reserved_cpu_worker_count,
+            caking=self.caking,
+            prepare_caked_display_payload=self.prepare_caked_display_payload,
+            sanitize_caked_display_payload=self.sanitize_caked_display_payload,
+            normalize_projection_view_signature=self.normalize_projection_view_signature,
+            targeted_projection_view_signature=self.targeted_projection_view_signature,
+            digest_payload=self.digest_payload,
+            replace_bundle=self.replace_bundle,
+        )
+
+    def emit_geometry_fit_stage_event(
+        self,
+        stage_callback: object,
+        kind: str,
+        **payload: object,
+    ) -> None:
+        self.stage_events.append((stage_callback, str(kind), dict(payload)))
+
+    def build_caked_roi_selection(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+        return dict(self.roi_selection)
+
+    def caked_roi_fit_space_to_detector_point(self, **_kwargs: object) -> object:
+        return lambda point: point
+
+    def worker_projection_analysis_bins(self) -> tuple[int, int]:
+        return 4, 5
+
+    def geometry_fit_worker_caked_projection_view(self, **_kwargs: object) -> dict[str, object]:
+        return {
+            "radial_axis": np.array([1.0, 2.0], dtype=np.float64),
+            "azimuth_axis": np.array([3.0, 4.0], dtype=np.float64),
+            "transform_bundle": FakeBundle(detector_shape=(2, 2)),
+        }
+
+    def temporary_numba_thread_limit(self, _count: object) -> FakeContextManager:
+        return FakeContextManager()
+
+    def default_reserved_cpu_worker_count(self) -> int:
+        return 0
+
+    def caking(
+        self,
+        background: object,
+        ai: object,
+        **kwargs: object,
+    ) -> object:
+        self.caking_calls.append(
+            {
+                "background_shape": tuple(np.asarray(background).shape),
+                "ai": ai,
+                **kwargs,
+            }
+        )
+        return self.caking_result
+
+    def prepare_caked_display_payload(self, *_args: object, **_kwargs: object) -> object:
+        return self.prepared_payload
+
+    def sanitize_caked_display_payload(
+        self,
+        payload: object,
+    ) -> tuple[object, dict[str, object]]:
+        return (
+            self.sanitized_payload if self.sanitized_payload is not None else payload,
+            dict(self.sanitize_diag),
+        )
+
+    def normalize_projection_view_signature(
+        self,
+        signature: object,
+        background_index: int,
+    ) -> dict[str, object]:
+        return dict(signature, normalized_background_index=int(background_index))
+
+    def targeted_projection_view_signature(
+        self,
+        background_index: int,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        return {"background_index": int(background_index), **kwargs}
+
+    def digest_payload(self, payload: object) -> tuple[str, str]:
+        return ("digest", repr(payload))
+
+    def replace_bundle(
+        self,
+        bundle: FakeBackgroundCacheBundle,
+        **changes: object,
+    ) -> FakeBackgroundCacheBundle:
+        values = {
+            "background_index": bundle.background_index,
+            "background_label": bundle.background_label,
+            "theta_base": bundle.theta_base,
+            "theta_initial": bundle.theta_initial,
+            "stored_rows": bundle.stored_rows,
+            "projected_rows": bundle.projected_rows,
+            "cache_source": bundle.cache_source,
+            "requested_signature": bundle.requested_signature,
+            "requested_signature_summary": bundle.requested_signature_summary,
+            "diagnostics": bundle.diagnostics,
+            "peak_table_lattice": bundle.peak_table_lattice,
+            "hit_tables": bundle.hit_tables,
+            "intersection_cache": bundle.intersection_cache,
+            "cache_metadata": bundle.cache_metadata,
+        }
+        values.update(changes)
+        return FakeBackgroundCacheBundle(**values)
 
 
 class FakeProjectionCallbacks:
@@ -835,6 +1001,22 @@ def _context_with_cache_bundle_deps(
     )
     context.cache_bundle_deps = _fake_cache_bundle_deps()
     return context, source_deps
+
+
+def _context_with_caked_view_storage_deps(
+    job: dict[str, object] | None = None,
+) -> tuple[GeometryFitWorkerContext, FakeCakedViewStorageDeps]:
+    context, _source_deps = _context_with_cache_bundle_deps(
+        {
+            "current_background_index": 0,
+            "params": {"center": (0.0, 0.0)},
+            **(job or {}),
+        }
+    )
+    context.caked_payload_deps = FakeCakedPayloadDeps().deps
+    fake_storage_deps = FakeCakedViewStorageDeps()
+    context.caked_view_storage_deps = fake_storage_deps.deps
+    return context, fake_storage_deps
 
 
 def _context_with_prebuild_deps(
@@ -2127,6 +2309,174 @@ def test_store_worker_background_cache_bundle_advances_generation_and_job_data()
     assert generation == 5
     assert context.source_cache_generation_by_background[0] == 5
     assert context.job_data["source_cache_generation_by_background"][0] == 5
+
+
+def _caked_storage_result_keys() -> set[str]:
+    return {
+        "background_index",
+        "background_label",
+        "source_cache_generation_id",
+        "row_count",
+        "caked_view_stored",
+        "caked_view_status",
+        "roi_enabled",
+        "roi_used_restricted_cake",
+        "roi_pixel_count",
+        "roi_fraction",
+        "roi_fallback_reason",
+        "roi_half_width_px",
+        "elapsed_s",
+    }
+
+
+def test_store_worker_caked_view_for_background_missing_native_background_result_shape() -> None:
+    context, _storage_deps = _context_with_caked_view_storage_deps({})
+    bundle = FakeBackgroundCacheBundle(
+        background_index=2,
+        background_label="other background",
+        stored_rows=[{"row": 1}],
+    )
+
+    result = context.store_worker_caked_view_for_background(
+        bundle,
+        source_cache_generation_id=7,
+    )
+
+    assert set(result) == _caked_storage_result_keys()
+    assert result["background_index"] == 2
+    assert result["background_label"] == "other background"
+    assert result["source_cache_generation_id"] == 7
+    assert result["row_count"] == 1
+    assert result["caked_view_stored"] is False
+    assert result["caked_view_status"] == "missing_native_background"
+    assert result["roi_fallback_reason"] == "missing_native_background"
+
+
+def test_store_worker_caked_view_for_background_invalid_caked_payload_result_shape() -> None:
+    context, storage_deps = _context_with_caked_view_storage_deps(
+        {"background_images": {0: {"native": np.ones((2, 2), dtype=np.float64)}}}
+    )
+    storage_deps.prepared_payload = None
+
+    result = context.store_worker_caked_view_for_background(
+        FakeBackgroundCacheBundle(background_index=0, stored_rows=[{"row": 1}])
+    )
+
+    assert set(result) == _caked_storage_result_keys()
+    assert result["caked_view_stored"] is False
+    assert result["caked_view_status"] == "invalid_caked_payload"
+    assert result["roi_fallback_reason"] == "invalid_caked_payload"
+
+
+def test_store_worker_caked_view_for_background_stale_generation_rejects_storage() -> None:
+    context, _storage_deps = _context_with_caked_view_storage_deps(
+        {
+            "background_images": {0: {"native": np.ones((2, 2), dtype=np.float64)}},
+            "source_cache_generation_by_background": {0: 2},
+        }
+    )
+
+    result = context.store_worker_caked_view_for_background(
+        FakeBackgroundCacheBundle(background_index=0, stored_rows=[{"row": 1}]),
+        source_cache_generation_id=1,
+    )
+
+    assert result["caked_view_stored"] is False
+    assert result["caked_view_status"] == "stale_generation"
+    assert context.job_data["caked_views_by_background"] == {}
+    assert context.job_data["projection_payload_by_background"] == {}
+
+
+def test_store_worker_caked_view_for_background_writes_payloads_and_events() -> None:
+    context, storage_deps = _context_with_caked_view_storage_deps(
+        {
+            "background_images": {0: {"native": np.ones((2, 2), dtype=np.float64)}},
+            "source_cache_generation_by_background": {0: 3},
+        }
+    )
+
+    result = context.store_worker_caked_view_for_background(
+        FakeBackgroundCacheBundle(background_index=0, stored_rows=[{"row": 1}]),
+        source_cache_generation_id=3,
+        stage_callback="stage-callback",
+    )
+
+    assert result["caked_view_stored"] is True
+    assert result["caked_view_status"] == "stored"
+    stored_payload = context.job_data["caked_views_by_background"][0]
+    assert set(stored_payload) == {
+        "background",
+        "radial_axis",
+        "azimuth_axis",
+        "raw_azimuth_axis",
+        "raw_to_gui_row_permutation",
+        "transform_bundle",
+        "detector_shape",
+        "roi_enabled",
+        "roi_used_restricted_cake",
+        "roi_pixel_count",
+        "roi_fraction",
+        "roi_fallback_reason",
+        "roi_half_width_px",
+        "caked_display_sanitize_status",
+        "sanitized_empty_bin_count",
+        "nonfinite_supported_bin_count",
+    }
+    assert context.job_data["projection_payload_by_background"][0]["digest"] == (
+        "projection-digest"
+    )
+    event_names = [event[1] for event in storage_deps.stage_events]
+    assert event_names == [
+        "source_cache_caked_roi_selection_start",
+        "source_cache_caked_roi_selection_ready",
+        "source_cache_full_cake_start",
+        "source_cache_full_cake_ready",
+        "projection_payload_ready",
+    ]
+    assert all(event[0] == "stage-callback" for event in storage_deps.stage_events)
+    assert all(
+        {"background_index", "background_label", "source_cache_generation_id", "row_count"}
+        <= set(event[2])
+        for event in storage_deps.stage_events
+    )
+
+
+def test_store_worker_caked_view_for_background_refreshes_caked_projection_rows() -> None:
+    context, _storage_deps = _context_with_caked_view_storage_deps(
+        {
+            "background_images": {0: {"native": np.ones((2, 2), dtype=np.float64)}},
+            "projection_view_mode": "caked",
+            "current_background_index": 0,
+            "analysis_bins": (4, 5),
+            "source_cache_generation_by_background": {0: 3},
+        }
+    )
+
+    result = context.store_worker_caked_view_for_background(
+        FakeBackgroundCacheBundle(
+            background_index=0,
+            stored_rows=[{"background_index": 0, "source_label": "manual"}],
+            diagnostics={"status": "cached"},
+        ),
+        source_cache_generation_id=3,
+    )
+
+    assert result["caked_view_stored"] is True
+    signature = context.job_data["projection_view_signature_by_background"][0]
+    assert signature["mode_override"] == "caked"
+    assert context.job_data["projection_view_signature"]["mode_override"] == "caked"
+    assert (
+        context.job_data["projection_view_signature"]["normalized_background_index"]
+        == 0
+    )
+    assert context.worker_background_cache_by_index[0].projected_rows
+    assert context.worker_source_row_snapshots[0]["projected_row_count"] == 1
+    assert (
+        context.worker_source_row_snapshots[0]["diagnostics"][
+            "projection_view_signature_digest"
+        ][0]
+        == "digest"
+    )
 
 
 def test_build_geometry_fit_background_cache_bundle_copies_stored_and_projected_rows() -> None:

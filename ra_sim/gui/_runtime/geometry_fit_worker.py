@@ -26,6 +26,24 @@ class GeometryFitWorkerCakedPayloadDeps:
 
 
 @dataclass(frozen=True)
+class GeometryFitWorkerCakedViewStorageDeps:
+    emit_geometry_fit_stage_event: Callable[..., object]
+    build_caked_roi_selection: Callable[..., object]
+    caked_roi_fit_space_to_detector_point: Callable[..., object]
+    worker_projection_analysis_bins: Callable[..., object]
+    geometry_fit_worker_caked_projection_view: Callable[..., object]
+    temporary_numba_thread_limit: Callable[..., object]
+    default_reserved_cpu_worker_count: Callable[..., object]
+    caking: Callable[..., object]
+    prepare_caked_display_payload: Callable[..., object]
+    sanitize_caked_display_payload: Callable[..., object]
+    normalize_projection_view_signature: Callable[..., object]
+    targeted_projection_view_signature: Callable[..., object]
+    digest_payload: Callable[..., object]
+    replace_bundle: Callable[..., object]
+
+
+@dataclass(frozen=True)
 class GeometryFitWorkerSourceProjectionDeps:
     rows_for_background: Callable[..., object]
     group_rows_by_background: Callable[..., object]
@@ -114,6 +132,7 @@ class GeometryFitWorkerContext:
     source_cache_generation_by_background: dict[int, object]
     source_cache_generation_lock: threading.Lock = field(default_factory=threading.Lock)
     caked_payload_deps: GeometryFitWorkerCakedPayloadDeps | None = None
+    caked_view_storage_deps: GeometryFitWorkerCakedViewStorageDeps | None = None
     source_projection_deps: GeometryFitWorkerSourceProjectionDeps | None = None
     cache_bundle_deps: GeometryFitWorkerCacheBundleDeps | None = None
     prebuild_deps: GeometryFitWorkerPrebuildDeps | None = None
@@ -216,6 +235,13 @@ class GeometryFitWorkerContext:
         if self.caked_payload_deps is None:
             raise RuntimeError("geometry-fit worker caked payload deps are not configured")
         return self.caked_payload_deps
+
+    def _require_caked_view_storage_deps(self) -> GeometryFitWorkerCakedViewStorageDeps:
+        if self.caked_view_storage_deps is None:
+            raise RuntimeError(
+                "geometry-fit worker caked view storage deps are not configured"
+            )
+        return self.caked_view_storage_deps
 
     def _require_source_projection_deps(self) -> GeometryFitWorkerSourceProjectionDeps:
         if self.source_projection_deps is None:
@@ -660,6 +686,578 @@ class GeometryFitWorkerContext:
             raise RuntimeError(
                 f"exact caked projector unavailable for background {int(background_idx) + 1}"
             )
+
+    def store_worker_caked_view_for_background(
+        self,
+        bundle: object,
+        *,
+        stage_callback: object | None = None,
+        source_cache_generation_id: int | None = None,
+    ) -> dict[str, object]:
+        storage_deps = self._require_caked_view_storage_deps()
+        caked_deps = self._require_caked_payload_deps()
+        helper_started_at = perf_counter()
+        background_idx = int(getattr(bundle, "background_index"))
+        resolved_background_label = str(
+            getattr(bundle, "background_label", None)
+            or f"background {background_idx + 1}"
+        )
+        stored_rows = getattr(bundle, "stored_rows", None)
+        projected_rows = getattr(bundle, "projected_rows", None)
+        row_count = int(len(projected_rows or stored_rows or ()))
+
+        def _emit_caked_stage(
+            stage: str,
+            *,
+            stage_started_at: float | None = None,
+            **payload: object,
+        ) -> None:
+            event_payload = {
+                "background_index": int(background_idx),
+                "background_label": resolved_background_label,
+                "source_cache_generation_id": (
+                    int(source_cache_generation_id)
+                    if source_cache_generation_id is not None
+                    else None
+                ),
+                "row_count": int(row_count),
+                "elapsed_s": float(max(0.0, perf_counter() - helper_started_at)),
+                **payload,
+            }
+            if stage_started_at is not None:
+                event_payload["stage_elapsed_s"] = float(
+                    max(0.0, perf_counter() - stage_started_at)
+                )
+            storage_deps.emit_geometry_fit_stage_event(
+                stage_callback,
+                str(stage),
+                **event_payload,
+            )
+
+        def _caked_result(
+            status: str,
+            *,
+            caked_view_stored: bool,
+            roi_enabled: bool = False,
+            roi_used_restricted_cake: bool = False,
+            roi_pixel_count: int = 0,
+            roi_fraction: float = 0.0,
+            roi_fallback_reason: str | None = None,
+            roi_half_width_px: float = 0.0,
+        ) -> dict[str, object]:
+            return {
+                "background_index": int(background_idx),
+                "background_label": resolved_background_label,
+                "source_cache_generation_id": (
+                    int(source_cache_generation_id)
+                    if source_cache_generation_id is not None
+                    else None
+                ),
+                "row_count": int(row_count),
+                "caked_view_stored": bool(caked_view_stored),
+                "caked_view_status": str(status),
+                "roi_enabled": bool(roi_enabled),
+                "roi_used_restricted_cake": bool(roi_used_restricted_cake),
+                "roi_pixel_count": int(roi_pixel_count),
+                "roi_fraction": float(roi_fraction),
+                "roi_fallback_reason": (
+                    str(roi_fallback_reason) if roi_fallback_reason is not None else None
+                ),
+                "roi_half_width_px": float(roi_half_width_px),
+                "elapsed_s": float(max(0.0, perf_counter() - helper_started_at)),
+            }
+
+        caked_views_by_background = self.job_data.setdefault(
+            "caked_views_by_background",
+            {},
+        )
+        projection_payload_by_background = self.job_data.setdefault(
+            "projection_payload_by_background",
+            {},
+        )
+        background_images = dict(self.job_data.get("background_images", {}) or {})
+        background_payload = dict(background_images.get(int(background_idx)) or {})
+        native_background = background_payload.get("native")
+        if native_background is None:
+            return _caked_result(
+                "missing_native_background",
+                caked_view_stored=False,
+                roi_fallback_reason="missing_native_background",
+            )
+
+        backend_background = np.asarray(native_background, dtype=np.float64)
+        apply_backend_orientation = self.job_data.get(
+            "apply_background_backend_orientation"
+        )
+        if callable(apply_backend_orientation):
+            try:
+                oriented_background = apply_backend_orientation(backend_background)
+            except Exception:
+                oriented_background = backend_background
+            if oriented_background is not None:
+                backend_background = np.asarray(oriented_background, dtype=np.float64)
+
+        worker_ai = caked_deps.caking_integrator()
+        background_caked_view = dict(caked_views_by_background.get(background_idx) or {})
+        if not caked_deps.is_transform_bundle(
+            background_caked_view.get("transform_bundle")
+        ):
+            # Non-current worker backgrounds need same-axes exact-cake metadata
+            # before the first caked payload exists, otherwise ROI projection drops
+            # every angle-backed source row on the first pass.
+            precompute_npt_rad, precompute_npt_azim = (
+                storage_deps.worker_projection_analysis_bins()
+            )
+            precomputed_caked_view = storage_deps.geometry_fit_worker_caked_projection_view(
+                detector_shape=backend_background.shape[:2],
+                ai=worker_ai,
+                npt_rad=precompute_npt_rad,
+                npt_azim=precompute_npt_azim,
+            )
+            if isinstance(precomputed_caked_view, dict):
+                background_caked_view.update(precomputed_caked_view)
+        roi_selection_started_at = perf_counter()
+        _emit_caked_stage("source_cache_caked_roi_selection_start")
+        roi_selection = storage_deps.build_caked_roi_selection(
+            stored_rows,
+            required_pairs=list(
+                dict(self.job_data.get("manual_pairs_by_background", {}) or {}).get(
+                    background_idx,
+                    (),
+                )
+                or ()
+            ),
+            image_shape=backend_background.shape[:2],
+            fit_config=dict(self.job_data.get("geometry_runtime_cfg", {}) or {}),
+            fit_space_to_detector_point=storage_deps.caked_roi_fit_space_to_detector_point(
+                detector_shape=backend_background.shape[:2],
+                radial_axis=background_caked_view.get("radial_axis"),
+                azimuth_axis=background_caked_view.get("azimuth_axis"),
+                ai=worker_ai,
+                transform_bundle=background_caked_view.get("transform_bundle"),
+            ),
+        )
+        roi_enabled = bool(roi_selection.get("enabled", False))
+        roi_pixel_count = int(roi_selection.get("pixel_count", 0) or 0)
+        roi_fraction = float(roi_selection.get("fraction", 0.0) or 0.0)
+        roi_half_width_px = float(roi_selection.get("half_width_px", 0.0) or 0.0)
+        roi_fallback_reason = roi_selection.get("fallback_reason")
+        roi_used_restricted_cake = bool(roi_selection.get("valid", False))
+        _emit_caked_stage(
+            "source_cache_caked_roi_selection_ready",
+            stage_started_at=roi_selection_started_at,
+            status="ready",
+            roi_enabled=bool(roi_enabled),
+            roi_used_restricted_cake=bool(roi_used_restricted_cake),
+            roi_pixel_count=int(roi_pixel_count),
+            roi_fraction=float(roi_fraction),
+            roi_fallback_reason=(
+                str(roi_fallback_reason) if roi_fallback_reason is not None else None
+            ),
+            roi_half_width_px=float(roi_half_width_px),
+        )
+
+        rows = cols = None
+        if roi_used_restricted_cake:
+            try:
+                rows = np.asarray(roi_selection.get("rows"), dtype=np.int32)
+                cols = np.asarray(roi_selection.get("cols"), dtype=np.int32)
+            except Exception:
+                rows = cols = None
+                roi_used_restricted_cake = False
+                roi_fallback_reason = "invalid_roi_pixels"
+
+        ai = worker_ai
+        if ai is None:
+            return _caked_result(
+                "missing_integrator",
+                caked_view_stored=False,
+                roi_enabled=bool(roi_enabled),
+                roi_pixel_count=int(roi_pixel_count),
+                roi_fraction=float(roi_fraction),
+                roi_fallback_reason="missing_integrator",
+                roi_half_width_px=float(roi_half_width_px),
+            )
+
+        res2 = None
+        if roi_used_restricted_cake:
+            restricted_started_at = perf_counter()
+            _emit_caked_stage(
+                "source_cache_restricted_cake_start",
+                roi_pixel_count=int(roi_pixel_count),
+            )
+            try:
+                with storage_deps.temporary_numba_thread_limit(
+                    storage_deps.default_reserved_cpu_worker_count()
+                ):
+                    res2 = storage_deps.caking(
+                        backend_background,
+                        ai,
+                        rows=rows,
+                        cols=cols,
+                    )
+                _emit_caked_stage(
+                    "source_cache_restricted_cake_ready",
+                    stage_started_at=restricted_started_at,
+                    status="ready",
+                    roi_pixel_count=int(roi_pixel_count),
+                )
+            except Exception as exc:
+                _emit_caked_stage(
+                    "source_cache_restricted_cake_failed",
+                    stage_started_at=restricted_started_at,
+                    status=f"exception:{type(exc).__name__}",
+                    roi_pixel_count=int(roi_pixel_count),
+                )
+                roi_used_restricted_cake = False
+                roi_fallback_reason = f"restricted_cake_exception:{type(exc).__name__}"
+
+        if res2 is None:
+            full_started_at = perf_counter()
+            _emit_caked_stage("source_cache_full_cake_start")
+            try:
+                with storage_deps.temporary_numba_thread_limit(
+                    storage_deps.default_reserved_cpu_worker_count()
+                ):
+                    res2 = storage_deps.caking(backend_background, ai)
+                _emit_caked_stage(
+                    "source_cache_full_cake_ready",
+                    stage_started_at=full_started_at,
+                    status="ready",
+                )
+            except Exception as exc:
+                _emit_caked_stage(
+                    "source_cache_full_cake_failed",
+                    stage_started_at=full_started_at,
+                    status=f"exception:{type(exc).__name__}",
+                )
+                return _caked_result(
+                    f"full_cake_exception:{type(exc).__name__}",
+                    caked_view_stored=False,
+                    roi_enabled=bool(roi_enabled),
+                    roi_used_restricted_cake=False,
+                    roi_pixel_count=int(roi_pixel_count),
+                    roi_fraction=float(roi_fraction),
+                    roi_fallback_reason=f"full_cake_exception:{type(exc).__name__}",
+                    roi_half_width_px=float(roi_half_width_px),
+                )
+
+        caked_payload = storage_deps.prepare_caked_display_payload(
+            res2,
+            ai=ai,
+            detector_shape=backend_background.shape,
+        )
+        if not isinstance(caked_payload, Mapping):
+            return _caked_result(
+                "invalid_caked_payload",
+                caked_view_stored=False,
+                roi_enabled=bool(roi_enabled),
+                roi_used_restricted_cake=bool(roi_used_restricted_cake),
+                roi_pixel_count=int(roi_pixel_count),
+                roi_fraction=float(roi_fraction),
+                roi_fallback_reason="invalid_caked_payload",
+                roi_half_width_px=float(roi_half_width_px),
+            )
+        projection_payload = caked_deps.caked_projection_payload(caked_payload)
+        projection_status = self.caked_projection_payload_status(projection_payload)
+        if projection_status != "projection_payload_ready":
+            return _caked_result(
+                projection_status,
+                caked_view_stored=False,
+                roi_enabled=bool(roi_enabled),
+                roi_used_restricted_cake=bool(roi_used_restricted_cake),
+                roi_pixel_count=int(roi_pixel_count),
+                roi_fraction=float(roi_fraction),
+                roi_fallback_reason=projection_status,
+                roi_half_width_px=float(roi_half_width_px),
+            )
+        hydrated_projection_payload = caked_deps.hydrate_exact_caked_payload(
+            projection_payload,
+            detector_shape=backend_background.shape[:2],
+            params=dict(self.job_data.get("params", {}) or {}),
+            require_background=False,
+        )
+        projection_status = self.caked_projection_payload_status(
+            hydrated_projection_payload
+        )
+        if not isinstance(hydrated_projection_payload, Mapping) or not (
+            caked_deps.is_transform_bundle(
+                hydrated_projection_payload.get("transform_bundle")
+            )
+        ):
+            return _caked_result(
+                projection_status,
+                caked_view_stored=False,
+                roi_enabled=bool(roi_enabled),
+                roi_used_restricted_cake=bool(roi_used_restricted_cake),
+                roi_pixel_count=int(roi_pixel_count),
+                roi_fraction=float(roi_fraction),
+                roi_fallback_reason=projection_status,
+                roi_half_width_px=float(roi_half_width_px),
+            )
+        projection_payload = caked_deps.caked_projection_payload(
+            hydrated_projection_payload
+        )
+        if not isinstance(projection_payload, Mapping):
+            return _caked_result(
+                "missing_exact_caked_bundle",
+                caked_view_stored=False,
+                roi_enabled=bool(roi_enabled),
+                roi_used_restricted_cake=bool(roi_used_restricted_cake),
+                roi_pixel_count=int(roi_pixel_count),
+                roi_fraction=float(roi_fraction),
+                roi_fallback_reason="missing_exact_caked_bundle",
+                roi_half_width_px=float(roi_half_width_px),
+            )
+        sanitized_caked_payload, sanitize_diag = (
+            storage_deps.sanitize_caked_display_payload(caked_payload)
+        )
+        sanitize_status = str(sanitize_diag.get("status", "invalid_caked_payload"))
+        if not isinstance(sanitized_caked_payload, Mapping):
+            return _caked_result(
+                sanitize_status,
+                caked_view_stored=False,
+                roi_enabled=bool(roi_enabled),
+                roi_used_restricted_cake=bool(roi_used_restricted_cake),
+                roi_pixel_count=int(roi_pixel_count),
+                roi_fraction=float(roi_fraction),
+                roi_fallback_reason=sanitize_status,
+                roi_half_width_px=float(roi_half_width_px),
+            )
+        hydrated_caked_payload = caked_deps.hydrate_exact_caked_payload(
+            sanitized_caked_payload,
+            detector_shape=backend_background.shape[:2],
+            params=dict(self.job_data.get("params", {}) or {}),
+            require_background=True,
+        )
+        if not isinstance(hydrated_caked_payload, Mapping):
+            return _caked_result(
+                "missing_exact_caked_bundle",
+                caked_view_stored=False,
+                roi_enabled=bool(roi_enabled),
+                roi_used_restricted_cake=bool(roi_used_restricted_cake),
+                roi_pixel_count=int(roi_pixel_count),
+                roi_fraction=float(roi_fraction),
+                roi_fallback_reason="missing_exact_caked_bundle",
+                roi_half_width_px=float(roi_half_width_px),
+            )
+        caked_payload = hydrated_caked_payload
+
+        if not self.source_cache_generation_matches(
+            background_idx,
+            source_cache_generation_id,
+        ):
+            return _caked_result(
+                "stale_generation",
+                caked_view_stored=False,
+                roi_enabled=bool(roi_enabled),
+                roi_used_restricted_cake=bool(roi_used_restricted_cake),
+                roi_pixel_count=int(roi_pixel_count),
+                roi_fraction=float(roi_fraction),
+                roi_fallback_reason=(
+                    str(roi_fallback_reason) if roi_fallback_reason is not None else None
+                ),
+                roi_half_width_px=float(roi_half_width_px),
+            )
+
+        stored_projection_payload = caked_deps.projection_payload_storage_copy(
+            projection_payload
+        )
+        if not isinstance(stored_projection_payload, Mapping):
+            return _caked_result(
+                "missing_exact_caked_bundle",
+                caked_view_stored=False,
+                roi_enabled=bool(roi_enabled),
+                roi_used_restricted_cake=bool(roi_used_restricted_cake),
+                roi_pixel_count=int(roi_pixel_count),
+                roi_fraction=float(roi_fraction),
+                roi_fallback_reason="missing_exact_caked_bundle",
+                roi_half_width_px=float(roi_half_width_px),
+            )
+        projection_payload_by_background[background_idx] = stored_projection_payload
+        _emit_caked_stage(
+            "projection_payload_ready",
+            status="projection_payload_ready",
+            payload_kind="projection",
+        )
+
+        try:
+            caked_views_by_background[background_idx] = {
+                "background": np.asarray(
+                    caked_payload.get("image"),
+                    dtype=np.float64,
+                ).copy(),
+                "radial_axis": np.asarray(
+                    caked_payload.get("radial"),
+                    dtype=np.float64,
+                ).copy(),
+                "azimuth_axis": np.asarray(
+                    caked_payload.get("azimuth"),
+                    dtype=np.float64,
+                ).copy(),
+                "raw_azimuth_axis": np.asarray(
+                    caked_payload.get(
+                        "raw_azimuth_axis",
+                        caked_payload.get("raw_azimuth"),
+                    ),
+                    dtype=np.float64,
+                ).copy(),
+                "raw_to_gui_row_permutation": np.asarray(
+                    caked_payload.get("raw_to_gui_row_permutation"),
+                    dtype=np.int32,
+                ).copy(),
+                "transform_bundle": caked_payload.get("transform_bundle"),
+                "detector_shape": tuple(
+                    int(v) for v in tuple(caked_payload.get("detector_shape", ()))[:2]
+                ),
+                "roi_enabled": bool(roi_enabled),
+                "roi_used_restricted_cake": bool(roi_used_restricted_cake),
+                "roi_pixel_count": int(roi_pixel_count),
+                "roi_fraction": float(roi_fraction),
+                "roi_fallback_reason": (
+                    str(roi_fallback_reason) if roi_fallback_reason is not None else None
+                ),
+                "roi_half_width_px": float(roi_half_width_px),
+                "caked_display_sanitize_status": sanitize_status,
+                "sanitized_empty_bin_count": int(
+                    sanitize_diag.get("sanitized_empty_bin_count", 0) or 0
+                ),
+                "nonfinite_supported_bin_count": int(
+                    sanitize_diag.get("nonfinite_supported_bin_count", 0) or 0
+                ),
+            }
+            if str(self.job_data.get("projection_view_mode") or "").strip().lower() == (
+                "caked"
+            ):
+                projection_signature_map = self.job_data.setdefault(
+                    "projection_view_signature_by_background",
+                    {},
+                )
+                projection_signature_map[background_idx] = (
+                    storage_deps.normalize_projection_view_signature(
+                        storage_deps.targeted_projection_view_signature(
+                            background_idx,
+                            mode_override="caked",
+                            caked_payload=dict(projection_payload),
+                            detector_shape=backend_background.shape[:2],
+                            ai=worker_ai,
+                            analysis_preview_bins=self.job_data.get("analysis_bins"),
+                        ),
+                        background_idx,
+                    )
+                )
+                if background_idx == int(
+                    self.job_data.get("current_background_index", -1)
+                ):
+                    self.job_data["projection_view_signature"] = copy.deepcopy(
+                        projection_signature_map[background_idx]
+                    )
+                source_deps = self._require_source_projection_deps()
+                refreshed_projected_rows = source_deps.rows_for_background(
+                    background_idx,
+                    self.project_source_rows_for_background(
+                        background_idx,
+                        stored_rows,
+                    ),
+                )
+                if refreshed_projected_rows:
+                    refreshed_diagnostics = dict(getattr(bundle, "diagnostics", {}) or {})
+                    refreshed_diagnostics["projected_peak_count"] = int(
+                        len(refreshed_projected_rows)
+                    )
+                    refreshed_diagnostics["projection_view_signature"] = copy.deepcopy(
+                        projection_signature_map.get(background_idx)
+                    )
+                    refreshed_diagnostics["projection_view_signature_digest"] = (
+                        storage_deps.digest_payload(
+                            refreshed_diagnostics.get("projection_view_signature")
+                        )
+                    )
+                    refreshed_bundle = storage_deps.replace_bundle(
+                        bundle,
+                        projected_rows=[
+                            dict(entry) for entry in refreshed_projected_rows
+                        ],
+                        diagnostics=refreshed_diagnostics,
+                    )
+                    self.worker_background_cache_by_index[background_idx] = (
+                        refreshed_bundle
+                    )
+                    cache_deps = self._require_cache_bundle_deps()
+                    self.worker_source_row_snapshots[background_idx] = {
+                        "background_index": int(
+                            getattr(refreshed_bundle, "background_index")
+                        ),
+                        "simulation_signature": getattr(
+                            refreshed_bundle,
+                            "requested_signature",
+                        ),
+                        "requested_signature": getattr(
+                            refreshed_bundle,
+                            "requested_signature",
+                        ),
+                        "requested_signature_summary": getattr(
+                            refreshed_bundle,
+                            "requested_signature_summary",
+                        ),
+                        "rows": cache_deps.copy_source_rows(
+                            getattr(refreshed_bundle, "stored_rows", None)
+                        ),
+                        "stored_rows": cache_deps.copy_source_rows(
+                            getattr(refreshed_bundle, "stored_rows", None)
+                        ),
+                        "projected_rows": cache_deps.copy_source_rows(
+                            getattr(refreshed_bundle, "projected_rows", None)
+                        ),
+                        "row_count": int(
+                            len(getattr(refreshed_bundle, "stored_rows", None) or ())
+                        ),
+                        "projected_row_count": int(
+                            len(getattr(refreshed_bundle, "projected_rows", None) or ())
+                        ),
+                        "created_from": str(
+                            getattr(refreshed_bundle, "cache_source", None)
+                            or "geometry_fit_background_cache"
+                        ),
+                        "diagnostics": copy.deepcopy(
+                            dict(getattr(refreshed_bundle, "diagnostics", {}) or {})
+                        ),
+                        "projection_view_signature": copy.deepcopy(
+                            refreshed_diagnostics.get("projection_view_signature")
+                        ),
+                        "valid_for_picker": bool(
+                            getattr(refreshed_bundle, "stored_rows", None)
+                        ),
+                        "valid_for_geometry_fit_dataset": bool(
+                            getattr(refreshed_bundle, "stored_rows", None)
+                            or getattr(refreshed_bundle, "projected_rows", None)
+                        ),
+                    }
+        except Exception as exc:
+            failure_status = f"store_caked_payload_failed:{type(exc).__name__}:{exc}"
+            return _caked_result(
+                failure_status,
+                caked_view_stored=False,
+                roi_enabled=bool(roi_enabled),
+                roi_used_restricted_cake=bool(roi_used_restricted_cake),
+                roi_pixel_count=int(roi_pixel_count),
+                roi_fraction=float(roi_fraction),
+                roi_fallback_reason=failure_status,
+                roi_half_width_px=float(roi_half_width_px),
+            )
+
+        return _caked_result(
+            sanitize_status if sanitize_status != "stored" else "stored",
+            caked_view_stored=True,
+            roi_enabled=bool(roi_enabled),
+            roi_used_restricted_cake=bool(roi_used_restricted_cake),
+            roi_pixel_count=int(roi_pixel_count),
+            roi_fraction=float(roi_fraction),
+            roi_fallback_reason=(
+                str(roi_fallback_reason) if roi_fallback_reason is not None else None
+            ),
+            roi_half_width_px=float(roi_half_width_px),
+        )
 
     def worker_native_detector_coords_to_detector_display_coords_for_background(
         self,

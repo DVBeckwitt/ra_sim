@@ -118,6 +118,7 @@ def test_geometry_fit_worker_context_helpers_are_not_duplicated_in_runtime_worke
         "_source_cache_generation_matches",
         "_source_rows_for_background_worker",
         "_store_worker_background_cache_bundle",
+        "_store_worker_caked_view_for_background",
         "_worker_manual_pairs_for_background",
         "_worker_manual_fit_space_by_background",
         "_worker_manual_caked_fit_space_required_for_background",
@@ -154,6 +155,7 @@ def test_geometry_fit_worker_has_moved_only_cache_manual_caked_and_display_helpe
         "rebuild_source_rows_for_background_worker",
         "source_rows_for_background_worker",
         "store_worker_background_cache_bundle",
+        "store_worker_caked_view_for_background",
         "worker_manual_pairs_for_background",
         "worker_manual_fit_space_by_background",
         "worker_manual_caked_fit_space_required_for_background",
@@ -165,11 +167,6 @@ def test_geometry_fit_worker_has_moved_only_cache_manual_caked_and_display_helpe
         "worker_geometry_manual_entry_display_coords",
         "worker_native_detector_coords_to_detector_display_coords_for_background",
     } <= worker_function_names
-
-    pending_worker_helper_names = {
-        "store_worker_caked_view_for_background",
-    }
-    assert not (worker_function_names & pending_worker_helper_names)
 
 
 def _geometry_fit_param_set() -> dict[str, object]:
