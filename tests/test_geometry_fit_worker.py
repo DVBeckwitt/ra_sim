@@ -10,6 +10,7 @@ from ra_sim.gui._runtime.geometry_fit_worker import (
     GeometryFitWorkerCakedPayloadDeps,
     GeometryFitWorkerCakedViewStorageDeps,
     GeometryFitWorkerContext,
+    GeometryFitWorkerDatasetDeps,
     GeometryFitWorkerManualFitSpaceDeps,
     GeometryFitWorkerPrebuildDeps,
     GeometryFitWorkerRequiredCacheDeps,
@@ -522,6 +523,52 @@ class FakeSourceProjectionDeps:
         _detector_shape: object,
     ) -> tuple[float, float]:
         return float(col), float(row)
+
+
+class FakeManualDatasetBindings:
+    def __init__(self, **kwargs: object) -> None:
+        self.kwargs = dict(kwargs)
+        self.geometry_manual_pairs_for_index = kwargs["geometry_manual_pairs_for_index"]
+
+
+class FakeDatasetDeps:
+    def __init__(self) -> None:
+        self.binding_calls: list[dict[str, object]] = []
+        self.bindings: list[FakeManualDatasetBindings] = []
+        self.prepare_calls: list[dict[str, object]] = []
+        self.dataset_calls: list[dict[str, object]] = []
+        self.prepare_result: object = {"prepared": True}
+
+    @property
+    def deps(self) -> GeometryFitWorkerDatasetDeps:
+        return GeometryFitWorkerDatasetDeps(
+            make_manual_dataset_bindings=self.make_manual_dataset_bindings,
+            prepare_geometry_fit_run=self.prepare_geometry_fit_run,
+            build_geometry_manual_fit_dataset=self.build_geometry_manual_fit_dataset,
+        )
+
+    def make_manual_dataset_bindings(self, **kwargs: object) -> FakeManualDatasetBindings:
+        self.binding_calls.append(dict(kwargs))
+        bindings = FakeManualDatasetBindings(**kwargs)
+        self.bindings.append(bindings)
+        return bindings
+
+    def prepare_geometry_fit_run(self, **kwargs: object) -> object:
+        self.prepare_calls.append(dict(kwargs))
+        return self.prepare_result
+
+    def build_geometry_manual_fit_dataset(
+        self,
+        background_index: int,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        self.dataset_calls.append(
+            {
+                "background_index": int(background_index),
+                "kwargs": dict(kwargs),
+            }
+        )
+        return {"dataset_background_index": int(background_index)}
 
 
 class FakePrebuildDeps:
@@ -1092,6 +1139,52 @@ def _context_with_manual_fit_space_deps(
     return context, fake_deps
 
 
+def _context_with_dataset_deps(
+    job: dict[str, object] | None = None,
+) -> tuple[GeometryFitWorkerContext, FakeDatasetDeps]:
+    context = GeometryFitWorkerContext.from_job(
+        {
+            "params": {"center": (1.0, 2.0), "theta_initial": 10.0},
+            "var_names": ["center_x", "theta_initial"],
+            "fit_config": {"geometry": {"auto_match": {"max_display_markers": 8}}},
+            "geometry_runtime_cfg": {"runtime": "cfg"},
+            "osc_files": ["bg0.osc", "bg1.osc"],
+            "current_background_index": 1,
+            "image_size": 64,
+            "display_rotate_k": 2,
+            "manual_pairs_by_background": {
+                1: [{"pair_id": "pair-1", "background_index": 1}]
+            },
+            "selected_background_indices": [1],
+            "theta_initial": 12.5,
+            "preserve_live_theta": True,
+            "selection_applied": True,
+            "uses_shared_theta": False,
+            "theta_metadata_applied": True,
+            "background_theta_values": [10.0, 12.5],
+            "theta_offset": 1.25,
+            "pick_uses_caked_space": True,
+            "manual_caked_fit_space_required_by_background": {1: True},
+            "apply_background_backend_orientation": lambda image: image,
+            "geometry_manual_simulated_lookup": lambda entry: {"lookup": entry},
+            "unrotate_display_peaks": lambda peaks: list(peaks or ()),
+            "display_to_native_sim_coords": lambda col, row: (col, row),
+            "native_detector_coords_to_detector_display_coords": (
+                lambda col, row: (col, row)
+            ),
+            "select_fit_orientation": lambda *_args, **_kwargs: ({}, {}),
+            "apply_orientation_to_entries": (
+                lambda entries, *_args, **_kwargs: list(entries or ())
+            ),
+            "orient_image_for_fit": lambda image, *_args, **_kwargs: image,
+            **(job or {}),
+        }
+    )
+    fake_deps = FakeDatasetDeps()
+    context.dataset_deps = fake_deps.deps
+    return context, fake_deps
+
+
 def _source_row(**overrides: object) -> dict[str, object]:
     row: dict[str, object] = {
         "background_index": 0,
@@ -1172,6 +1265,107 @@ def test_worker_context_from_job_copies_source_snapshots() -> None:
 
     source_snapshots[0]["rows"][0]["source"] = "mutated"
     assert context.worker_source_row_snapshots[0]["rows"][0]["source"] == "cached"
+
+
+def test_worker_prepare_geometry_fit_run_passes_job_snapshots() -> None:
+    context, fake_deps = _context_with_dataset_deps()
+
+    result = context.prepare_geometry_fit_run_for_worker(
+        ensure_geometry_fit_caked_view=lambda: None,
+        stage_callback=lambda _stage, _payload: None,
+    )
+
+    assert result is fake_deps.prepare_result
+    prepare_call = fake_deps.prepare_calls[0]
+    assert prepare_call["params"] == {"center": (1.0, 2.0), "theta_initial": 10.0}
+    assert prepare_call["var_names"] == ["center_x", "theta_initial"]
+    assert prepare_call["fit_config"] == {
+        "geometry": {"auto_match": {"max_display_markers": 8}}
+    }
+    assert prepare_call["osc_files"] == ["bg0.osc", "bg1.osc"]
+    assert prepare_call["current_background_index"] == 1
+    assert prepare_call["theta_initial"] == 12.5
+    assert prepare_call["preserve_live_theta"] is True
+    assert prepare_call["manual_fit_pick_uses_caked_space"] is True
+    assert prepare_call["manual_fit_requires_caked_space"] is True
+
+
+def test_worker_prepare_geometry_fit_run_uses_manual_dataset_bindings_callbacks() -> None:
+    context, fake_deps = _context_with_dataset_deps()
+
+    context.prepare_geometry_fit_run_for_worker(
+        ensure_geometry_fit_caked_view=lambda: None,
+        stage_callback=lambda _stage, _payload: None,
+    )
+
+    binding_call = fake_deps.binding_calls[0]
+    assert binding_call["osc_files"] == ["bg0.osc", "bg1.osc"]
+    assert binding_call["current_background_index"] == 1
+    assert binding_call["image_size"] == 64
+    assert binding_call["display_rotate_k"] == 2
+    assert (
+        binding_call["geometry_manual_source_rows_for_background"]
+        == context.source_rows_for_background_worker
+    )
+    assert (
+        binding_call["geometry_manual_rebuild_source_rows_for_background"]
+        == context.rebuild_source_rows_for_background_worker
+    )
+    pairs = binding_call["geometry_manual_pairs_for_index"](1)
+    pairs[0]["pair_id"] = "mutated"
+    assert context.job_data["manual_pairs_by_background"][1][0]["pair_id"] == "pair-1"
+
+
+def test_worker_prepare_geometry_fit_run_build_dataset_uses_manual_builder() -> None:
+    context, fake_deps = _context_with_dataset_deps()
+
+    context.prepare_geometry_fit_run_for_worker(
+        ensure_geometry_fit_caked_view=lambda: None,
+        stage_callback=lambda _stage, _payload: None,
+    )
+    prepare_call = fake_deps.prepare_calls[0]
+    dataset = prepare_call["build_dataset"](
+        1,
+        theta_base=20.0,
+        base_fit_params={"center": (1.0, 2.0)},
+        orientation_cfg={"mode": "detector"},
+        manual_fit_requires_caked_space=True,
+        stage_callback="stage-callback",
+    )
+
+    assert dataset == {"dataset_background_index": 1}
+    dataset_call = fake_deps.dataset_calls[0]
+    assert dataset_call["background_index"] == 1
+    assert dataset_call["kwargs"] == {
+        "theta_base": 20.0,
+        "base_fit_params": {"center": (1.0, 2.0)},
+        "manual_dataset_bindings": fake_deps.bindings[0],
+        "orientation_cfg": {"mode": "detector"},
+        "manual_fit_requires_caked_space": True,
+        "stage_callback": "stage-callback",
+    }
+
+
+def test_worker_prepare_geometry_fit_run_preserves_callbacks_and_error_lambdas() -> None:
+    context, fake_deps = _context_with_dataset_deps({"selection_error": "bad selection"})
+    stage_callback = lambda _stage, _payload: None
+    ensure_calls: list[str] = []
+
+    context.prepare_geometry_fit_run_for_worker(
+        ensure_geometry_fit_caked_view=lambda: ensure_calls.append("ensure"),
+        stage_callback=stage_callback,
+    )
+
+    prepare_call = fake_deps.prepare_calls[0]
+    assert prepare_call["stage_callback"] is stage_callback
+    prepare_call["ensure_geometry_fit_caked_view"]()
+    assert ensure_calls == ["ensure"]
+    try:
+        prepare_call["current_geometry_fit_background_indices"](strict=True)
+    except RuntimeError as exc:
+        assert str(exc) == "bad selection"
+    else:
+        raise AssertionError("expected selection error")
 
 
 def test_worker_manual_pairs_for_background_returns_copied_pairs() -> None:

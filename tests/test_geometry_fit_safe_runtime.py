@@ -135,7 +135,7 @@ def test_geometry_fit_worker_context_helpers_are_not_duplicated_in_runtime_worke
     assert not (nested_function_names & moved_helper_names)
 
 
-def test_geometry_fit_worker_has_moved_only_cache_manual_caked_and_display_helpers() -> None:
+def test_geometry_fit_worker_has_moved_only_cache_manual_caked_display_and_dataset_helpers() -> None:
     tree = ast.parse(GEOMETRY_FIT_WORKER_PATH.read_text(encoding="utf-8"))
     worker_function_names = {
         node.name
@@ -149,6 +149,7 @@ def test_geometry_fit_worker_has_moved_only_cache_manual_caked_and_display_helpe
         "mark_worker_cached_projection_rows",
         "prebuild_background_cache_bundle_worker",
         "prebuild_required_background_caches",
+        "prepare_geometry_fit_run_for_worker",
         "project_source_rows_by_row_background",
         "project_source_rows_for_background_view_worker",
         "project_source_rows_for_background",
@@ -167,6 +168,8 @@ def test_geometry_fit_worker_has_moved_only_cache_manual_caked_and_display_helpe
         "worker_geometry_manual_entry_display_coords",
         "worker_native_detector_coords_to_detector_display_coords_for_background",
     } <= worker_function_names
+    assert "execute_runtime_geometry_fit_solver_phase" not in worker_function_names
+    assert "_geometry_fit_worker_action_result" not in worker_function_names
 
 
 def _geometry_fit_param_set() -> dict[str, object]:

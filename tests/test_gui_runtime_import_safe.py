@@ -3956,7 +3956,8 @@ def test_runtime_impl_worker_geometry_fit_rebuilds_source_rows_on_demand() -> No
     assert "def source_rows_for_background_worker(" in worker_source
     assert "def _rebuild_source_rows_for_background_worker(" not in source
     assert "_rebuild_source_rows_for_background_worker = (" in source
-    assert "geometry_manual_rebuild_source_rows_for_background=(" in source
+    assert "geometry_manual_rebuild_source_rows_for_background=(" in worker_source
+    assert "worker_context.prepare_geometry_fit_run_for_worker(" in source
     assert "_rebuild_source_rows_for_background_worker" in source
     assert "def _prebuild_required_background_caches(" not in source
     assert "worker_context.prebuild_required_background_caches(" in source
@@ -15601,12 +15602,13 @@ def test_runtime_impl_source_cache_build_ready_no_longer_inlines_caked_store() -
 
 def test_runtime_impl_does_not_raw_preflight_detector_origin_caked_pairs() -> None:
     source = _source_text(RUNTIME_SESSION_SOURCE_PATH)
+    worker_source = _source_text(GUI_SOURCE_ROOT / "_runtime" / "geometry_fit_worker.py")
 
     assert "detector_qr_rows_need_auto_caked_backfill" not in source
     assert "geometry_fit_active_vars_include_detector_tilts(var_names)" not in source
     assert "manual_caked_geometry_fit_observed_anchor_preflight_error" not in source
-    assert "manual_caked_fit_space_required_by_background" in source
-    assert "manual_fit_requires_caked_space=any(" in source
+    assert "manual_caked_fit_space_required_by_background" in worker_source
+    assert "manual_fit_requires_caked_space=any(" in worker_source
 
 
 def test_runtime_manual_caked_requirement_keeps_caked_space_fast_path() -> None:

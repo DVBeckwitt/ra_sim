@@ -113,6 +113,13 @@ class GeometryFitWorkerRequiredCacheDeps:
 
 
 @dataclass(frozen=True)
+class GeometryFitWorkerDatasetDeps:
+    make_manual_dataset_bindings: Callable[..., object]
+    prepare_geometry_fit_run: Callable[..., object]
+    build_geometry_manual_fit_dataset: Callable[..., object]
+
+
+@dataclass(frozen=True)
 class GeometryFitWorkerManualFitSpaceDeps:
     geometry_manual_fit_space_by_background: Callable[..., object]
     geometry_manual_caked_fit_space_required_from_context: Callable[..., object]
@@ -138,6 +145,7 @@ class GeometryFitWorkerContext:
     prebuild_deps: GeometryFitWorkerPrebuildDeps | None = None
     source_rows_deps: GeometryFitWorkerSourceRowsDeps | None = None
     required_cache_deps: GeometryFitWorkerRequiredCacheDeps | None = None
+    dataset_deps: GeometryFitWorkerDatasetDeps | None = None
     manual_fit_space_deps: GeometryFitWorkerManualFitSpaceDeps | None = None
 
     @classmethod
@@ -270,12 +278,179 @@ class GeometryFitWorkerContext:
             raise RuntimeError("geometry-fit worker required-cache deps are not configured")
         return self.required_cache_deps
 
+    def _require_dataset_deps(self) -> GeometryFitWorkerDatasetDeps:
+        if self.dataset_deps is None:
+            raise RuntimeError("geometry-fit worker dataset deps are not configured")
+        return self.dataset_deps
+
     def _require_manual_fit_space_deps(self) -> GeometryFitWorkerManualFitSpaceDeps:
         if self.manual_fit_space_deps is None:
             raise RuntimeError(
                 "geometry-fit worker manual fit-space deps are not configured"
             )
         return self.manual_fit_space_deps
+
+    def prepare_geometry_fit_run_for_worker(
+        self,
+        *,
+        ensure_geometry_fit_caked_view: Callable[[], None],
+        stage_callback: Callable[[str, Mapping[str, object]], None] | None,
+        default_image_size: object = 0,
+        default_display_rotate_k: object = 0,
+    ) -> object:
+        deps = self._require_dataset_deps()
+        job_data = self.job_data
+
+        def _manual_pairs_for_index(idx: int) -> list[dict[str, object]]:
+            return [
+                dict(entry)
+                for entry in (
+                    dict(job_data.get("manual_pairs_by_background", {}) or {}).get(
+                        int(idx),
+                        (),
+                    )
+                    or ()
+                )
+                if isinstance(entry, Mapping)
+            ]
+
+        image_size_value = (
+            job_data["image_size"] if "image_size" in job_data else default_image_size
+        )
+        manual_dataset_bindings = deps.make_manual_dataset_bindings(
+            osc_files=list(job_data.get("osc_files", ()) or ()),
+            current_background_index=int(job_data.get("current_background_index", 0)),
+            image_size=int(image_size_value),
+            display_rotate_k=int(
+                job_data.get("display_rotate_k", default_display_rotate_k)
+            ),
+            geometry_manual_pairs_for_index=_manual_pairs_for_index,
+            load_background_by_index=self.load_background_by_index_snapshot,
+            apply_background_backend_orientation=job_data.get(
+                "apply_background_backend_orientation"
+            ),
+            geometry_manual_simulated_peaks_for_params=lambda *_args, **_kwargs: [],
+            geometry_manual_simulated_lookup=job_data.get(
+                "geometry_manual_simulated_lookup"
+            ),
+            geometry_manual_source_rows_for_background=(
+                self.source_rows_for_background_worker
+            ),
+            geometry_manual_rebuild_source_rows_for_background=(
+                self.rebuild_source_rows_for_background_worker
+            ),
+            geometry_manual_last_source_snapshot_diagnostics=(
+                self.last_worker_source_snapshot_diagnostics
+            ),
+            geometry_manual_last_simulation_diagnostics=(
+                self.last_worker_simulation_diagnostics
+            ),
+            geometry_manual_match_config=(
+                lambda: copy.deepcopy(job_data.get("manual_match_config", {}))
+            ),
+            geometry_manual_entry_display_coords=(
+                self.worker_geometry_manual_entry_display_coords
+            ),
+            geometry_manual_refresh_pair_entry=None,
+            geometry_manual_caked_view_for_index=self.load_caked_view_by_index_snapshot,
+            geometry_manual_project_peaks_to_current_view=(
+                self.project_source_rows_by_row_background
+            ),
+            geometry_manual_project_peaks_for_background_view=(
+                self.project_source_rows_for_background_view_worker
+            ),
+            geometry_manual_caked_projection_for_index=(
+                self.load_caked_projection_by_index_snapshot
+            ),
+            unrotate_display_peaks=job_data.get("unrotate_display_peaks"),
+            display_to_native_sim_coords=job_data.get("display_to_native_sim_coords"),
+            native_detector_coords_to_detector_display_coords=(
+                job_data.get("native_detector_coords_to_detector_display_coords")
+            ),
+            native_detector_coords_to_detector_display_coords_for_background=(
+                self.worker_native_detector_coords_to_detector_display_coords_for_background
+            ),
+            select_fit_orientation=job_data.get("select_fit_orientation"),
+            apply_orientation_to_entries=job_data.get("apply_orientation_to_entries"),
+            orient_image_for_fit=job_data.get("orient_image_for_fit"),
+            pick_uses_caked_space=(
+                lambda: bool(job_data.get("pick_uses_caked_space", False))
+            ),
+        )
+
+        def _selected_background_indices(**_kwargs: object) -> list[object]:
+            if job_data.get("selection_error"):
+                raise RuntimeError(str(job_data.get("selection_error")))
+            return list(job_data.get("selected_background_indices", ()) or ())
+
+        def _background_theta_values(**_kwargs: object) -> list[object]:
+            if job_data.get("background_theta_error"):
+                raise RuntimeError(str(job_data.get("background_theta_error")))
+            return list(job_data.get("background_theta_values", ()) or ())
+
+        def _build_dataset(
+            background_index: int,
+            *,
+            theta_base: object,
+            base_fit_params: object,
+            orientation_cfg: object,
+            manual_fit_requires_caked_space: bool = False,
+            stage_callback: object = None,
+        ) -> object:
+            return deps.build_geometry_manual_fit_dataset(
+                background_index,
+                theta_base=theta_base,
+                base_fit_params=base_fit_params,
+                manual_dataset_bindings=manual_dataset_bindings,
+                orientation_cfg=orientation_cfg,
+                manual_fit_requires_caked_space=manual_fit_requires_caked_space,
+                stage_callback=stage_callback,
+            )
+
+        return deps.prepare_geometry_fit_run(
+            params=dict(job_data.get("params", {}) or {}),
+            var_names=list(job_data.get("var_names", ()) or ()),
+            fit_config=dict(job_data.get("fit_config", {}) or {}),
+            osc_files=list(job_data.get("osc_files", ()) or ()),
+            current_background_index=int(job_data.get("current_background_index", 0)),
+            theta_initial=float(job_data.get("theta_initial", 0.0)),
+            preserve_live_theta=bool(job_data.get("preserve_live_theta", False)),
+            apply_geometry_fit_background_selection=(
+                lambda **_kwargs: bool(job_data.get("selection_applied", True))
+            ),
+            current_geometry_fit_background_indices=_selected_background_indices,
+            geometry_fit_uses_shared_theta_offset=(
+                lambda _indices: bool(job_data.get("uses_shared_theta", False))
+            ),
+            apply_background_theta_metadata=(
+                lambda **_kwargs: bool(job_data.get("theta_metadata_applied", True))
+            ),
+            current_background_theta_values=_background_theta_values,
+            current_geometry_theta_offset=(
+                lambda **_kwargs: float(job_data.get("theta_offset", 0.0))
+            ),
+            geometry_manual_pairs_for_index=(
+                manual_dataset_bindings.geometry_manual_pairs_for_index
+            ),
+            ensure_geometry_fit_caked_view=ensure_geometry_fit_caked_view,
+            build_dataset=_build_dataset,
+            build_runtime_config=(
+                lambda _fit_params: copy.deepcopy(
+                    dict(job_data.get("geometry_runtime_cfg", {}) or {})
+                )
+            ),
+            manual_fit_pick_uses_caked_space=bool(
+                job_data.get("pick_uses_caked_space", False)
+            ),
+            manual_fit_requires_caked_space=any(
+                bool(value)
+                for value in dict(
+                    job_data.get("manual_caked_fit_space_required_by_background", {})
+                    or {}
+                ).values()
+            ),
+            stage_callback=stage_callback,
+        )
 
     def worker_manual_pairs_for_background(
         self,

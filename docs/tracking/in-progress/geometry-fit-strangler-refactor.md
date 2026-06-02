@@ -13,8 +13,8 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: Patch E4.1 caked-view storage test hardening complete; ready for E5 planning
-Bug/error/feature status: Patch E4.1 is a test/docs cleanup after the E4 caked-view storage extraction. It removes dead fake fixture state and pins the existing missing-integrator failure result; no user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
+Status: Patch E5 dataset preparation boundary extraction complete; ready for E6 planning
+Bug/error/feature status: Patch E5 moves the worker dataset preparation/call boundary into the internal worker context while preserving the old manual dataset binding callbacks, preparation inputs, build-dataset delegation, and stage callback behavior. No user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
 Shipping status: no runtime rollout or feature flag is needed because behavior is preserved behind existing public wrappers. Rollback is a normal commit revert.
@@ -247,6 +247,19 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
   `missing_integrator` failure result shape and status. No production code,
   public payload, saved-state, CLI/env/debug behavior, UI behavior, dataset,
   solver, optimizer, or migration surface changed.
+- Patch E5 moved the worker dataset preparation boundary into
+  `GeometryFitWorkerContext.prepare_geometry_fit_run_for_worker()` behind
+  explicit injected dataset dependencies.
+- Patch E5 constructs worker manual dataset bindings with the same job-local
+  callbacks, calls the injected `prepare_geometry_fit_run(...)`, and delegates
+  the `build_dataset` callback to the injected
+  `build_geometry_manual_fit_dataset(...)`.
+- Patch E5 kept preflight exception log persistence, solver request assembly,
+  solver execution, result packaging, optimizer code, saved-state code,
+  CLI/env/debug behavior, and UI behavior in `runtime_session.py`.
+- Post-Patch-E5 size report: `runtime_session.py` 43,428 lines;
+  `geometry_fit_worker.py` 3,488 lines; `_run_async_geometry_fit_worker_job()`
+  747 lines.
 
 ## Review status
 
@@ -376,6 +389,33 @@ E2 caked-view ensure helpers:
     `exact caked projector unavailable for background N` with one-based labels
     when a required exact caked payload is unavailable.
 
+E5 dataset preparation boundary:
+
+- `worker_manual_dataset_bindings` construction
+  - Inputs: job-local osc files, current background index, image size, display
+    rotation, manual-pair maps, background snapshots, orientation callbacks,
+    source-row cache callbacks, caked payload loaders, and display/projection
+    adapters.
+  - Return shape: `GeometryFitRuntimeManualDatasetBindings` or equivalent
+    runtime binding object from the injected constructor.
+  - Mutations/events: none; callbacks may later read or update worker-local
+    caches when `prepare_geometry_fit_run(...)` invokes them.
+- `prepare_geometry_fit_run(...)` call boundary
+  - Inputs: copied job-local params, var names, fit config, osc files,
+    background selection state, theta state, manual-pair lookup, caked-view
+    ensure callback, runtime config builder, caked-pick flags, and stage
+    callback.
+  - Return shape: the injected preparation result object unchanged.
+  - Selection/theta behavior: preserves existing selection-error and
+    background-theta-error RuntimeError paths from job snapshots.
+  - Dataset callback: delegates to the injected
+    `build_geometry_manual_fit_dataset(...)` with the same background index,
+    theta base, base fit params, manual dataset bindings, orientation config,
+    caked fit-space requirement, and stage callback.
+  - Out-of-scope behavior: preflight exception logging, solver request
+    assembly, solver execution, result packaging, optimizer, saved-state,
+    CLI/env, and UI behavior remain in `runtime_session.py`.
+
 E3 display/projection adapter helpers:
 
 - `_worker_native_detector_coords_to_detector_display_coords_for_background(background_index)`
@@ -405,16 +445,12 @@ E3 display/projection adapter helpers:
 
 ## Next actions
 
-1. Patch E5 should move the worker dataset preparation/call boundary only:
-   `worker_manual_dataset_bindings` construction, the
-   `prepare_geometry_fit_run(...)` call, and the `build_dataset` callback that
-   delegates to `build_geometry_manual_fit_dataset(...)`.
-2. Keep preflight failure log persistence, solver request assembly, solver
-   execution, result packaging, optimizer, saved-state, CLI/env, and UI
-   behavior out of E5.
-3. Current E4.1 measured size before E5: `runtime_session.py` 43,537 lines;
-   `geometry_fit_worker.py` 3,313 lines; `_run_async_geometry_fit_worker_job()`
-   856 lines.
+1. Patch E6 should move solver request assembly only.
+2. Keep solver execution, result packaging, optimizer, saved-state, CLI/env,
+   and UI behavior out of E6.
+3. Current measured size after E5: `runtime_session.py` 43,428 lines;
+   `geometry_fit_worker.py` 3,488 lines; `_run_async_geometry_fit_worker_job()`
+   747 lines.
 4. Do not add hard debt gates yet.
 
 ## Validation
@@ -672,6 +708,11 @@ Current validation status:
   full worker tests, worker/job import-boundary tests, the targeted GUI runtime
   import-safe caked-storage ordering guard, Ruff on touched tests, and
   `git diff --check`.
+- Patch E5 validation passed: compileall, worker dataset-boundary tests, full
+  worker tests, worker/job import-boundary tests, GUI runtime tests, full GUI
+  runtime import-safe tests, live-row/signature handoff tests, GUI workflow
+  caked/dataset route tests, geometry fitting route tests, Ruff on touched
+  files, and `git diff --check`.
 - `python -m ra_sim.dev check` remains blocked only by the documented pre-existing formatting drift above.
 - No generated artifacts, raw data, local config, notebook output, dependency changes, release version changes, or public migration files are included.
 
