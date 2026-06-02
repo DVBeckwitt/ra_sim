@@ -40888,6 +40888,9 @@ def _run_async_geometry_fit_worker_job(
         prepare_geometry_fit_run=gui_geometry_fit.prepare_geometry_fit_run,
         build_geometry_manual_fit_dataset=gui_geometry_fit.build_geometry_manual_fit_dataset,
     )
+    worker_context.solver_deps = _geometry_fit_worker.GeometryFitWorkerSolverDeps(
+        execute_solver_phase=gui_geometry_fit.execute_runtime_geometry_fit_solver_phase,
+    )
 
     def _stage_callback(stage: str, payload: Mapping[str, object]) -> None:
         _emit_worker_event(str(stage), dict(payload or {}))
@@ -40982,11 +40985,8 @@ def _run_async_geometry_fit_worker_job(
             error_text=prepare_result.error_text,
         )
 
-    solver_phase_kwargs = worker_context.build_solver_phase_kwargs_for_worker(
+    execution_result = worker_context.execute_solver_phase_for_worker(
         prepare_result.prepared_run
-    )
-    execution_result = gui_geometry_fit.execute_runtime_geometry_fit_solver_phase(
-        **solver_phase_kwargs,
     )
     worker_background_cache_by_index.clear()
     return _geometry_fit_worker_action_result(

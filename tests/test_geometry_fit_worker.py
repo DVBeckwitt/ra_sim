@@ -15,6 +15,7 @@ from ra_sim.gui._runtime.geometry_fit_worker import (
     GeometryFitWorkerManualFitSpaceDeps,
     GeometryFitWorkerPrebuildDeps,
     GeometryFitWorkerRequiredCacheDeps,
+    GeometryFitWorkerSolverDeps,
     GeometryFitWorkerSourceProjectionDeps,
     GeometryFitWorkerSourceRowsDeps,
 )
@@ -569,6 +570,22 @@ class FakeDatasetDeps:
             }
         )
         return {"dataset_background_index": int(background_index)}
+
+
+class FakeSolverDeps:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.result: object = SimpleNamespace(error_text="solver-error")
+
+    @property
+    def deps(self) -> GeometryFitWorkerSolverDeps:
+        return GeometryFitWorkerSolverDeps(
+            execute_solver_phase=self.execute_solver_phase,
+        )
+
+    def execute_solver_phase(self, **kwargs: object) -> object:
+        self.calls.append(dict(kwargs))
+        return self.result
 
 
 class FakePrebuildDeps:
@@ -1466,6 +1483,95 @@ def test_worker_solver_phase_kwargs_disables_live_update_callback_when_requested
     )
 
     assert kwargs["live_update_callback"] is None
+
+
+def test_worker_execute_solver_phase_calls_injected_executor_with_kwargs() -> None:
+    fake_deps = FakeSolverDeps()
+    prepared_run = SimpleNamespace(fit_params={})
+    solver_inputs = object()
+    context = GeometryFitWorkerContext.from_job(
+        {
+            "var_names": ("gamma", "Gamma"),
+            "solver_inputs": solver_inputs,
+            "solve_fit": "solve-fit",
+            "stamp": "run-1",
+            "log_path": "run.log",
+        }
+    )
+    context.solver_deps = fake_deps.deps
+
+    context.execute_solver_phase_for_worker(prepared_run)
+
+    call = fake_deps.calls[0]
+    assert call["prepared_run"] is prepared_run
+    assert call["var_names"] == ["gamma", "Gamma"]
+    assert call["solver_inputs"] is solver_inputs
+    assert call["solve_fit"] == "solve-fit"
+    assert call["stamp"] == "run-1"
+    assert call["log_path"] == "run.log"
+
+
+def test_worker_execute_solver_phase_returns_executor_result() -> None:
+    fake_deps = FakeSolverDeps()
+    context = GeometryFitWorkerContext.from_job({})
+    context.solver_deps = fake_deps.deps
+
+    result = context.execute_solver_phase_for_worker(SimpleNamespace(fit_params={}))
+
+    assert result is fake_deps.result
+
+
+def test_worker_execute_solver_phase_preserves_event_callback_shape() -> None:
+    fake_deps = FakeSolverDeps()
+    queue = RecordingQueue()
+    context = GeometryFitWorkerContext.from_job({"job_id": 12, "event_queue": queue})
+    context.solver_deps = fake_deps.deps
+
+    context.execute_solver_phase_for_worker(SimpleNamespace(fit_params={}))
+    payload = {"message": {"text": "running"}}
+    fake_deps.calls[0]["event_callback"]("progress_text", payload)
+    payload["message"]["text"] = "mutated"
+
+    assert queue.items == [
+        {
+            "job_id": 12,
+            "kind": "progress_text",
+            "payload": {"message": {"text": "running"}},
+        }
+    ]
+
+
+def test_worker_execute_solver_phase_preserves_live_update_callback_shape() -> None:
+    fake_deps = FakeSolverDeps()
+    queue = RecordingQueue()
+    context = GeometryFitWorkerContext.from_job(
+        {"job_id": 13, "event_queue": queue, "enable_live_update_events": True}
+    )
+    context.solver_deps = fake_deps.deps
+
+    context.execute_solver_phase_for_worker(SimpleNamespace(fit_params={}))
+    payload = {"background_index": 2, "rows": [{"row_id": "r1"}]}
+    fake_deps.calls[0]["live_update_callback"](payload)
+    payload["rows"][0]["row_id"] = "mutated"
+
+    assert queue.items == [
+        {
+            "job_id": 13,
+            "kind": "live_cache_update",
+            "payload": {"background_index": 2, "rows": [{"row_id": "r1"}]},
+        }
+    ]
+
+
+def test_worker_execute_solver_phase_does_not_package_action_result() -> None:
+    fake_deps = FakeSolverDeps()
+    fake_deps.result = {"execution_result": True}
+    context = GeometryFitWorkerContext.from_job({})
+    context.solver_deps = fake_deps.deps
+
+    result = context.execute_solver_phase_for_worker(SimpleNamespace(fit_params={}))
+
+    assert result == {"execution_result": True}
 
 
 def test_worker_manual_pairs_for_background_returns_copied_pairs() -> None:

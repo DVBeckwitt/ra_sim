@@ -120,6 +120,11 @@ class GeometryFitWorkerDatasetDeps:
 
 
 @dataclass(frozen=True)
+class GeometryFitWorkerSolverDeps:
+    execute_solver_phase: Callable[..., object]
+
+
+@dataclass(frozen=True)
 class GeometryFitWorkerManualFitSpaceDeps:
     geometry_manual_fit_space_by_background: Callable[..., object]
     geometry_manual_caked_fit_space_required_from_context: Callable[..., object]
@@ -146,6 +151,7 @@ class GeometryFitWorkerContext:
     source_rows_deps: GeometryFitWorkerSourceRowsDeps | None = None
     required_cache_deps: GeometryFitWorkerRequiredCacheDeps | None = None
     dataset_deps: GeometryFitWorkerDatasetDeps | None = None
+    solver_deps: GeometryFitWorkerSolverDeps | None = None
     manual_fit_space_deps: GeometryFitWorkerManualFitSpaceDeps | None = None
 
     @classmethod
@@ -283,6 +289,11 @@ class GeometryFitWorkerContext:
             raise RuntimeError("geometry-fit worker dataset deps are not configured")
         return self.dataset_deps
 
+    def _require_solver_deps(self) -> GeometryFitWorkerSolverDeps:
+        if self.solver_deps is None:
+            raise RuntimeError("geometry-fit worker solver deps are not configured")
+        return self.solver_deps
+
     def _require_manual_fit_space_deps(self) -> GeometryFitWorkerManualFitSpaceDeps:
         if self.manual_fit_space_deps is None:
             raise RuntimeError(
@@ -322,6 +333,11 @@ class GeometryFitWorkerContext:
             "event_callback": _event_callback,
             "live_update_callback": live_update_callback,
         }
+
+    def execute_solver_phase_for_worker(self, prepared_run: object) -> object:
+        return self._require_solver_deps().execute_solver_phase(
+            **self.build_solver_phase_kwargs_for_worker(prepared_run)
+        )
 
     def prepare_geometry_fit_run_for_worker(
         self,
