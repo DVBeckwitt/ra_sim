@@ -13,8 +13,8 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: Patch E7 solver execution boundary reviewed; ready for E8 planning
-Bug/error/feature status: Patch E7 moved the worker-side solver execution call behind an injected `GeometryFitWorkerSolverDeps` dependency while preserving solver request construction inside `geometry_fit.py`, action-result packaging, logs, events, and diagnostics. Static review found no correctness, bloat, security, performance, test-quality, or unnecessary-abstraction blocker. No user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
+Status: Patch E8 result packaging boundary implemented; ready for review
+Bug/error/feature status: Patch E8 moved only the worker-side calls to `_geometry_fit_worker_action_result(...)` behind an injected `GeometryFitWorkerResultDeps` dependency. The result builder still lives in `runtime_session.py`; cache clearing, preflight handling, async polling, UI result application, solver execution, optimizer behavior, saved-state schema, CLI/env/debug behavior, UI callbacks, and diagnostics remain unchanged. No user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
 Shipping status: no runtime rollout or feature flag is needed because behavior is preserved behind existing public wrappers. Rollback is a normal commit revert.
@@ -286,6 +286,18 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Post-Patch-E7 size report: `runtime_session.py` 43,411 lines;
   `geometry_fit_worker.py` 3,537 lines; `_run_async_geometry_fit_worker_job()`
   730 lines.
+- Patch E8 moved only the worker-side result packaging call boundary behind
+  `GeometryFitWorkerContext.build_action_result_for_worker()` and an injected
+  `GeometryFitWorkerResultDeps.build_action_result` callable. The
+  `_geometry_fit_worker_action_result(...)` builder remains in
+  `runtime_session.py`.
+- Patch E8 keeps worker cache clearing order, preflight failure log
+  persistence, `prepared_run is None` handling, async polling, UI result
+  application, solver execution, optimizer behavior, saved-state behavior,
+  CLI/env/debug behavior, and UI behavior in their existing locations.
+- Post-Patch-E8 size report: `runtime_session.py` 43,411 lines;
+  `geometry_fit_worker.py` 3,562 lines; `_run_async_geometry_fit_worker_job()`
+  730 lines.
 
 ## Review status
 
@@ -510,11 +522,12 @@ E3 display/projection adapter helpers:
 
 ## Next actions
 
-1. Plan Patch E8 as result packaging boundary only.
-2. Keep solver execution, result packaging, optimizer, saved-state, CLI/env,
-   and UI behavior out of the next slice unless explicitly scoped.
-3. Current measured size after E7: `runtime_session.py` 43,411 lines;
-   `geometry_fit_worker.py` 3,537 lines; `_run_async_geometry_fit_worker_job()`
+1. Review Patch E8 result packaging boundary.
+2. Plan the next worker-wrapper cleanup pass before starting dataset or
+   optimizer extraction: measure `_run_async_geometry_fit_worker_job()`,
+   identify dead aliases and duplicate glue, and delete only proven dead code.
+3. Current measured size after E8: `runtime_session.py` 43,411 lines;
+   `geometry_fit_worker.py` 3,562 lines; `_run_async_geometry_fit_worker_job()`
    730 lines.
 4. Do not add hard debt gates yet.
 
@@ -786,6 +799,11 @@ Current validation status:
   caked/dataset route tests, geometry fitting route tests, Ruff on touched
   files, and `git diff --check`.
 - Patch E7 validation passed: compileall, focused solver execution-boundary
+  tests, full worker tests, worker/job import-boundary tests, GUI runtime
+  tests, full GUI runtime import-safe tests, live-row/signature handoff tests,
+  GUI workflow caked/dataset route tests, geometry fitting route tests, Ruff on
+  touched files, and `git diff --check`.
+- Patch E8 validation passed: compileall, focused result packaging-boundary
   tests, full worker tests, worker/job import-boundary tests, GUI runtime
   tests, full GUI runtime import-safe tests, live-row/signature handoff tests,
   GUI workflow caked/dataset route tests, geometry fitting route tests, Ruff on

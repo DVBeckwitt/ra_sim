@@ -15,6 +15,7 @@ from ra_sim.gui._runtime.geometry_fit_worker import (
     GeometryFitWorkerManualFitSpaceDeps,
     GeometryFitWorkerPrebuildDeps,
     GeometryFitWorkerRequiredCacheDeps,
+    GeometryFitWorkerResultDeps,
     GeometryFitWorkerSolverDeps,
     GeometryFitWorkerSourceProjectionDeps,
     GeometryFitWorkerSourceRowsDeps,
@@ -585,6 +586,22 @@ class FakeSolverDeps:
 
     def execute_solver_phase(self, **kwargs: object) -> object:
         self.calls.append(dict(kwargs))
+        return self.result
+
+
+class FakeResultDeps:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.result: object = {"action_result": True}
+
+    @property
+    def deps(self) -> GeometryFitWorkerResultDeps:
+        return GeometryFitWorkerResultDeps(
+            build_action_result=self.build_action_result,
+        )
+
+    def build_action_result(self, job: object, **kwargs: object) -> object:
+        self.calls.append({"job": job, "kwargs": dict(kwargs)})
         return self.result
 
 
@@ -1572,6 +1589,66 @@ def test_worker_execute_solver_phase_does_not_package_action_result() -> None:
     result = context.execute_solver_phase_for_worker(SimpleNamespace(fit_params={}))
 
     assert result == {"execution_result": True}
+
+
+def test_worker_action_result_for_worker_passes_job_and_prepare_result() -> None:
+    fake_deps = FakeResultDeps()
+    prepare_result = object()
+    context = GeometryFitWorkerContext.from_job({"job_id": 5, "params": {"a": 1.0}})
+    context.result_deps = fake_deps.deps
+
+    context.build_action_result_for_worker(prepare_result=prepare_result)
+
+    call = fake_deps.calls[0]
+    assert call["job"] is context.job_data
+    assert call["kwargs"] == {
+        "prepare_result": prepare_result,
+        "execution_result": None,
+        "error_text": None,
+    }
+
+
+def test_worker_action_result_for_worker_passes_execution_result_and_error_text() -> None:
+    fake_deps = FakeResultDeps()
+    execution_result = object()
+    context = GeometryFitWorkerContext.from_job({"job_id": 6})
+    context.result_deps = fake_deps.deps
+
+    context.build_action_result_for_worker(
+        execution_result=execution_result,
+        error_text="solver failed",
+    )
+
+    call = fake_deps.calls[0]
+    assert call["kwargs"] == {
+        "prepare_result": None,
+        "execution_result": execution_result,
+        "error_text": "solver failed",
+    }
+
+
+def test_worker_action_result_for_worker_returns_builder_result() -> None:
+    fake_deps = FakeResultDeps()
+    fake_deps.result = {"worker_action_result": "ready"}
+    context = GeometryFitWorkerContext.from_job({})
+    context.result_deps = fake_deps.deps
+
+    result = context.build_action_result_for_worker()
+
+    assert result == {"worker_action_result": "ready"}
+
+
+def test_worker_action_result_for_worker_does_not_clear_cache_or_touch_events() -> None:
+    fake_deps = FakeResultDeps()
+    queue = RecordingQueue()
+    context = GeometryFitWorkerContext.from_job({"job_id": 7, "event_queue": queue})
+    context.result_deps = fake_deps.deps
+    context.worker_background_cache_by_index[0] = {"cached": True}
+
+    context.build_action_result_for_worker(error_text="preflight failed")
+
+    assert context.worker_background_cache_by_index == {0: {"cached": True}}
+    assert queue.items == []
 
 
 def test_worker_manual_pairs_for_background_returns_copied_pairs() -> None:

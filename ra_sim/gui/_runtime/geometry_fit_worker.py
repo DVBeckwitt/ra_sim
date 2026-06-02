@@ -125,6 +125,11 @@ class GeometryFitWorkerSolverDeps:
 
 
 @dataclass(frozen=True)
+class GeometryFitWorkerResultDeps:
+    build_action_result: Callable[..., object]
+
+
+@dataclass(frozen=True)
 class GeometryFitWorkerManualFitSpaceDeps:
     geometry_manual_fit_space_by_background: Callable[..., object]
     geometry_manual_caked_fit_space_required_from_context: Callable[..., object]
@@ -152,6 +157,7 @@ class GeometryFitWorkerContext:
     required_cache_deps: GeometryFitWorkerRequiredCacheDeps | None = None
     dataset_deps: GeometryFitWorkerDatasetDeps | None = None
     solver_deps: GeometryFitWorkerSolverDeps | None = None
+    result_deps: GeometryFitWorkerResultDeps | None = None
     manual_fit_space_deps: GeometryFitWorkerManualFitSpaceDeps | None = None
 
     @classmethod
@@ -294,6 +300,11 @@ class GeometryFitWorkerContext:
             raise RuntimeError("geometry-fit worker solver deps are not configured")
         return self.solver_deps
 
+    def _require_result_deps(self) -> GeometryFitWorkerResultDeps:
+        if self.result_deps is None:
+            raise RuntimeError("geometry-fit worker result deps are not configured")
+        return self.result_deps
+
     def _require_manual_fit_space_deps(self) -> GeometryFitWorkerManualFitSpaceDeps:
         if self.manual_fit_space_deps is None:
             raise RuntimeError(
@@ -337,6 +348,20 @@ class GeometryFitWorkerContext:
     def execute_solver_phase_for_worker(self, prepared_run: object) -> object:
         return self._require_solver_deps().execute_solver_phase(
             **self.build_solver_phase_kwargs_for_worker(prepared_run)
+        )
+
+    def build_action_result_for_worker(
+        self,
+        *,
+        prepare_result: object | None = None,
+        execution_result: object | None = None,
+        error_text: str | None = None,
+    ) -> object:
+        return self._require_result_deps().build_action_result(
+            self.job_data,
+            prepare_result=prepare_result,
+            execution_result=execution_result,
+            error_text=error_text,
         )
 
     def prepare_geometry_fit_run_for_worker(

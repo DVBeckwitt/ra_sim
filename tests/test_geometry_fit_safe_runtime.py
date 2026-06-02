@@ -146,6 +146,7 @@ def test_geometry_fit_worker_has_moved_only_cache_manual_caked_display_dataset_a
     assert {
         "bundle_rows",
         "build_geometry_fit_background_cache_bundle",
+        "build_action_result_for_worker",
         "build_solver_phase_kwargs_for_worker",
         "mark_worker_cached_projection_rows",
         "prebuild_background_cache_bundle_worker",
