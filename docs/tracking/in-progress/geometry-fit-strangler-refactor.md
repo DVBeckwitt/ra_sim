@@ -13,8 +13,8 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: Patch E3.2 caked display-adapter guard cleanup complete; ready for E4 planning
-Bug/error/feature status: internal worker refactor only; no user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
+Status: Patch E3.2 caked display-adapter guard cleanup reviewed; ready for E4 planning
+Bug/error/feature status: Patch E3.2 preserves the old caked manual-entry display-adapter guard inside the internal worker refactor; no user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
 Shipping status: no runtime rollout or feature flag is needed because behavior is preserved behind existing public wrappers. Rollback is a normal commit revert.
@@ -220,6 +220,10 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Patch E3.2 added a focused worker test for that caked scalar guard path. No
   public payload, saved-state, CLI/env, UI, dataset, solver, optimizer, or
   diagnostic contract changed.
+- Patch E3.2 post-commit review found no correctness, bloat, security,
+  performance, test-quality, unnecessary-file, or avoidable-abstraction issues.
+  No migration, deprecation, rollout, feature flag, CI pipeline, or public
+  documentation change is required beyond this tracking-note status update.
 
 ## Review status
 
