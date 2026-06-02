@@ -3968,7 +3968,7 @@ def test_runtime_impl_worker_geometry_fit_rebuilds_source_rows_on_demand() -> No
     assert "exact caked fit-space projection/storage unavailable" in required_helper_source
     assert "exact caked fit-space projection/storage timed out" in required_helper_source
     assert "mixed detector/caked manual fit spaces are not supported" in worker_source
-    assert "_reject_worker_mixed_manual_fit_spaces = (" in source
+    assert "worker_context.reject_worker_mixed_manual_fit_spaces(manual_spaces)" in source
     assert "Geometry fit preflight timed out" in required_helper_source
 
 

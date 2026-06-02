@@ -40302,8 +40302,6 @@ def _run_async_geometry_fit_worker_job(
         tuple[float | None, float | None, float | None, float | None] | None
     ) = None
     caked_view_timeout_s = 5.0
-    _source_cache_generation_matches = worker_context.source_cache_generation_matches
-
     def _copy_source_rows(raw_rows: Sequence[object] | None) -> list[dict[str, object]]:
         return [dict(entry) for entry in (raw_rows or ()) if isinstance(entry, Mapping)]
 
@@ -40374,17 +40372,17 @@ def _run_async_geometry_fit_worker_job(
 
         if normalized_mode == "caked":
             worker_ai = _worker_geometry_fit_caking_integrator()
-            caked_payload, candidate_state = _projection_candidate_state(
+            caked_payload, candidate_state = worker_context.projection_candidate_state(
                 payload_map.get(background_idx),
                 detector_shape=detector_shape,
             )
             if candidate_state == "absent":
-                caked_payload = _load_caked_projection_by_index_snapshot(
+                caked_payload = worker_context.load_caked_projection_by_index_snapshot(
                     background_idx,
                     detector_shape=detector_shape,
                     allow_generated_payload=True,
                 )
-                _unused_projection, candidate_state = _projection_candidate_state(
+                _unused_projection, candidate_state = worker_context.projection_candidate_state(
                     caked_payload,
                     detector_shape=detector_shape,
                 )
@@ -40640,23 +40638,6 @@ def _run_async_geometry_fit_worker_job(
         ),
         theta_base_for_background=_theta_base_for_background_worker,
     )
-    _projection_candidate_state = worker_context.projection_candidate_state
-    _load_caked_projection_by_index_snapshot = (
-        worker_context.load_caked_projection_by_index_snapshot
-    )
-    _worker_manual_fit_space_by_background = (
-        worker_context.worker_manual_fit_space_by_background
-    )
-    _reject_worker_mixed_manual_fit_spaces = (
-        worker_context.reject_worker_mixed_manual_fit_spaces
-    )
-    _ensure_worker_geometry_fit_caked_view = (
-        worker_context.ensure_worker_geometry_fit_caked_view
-    )
-    _store_worker_caked_view_for_background = (
-        worker_context.store_worker_caked_view_for_background
-    )
-
     def _build_source_rows_for_rebuild(
         source_tables: Sequence[object] | None,
         *,
@@ -40765,7 +40746,7 @@ def _run_async_geometry_fit_worker_job(
 
         def _worker() -> None:
             try:
-                outcome = _store_worker_caked_view_for_background(
+                outcome = worker_context.store_worker_caked_view_for_background(
                     bundle,
                     stage_callback=stage_callback,
                     source_cache_generation_id=source_cache_generation_id,
@@ -40789,7 +40770,7 @@ def _run_async_geometry_fit_worker_job(
                 should_emit_late = bool(task_state.get("timed_out", False))
             if not should_emit_late:
                 return
-            if not _source_cache_generation_matches(
+            if not worker_context.source_cache_generation_matches(
                 int(bundle.background_index),
                 int(source_cache_generation_id),
             ):
@@ -40861,13 +40842,15 @@ def _run_async_geometry_fit_worker_job(
         _emit_worker_event(str(stage), dict(payload or {}))
 
     try:
-        manual_spaces = _worker_manual_fit_space_by_background()
-        _reject_worker_mixed_manual_fit_spaces(manual_spaces)
+        manual_spaces = worker_context.worker_manual_fit_space_by_background()
+        worker_context.reject_worker_mixed_manual_fit_spaces(manual_spaces)
         worker_context.prebuild_required_background_caches(
             stage_callback=_stage_callback
         )
         prepare_result = worker_context.prepare_geometry_fit_run_for_worker(
-            ensure_geometry_fit_caked_view=_ensure_worker_geometry_fit_caked_view,
+            ensure_geometry_fit_caked_view=(
+                worker_context.ensure_worker_geometry_fit_caked_view
+            ),
             stage_callback=_stage_callback,
             default_image_size=globals().get("image_size", 0),
             default_display_rotate_k=DISPLAY_ROTATE_K,
