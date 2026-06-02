@@ -13,8 +13,8 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: Patch E8 result packaging boundary implemented; ready for review
-Bug/error/feature status: Patch E8 moved only the worker-side calls to `_geometry_fit_worker_action_result(...)` behind an injected `GeometryFitWorkerResultDeps` dependency. The result builder still lives in `runtime_session.py`; cache clearing, preflight handling, async polling, UI result application, solver execution, optimizer behavior, saved-state schema, CLI/env/debug behavior, UI callbacks, and diagnostics remain unchanged. No user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
+Status: Patch E8 result packaging boundary implemented; post-review guard-name cleanup validated
+Bug/error/feature status: Patch E8 moved only the worker-side calls to `_geometry_fit_worker_action_result(...)` behind an injected `GeometryFitWorkerResultDeps` dependency. The result builder still lives in `runtime_session.py`; cache clearing, preflight handling, async polling, UI result application, solver execution, optimizer behavior, saved-state schema, CLI/env/debug behavior, UI callbacks, and diagnostics remain unchanged. The post-review cleanup only renamed a safe-runtime guard test so its name matches the current helper boundary. No user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
 Shipping status: no runtime rollout or feature flag is needed because behavior is preserved behind existing public wrappers. Rollback is a normal commit revert.
@@ -298,6 +298,10 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Post-Patch-E8 size report: `runtime_session.py` 43,411 lines;
   `geometry_fit_worker.py` 3,562 lines; `_run_async_geometry_fit_worker_job()`
   730 lines.
+- Patch E8 post-review cleanup renamed the safe-runtime worker helper movement
+  guard to avoid stale wording after the result-boundary helper moved. No
+  production code, runtime behavior, payload schema, migration path, or launch
+  gate changed.
 
 ## Review status
 
@@ -522,14 +526,13 @@ E3 display/projection adapter helpers:
 
 ## Next actions
 
-1. Review Patch E8 result packaging boundary.
-2. Plan the next worker-wrapper cleanup pass before starting dataset or
+1. Plan the next worker-wrapper cleanup pass before starting dataset or
    optimizer extraction: measure `_run_async_geometry_fit_worker_job()`,
    identify dead aliases and duplicate glue, and delete only proven dead code.
-3. Current measured size after E8: `runtime_session.py` 43,411 lines;
+2. Current measured size after E8: `runtime_session.py` 43,411 lines;
    `geometry_fit_worker.py` 3,562 lines; `_run_async_geometry_fit_worker_job()`
    730 lines.
-4. Do not add hard debt gates yet.
+3. Do not add hard debt gates yet.
 
 ## Validation
 
@@ -808,6 +811,8 @@ Current validation status:
   tests, full GUI runtime import-safe tests, live-row/signature handoff tests,
   GUI workflow caked/dataset route tests, geometry fitting route tests, Ruff on
   touched files, and `git diff --check`.
+- Patch E8 post-review cleanup validation passed: worker/job import-boundary
+  tests and Ruff on `tests/test_geometry_fit_safe_runtime.py`.
 - `python -m ra_sim.dev check` remains blocked only by the documented pre-existing formatting drift above.
 - No generated artifacts, raw data, local config, notebook output, dependency changes, release version changes, or public migration files are included.
 

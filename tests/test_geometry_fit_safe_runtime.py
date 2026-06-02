@@ -135,7 +135,7 @@ def test_geometry_fit_worker_context_helpers_are_not_duplicated_in_runtime_worke
     assert not (nested_function_names & moved_helper_names)
 
 
-def test_geometry_fit_worker_has_moved_only_cache_manual_caked_display_dataset_and_solver_helpers() -> None:
+def test_geometry_fit_worker_has_moved_only_expected_worker_helpers() -> None:
     tree = ast.parse(GEOMETRY_FIT_WORKER_PATH.read_text(encoding="utf-8"))
     worker_function_names = {
         node.name
