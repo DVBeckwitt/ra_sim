@@ -13,8 +13,8 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: Patch E7 solver execution boundary complete; ready for review
-Bug/error/feature status: Patch E7 moves the worker-side solver execution call behind an injected `GeometryFitWorkerSolverDeps` dependency while preserving solver request construction inside `geometry_fit.py`, action-result packaging, logs, events, and diagnostics. No user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
+Status: Patch E7 solver execution boundary reviewed; ready for E8 planning
+Bug/error/feature status: Patch E7 moved the worker-side solver execution call behind an injected `GeometryFitWorkerSolverDeps` dependency while preserving solver request construction inside `geometry_fit.py`, action-result packaging, logs, events, and diagnostics. Static review found no correctness, bloat, security, performance, test-quality, or unnecessary-abstraction blocker. No user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
 Shipping status: no runtime rollout or feature flag is needed because behavior is preserved behind existing public wrappers. Rollback is a normal commit revert.
@@ -280,6 +280,9 @@ Shipping status: no runtime rollout or feature flag is needed because behavior i
 - Patch E7 keeps solver request construction inside `geometry_fit.py` and keeps
   worker cache clearing plus `_geometry_fit_worker_action_result(...)` result
   packaging in `runtime_session.py`.
+- Patch E7 post-implementation review approved the production boundary:
+  `geometry_fit_worker.py` remains import-clean, the injected solver dependency
+  is minimal, and result packaging still lives in `runtime_session.py`.
 - Post-Patch-E7 size report: `runtime_session.py` 43,411 lines;
   `geometry_fit_worker.py` 3,537 lines; `_run_async_geometry_fit_worker_job()`
   730 lines.
@@ -507,10 +510,9 @@ E3 display/projection adapter helpers:
 
 ## Next actions
 
-1. Review Patch E7 before planning the next worker boundary.
+1. Plan Patch E8 as result packaging boundary only.
 2. Keep solver execution, result packaging, optimizer, saved-state, CLI/env,
-   and UI behavior out of the next slice unless explicitly scoped. The likely
-   next slice is result packaging only.
+   and UI behavior out of the next slice unless explicitly scoped.
 3. Current measured size after E7: `runtime_session.py` 43,411 lines;
    `geometry_fit_worker.py` 3,537 lines; `_run_async_geometry_fit_worker_job()`
    730 lines.
