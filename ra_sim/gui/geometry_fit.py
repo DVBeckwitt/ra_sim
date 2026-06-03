@@ -78,6 +78,7 @@ from ra_sim.gui.geometry_fit_contracts import (
     GeometryFitSweepApplyResult,
     GeometryToolActionRuntimeCallbacks,
 )
+from ra_sim.gui.geometry_fit_dataset import collect_geometry_manual_dataset_inputs
 from ra_sim.simulation.exact_cake_portable import (
     CakeTransformBundle,
     FastAzimuthalIntegrator,
@@ -11550,80 +11551,35 @@ def build_geometry_manual_fit_dataset(
         manual_dataset_bindings,
         background_idx,
     )
-    selected_entry_inputs: list[dict[str, object]] = []
-    if callable(manual_dataset_bindings.geometry_manual_refresh_pair_entry):
-        for raw_entry in raw_selected_entries:
-            raw_saved_entry = dict(raw_entry) if isinstance(raw_entry, Mapping) else None
-            refreshed = manual_dataset_bindings.geometry_manual_refresh_pair_entry(raw_entry)
-            normalized_entry = (
-                dict(refreshed)
-                if isinstance(refreshed, Mapping)
-                else (dict(raw_entry) if isinstance(raw_entry, Mapping) else None)
-            )
-            if normalized_entry is None:
-                continue
-            if _background_detector_pair_for_frame(normalized_entry, "native_detector") is not None:
-                normalized_entry.setdefault(
-                    "background_detector_frame_provenance",
-                    "geometry_manual_refresh_pair_entry",
-                )
-            selected_entry_inputs.append(
-                {
-                    "raw_saved_entry": (
-                        raw_saved_entry
-                        if isinstance(raw_saved_entry, dict)
-                        else dict(normalized_entry)
-                    ),
-                    "entry": dict(normalized_entry),
-                }
-            )
-    else:
-        for raw_entry in raw_selected_entries:
-            if not isinstance(raw_entry, Mapping):
-                continue
-            selected_entry_inputs.append(
-                {
-                    "raw_saved_entry": dict(raw_entry),
-                    "entry": dict(raw_entry),
-                }
-            )
-    selected_entries = [
-        {
-            **dict(item["entry"]),
-            "source_label": _geometry_fit_entry_source_label(
-                item["entry"] if isinstance(item.get("entry"), Mapping) else None
-            ),
-        }
-        for item in selected_entry_inputs
-        if isinstance(item.get("entry"), Mapping)
-    ]
 
-    def _required_pairs_callback_payload() -> list[dict[str, object]]:
-        callback_pairs: list[dict[str, object]] = []
-        for entry in selected_entries:
-            copied = dict(entry)
-            copied.pop("source_label", None)
-            callback_pairs.append(copied)
-        return callback_pairs
-
-    manual_picker_truth_pairs = gui_manual_geometry.build_geometry_manual_picker_truth_pairs(
-        background_idx,
-        [
-            dict(item["raw_saved_entry"])
-            for item in selected_entry_inputs
-            if isinstance(item.get("raw_saved_entry"), Mapping)
-        ],
-        refresh_pair_entry=manual_dataset_bindings.geometry_manual_refresh_pair_entry,
+    dataset_inputs = collect_geometry_manual_dataset_inputs(
+        background_idx=background_idx,
+        theta_base=theta_base,
+        base_fit_params=base_fit_params,
+        manual_dataset_bindings=manual_dataset_bindings,
+        manual_fit_requires_caked_space=manual_fit_requires_caked_space,
+        pair_enabled=geometry_manual_pair_enabled_for_geometry_fit,
+        background_detector_pair_for_frame=_background_detector_pair_for_frame,
+        entry_source_label=_geometry_fit_entry_source_label,
+        build_manual_picker_truth_pairs=(
+            gui_manual_geometry.build_geometry_manual_picker_truth_pairs
+        ),
+        truth_by_order_key=_geometry_fit_truth_by_order_key,
+        finite_float=_finite_float,
+        raw_selected_entries=raw_selected_entries,
+        use_caked_display=use_caked_display,
     )
-    manual_picker_truth_by_order = _geometry_fit_truth_by_order_key(manual_picker_truth_pairs)
-
-    baseline_fit_params_i = dict(base_fit_params or {})
-    params_i = dict(base_fit_params or {})
-    theta_offset = float(params_i.get("theta_offset", 0.0))
-    params_i["theta_initial"] = float(theta_base + theta_offset)
-    reference_a = _finite_float(params_i.get("a"))
-    reference_c = _finite_float(params_i.get("c"))
-    reference_lambda = _finite_float(params_i.get("lambda"))
+    use_caked_display = dataset_inputs.use_caked_display
+    selected_entry_inputs = dataset_inputs.selected_entry_inputs
+    selected_entries = dataset_inputs.selected_entries
+    manual_picker_truth_pairs = dataset_inputs.manual_picker_truth_pairs
+    manual_picker_truth_by_order = dataset_inputs.manual_picker_truth_by_order
+    baseline_fit_params_i = dataset_inputs.baseline_fit_params_i
+    params_i = dataset_inputs.params_i
+    theta_offset = dataset_inputs.theta_offset
+    reference_a = dataset_inputs.reference_a
+    reference_c = dataset_inputs.reference_c
+    reference_lambda = dataset_inputs.reference_lambda
 
     def _project_source_rows_for_current_view(
         rows: object,
@@ -13531,7 +13487,7 @@ def build_geometry_manual_fit_dataset(
                         int(background_idx),
                         active_params,
                         consumer="geometry_fit_trial_source_rows",
-                        required_pairs=_required_pairs_callback_payload(),
+                        required_pairs=dataset_inputs.required_pairs_callback_payload(),
                     )
                     or []
                 )
@@ -13562,7 +13518,7 @@ def build_geometry_manual_fit_dataset(
                         int(background_idx),
                         active_params,
                         consumer="geometry_fit_dataset",
-                        required_pairs=_required_pairs_callback_payload(),
+                        required_pairs=dataset_inputs.required_pairs_callback_payload(),
                     )
                     or []
                 )
@@ -13785,7 +13741,7 @@ def build_geometry_manual_fit_dataset(
             int(background_idx),
             params_i,
             consumer="geometry_fit_dataset",
-            required_pairs=_required_pairs_callback_payload(),
+            required_pairs=dataset_inputs.required_pairs_callback_payload(),
         )
     else:
         simulated_peaks = manual_dataset_bindings.geometry_manual_simulated_peaks_for_params(
@@ -13812,7 +13768,7 @@ def build_geometry_manual_fit_dataset(
                 params_i,
                 consumer="geometry_fit_dataset",
                 prior_diagnostics=dict(simulation_diagnostics),
-                required_pairs=_required_pairs_callback_payload(),
+                required_pairs=dataset_inputs.required_pairs_callback_payload(),
             )
         )
         simulated_peaks = _project_source_rows_for_current_view(simulated_peaks)

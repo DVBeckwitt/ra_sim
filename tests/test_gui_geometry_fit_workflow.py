@@ -2035,6 +2035,71 @@ def test_prepare_runtime_geometry_fit_run_builds_prepared_run_from_runtime_bindi
     assert calls["ensure_caked"] == 0
 
 
+def test_build_geometry_manual_fit_dataset_load_failure_precedes_refresh_and_truth(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+
+    def _load_background_by_index(_idx):
+        calls.append("load")
+        raise RuntimeError("load broke")
+
+    def _refresh_pair_entry(_entry):
+        calls.append("refresh")
+        pytest.fail("manual entries must not refresh before background load succeeds")
+
+    def _build_truth_pairs(*_args, **_kwargs):
+        calls.append("truth")
+        pytest.fail("truth pairs must not build before background load succeeds")
+
+    monkeypatch.setattr(
+        geometry_fit.gui_manual_geometry,
+        "build_geometry_manual_picker_truth_pairs",
+        _build_truth_pairs,
+    )
+    manual_dataset_bindings = geometry_fit.GeometryFitRuntimeManualDatasetBindings(
+        osc_files=["C:/tmp/bg0.osc"],
+        current_background_index=0,
+        image_size=64,
+        display_rotate_k=0,
+        geometry_manual_pairs_for_index=lambda _idx: [
+            {
+                "q_group_key": ("q", 1),
+                "source_table_index": 1,
+                "source_row_index": 2,
+                "hkl": (1, 1, 0),
+                "x": 30.0,
+                "y": 40.0,
+            }
+        ],
+        load_background_by_index=_load_background_by_index,
+        apply_background_backend_orientation=lambda image: image,
+        geometry_manual_simulated_peaks_for_params=lambda params, *, prefer_cache: [],
+        geometry_manual_simulated_lookup=lambda _peaks: {},
+        geometry_manual_entry_display_coords=lambda entry: (30.0, 40.0),
+        unrotate_display_peaks=lambda entries, shape, *, k: list(entries),
+        display_to_native_sim_coords=lambda col, row, shape: (float(col), float(row)),
+        select_fit_orientation=lambda sim_pts, meas_pts, shape, *, cfg: (
+            {"indexing_mode": "xy", "k": 0, "flip_x": False, "flip_y": False},
+            {"pairs": 1},
+        ),
+        apply_orientation_to_entries=lambda entries, shape, **kwargs: list(entries),
+        orient_image_for_fit=lambda image, **kwargs: image,
+        geometry_manual_refresh_pair_entry=_refresh_pair_entry,
+    )
+
+    with pytest.raises(RuntimeError, match="load broke"):
+        geometry_fit.build_geometry_manual_fit_dataset(
+            0,
+            theta_base=1.5,
+            base_fit_params={"theta_offset": 0.0},
+            manual_dataset_bindings=manual_dataset_bindings,
+            orientation_cfg={},
+        )
+
+    assert calls == ["load"]
+
+
 def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload() -> None:
     calls: dict[str, object] = {}
     native_background = np.arange(20, dtype=np.float64).reshape(4, 5)
