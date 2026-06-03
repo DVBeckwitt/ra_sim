@@ -13,8 +13,8 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: G5 caked dynamic reanchor helper extraction implemented and validated; ready for next-slice planning
-Bug/error/feature status: Patch F0 audited `_run_async_geometry_fit_worker_job()` after E8 and deleted proven-dead worker-context alias assignments. Patch F0.1 then inlined the remaining one-use worker-context method aliases that were only wrapper glue. Patch F0.2 fixed the stale import-safe guard that still expected the deleted `_rebuild_source_rows_for_background_worker` alias. Patch F1 moved caked-storage event emission and non-gating caked-view task support into `GeometryFitWorkerContext` and deleted the corresponding runtime-local helpers and dependency callback seam. The post-F1 cleanup renamed two unused local unpack placeholders in the runtime wrapper to `_` without changing calls, call order, side effects, or behavior. Patch G0 added characterization coverage for `build_geometry_manual_fit_dataset()` public payload keys, detector-space objective selection, and caked-objective locked-Qr handoff audit fields before extracting dataset helpers. Patch G1 moved dataset input normalization only into `ra_sim/gui/geometry_fit_dataset.py`: caked-display input selection, enabled manual-pair filtering, manual-entry refresh snapshots, source labels, required-pair callback payload shape, manual picker truth rows, theta/base parameter copies, and reference scalar extraction. Patch G1 post-review restored the original `load_background_by_index()` before manual-entry refresh/truth callback ordering. Patch G2 moved provider coverage augmentation, fresh-row matching, and fresh-row promotion into `ra_sim/gui/geometry_fit_dataset.py` behind an injected dependency contract. Patch G3 moved source row/reflection keying, source locator matching, HKL/group/branch filtering, source candidate scoring/tie handling, and legacy dense source fallback into `ra_sim/gui/geometry_fit_dataset.py` behind `GeometrySourceCandidateDeps`. Patch G4 moved dynamic trial row signatures, classification, stage summaries, dynamic marking, candidate sorting, analytic two-theta/caked-point helpers, completion-row construction, and candidate-pool supplementation into `ra_sim/gui/geometry_fit_dataset.py` behind `GeometryDynamicTrialDeps`. Patch G5 moved caked dynamic reanchor cache keys, exact bundle cache reuse, active-bundle projection, fit-space projection, simulated caked image building, and dynamic reanchor callback mechanics into `ra_sim/gui/geometry_fit_dataset.py` behind `GeometryDynamicReanchorDeps` and `GeometryDynamicReanchorState`. Final dataset assembly, source-row rebuild orchestration, worker/runtime, optimizer, saved-state, CLI/env/debug behavior, UI behavior, solver math, and diagnostic log fields did not move.
+Status: G6 final dataset assembly contract guard implemented and validated; ready for next-slice planning
+Bug/error/feature status: Patch F0 audited `_run_async_geometry_fit_worker_job()` after E8 and deleted proven-dead worker-context alias assignments. Patch F0.1 then inlined the remaining one-use worker-context method aliases that were only wrapper glue. Patch F0.2 fixed the stale import-safe guard that still expected the deleted `_rebuild_source_rows_for_background_worker` alias. Patch F1 moved caked-storage event emission and non-gating caked-view task support into `GeometryFitWorkerContext` and deleted the corresponding runtime-local helpers and dependency callback seam. The post-F1 cleanup renamed two unused local unpack placeholders in the runtime wrapper to `_` without changing calls, call order, side effects, or behavior. Patch G0 added characterization coverage for `build_geometry_manual_fit_dataset()` public payload keys, detector-space objective selection, and caked-objective locked-Qr handoff audit fields before extracting dataset helpers. Patch G1 moved dataset input normalization only into `ra_sim/gui/geometry_fit_dataset.py`: caked-display input selection, enabled manual-pair filtering, manual-entry refresh snapshots, source labels, required-pair callback payload shape, manual picker truth rows, theta/base parameter copies, and reference scalar extraction. Patch G1 post-review restored the original `load_background_by_index()` before manual-entry refresh/truth callback ordering. Patch G2 moved provider coverage augmentation, fresh-row matching, and fresh-row promotion into `ra_sim/gui/geometry_fit_dataset.py` behind an injected dependency contract. Patch G3 moved source row/reflection keying, source locator matching, HKL/group/branch filtering, source candidate scoring/tie handling, and legacy dense source fallback into `ra_sim/gui/geometry_fit_dataset.py` behind `GeometrySourceCandidateDeps`. Patch G4 moved dynamic trial row signatures, classification, stage summaries, dynamic marking, candidate sorting, analytic two-theta/caked-point helpers, completion-row construction, and candidate-pool supplementation into `ra_sim/gui/geometry_fit_dataset.py` behind `GeometryDynamicTrialDeps`. Patch G5 moved caked dynamic reanchor cache keys, exact bundle cache reuse, active-bundle projection, fit-space projection, simulated caked image building, and dynamic reanchor callback mechanics into `ra_sim/gui/geometry_fit_dataset.py` behind `GeometryDynamicReanchorDeps` and `GeometryDynamicReanchorState`. Patch G6 pinned the final dataset payload and nested `spec` key inventory in the existing orientation-ready workflow test, measured `build_geometry_manual_fit_dataset()` at 3,771 lines, and kept final dataset assembly local for now because it still owns audit rows, point-provider reports, stage-event emission, and public payload packaging. Source-row rebuild orchestration, worker/runtime, optimizer, saved-state, CLI/env/debug behavior, UI behavior, solver math, and diagnostic log fields did not move.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
 Shipping status: no runtime rollout or feature flag is needed because behavior is preserved behind existing public wrappers. Rollback is a normal commit revert.
@@ -177,6 +177,57 @@ surface is removed or changed.
 Shipping status: launch risk is limited to the internal dataset extraction
 boundary. No feature flag, staged rollout, release bump, or production launch
 step is needed; rollback is a normal commit revert.
+
+## Patch G6 final dataset assembly contract guard
+
+What was done: measured `build_geometry_manual_fit_dataset()` at 3,771 lines
+after G5 and tightened the existing orientation-ready workflow test so it pins
+the exact top-level dataset payload key inventory and exact nested `spec` key
+inventory. The wrapper audit found no dead local wrappers that can be deleted
+without changing callable handoff behavior; remaining thin wrappers are either
+called locally or exported through the dataset `spec` callback surface.
+
+Bug/error/feature status: this is a characterization and interface-guard
+slice for the next dataset refactor decision. It does not move final dataset
+assembly, source-row rebuild orchestration, worker/runtime code, optimizer
+behavior, saved-state handling, CLI/env/debug behavior, UI behavior, solver
+math, or diagnostic log fields.
+
+Interface/API status: the public dataset dictionary and nested `spec`
+dictionary remain unchanged. The new assertions make accidental payload drift
+visible before any future final-assembly extraction.
+
+Scope decision: final dataset assembly stays in `geometry_fit.py` for this
+slice because it still owns audit row construction, audit line emission,
+point-provider report construction, manual-point-pair handoff reconciliation,
+and public payload packaging. Source-row rebuild stays local until a fresh
+source-row-specific plan exists.
+
+Validation status: the targeted
+`test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload`
+workflow test passed after the exact-key assertions were added.
+
+## Patch G6 commit and launch status
+
+What was done: completed the G6 contract-guard review and prepared an atomic
+commit with only the tracking-note update and existing workflow-test contract
+assertions staged.
+
+Bug/error/feature status: this remains an internal characterization and
+interface-guard slice, not a user-visible behavior fix. It should not change
+geometry-fit results, diagnostic schema, saved-state format, config, CLI, GUI
+workflow, optimizer behavior, or artifact format.
+
+CI/CD status: no workflow automation or CI configuration changed. The relevant
+local quality gates passed for the touched workflow test and tracking note; the
+full dev check remains blocked only by documented unrelated formatter drift.
+
+Deprecation/migration status: no migration guide, compatibility shim,
+deprecation notice, release note, or version bump is required because no public
+surface is removed or changed.
+
+Shipping status: no feature flag, staged rollout, release bump, or production
+launch step is needed. Rollback is a normal commit revert of this guard slice.
 
 ## Patch G4 dynamic trial row helper handoff
 
@@ -1257,6 +1308,10 @@ Current validation status:
   dataset import-boundary check, and `git diff --check`. `python -m
   ra_sim.dev check` remains blocked only by pre-existing formatter drift in
   unrelated files.
+- Patch G6 validation passed: targeted
+  `test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload`
+  workflow test, Ruff on `tests/test_gui_geometry_fit_workflow.py`, and `git
+  diff --check` for the touched tracking/test files.
 - `python -m ra_sim.dev check` remains blocked only by the documented pre-existing formatting drift above.
 - No generated artifacts, raw data, local config, notebook output, dependency changes, release version changes, or public migration files are included.
 

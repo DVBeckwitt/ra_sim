@@ -2202,9 +2202,14 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
     assert dataset["resolved_source_pair_count"] == 1
     expected_dataset_contract_keys = {
         "cache_metadata",
+        "dataset_index",
+        "display_rotate_k",
         "fit_handoff_audit_lines",
         "fit_handoff_audit_rows",
+        "group_count",
+        "image_size",
         "initial_pairs_display",
+        "label",
         "manual_caked_recompute_audit",
         "manual_picker_truth_pairs",
         "manual_point_pairs",
@@ -2212,17 +2217,26 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
         "measured_for_fit",
         "measured_native",
         "native_background",
+        "native_detector_coords_to_detector_display_coords",
+        "native_detector_coords_to_detector_display_coords_source",
+        "native_detector_coords_to_detector_display_coords_unavailable_reason",
         "orientation_choice",
         "orientation_diag",
+        "pair_count",
         "point_provider_report",
         "provider_pairs",
+        "resolved_source_pair_count",
         "simulation_diagnostics",
+        "simulated_lookup_count",
+        "simulated_peak_count",
         "source_resolution_diagnostics",
         "source_rows_for_trace",
         "spec",
         "summary_line",
+        "theta_base",
+        "theta_effective",
     }
-    assert expected_dataset_contract_keys <= set(dataset)
+    assert set(dataset) == expected_dataset_contract_keys
     assert len(dataset["initial_pairs_display"]) == 1
     initial_entry = dataset["initial_pairs_display"][0]
     expected_initial_subset = {
@@ -2270,8 +2284,31 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
     assert "experimental_image_for_fit" not in dataset
     assert dataset["orientation_choice"] == orientation_choice
     assert dataset["orientation_diag"] == orientation_diag
-    dataset_spec = dict(dataset["spec"])
-    assert dataset_spec.pop("manual_point_pairs") == dataset["manual_point_pairs"]
+    dataset_spec = dataset["spec"]
+    expected_dataset_spec_contract_keys = {
+        "_manual_caked_fit_space_required",
+        "baseline_fit_params",
+        "dataset_index",
+        "diagnostic_runtime_live_caked_projection_rows",
+        "diagnostic_runtime_live_caked_projector",
+        "dynamic_reanchor_callback",
+        "dynamic_reanchor_enabled",
+        "experimental_image",
+        "fit_space_projector",
+        "fit_space_projector_kind",
+        "fit_space_projector_unavailable_reason",
+        "label",
+        "manual_point_pairs",
+        "measured_peaks",
+        "qr_fit_trial_source_rows_builder",
+        "qr_fit_trial_source_rows_builder_kind",
+        "sim_caked_image_builder",
+        "sim_caked_image_builder_kind",
+        "solver_requested_objective_space",
+        "theta_initial",
+    }
+    assert set(dataset_spec) == expected_dataset_spec_contract_keys
+    assert dataset_spec["manual_point_pairs"] == dataset["manual_point_pairs"]
     expected_dataset_spec_subset = {
         "dataset_index": 0,
         "label": "bg0.osc",
