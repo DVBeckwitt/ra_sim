@@ -61,6 +61,794 @@ class GeometryProviderCoverageDeps:
     zero_qr_coverage_branch_slot: object
 
 
+@dataclass(frozen=True)
+class GeometrySourceCandidateDeps:
+    coerce_nonnegative_index: Callable[[object], int | None]
+    trusted_full_reflection_identity: Callable[[Mapping[str, object] | None], bool]
+    source_branch_index: Callable[[Mapping[str, object] | None], int | None]
+    normalized_hkl: Callable[[object], tuple[int, int, int] | None]
+    source_entry_hkl_matches: (
+        Callable[[Mapping[str, object] | None, Mapping[str, object] | None], bool]
+    )
+    entry_source_label: Callable[[Mapping[str, object] | None], str]
+    stable_group_identity: Callable[[object], object | None]
+    is_zero_qr_00l: Callable[[Mapping[str, object] | None], bool]
+    entry_display_point: Callable[[Mapping[str, object] | None], tuple[float, float] | None]
+    entry_saved_simulated_current_view_point: (
+        Callable[[Mapping[str, object] | None], tuple[float, float] | None]
+    )
+    legacy_saved_simulated_detector_hint: Callable[
+        [Mapping[str, object] | None],
+        object,
+    ]
+    candidate_current_view_point: (
+        Callable[[Mapping[str, object] | None], tuple[float, float] | None]
+    )
+    candidate_current_view_frame: Callable[[Mapping[str, object] | None], str | None]
+    candidate_point_for_frame: (
+        Callable[..., tuple[float, float] | None]
+    )
+    compact_source_resolution_entry_payload: (
+        Callable[[Mapping[str, object] | None], dict[str, object] | None]
+    )
+    trace_candidate_inventory: Callable[[Sequence[Mapping[str, object]] | None], list[dict[str, object]]]
+    legacy_dense_working_entry: (
+        Callable[
+            [Mapping[str, object] | None, Mapping[str, object] | None],
+            dict[str, object] | None,
+        ]
+    )
+    resolve_source_entry_candidate_pool: (
+        Callable[[Mapping[str, object] | None], tuple[list[dict[str, object]], str | None]]
+    )
+    legacy_branch_hint_resolution: Callable[
+        [Mapping[str, object] | None],
+        tuple[int | None, str | None, str | None],
+    ]
+    legacy_geometry_hint: Callable[
+        [Mapping[str, object] | None, Sequence[Mapping[str, object]] | None],
+        tuple[str | None, tuple[float, float] | None, float],
+    ]
+    canonicalize_live_source_entry: (
+        Callable[[Mapping[str, object] | None], dict[str, object] | None]
+    )
+    is_canonical_live_source_entry: (
+        Callable[[Mapping[str, object] | None], tuple[bool, str | None]]
+    )
+    apply_refined_simulated_override: Callable[..., dict[str, object] | None]
+    cache_jsonable: Callable[[object], object]
+    background_current_view_frame: Callable[[Mapping[str, object] | None], str | None]
+
+
+def _source_row_key(
+    entry: Mapping[str, object] | None,
+) -> tuple[int, int] | None:
+    if not isinstance(entry, Mapping):
+        return None
+    try:
+        return (
+            int(entry.get("source_table_index")),
+            int(entry.get("source_row_index")),
+        )
+    except Exception:
+        return None
+
+
+def _source_reflection_row_key(
+    entry: Mapping[str, object] | None,
+    *,
+    deps: GeometrySourceCandidateDeps,
+) -> tuple[int, int] | None:
+    if not isinstance(entry, Mapping):
+        return None
+    if not deps.trusted_full_reflection_identity(entry):
+        return None
+    try:
+        return (
+            int(entry.get("source_reflection_index")),
+            int(entry.get("source_row_index")),
+        )
+    except Exception:
+        return None
+
+def _source_locator_payload(
+    entry: Mapping[str, object] | None,
+    *,
+    deps: GeometrySourceCandidateDeps,
+) -> dict[str, object]:
+    if not isinstance(entry, Mapping):
+        return {
+            "source_reflection_index": None,
+            "source_reflection_namespace": None,
+            "source_reflection_is_full": None,
+            "source_table_index": None,
+            "source_row_index": None,
+            "source_branch_index": None,
+            "source_peak_index": None,
+        }
+    return {
+        "source_reflection_index": entry.get("source_reflection_index"),
+        "source_reflection_namespace": entry.get("source_reflection_namespace"),
+        "source_reflection_is_full": entry.get("source_reflection_is_full"),
+        "source_table_index": entry.get("source_table_index"),
+        "source_row_index": entry.get("source_row_index"),
+        "source_branch_index": deps.source_branch_index(entry),
+        "source_peak_index": entry.get("source_peak_index"),
+    }
+
+
+def _source_locator_identity_match(
+    saved_entry: Mapping[str, object] | None,
+    candidate: Mapping[str, object] | None,
+    *,
+    deps: GeometrySourceCandidateDeps,
+) -> bool:
+    saved_locator = _source_locator_payload(saved_entry, deps=deps)
+    candidate_locator = _source_locator_payload(candidate, deps=deps)
+    comparable_keys = [key for key, value in saved_locator.items() if value is not None]
+    if not comparable_keys:
+        return False
+    return all(candidate_locator.get(key) == saved_locator.get(key) for key in comparable_keys)
+
+
+def _filter_hkl_candidates(
+    entry: Mapping[str, object] | None,
+    candidates: Sequence[dict[str, object]] | None,
+    *,
+    deps: GeometrySourceCandidateDeps,
+) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
+    filtered: list[dict[str, object]] = []
+    excluded_missing_hkl: list[dict[str, object]] = []
+    excluded_mismatched_hkl: list[dict[str, object]] = []
+    target_hkl = deps.normalized_hkl(entry.get("hkl") if isinstance(entry, Mapping) else None)
+    for raw_candidate in candidates or ():
+        if not isinstance(raw_candidate, Mapping):
+            continue
+        candidate = dict(raw_candidate)
+        candidate_hkl = deps.normalized_hkl(candidate.get("hkl"))
+        if candidate_hkl is None:
+            excluded_missing_hkl.append(candidate)
+            continue
+        if (
+            target_hkl is not None
+            and tuple(candidate_hkl) != tuple(target_hkl)
+            and not deps.source_entry_hkl_matches(entry, candidate)
+        ):
+            excluded_mismatched_hkl.append(candidate)
+            continue
+        filtered.append(candidate)
+    return filtered, excluded_missing_hkl, excluded_mismatched_hkl
+
+
+def _candidate_matches_group_constraints(
+    entry: Mapping[str, object] | None,
+    candidate: Mapping[str, object] | None,
+    *,
+    deps: GeometrySourceCandidateDeps,
+) -> bool:
+    if not isinstance(entry, Mapping):
+        return True
+    if not isinstance(candidate, Mapping):
+        return False
+    if deps.entry_source_label(candidate) != deps.entry_source_label(entry):
+        return False
+    required_branch_group = deps.stable_group_identity(entry.get("branch_group_key"))
+    if required_branch_group is not None:
+        candidate_branch_group = deps.stable_group_identity(candidate.get("branch_group_key"))
+        if candidate_branch_group != required_branch_group:
+            return False
+
+    required_q_groups: list[object] = []
+    for key in ("q_group_key", "source_q_group_key"):
+        required_q_group = deps.stable_group_identity(entry.get(key))
+        if required_q_group is not None and not any(
+            existing == required_q_group for existing in required_q_groups
+        ):
+            required_q_groups.append(required_q_group)
+    if required_q_groups:
+        candidate_q_groups = [
+            deps.stable_group_identity(candidate.get(key))
+            for key in ("q_group_key", "source_q_group_key")
+        ]
+        candidate_q_groups = [value for value in candidate_q_groups if value is not None]
+        if not candidate_q_groups:
+            return False
+        for required_q_group in required_q_groups:
+            if not any(candidate_q_group == required_q_group for candidate_q_group in candidate_q_groups):
+                return False
+    return True
+
+
+def _filter_group_candidates(
+    entry: Mapping[str, object] | None,
+    candidates: Sequence[dict[str, object]] | None,
+    *,
+    deps: GeometrySourceCandidateDeps,
+) -> list[dict[str, object]]:
+    return [
+        dict(candidate)
+        for candidate in (candidates or ())
+        if isinstance(candidate, Mapping)
+        and _candidate_matches_group_constraints(entry, candidate, deps=deps)
+    ]
+
+
+def _filter_source_branch_candidates(
+    entry: Mapping[str, object] | None,
+    candidates: Sequence[dict[str, object]] | None,
+    *,
+    deps: GeometrySourceCandidateDeps,
+    required_branch_index: int | None = None,
+) -> list[dict[str, object]]:
+    candidate_pool = [
+        dict(candidate) for candidate in (candidates or ()) if isinstance(candidate, Mapping)
+    ]
+    if not candidate_pool:
+        return []
+    if deps.is_zero_qr_00l(entry):
+        return candidate_pool
+    branch_idx = (
+        int(required_branch_index)
+        if required_branch_index in {0, 1}
+        else deps.source_branch_index(entry)
+    )
+    if branch_idx in {0, 1}:
+        return [
+            dict(candidate)
+            for candidate in candidate_pool
+            if deps.source_branch_index(candidate) == int(branch_idx)
+        ]
+    return candidate_pool
+
+
+def _source_candidate_filter_inventory(
+    entry: Mapping[str, object] | None,
+    candidates: Sequence[dict[str, object]] | None,
+    *,
+    deps: GeometrySourceCandidateDeps,
+    required_branch_index: int | None = None,
+) -> dict[str, object]:
+    candidate_pool = [
+        dict(candidate) for candidate in (candidates or ()) if isinstance(candidate, Mapping)
+    ]
+    hkl_candidates, missing_hkl_candidates, mismatched_hkl_candidates = _filter_hkl_candidates(
+        entry,
+        candidate_pool,
+        deps=deps,
+    )
+    group_candidates = _filter_group_candidates(entry, hkl_candidates, deps=deps)
+    branch_candidates = _filter_source_branch_candidates(
+        entry,
+        group_candidates,
+        deps=deps,
+        required_branch_index=required_branch_index,
+    )
+    return {
+        "candidate_pool": candidate_pool,
+        "hkl_candidates": hkl_candidates,
+        "missing_hkl_candidates": missing_hkl_candidates,
+        "mismatched_hkl_candidates": mismatched_hkl_candidates,
+        "group_candidates": group_candidates,
+        "branch_candidates": branch_candidates,
+    }
+
+
+def _candidate_sort_identity(
+    candidate: Mapping[str, object],
+    *,
+    deps: GeometrySourceCandidateDeps,
+) -> tuple[int, int, int, int]:
+    sentinel = 1 << 30
+    reflection_idx = deps.coerce_nonnegative_index(
+        candidate.get("source_reflection_index") if isinstance(candidate, Mapping) else None
+    )
+    table_idx = deps.coerce_nonnegative_index(
+        candidate.get("source_table_index") if isinstance(candidate, Mapping) else None
+    )
+    row_idx = deps.coerce_nonnegative_index(
+        candidate.get("source_row_index") if isinstance(candidate, Mapping) else None
+    )
+    branch_idx = deps.source_branch_index(candidate)
+    return (
+        int(reflection_idx) if reflection_idx is not None else sentinel,
+        int(table_idx) if table_idx is not None else sentinel,
+        int(row_idx) if row_idx is not None else sentinel,
+        int(branch_idx) if branch_idx in {0, 1} else sentinel,
+    )
+
+
+def _dedupe_geometry_tied_candidates(
+    candidates: Sequence[Mapping[str, object]] | None,
+    *,
+    deps: GeometrySourceCandidateDeps,
+    frame_name: str,
+) -> list[dict[str, object]]:
+    unique_candidates: dict[tuple[object, ...], dict[str, object]] = {}
+    for raw_candidate in candidates or ():
+        if not isinstance(raw_candidate, Mapping):
+            continue
+        candidate = dict(raw_candidate)
+        dedupe_key = (
+            deps.normalized_hkl(candidate.get("hkl")),
+            deps.source_branch_index(candidate),
+            str(frame_name),
+            deps.candidate_point_for_frame(candidate, frame_name=str(frame_name)),
+            tuple(sorted(_source_locator_payload(candidate, deps=deps).items())),
+        )
+        existing = unique_candidates.get(dedupe_key)
+        if existing is None or _candidate_sort_identity(
+            candidate,
+            deps=deps,
+        ) < _candidate_sort_identity(existing, deps=deps):
+            unique_candidates[dedupe_key] = candidate
+    return [
+        dict(candidate)
+        for _key, candidate in sorted(
+            unique_candidates.items(),
+            key=lambda item: _candidate_sort_identity(item[1], deps=deps),
+        )
+    ]
+
+
+def _select_source_candidate(
+    entry: Mapping[str, object] | None,
+    candidates: Sequence[dict[str, object]] | None,
+    *,
+    deps: GeometrySourceCandidateDeps,
+    saved_identity_entry: Mapping[str, object] | None = None,
+    target_point: tuple[float, float] | None = None,
+    frame_name: str | None = None,
+    tie_tolerance: float = 0.0,
+    required_branch_index: int | None = None,
+    fail_on_ambiguous_tie: bool = False,
+    require_all_candidate_points: bool = False,
+    allow_missing_target_selection: bool = True,
+    allow_single_candidate_without_score: bool = False,
+) -> dict[str, object]:
+    inventory = _source_candidate_filter_inventory(
+        entry,
+        candidates,
+        deps=deps,
+        required_branch_index=required_branch_index,
+    )
+    branch_candidates = [
+        dict(candidate)
+        for candidate in inventory.get("branch_candidates", [])
+        if isinstance(candidate, Mapping)
+    ]
+    result: dict[str, object] = {
+        **inventory,
+        "selected": None,
+        "selected_score": None,
+        "selected_point": None,
+        "selected_frame": frame_name,
+        "scored_candidates": [],
+        "score_inventory": [],
+        "best_score": None,
+        "second_best_score": None,
+        "tied_candidates": [],
+        "identity_tied_candidates": [],
+        "selection_tie_breaker": None,
+        "failure_reason": None,
+    }
+    if not inventory.get("hkl_candidates"):
+        result["failure_reason"] = "missing_candidate_pool"
+        return result
+    if not inventory.get("group_candidates"):
+        result["failure_reason"] = "group_constraint_no_match"
+        return result
+    if not branch_candidates:
+        result["failure_reason"] = "branch_constraint_no_match"
+        return result
+
+    resolved_target_point = target_point
+    if resolved_target_point is None:
+        resolved_target_point = deps.entry_display_point(entry)
+    if resolved_target_point is None:
+        resolved_target_point = deps.entry_saved_simulated_current_view_point(entry)
+    if resolved_target_point is None:
+        if allow_missing_target_selection or (
+            allow_single_candidate_without_score and len(branch_candidates) == 1
+        ):
+            selected = dict(branch_candidates[0])
+            result["selected"] = selected
+            result["selection_tie_breaker"] = "missing_target_point_first_candidate"
+            return result
+        result["failure_reason"] = "missing_target_point"
+        return result
+
+    scored_candidates: list[
+        tuple[float, dict[str, object], tuple[float, float], str | None]
+    ] = []
+    for candidate in branch_candidates:
+        candidate_point = (
+            deps.candidate_point_for_frame(candidate, frame_name=str(frame_name))
+            if frame_name is not None
+            else deps.candidate_current_view_point(candidate)
+        )
+        if candidate_point is None:
+            if require_all_candidate_points:
+                result["failure_reason"] = "missing_candidate_point"
+                return result
+            continue
+        score = float(
+            math.hypot(
+                float(candidate_point[0]) - float(resolved_target_point[0]),
+                float(candidate_point[1]) - float(resolved_target_point[1]),
+            )
+        )
+        if not math.isfinite(float(score)):
+            result["failure_reason"] = "nonfinite_score"
+            return result
+        candidate_frame = (
+            str(frame_name)
+            if frame_name is not None
+            else deps.candidate_current_view_frame(candidate)
+        )
+        scored_candidates.append(
+            (
+                float(score),
+                dict(candidate),
+                (float(candidate_point[0]), float(candidate_point[1])),
+                candidate_frame,
+            )
+        )
+
+    if not scored_candidates:
+        if allow_single_candidate_without_score and len(branch_candidates) == 1:
+            selected = dict(branch_candidates[0])
+            result["selected"] = selected
+            result["selection_tie_breaker"] = "single_candidate_without_geometry"
+            return result
+        result["failure_reason"] = "missing_candidate_point"
+        return result
+
+    scored_candidates.sort(
+        key=lambda item: (
+            float(item[0]),
+            *_candidate_sort_identity(item[1], deps=deps),
+        )
+    )
+    score_inventory = [
+        {
+            **(deps.compact_source_resolution_entry_payload(candidate) or {}),
+            "score": float(score),
+            "frame_name": str(candidate_frame or ""),
+            "candidate_point": [
+                float(candidate_point[0]),
+                float(candidate_point[1]),
+            ],
+            "saved_target_point": [
+                float(resolved_target_point[0]),
+                float(resolved_target_point[1]),
+            ],
+        }
+        for score, candidate, candidate_point, candidate_frame in scored_candidates
+    ]
+    best_score = float(scored_candidates[0][0])
+    second_best_score = float(scored_candidates[1][0]) if len(scored_candidates) > 1 else None
+    try:
+        tie_window = float(tie_tolerance)
+    except Exception:
+        tie_window = 0.0
+    if not math.isfinite(float(tie_window)) or tie_window < 0.0:
+        tie_window = 0.0
+    tied_scored = [
+        item
+        for item in scored_candidates
+        if abs(float(item[0]) - float(best_score)) <= float(tie_window)
+    ]
+    identity_tied_scored = [
+        item
+        for item in tied_scored
+        if _source_locator_identity_match(saved_identity_entry, item[1], deps=deps)
+    ]
+    chosen = tied_scored[0]
+    selection_tie_breaker: str | None = None
+    tied_candidates = [dict(item[1]) for item in tied_scored]
+    identity_tied_candidates = [dict(item[1]) for item in identity_tied_scored]
+    if fail_on_ambiguous_tie and len(tied_scored) > 1:
+        deduped_tied_candidates = _dedupe_geometry_tied_candidates(
+            tied_candidates,
+            deps=deps,
+            frame_name=str(frame_name or ""),
+        )
+        tied_candidates = [dict(candidate) for candidate in deduped_tied_candidates]
+        identity_tied_candidates = [
+            dict(candidate)
+            for candidate in deduped_tied_candidates
+            if _source_locator_identity_match(saved_identity_entry, candidate, deps=deps)
+        ]
+        if len(deduped_tied_candidates) == 1:
+            selection_tie_breaker = "duplicate_live_rows_canonicalized"
+            chosen_candidate = dict(deduped_tied_candidates[0])
+            chosen = next(
+                (item for item in scored_candidates if dict(item[1]) == chosen_candidate),
+                scored_candidates[0],
+            )
+        elif len(identity_tied_candidates) == 1:
+            selection_tie_breaker = "saved_source_identity"
+            chosen_candidate = dict(identity_tied_candidates[0])
+            chosen = next(
+                (item for item in scored_candidates if dict(item[1]) == chosen_candidate),
+                scored_candidates[0],
+            )
+        else:
+            result.update(
+                {
+                    "scored_candidates": scored_candidates,
+                    "score_inventory": score_inventory,
+                    "best_score": best_score,
+                    "second_best_score": second_best_score,
+                    "tied_candidates": tied_candidates,
+                    "identity_tied_candidates": identity_tied_candidates,
+                    "failure_reason": "ambiguous_geometry_tie",
+                }
+            )
+            return result
+    elif len(identity_tied_scored) == 1:
+        chosen = identity_tied_scored[0]
+        if len(tied_scored) > 1:
+            selection_tie_breaker = "saved_source_identity"
+
+    result.update(
+        {
+            "selected": dict(chosen[1]),
+            "selected_score": float(chosen[0]),
+            "selected_point": [
+                float(chosen[2][0]),
+                float(chosen[2][1]),
+            ],
+            "selected_frame": chosen[3],
+            "scored_candidates": scored_candidates,
+            "score_inventory": score_inventory,
+            "best_score": best_score,
+            "second_best_score": second_best_score,
+            "tied_candidates": tied_candidates,
+            "identity_tied_candidates": identity_tied_candidates,
+            "selection_tie_breaker": selection_tie_breaker,
+        }
+    )
+    return result
+
+
+def _resolve_legacy_dense_source_entry(
+    entry: Mapping[str, object] | None,
+    *,
+    raw_saved_entry: Mapping[str, object] | None,
+    deps: GeometrySourceCandidateDeps,
+    use_caked_display: bool = False,
+) -> tuple[dict[str, object] | None, str | None, dict[str, object]]:
+    diagnostics: dict[str, object] = {
+        "legacy_raw_saved_entry": deps.compact_source_resolution_entry_payload(
+            raw_saved_entry
+        ),
+        "legacy_normalized_saved_entry": deps.compact_source_resolution_entry_payload(entry),
+    }
+    working_entry = deps.legacy_dense_working_entry(entry, raw_saved_entry)
+    saved_identity_entry = raw_saved_entry if isinstance(raw_saved_entry, Mapping) else entry
+    diagnostics["legacy_working_entry"] = deps.compact_source_resolution_entry_payload(
+        working_entry
+    )
+    if not isinstance(working_entry, Mapping):
+        return None, None, diagnostics
+
+    candidate_pool, candidate_pool_source = deps.resolve_source_entry_candidate_pool(working_entry)
+    candidate_inventory = _source_candidate_filter_inventory(
+        working_entry,
+        candidate_pool,
+        deps=deps,
+    )
+    hkl_candidates = [
+        dict(candidate)
+        for candidate in candidate_inventory.get("hkl_candidates", [])
+        if isinstance(candidate, Mapping)
+    ]
+    group_candidates = [
+        dict(candidate)
+        for candidate in candidate_inventory.get("group_candidates", [])
+        if isinstance(candidate, Mapping)
+    ]
+    missing_hkl_candidates = [
+        dict(candidate)
+        for candidate in candidate_inventory.get("missing_hkl_candidates", [])
+        if isinstance(candidate, Mapping)
+    ]
+    mismatched_hkl_candidates = [
+        dict(candidate)
+        for candidate in candidate_inventory.get("mismatched_hkl_candidates", [])
+        if isinstance(candidate, Mapping)
+    ]
+    diagnostics["legacy_candidate_pool_source"] = candidate_pool_source
+    diagnostics["legacy_candidate_count_initial"] = int(len(hkl_candidates))
+    diagnostics["legacy_candidate_inventory"] = deps.trace_candidate_inventory(hkl_candidates)
+    diagnostics["legacy_candidate_count_after_hkl"] = int(len(hkl_candidates))
+    diagnostics["legacy_excluded_missing_hkl_candidates"] = deps.trace_candidate_inventory(
+        missing_hkl_candidates
+    )
+    diagnostics["legacy_excluded_mismatched_hkl_candidates"] = deps.trace_candidate_inventory(
+        mismatched_hkl_candidates
+    )
+    diagnostics["legacy_candidate_count_after_group"] = int(len(group_candidates))
+    diagnostics["legacy_candidate_inventory_after_group"] = deps.trace_candidate_inventory(
+        group_candidates
+    )
+    if not hkl_candidates or not group_candidates:
+        diagnostics["legacy_failure_reason"] = "legacy_rebind_missing_candidate_pool"
+        return None, None, diagnostics
+
+    branch_idx, branch_source, branch_reason = deps.legacy_branch_hint_resolution(working_entry)
+    diagnostics["legacy_branch_hint_source"] = branch_source
+    diagnostics["legacy_branch_hint_reason"] = branch_reason
+    if branch_idx not in {0, 1}:
+        diagnostics["legacy_failure_reason"] = (
+            f"legacy_rebind_{branch_reason or 'missing_branch_hint'}"
+        )
+        return None, None, diagnostics
+
+    branch_inventory = _source_candidate_filter_inventory(
+        working_entry,
+        candidate_pool,
+        deps=deps,
+        required_branch_index=int(branch_idx),
+    )
+    branch_candidates = [
+        dict(candidate)
+        for candidate in branch_inventory.get("branch_candidates", [])
+        if isinstance(candidate, Mapping)
+    ]
+    diagnostics["legacy_candidate_count_after_branch"] = int(len(branch_candidates))
+    diagnostics["legacy_candidate_inventory_after_branch"] = deps.trace_candidate_inventory(
+        branch_candidates
+    )
+    if not branch_candidates:
+        diagnostics["legacy_failure_reason"] = "legacy_rebind_no_candidate_on_branch"
+        return None, None, diagnostics
+
+    geometry_hint_source, geometry_target_point, tie_tolerance = deps.legacy_geometry_hint(
+        working_entry,
+        branch_candidates,
+    )
+    diagnostics["legacy_geometry_hint_source"] = geometry_hint_source
+    diagnostics["legacy_tie_tolerance"] = (
+        float(tie_tolerance) if math.isfinite(float(tie_tolerance)) else None
+    )
+
+    selection = _select_source_candidate(
+        working_entry,
+        candidate_pool,
+        deps=deps,
+        saved_identity_entry=saved_identity_entry,
+        target_point=geometry_target_point,
+        frame_name=geometry_hint_source,
+        tie_tolerance=tie_tolerance,
+        required_branch_index=int(branch_idx),
+        fail_on_ambiguous_tie=True,
+        require_all_candidate_points=True,
+        allow_missing_target_selection=False,
+        allow_single_candidate_without_score=True,
+    )
+    score_inventory = [
+        dict(item) for item in selection.get("score_inventory", []) if isinstance(item, Mapping)
+    ]
+    selected_geometry_count = 1 if isinstance(selection.get("selected"), Mapping) else 0
+    diagnostics["legacy_candidate_count_after_geometry"] = int(
+        len(score_inventory) if score_inventory else selected_geometry_count
+    )
+    if score_inventory:
+        diagnostics["legacy_geometry_candidate_scores"] = score_inventory
+    if selection.get("best_score") is not None:
+        diagnostics["legacy_best_score"] = float(selection["best_score"])
+    if selection.get("second_best_score") is not None:
+        diagnostics["legacy_second_best_score"] = float(selection["second_best_score"])
+    else:
+        diagnostics["legacy_second_best_score"] = None
+    if selection.get("selection_tie_breaker"):
+        diagnostics["legacy_selection_tie_breaker"] = str(
+            selection.get("selection_tie_breaker")
+        )
+    chosen_live_row = (
+        dict(selection.get("selected")) if isinstance(selection.get("selected"), Mapping) else None
+    )
+    if chosen_live_row is None:
+        failure_reason = str(selection.get("failure_reason") or "")
+        if failure_reason == "missing_target_point":
+            diagnostics["legacy_failure_reason"] = "legacy_rebind_missing_geometry_hint"
+        elif failure_reason == "missing_candidate_point":
+            diagnostics["legacy_failure_reason"] = "legacy_rebind_missing_geometry_candidate"
+        elif failure_reason == "nonfinite_score":
+            diagnostics["legacy_failure_reason"] = "legacy_rebind_nonfinite_geometry_score"
+        elif failure_reason == "branch_constraint_no_match":
+            diagnostics["legacy_failure_reason"] = "legacy_rebind_no_candidate_on_branch"
+        elif failure_reason == "ambiguous_geometry_tie":
+            diagnostics["legacy_failure_reason"] = "legacy_rebind_ambiguous_geometry_tie"
+            diagnostics["legacy_geometry_tied_candidates"] = deps.trace_candidate_inventory(
+                selection.get("tied_candidates", [])
+            )
+            diagnostics["legacy_geometry_identity_tied_candidates"] = (
+                deps.trace_candidate_inventory(selection.get("identity_tied_candidates", []))
+            )
+        else:
+            diagnostics["legacy_failure_reason"] = (
+                "legacy_rebind_missing_candidate_pool"
+                if failure_reason in {"missing_candidate_pool", "group_constraint_no_match"}
+                else "legacy_rebind_ambiguous_geometry_tie"
+            )
+        return None, None, diagnostics
+
+    canonical_live_row = deps.canonicalize_live_source_entry(chosen_live_row)
+    canonical_ok, canonical_reason = deps.is_canonical_live_source_entry(canonical_live_row)
+    if not canonical_ok or not isinstance(canonical_live_row, Mapping):
+        diagnostics["legacy_failure_reason"] = (
+            f"legacy_rebind_noncanonical_live_row:{canonical_reason or 'unknown'}"
+        )
+        return None, None, diagnostics
+
+    fit_bound_entry = deps.apply_refined_simulated_override(
+        dict(working_entry),
+        dict(canonical_live_row),
+        prefer_caked_display=bool(use_caked_display),
+    )
+    canonical_fit_ok, canonical_fit_reason = deps.is_canonical_live_source_entry(
+        fit_bound_entry
+    )
+    if not canonical_fit_ok or not isinstance(fit_bound_entry, Mapping):
+        diagnostics["legacy_failure_reason"] = (
+            "legacy_rebind_fit_bound_identity_loss"
+            if canonical_fit_reason is None
+            else f"legacy_rebind_fit_bound_identity_loss:{canonical_fit_reason}"
+        )
+        return None, None, diagnostics
+
+    diagnostics["legacy_chosen_live_row"] = deps.compact_source_resolution_entry_payload(
+        canonical_live_row
+    )
+    diagnostics["legacy_selected_source_identity_fields"] = _source_locator_payload(
+        canonical_live_row,
+        deps=deps,
+    )
+    diagnostics["legacy_saved_background_current_view_point"] = deps.cache_jsonable(
+        deps.entry_display_point(entry)
+    )
+    diagnostics["legacy_saved_background_current_view_frame"] = deps.background_current_view_frame(
+        entry
+    )
+    diagnostics["legacy_selected_live_simulated_current_view_point"] = deps.cache_jsonable(
+        deps.candidate_current_view_point(canonical_live_row)
+    )
+    diagnostics["legacy_selected_live_simulated_current_view_frame"] = (
+        deps.candidate_current_view_frame(canonical_live_row)
+    )
+    candidate_frame = deps.candidate_current_view_frame(canonical_live_row)
+    background_frame = deps.background_current_view_frame(entry)
+    candidate_point = deps.candidate_current_view_point(canonical_live_row)
+    background_point = deps.entry_display_point(entry)
+    diagnostics["legacy_selected_to_background_distance_px"] = (
+        float(
+            math.hypot(
+                float(candidate_point[0]) - float(background_point[0]),
+                float(candidate_point[1]) - float(background_point[1]),
+            )
+        )
+        if candidate_frame == background_frame
+        and candidate_point is not None
+        and background_point is not None
+        else None
+    )
+    diagnostics["legacy_saved_simulated_detector_hint"] = deps.cache_jsonable(
+        deps.legacy_saved_simulated_detector_hint(saved_identity_entry)
+    )
+    diagnostics["legacy_fit_bound_entry"] = deps.compact_source_resolution_entry_payload(
+        fit_bound_entry
+    )
+    resolution_kind = (
+        "legacy_dense_q_group_rebind"
+        if candidate_pool_source == "q_group"
+        else "legacy_dense_hkl_rebind"
+    )
+    return dict(fit_bound_entry), resolution_kind, diagnostics
+
+
 def collect_geometry_manual_dataset_inputs(
     *,
     background_idx: int,

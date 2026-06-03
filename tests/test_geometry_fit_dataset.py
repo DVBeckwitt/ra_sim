@@ -212,6 +212,209 @@ def _provider_coverage_deps(
     )
 
 
+def _coerce_nonnegative_index(value):
+    try:
+        index = int(value)
+    except Exception:
+        return None
+    return index if index >= 0 else None
+
+
+def _normalized_hkl(value):
+    if not isinstance(value, (list, tuple)) or len(value) < 3:
+        return None
+    try:
+        return tuple(int(item) for item in value[:3])
+    except Exception:
+        return None
+
+
+def _source_branch_index(entry):
+    if not isinstance(entry, Mapping):
+        return None
+    value = entry.get("physical_branch_slot", entry.get("source_branch_index"))
+    try:
+        branch = int(value)
+    except Exception:
+        return None
+    return branch if branch in {0, 1} else None
+
+
+def _entry_point(entry, x_key, y_key):
+    if not isinstance(entry, Mapping):
+        return None
+    try:
+        point = (float(entry[x_key]), float(entry[y_key]))
+    except Exception:
+        return None
+    if not (math.isfinite(point[0]) and math.isfinite(point[1])):
+        return None
+    return point
+
+
+def _candidate_point_for_frame(candidate, *, frame_name):
+    if frame_name in {
+        "measured_display",
+        "refined_sim_display",
+        "current_view_display",
+    }:
+        return _entry_point(candidate, "sim_col", "sim_row") or _entry_point(
+            candidate, "display_col", "display_row"
+        )
+    if frame_name in {"measured_detector", "refined_sim_native"}:
+        return _entry_point(candidate, "sim_col_raw", "sim_row_raw")
+    if frame_name == "refined_sim_caked":
+        return _entry_point(candidate, "caked_x", "caked_y")
+    return None
+
+
+def _source_entry_hkl_matches(entry, candidate):
+    entry_hkl = _normalized_hkl(entry.get("hkl") if isinstance(entry, Mapping) else None)
+    candidate_hkl = _normalized_hkl(
+        candidate.get("hkl") if isinstance(candidate, Mapping) else None
+    )
+    if candidate_hkl is None:
+        return False
+    if entry_hkl is None:
+        return True
+    if candidate_hkl == entry_hkl:
+        return True
+    entry_group = _stable_group_identity(entry.get("q_group_key"))
+    candidate_group = _stable_group_identity(candidate.get("q_group_key"))
+    return (
+        isinstance(entry_group, tuple)
+        and len(entry_group) >= 4
+        and str(entry_group[0]) == "q_group"
+        and entry_group == candidate_group
+    )
+
+
+def _source_candidate_deps(
+    *,
+    legacy_candidate_pool=None,
+    legacy_candidate_pool_source="source_hkl",
+):
+    def _compact(entry):
+        if not isinstance(entry, Mapping):
+            return None
+        keys = (
+            "id",
+            "hkl",
+            "source_table_index",
+            "source_row_index",
+            "source_reflection_index",
+            "source_branch_index",
+            "source_peak_index",
+            "q_group_key",
+            "sim_col",
+            "sim_row",
+        )
+        return {key: _cache_jsonable(entry.get(key)) for key in keys if key in entry}
+
+    def _trace_inventory(candidates):
+        return [_compact(candidate) for candidate in candidates or () if isinstance(candidate, Mapping)]
+
+    def _legacy_dense_working_entry(entry, raw_saved_entry):
+        if not isinstance(entry, Mapping):
+            return None
+        working = dict(entry)
+        source = raw_saved_entry if isinstance(raw_saved_entry, Mapping) else entry
+        if source.get("source_reflection_index") is not None:
+            working["legacy_source_reflection_index"] = source.get("source_reflection_index")
+        if source.get("source_peak_index") is not None:
+            working["legacy_source_peak_index"] = source.get("source_peak_index")
+        for key in (
+            "source_table_index",
+            "source_reflection_index",
+            "source_reflection_namespace",
+            "source_reflection_is_full",
+            "source_row_index",
+            "source_branch_index",
+            "source_peak_index",
+        ):
+            working.pop(key, None)
+        return working
+
+    def _apply_override(entry, live_row, *, prefer_caked_display=False):
+        merged = dict(entry or {})
+        if isinstance(live_row, Mapping):
+            merged.update(dict(live_row))
+        return merged
+
+    return geometry_fit_dataset.GeometrySourceCandidateDeps(
+        coerce_nonnegative_index=_coerce_nonnegative_index,
+        trusted_full_reflection_identity=lambda entry: bool(
+            isinstance(entry, Mapping)
+            and _coerce_nonnegative_index(entry.get("source_reflection_index")) is not None
+            and (
+                str(entry.get("source_reflection_namespace", "")).lower()
+                in {"full", "full_reflection", "miller"}
+                or bool(entry.get("source_reflection_is_full", False))
+            )
+        ),
+        source_branch_index=_source_branch_index,
+        normalized_hkl=_normalized_hkl,
+        source_entry_hkl_matches=_source_entry_hkl_matches,
+        entry_source_label=lambda entry: str(entry.get("source_label", "primary"))
+        if isinstance(entry, Mapping)
+        else "primary",
+        stable_group_identity=_stable_group_identity,
+        is_zero_qr_00l=lambda entry: bool(
+            isinstance(entry, Mapping)
+            and (
+                (_normalized_hkl(entry.get("hkl")) or (1, 1, 1))[0:2] == (0, 0)
+                or (
+                    isinstance(entry.get("q_group_key"), tuple)
+                    and len(entry["q_group_key"]) >= 3
+                    and int(entry["q_group_key"][2]) == 0
+                )
+            )
+        ),
+        entry_display_point=lambda entry: _entry_point(entry, "display_col", "display_row"),
+        entry_saved_simulated_current_view_point=lambda entry: _entry_point(
+            entry, "refined_sim_x", "refined_sim_y"
+        ),
+        legacy_saved_simulated_detector_hint=lambda entry: _entry_point(
+            entry, "refined_sim_native_x", "refined_sim_native_y"
+        )
+        or _entry_point(entry, "refined_sim_x", "refined_sim_y"),
+        candidate_current_view_point=lambda candidate: _candidate_point_for_frame(
+            candidate, frame_name="measured_display"
+        ),
+        candidate_current_view_frame=lambda candidate: "current_view_display"
+        if _candidate_point_for_frame(candidate, frame_name="measured_display") is not None
+        else None,
+        candidate_point_for_frame=_candidate_point_for_frame,
+        compact_source_resolution_entry_payload=_compact,
+        trace_candidate_inventory=_trace_inventory,
+        legacy_dense_working_entry=_legacy_dense_working_entry,
+        resolve_source_entry_candidate_pool=lambda entry: (
+            [dict(candidate) for candidate in (legacy_candidate_pool or ())],
+            legacy_candidate_pool_source,
+        ),
+        legacy_branch_hint_resolution=lambda entry: (1, "phi_deg", None),
+        legacy_geometry_hint=lambda entry, candidates: (
+            "measured_display",
+            _entry_point(entry, "display_col", "display_row"),
+            0.0,
+        ),
+        canonicalize_live_source_entry=lambda entry: dict(entry)
+        if isinstance(entry, Mapping)
+        else None,
+        is_canonical_live_source_entry=lambda entry: (
+            isinstance(entry, Mapping) and _source_branch_index(entry) in {0, 1},
+            None
+            if isinstance(entry, Mapping) and _source_branch_index(entry) in {0, 1}
+            else "missing_branch",
+        ),
+        apply_refined_simulated_override=_apply_override,
+        cache_jsonable=_cache_jsonable,
+        background_current_view_frame=lambda entry: "current_view_display"
+        if _entry_point(entry, "display_col", "display_row") is not None
+        else None,
+    )
+
+
 def test_geometry_fit_dataset_module_keeps_internal_import_boundary() -> None:
     source = Path(geometry_fit_dataset.__file__).read_text(encoding="utf-8")
 
@@ -597,3 +800,288 @@ def test_augment_source_rows_with_provider_coverage_updates_targeted_performance
         "candidate_rows_after_hkl_filter": 2,
         "missing_required_branch_group_keys": [{"hkl": (1, 1, 0)}],
     }
+
+
+def test_source_row_key_preserves_source_locator_identity() -> None:
+    assert geometry_fit_dataset._source_row_key(
+        {
+            "source_table_index": "4",
+            "source_row_index": "8",
+            "source_peak_index": 99,
+        }
+    ) == (4, 8)
+    assert geometry_fit_dataset._source_row_key({"source_table_index": 4}) is None
+
+
+def test_source_reflection_row_key_preserves_hkl_and_branch_identity() -> None:
+    deps = _source_candidate_deps()
+
+    assert geometry_fit_dataset._source_reflection_row_key(
+        {
+            "source_reflection_index": "7",
+            "source_reflection_namespace": "full",
+            "source_row_index": "2",
+            "hkl": (1, 0, 0),
+            "source_branch_index": 1,
+        },
+        deps=deps,
+    ) == (7, 2)
+    assert (
+        geometry_fit_dataset._source_reflection_row_key(
+            {
+                "source_reflection_index": "7",
+                "source_reflection_namespace": "candidate_pool",
+                "source_row_index": "2",
+            },
+            deps=deps,
+        )
+        is None
+    )
+
+
+def test_source_locator_identity_match_accepts_exact_payload_match() -> None:
+    deps = _source_candidate_deps()
+    saved = {
+        "source_reflection_index": 7,
+        "source_reflection_namespace": "full",
+        "source_reflection_is_full": True,
+        "source_table_index": 3,
+        "source_row_index": 2,
+        "source_branch_index": 1,
+        "source_peak_index": 1,
+    }
+    candidate = {**saved, "hkl": (1, 0, 0), "sim_col": 10.0, "sim_row": 20.0}
+
+    assert geometry_fit_dataset._source_locator_identity_match(
+        saved,
+        candidate,
+        deps=deps,
+    )
+
+
+def test_source_locator_identity_match_rejects_mismatched_branch_or_source() -> None:
+    deps = _source_candidate_deps()
+    saved = {
+        "source_reflection_index": 7,
+        "source_table_index": 3,
+        "source_row_index": 2,
+        "source_branch_index": 1,
+    }
+
+    assert not geometry_fit_dataset._source_locator_identity_match(
+        saved,
+        {**saved, "source_branch_index": 0},
+        deps=deps,
+    )
+    assert not geometry_fit_dataset._source_locator_identity_match(
+        saved,
+        {**saved, "source_table_index": 4},
+        deps=deps,
+    )
+
+
+def test_filter_hkl_candidates_keeps_matching_hkl_only() -> None:
+    deps = _source_candidate_deps()
+
+    filtered, missing, mismatched = geometry_fit_dataset._filter_hkl_candidates(
+        {"hkl": (1, 1, 0)},
+        [
+            {"id": "match", "hkl": (1, 1, 0)},
+            {"id": "missing"},
+            {"id": "mismatch", "hkl": (2, 0, 0)},
+        ],
+        deps=deps,
+    )
+
+    assert [candidate["id"] for candidate in filtered] == ["match"]
+    assert [candidate["id"] for candidate in missing] == ["missing"]
+    assert [candidate["id"] for candidate in mismatched] == ["mismatch"]
+
+
+def test_filter_group_candidates_keeps_matching_group_identity_only() -> None:
+    deps = _source_candidate_deps()
+
+    filtered = geometry_fit_dataset._filter_group_candidates(
+        {"source_label": "primary", "q_group_key": ("q_group", "primary", 2, 10)},
+        [
+            {
+                "id": "match",
+                "source_label": "primary",
+                "q_group_key": ("q_group", "primary", 2, 10),
+            },
+            {
+                "id": "wrong-group",
+                "source_label": "primary",
+                "q_group_key": ("q_group", "primary", 3, 10),
+            },
+            {
+                "id": "wrong-source",
+                "source_label": "aux",
+                "q_group_key": ("q_group", "primary", 2, 10),
+            },
+        ],
+        deps=deps,
+    )
+
+    assert [candidate["id"] for candidate in filtered] == ["match"]
+
+
+def test_filter_source_branch_candidates_keeps_matching_branch_only() -> None:
+    deps = _source_candidate_deps()
+
+    filtered = geometry_fit_dataset._filter_source_branch_candidates(
+        {"hkl": (1, 1, 0), "source_branch_index": 1},
+        [
+            {"id": "branch-0", "source_branch_index": 0},
+            {"id": "branch-1", "source_branch_index": 1},
+        ],
+        deps=deps,
+    )
+
+    assert [candidate["id"] for candidate in filtered] == ["branch-1"]
+
+
+def test_select_source_candidate_prefers_exact_locator_match() -> None:
+    deps = _source_candidate_deps()
+    saved = {
+        "hkl": (1, 1, 0),
+        "source_label": "primary",
+        "q_group_key": ("q_group", "primary", 2, 10),
+        "source_table_index": 3,
+        "source_row_index": 7,
+        "source_branch_index": 1,
+        "display_col": 10.0,
+        "display_row": 20.0,
+    }
+
+    selection = geometry_fit_dataset._select_source_candidate(
+        saved,
+        [
+            {
+                "id": "sorts-first",
+                "hkl": (1, 1, 0),
+                "source_label": "primary",
+                "q_group_key": ("q_group", "primary", 2, 10),
+                "source_table_index": 2,
+                "source_row_index": 6,
+                "source_branch_index": 1,
+                "sim_col": 10.0,
+                "sim_row": 20.0,
+            },
+            {
+                "id": "identity-match",
+                "hkl": (1, 1, 0),
+                "source_label": "primary",
+                "q_group_key": ("q_group", "primary", 2, 10),
+                "source_table_index": 3,
+                "source_row_index": 7,
+                "source_branch_index": 1,
+                "sim_col": 10.0,
+                "sim_row": 20.0,
+            },
+        ],
+        deps=deps,
+        saved_identity_entry=saved,
+        tie_tolerance=0.0,
+    )
+
+    assert selection["selected"]["id"] == "identity-match"
+    assert selection["selection_tie_breaker"] == "saved_source_identity"
+
+
+def test_select_source_candidate_rejects_ambiguous_equal_candidates() -> None:
+    deps = _source_candidate_deps()
+    entry = {
+        "hkl": (1, 1, 0),
+        "source_label": "primary",
+        "q_group_key": ("q_group", "primary", 2, 10),
+        "source_branch_index": 1,
+        "display_col": 10.0,
+        "display_row": 20.0,
+    }
+
+    selection = geometry_fit_dataset._select_source_candidate(
+        entry,
+        [
+            {
+                "id": "a",
+                "hkl": (1, 1, 0),
+                "source_label": "primary",
+                "q_group_key": ("q_group", "primary", 2, 10),
+                "source_table_index": 2,
+                "source_row_index": 6,
+                "source_branch_index": 1,
+                "sim_col": 10.0,
+                "sim_row": 20.0,
+            },
+            {
+                "id": "b",
+                "hkl": (1, 1, 0),
+                "source_label": "primary",
+                "q_group_key": ("q_group", "primary", 2, 10),
+                "source_table_index": 3,
+                "source_row_index": 7,
+                "source_branch_index": 1,
+                "sim_col": 10.0,
+                "sim_row": 20.0,
+            },
+        ],
+        deps=deps,
+        tie_tolerance=0.0,
+        fail_on_ambiguous_tie=True,
+    )
+
+    assert selection["selected"] is None
+    assert selection["failure_reason"] == "ambiguous_geometry_tie"
+    assert len(selection["tied_candidates"]) == 2
+
+
+def test_resolve_legacy_dense_source_entry_preserves_existing_dense_fallback() -> None:
+    candidate_pool = [
+        {
+            "id": "wrong-branch",
+            "hkl": (1, 1, 0),
+            "source_branch_index": 0,
+            "source_table_index": 5,
+            "source_row_index": 0,
+            "source_reflection_index": 5,
+            "source_reflection_namespace": "full",
+            "source_reflection_is_full": True,
+            "sim_col": 10.0,
+            "sim_row": 20.0,
+        },
+        {
+            "id": "selected",
+            "hkl": (1, 1, 0),
+            "source_branch_index": 1,
+            "source_table_index": 5,
+            "source_row_index": 0,
+            "source_reflection_index": 5,
+            "source_reflection_namespace": "full",
+            "source_reflection_is_full": True,
+            "sim_col": 10.0,
+            "sim_row": 20.0,
+        },
+    ]
+    deps = _source_candidate_deps(legacy_candidate_pool=candidate_pool)
+    entry = {
+        "hkl": (1, 1, 0),
+        "source_table_index": 5,
+        "source_row_index": 0,
+        "source_peak_index": 5,
+        "display_col": 10.0,
+        "display_row": 20.0,
+        "phi_deg": 45.0,
+    }
+
+    resolved, kind, diagnostics = geometry_fit_dataset._resolve_legacy_dense_source_entry(
+        entry,
+        raw_saved_entry=dict(entry),
+        deps=deps,
+    )
+
+    assert resolved["id"] == "selected"
+    assert resolved["source_branch_index"] == 1
+    assert kind == "legacy_dense_hkl_rebind"
+    assert "legacy_failure_reason" not in diagnostics
+    assert diagnostics["legacy_candidate_count_after_branch"] == 1
