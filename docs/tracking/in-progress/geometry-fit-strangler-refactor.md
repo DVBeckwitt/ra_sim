@@ -5,7 +5,7 @@ Type: refactor
 Owner:
 Issue: none
 Priority: p1
-Last updated: 2026-06-02
+Last updated: 2026-06-03
 
 ## Summary
 
@@ -13,8 +13,8 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: Patch F1 caked-storage event/task move implemented, reviewed, and validated; post-F1 wrapper-name cleanup implemented and validated; ready for next-slice planning
-Bug/error/feature status: Patch F0 audited `_run_async_geometry_fit_worker_job()` after E8 and deleted proven-dead worker-context alias assignments. Patch F0.1 then inlined the remaining one-use worker-context method aliases that were only wrapper glue. Patch F0.2 fixed the stale import-safe guard that still expected the deleted `_rebuild_source_rows_for_background_worker` alias. Patch F1 moved caked-storage event emission and non-gating caked-view task support into `GeometryFitWorkerContext` and deleted the corresponding runtime-local helpers and dependency callback seam. The post-F1 cleanup renamed two unused local unpack placeholders in the runtime wrapper to `_` without changing calls, call order, side effects, or behavior. The result builder still lives in `runtime_session.py`; cache clearing, preflight handling, async polling result application, solver execution, optimizer behavior, saved-state schema, CLI/env/debug behavior, UI callbacks, and diagnostics remain unchanged. No user-facing geometry-fit behavior, saved-state schema, CLI, environment flag, solver math, UI callback, or diagnostic log-field change is intended in this slice.
+Status: G0 dataset extraction contract map implemented and validated; ready for next-slice planning
+Bug/error/feature status: Patch F0 audited `_run_async_geometry_fit_worker_job()` after E8 and deleted proven-dead worker-context alias assignments. Patch F0.1 then inlined the remaining one-use worker-context method aliases that were only wrapper glue. Patch F0.2 fixed the stale import-safe guard that still expected the deleted `_rebuild_source_rows_for_background_worker` alias. Patch F1 moved caked-storage event emission and non-gating caked-view task support into `GeometryFitWorkerContext` and deleted the corresponding runtime-local helpers and dependency callback seam. The post-F1 cleanup renamed two unused local unpack placeholders in the runtime wrapper to `_` without changing calls, call order, side effects, or behavior. Patch G0 added characterization coverage for `build_geometry_manual_fit_dataset()` public payload keys, detector-space objective selection, and caked-objective locked-Qr handoff audit fields before extracting dataset helpers. Dataset assembly still lives in `geometry_fit.py`; no production code, UI behavior, API shape, saved-state schema, CLI/env/debug behavior, solver math, or diagnostic log fields changed.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
 Shipping status: no runtime rollout or feature flag is needed because behavior is preserved behind existing public wrappers. Rollback is a normal commit revert.
@@ -54,6 +54,32 @@ feature flag, migration, or release work is needed.
 Deprecation/migration status: no public API, artifact schema, config key,
 command, saved-state field, or compatibility surface changed.
 
+## Patch G0 dataset extraction contract map handoff
+
+What was done: added characterization assertions around
+`build_geometry_manual_fit_dataset()` before the next extraction slice. The
+coverage pins the stable dataset payload key inventory, the detector-native
+objective request in the baseline dataset path, and the caked-objective
+handoff audit contract for a detector-origin locked-Qr anchor.
+
+Bug/error/feature status: this is coverage and documentation only. It does not
+move dataset code, change solver inputs, change caked fit-space behavior,
+alter UI callbacks, or modify public payload schemas.
+
+Interface/API status: no public API changed. The pinned interface remains the
+existing dataset dictionary plus nested `spec` and `fit_handoff_audit_rows`
+fields consumed by geometry-fit worker, optimizer, diagnostics, and saved
+state paths.
+
+CI/shipping status: targeted dataset workflow, GUI route-pack, and geometry
+fitting route-pack tests passed. No CI config, dependency, release-version,
+rollout, feature flag, migration, or launch work is needed for this guardrail
+slice.
+
+Deprecation/migration status: no public API, artifact schema, config key,
+command, saved-state field, or compatibility surface is deprecated or
+migrated.
+
 ## Current state
 
 - Added canonical snapshot normalization for geometry-fit comparison tests.
@@ -70,6 +96,9 @@ command, saved-state field, or compatibility surface changed.
 - Fixed snapshot normalization so integer background keys and string keys cannot collapse.
 - Moved caked-storage event/task support into `GeometryFitWorkerContext`.
 - Cleaned unused local unpack placeholder names in the runtime wrapper.
+- Patch G0 pinned `build_geometry_manual_fit_dataset()` payload keys,
+  detector-native objective-space selection, and caked-objective handoff audit
+  fields before moving any dataset assembly behavior.
 - Fixed snapshot normalization to fail closed when any normalized mapping keys collide, including typed aliases such as `0` versus `"int:0"` and unstable timestamp-like string keys.
 - Removed the unused snapshot JSON helper.
 - Added a caked projection-authority snapshot that pins exact-projector use over stale saved caked aliases.
@@ -915,6 +944,10 @@ Current validation status:
 - Patch F1 post-review cleanup validation passed: targeted worker/job
   import-boundary tests, focused worker projection/prebuild/rebuild tests, Ruff
   on `runtime_session.py`, and `git diff --check`.
+- Patch G0 validation passed: targeted
+  `tests/test_gui_geometry_fit_workflow.py` dataset contract tests, the GUI
+  workflow caked/dataset/locked-Qr route pack, and the geometry fitting
+  caked/manual-Qr/locked-Qr route pack.
 - `python -m ra_sim.dev check` remains blocked only by the documented pre-existing formatting drift above.
 - No generated artifacts, raw data, local config, notebook output, dependency changes, release version changes, or public migration files are included.
 

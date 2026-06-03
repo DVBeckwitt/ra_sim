@@ -2135,6 +2135,29 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
     assert dataset["group_count"] == 1
     assert dataset["pair_count"] == 1
     assert dataset["resolved_source_pair_count"] == 1
+    expected_dataset_contract_keys = {
+        "cache_metadata",
+        "fit_handoff_audit_lines",
+        "fit_handoff_audit_rows",
+        "initial_pairs_display",
+        "manual_caked_recompute_audit",
+        "manual_picker_truth_pairs",
+        "manual_point_pairs",
+        "measured_display",
+        "measured_for_fit",
+        "measured_native",
+        "native_background",
+        "orientation_choice",
+        "orientation_diag",
+        "point_provider_report",
+        "provider_pairs",
+        "simulation_diagnostics",
+        "source_resolution_diagnostics",
+        "source_rows_for_trace",
+        "spec",
+        "summary_line",
+    }
+    assert expected_dataset_contract_keys <= set(dataset)
     assert len(dataset["initial_pairs_display"]) == 1
     initial_entry = dataset["initial_pairs_display"][0]
     expected_initial_subset = {
@@ -2195,6 +2218,8 @@ def test_build_geometry_manual_fit_dataset_assembles_orientation_ready_payload()
         "fit_space_projector": None,
         "fit_space_projector_kind": None,
         "fit_space_projector_unavailable_reason": "exact_caked_view_unavailable",
+        "_manual_caked_fit_space_required": False,
+        "solver_requested_objective_space": "detector_native_px",
     }
     for key, expected in expected_dataset_spec_subset.items():
         assert dataset_spec[key] == expected
@@ -25376,6 +25401,24 @@ def test_build_geometry_manual_fit_dataset_projects_detector_origin_observed_anc
     assert spec_pair["simulated_point"] == pytest.approx((37.935, 41.130))
     assert spec_pair["simulated_frame"] == "caked_2theta_phi"
     assert spec_pair["simulated_point_source"] == "fit_space_projector_native_detector"
+    assert dataset["spec"]["_manual_caked_fit_space_required"] is True
+    assert dataset["spec"]["solver_requested_objective_space"] == "caked_deg"
+    handoff_row = dataset["fit_handoff_audit_rows"][0]
+    expected_handoff_subset = {
+        "pair_index": 0,
+        "source_table_index": 160,
+        "source_row_index": 42,
+        "source_branch_index": 0,
+        "solver_requested_objective_space": "caked_deg",
+        "objective_space": "caked_deg",
+        "objective_residual_units": "deg",
+        "handoff_available_fit_space": "caked_deg",
+        "fit_prediction_caked_authority": "exact_projector_from_native",
+    }
+    for key, expected in expected_handoff_subset.items():
+        assert handoff_row[key] == expected
+    assert handoff_row["fit_observed_caked_deg"] == pytest.approx((33.063, 130.754))
+    assert handoff_row["fit_prediction_caked_deg"] == pytest.approx((37.935, 41.130))
     assert (3.0, 4.0) in detector_calls
     assert (5.0, 6.0) in detector_calls
 
@@ -25895,6 +25938,15 @@ def test_build_geometry_manual_fit_dataset_keeps_detector_origin_anchor_in_detec
     assert display["background_phi_deg"] == pytest.approx(-999.0)
     assert dataset["spec"]["measured_peaks"][0]["background_two_theta_deg"] == pytest.approx(999.0)
     assert dataset["spec"]["measured_peaks"][0]["background_phi_deg"] == pytest.approx(-999.0)
+    assert dataset["spec"]["_manual_caked_fit_space_required"] is False
+    assert dataset["spec"]["solver_requested_objective_space"] == "detector_native_px"
+    handoff_row = dataset["fit_handoff_audit_rows"][0]
+    for key, expected in {
+        "solver_requested_objective_space": "detector_native_px",
+        "objective_space": "detector_native_px",
+        "objective_residual_units": "px",
+    }.items():
+        assert handoff_row[key] == expected
     assert tuple(expected_detector_call) not in detector_calls
 
 
