@@ -127,6 +127,19 @@ class ScaleEstimate:
 
 
 @dataclass(frozen=True)
+class ThicknessResolution:
+    target_thickness_angstrom: float
+    stack_layers: int
+    effective_thickness_angstrom: float
+    effective_thickness_nm: float
+    c_angstrom: float
+    fringe_period_L: float
+    fringe_period_L_parratt: float
+    thickness_mismatch_angstrom: float
+    thickness_mismatch_percent: float
+
+
+@dataclass(frozen=True)
 class WavelengthContribution:
     structure: np.ndarray
     ht_over_q2: np.ndarray
@@ -326,6 +339,87 @@ def resolve_worker_count(workers: str, *, n_jobs: int) -> int:
 
 def positive_rounded_int(value: float) -> int:
     return max(1, int(round(float(value))))
+
+
+def resolve_common_thickness(
+    *,
+    thickness_nm: float,
+    c_angstrom: float,
+    stack_layers: int = 0,
+) -> ThicknessResolution:
+    target = float(thickness_nm) * 10.0
+    c_value = float(c_angstrom)
+    if int(stack_layers) > 0:
+        layers = int(stack_layers)
+    else:
+        layers = max(1, int(round(target / c_value)))
+    effective = layers * c_value
+    mismatch = effective - target
+    mismatch_percent = 100.0 * mismatch / target if target != 0.0 else float("nan")
+    fringe_period = 1.0 / float(layers)
+    return ThicknessResolution(
+        target_thickness_angstrom=target,
+        stack_layers=layers,
+        effective_thickness_angstrom=effective,
+        effective_thickness_nm=effective / 10.0,
+        c_angstrom=c_value,
+        fringe_period_L=fringe_period,
+        fringe_period_L_parratt=c_value / effective,
+        thickness_mismatch_angstrom=mismatch,
+        thickness_mismatch_percent=mismatch_percent,
+    )
+
+
+def resolve_common_thickness_for_args(args) -> ThicknessResolution:
+    return resolve_common_thickness(
+        thickness_nm=args.thickness_nm,
+        c_angstrom=args.c_angstrom,
+        stack_layers=args.stack_layers,
+    )
+
+
+def thickness_metadata(thickness: ThicknessResolution) -> dict[str, float | int]:
+    return {
+        "target_thickness_nm": thickness.target_thickness_angstrom / 10.0,
+        "effective_thickness_nm": thickness.effective_thickness_nm,
+        "target_thickness_angstrom": thickness.target_thickness_angstrom,
+        "effective_thickness_angstrom": thickness.effective_thickness_angstrom,
+        "thickness_mismatch_angstrom": thickness.thickness_mismatch_angstrom,
+        "thickness_mismatch_percent": thickness.thickness_mismatch_percent,
+        "stack_layers": int(thickness.stack_layers),
+        "c_angstrom": thickness.c_angstrom,
+        "fringe_period_L_ht": thickness.fringe_period_L,
+        "fringe_period_L_parratt": thickness.fringe_period_L_parratt,
+    }
+
+
+def attach_curve_metadata(frame: pd.DataFrame, metadata: dict[str, object]) -> pd.DataFrame:
+    for key, value in metadata.items():
+        frame[key] = value
+    return frame
+
+
+def thickness_summary_text(thickness: ThicknessResolution) -> str:
+    return (
+        "Shared film thickness\n"
+        f"target d = {thickness.target_thickness_angstrom / 10.0:.2f} nm\n"
+        f"N = {thickness.stack_layers}; effective d = {thickness.effective_thickness_nm:.2f} nm\n"
+        f"mismatch = {thickness.thickness_mismatch_angstrom / 10.0:.3f} nm "
+        f"({thickness.thickness_mismatch_percent:.2f}%)\n"
+        f"fringe period ΔL = {thickness.fringe_period_L:.5f}"
+    )
+
+
+def thickness_warning_text(thickness: ThicknessResolution) -> str | None:
+    if np.isclose(thickness.thickness_mismatch_angstrom, 0.0, atol=1.0e-9):
+        return None
+    return (
+        f"Requested target thickness {thickness.target_thickness_angstrom / 10.0:.3f} nm "
+        f"maps to N={thickness.stack_layers} repeats. Parratt thickness is synchronized "
+        f"to HT: {thickness.effective_thickness_nm:.3f} nm. Mismatch from target: "
+        f"{thickness.thickness_mismatch_angstrom / 10.0:.3f} nm "
+        f"({thickness.thickness_mismatch_percent:.2f}%)."
+    )
 
 
 def _scale_fit_mask(
@@ -876,14 +970,16 @@ class Layer:
     roughness_angstrom: float = 0.0
 
 
-def make_air_film_substrate_stack(args) -> list[Layer]:
+def make_air_film_substrate_stack(args, *, thickness_angstrom: float | None = None) -> list[Layer]:
+    if thickness_angstrom is None:
+        thickness_angstrom = resolve_common_thickness_for_args(args).effective_thickness_angstrom
     substrate_qc = 0.0 if args.substrate.lower() == "air" else float(args.substrate_qc_inv_angstrom)
     return [
         Layer("air", 0.0, None),
         Layer(
             args.material,
             float(args.qc_inv_angstrom),
-            float(args.thickness_nm) * 10.0,
+            float(thickness_angstrom),
             roughness_angstrom=float(args.top_roughness_angstrom),
         ),
         Layer(
@@ -1276,6 +1372,7 @@ def build_stitch_curve_frames(
         scale_grid_l_min=float(np.nanmin(l_values)),
         scale_grid_l_max=float(np.nanmax(l_values)),
     )
+    metadata.update(thickness_metadata(resolve_common_thickness_for_args(args)))
     metadata.update(
         {
             "stitch_cut_mode": args.stitch_cut_mode,
@@ -1306,9 +1403,7 @@ def build_stitch_curve_frames(
                 "label": label,
             }
         )
-        for key, value in metadata.items():
-            frame[key] = value
-        frames.append(frame)
+        frames.append(attach_curve_metadata(frame, metadata))
     return frames
 
 
@@ -1323,6 +1418,11 @@ def _curve_metadata_value(grid: pd.DataFrame, name: str, default):
 
 def write_stitch_diagnostics(curves: pd.DataFrame, args, out_dir: Path) -> Path:
     scaled_grid = _curve_grid_for_label(curves, STITCH_SCALED_HT_OVER_Q2_LABEL)
+    thickness_defaults = thickness_metadata(resolve_common_thickness_for_args(args))
+
+    def _thickness_value(name: str, cast=float):
+        return cast(_curve_metadata_value(scaled_grid, name, thickness_defaults[name]))
+
     scaled_l = np.asarray(scaled_grid["L"], dtype=float)
     scaled_y = np.asarray(scaled_grid["intensity"], dtype=float)
     unscaled_l, unscaled_y = _curve_arrays_for_label(curves, STITCH_UNSCALED_HT_OVER_Q2_LABEL)
@@ -1464,6 +1564,16 @@ def write_stitch_diagnostics(curves: pd.DataFrame, args, out_dir: Path) -> Path:
                         scaled_grid, "scale_grid_L_max", float(np.nanmax(scaled_l))
                     )
                 ),
+                "target_thickness_nm": _thickness_value("target_thickness_nm"),
+                "effective_thickness_nm": _thickness_value("effective_thickness_nm"),
+                "target_thickness_angstrom": _thickness_value("target_thickness_angstrom"),
+                "effective_thickness_angstrom": _thickness_value("effective_thickness_angstrom"),
+                "thickness_mismatch_angstrom": _thickness_value("thickness_mismatch_angstrom"),
+                "thickness_mismatch_percent": _thickness_value("thickness_mismatch_percent"),
+                "stack_layers": _thickness_value("stack_layers", int),
+                "c_angstrom": _thickness_value("c_angstrom"),
+                "fringe_period_L_ht": _thickness_value("fringe_period_L_ht"),
+                "fringe_period_L_parratt": _thickness_value("fringe_period_L_parratt"),
             }
         ]
     )
@@ -1568,7 +1678,11 @@ def average_pure_parratt_for_L(L_nom: np.ndarray, args) -> np.ndarray:
     """
     L_nom = np.asarray(L_nom, dtype=float)
     qz_nom = qz_from_L(L_nom, args.c_angstrom)
-    layers = make_air_film_substrate_stack(args)
+    thickness = resolve_common_thickness_for_args(args)
+    layers = make_air_film_substrate_stack(
+        args,
+        thickness_angstrom=thickness.effective_thickness_angstrom,
+    )
 
     lambda_samples, lambda_weights = gaussian_samples(
         args.lambda0_angstrom,
@@ -1610,6 +1724,7 @@ def load_curves_from_csv(path: Path, args) -> pd.DataFrame:
     locally on the same L grid using the current CLI/default optical parameters.
     """
     df = pd.read_csv(path)
+    resolved_thickness_metadata = thickness_metadata(resolve_common_thickness_for_args(args))
 
     parts = []
 
@@ -1672,6 +1787,7 @@ def load_curves_from_csv(path: Path, args) -> pd.DataFrame:
             STITCH_UNSCALED_HT_OVER_Q2_LABEL,
             STITCHED_PARRATT_HT_OVER_Q2_LABEL,
             LEGACY_STITCH_WEIGHT_LABEL,
+            PURE_PARRATT_LABEL,
         }
     ]
     if ht_over_q2_parts:
@@ -1700,25 +1816,22 @@ def load_curves_from_csv(path: Path, args) -> pd.DataFrame:
             )
             break
 
-    if not any((p["label"].iloc[0] == PURE_PARRATT_LABEL) for p in parts):
-        # Compute it on the grid from the loaded CSV.
-        grid = df[["L", "Qz_Ainv"]].drop_duplicates().sort_values("L")
-        R = average_pure_parratt_for_L(grid["L"].to_numpy(), args)
-        parts.append(
-            pd.DataFrame(
-                {
-                    "L": grid["L"].to_numpy(),
-                    "Qz_Ainv": grid["Qz_Ainv"].to_numpy(),
-                    "intensity": R,
-                    "label": PURE_PARRATT_LABEL,
-                }
-            )
-        )
+    # Always recompute pure Parratt so CSV redraw mode uses the synchronized
+    # effective thickness even when older CSVs contain nominal-thickness optics.
+    grid = df[["L", "Qz_Ainv"]].drop_duplicates().sort_values("L")
+    R = average_pure_parratt_for_L(grid["L"].to_numpy(), args)
+    pure_grid = pd.DataFrame(
+        {
+            "L": grid["L"].to_numpy(),
+            "Qz_Ainv": grid["Qz_Ainv"].to_numpy(),
+            "intensity": R,
+            "label": PURE_PARRATT_LABEL,
+        }
+    )
+    pure_l, pure_y = _curve_arrays_for_label(pure_grid, PURE_PARRATT_LABEL)
+    parts.append(pure_grid)
 
     if unscaled_ht_grid is not None:
-        pure_l, pure_y = _curve_arrays_for_label(
-            pd.concat(parts, ignore_index=True), PURE_PARRATT_LABEL
-        )
         pure_interp = np.interp(
             np.asarray(unscaled_ht_grid["L"], dtype=float),
             pure_l,
@@ -1746,20 +1859,20 @@ def load_curves_from_csv(path: Path, args) -> pd.DataFrame:
             scale_grid_l_min=float(np.nanmin(unscaled_ht_grid["L"])),
             scale_grid_l_max=float(np.nanmax(unscaled_ht_grid["L"])),
         )
-        for key, value in scale_metadata.items():
-            scaled_ht_grid[key] = value
+        scale_metadata.update(resolved_thickness_metadata)
+        attach_curve_metadata(scaled_ht_grid, scale_metadata)
         if not stitch_requested(args):
             parts.append(scaled_ht_grid)
 
     for part in parts:
         if part["label"].iloc[0] == HT_STRUCTURE_LABEL:
             part["intensity"] = part["intensity"] * float(args.ht_structure_scale)
+        attach_curve_metadata(part, resolved_thickness_metadata)
 
     out = pd.concat(parts, ignore_index=True)
     if stitch_requested(args) and STITCHED_PARRATT_HT_OVER_Q2_LABEL not in set(out["label"]):
         if unscaled_ht_grid is None:
             raise ValueError("CSV does not include or imply an HT/Qz² curve for stitching.")
-        pure_l, pure_y = _curve_arrays_for_label(out, PURE_PARRATT_LABEL)
         pure_interp = np.interp(np.asarray(unscaled_ht_grid["L"], dtype=float), pure_l, pure_y)
         out = pd.concat(
             [
@@ -1845,9 +1958,8 @@ def compute_curves(args) -> pd.DataFrame:
     if not cif_path.exists():
         raise FileNotFoundError(f"CIF file not found: {cif_path}")
 
-    stack_layers = int(args.stack_layers)
-    if stack_layers <= 0:
-        stack_layers = max(1, int(round(args.thickness_nm * 10.0 / args.c_angstrom)))
+    thickness = resolve_common_thickness_for_args(args)
+    stack_layers = thickness.stack_layers
 
     L_grid_min, L_grid_max = compute_l_grid_limits(args)
     l_step = float(args.L_step)
@@ -1905,7 +2017,10 @@ def compute_curves(args) -> pd.DataFrame:
     elif args.ht_bandwidth_mode != "resimulate":
         raise ValueError("--ht-bandwidth-mode must be 'interpolate-only' or 'resimulate'")
 
-    layers = make_air_film_substrate_stack(args)
+    layers = make_air_film_substrate_stack(
+        args,
+        thickness_angstrom=thickness.effective_thickness_angstrom,
+    )
     miceli_scale = miceli_cell_scale(args.a_angstrom) if compute_raw_miceli_branch else None
 
     theta_nom = np.arcsin(np.clip(qz_nom * args.lambda0_angstrom / (4.0 * np.pi), 0.0, 1.0))
@@ -2052,6 +2167,8 @@ def compute_curves(args) -> pd.DataFrame:
         scale_grid_l_min=float(np.nanmin(L_nom)),
         scale_grid_l_max=float(np.nanmax(L_nom)),
     )
+    curve_metadata = thickness_metadata(thickness)
+    scale_metadata.update(curve_metadata)
     raw_miceli_ht_over_q2_values = None
     if compute_raw_miceli_branch:
         raw_miceli_ht_over_q2_values = np.full_like(raw_miceli_ht_over_q2, np.nan, dtype=float)
@@ -2082,48 +2199,30 @@ def compute_curves(args) -> pd.DataFrame:
             "label": HT_OVER_Q2_LABEL,
         }
     )
-    for key, value in scale_metadata.items():
-        ht_over_q2_frame[key] = value
+    attach_curve_metadata(ht_over_q2_frame, scale_metadata)
     ht_over_q2_frames = [] if stitch_requested(args) else [ht_over_q2_frame]
+
+    def _curve_frame(label: str, intensity: np.ndarray) -> pd.DataFrame:
+        return attach_curve_metadata(
+            pd.DataFrame(
+                {
+                    "L": L_nom,
+                    "Qz_Ainv": qz_nom,
+                    "intensity": intensity,
+                    "label": label,
+                }
+            ),
+            curve_metadata,
+        )
 
     return pd.concat(
         [
-            pd.DataFrame(
-                {
-                    "L": L_nom,
-                    "Qz_Ainv": qz_nom,
-                    "intensity": structure * float(args.ht_structure_scale),
-                    "label": HT_STRUCTURE_LABEL,
-                }
-            ),
+            _curve_frame(HT_STRUCTURE_LABEL, structure * float(args.ht_structure_scale)),
             *ht_over_q2_frames,
-            pd.DataFrame(
-                {"L": L_nom, "Qz_Ainv": qz_nom, "intensity": born, "label": BORN_HT_LABEL}
-            ),
-            pd.DataFrame(
-                {
-                    "L": L_nom,
-                    "Qz_Ainv": qz_nom,
-                    "intensity": fresnel,
-                    "label": FRESNEL_HT_LABEL,
-                }
-            ),
-            pd.DataFrame(
-                {
-                    "L": L_nom,
-                    "Qz_Ainv": qz_nom,
-                    "intensity": parratt_env,
-                    "label": PARRATT_ENV_HT_LABEL,
-                }
-            ),
-            pd.DataFrame(
-                {
-                    "L": L_nom,
-                    "Qz_Ainv": qz_nom,
-                    "intensity": pure_parratt,
-                    "label": PURE_PARRATT_LABEL,
-                }
-            ),
+            _curve_frame(BORN_HT_LABEL, born),
+            _curve_frame(FRESNEL_HT_LABEL, fresnel),
+            _curve_frame(PARRATT_ENV_HT_LABEL, parratt_env),
+            _curve_frame(PURE_PARRATT_LABEL, pure_parratt),
             *stitch_parts,
         ],
         ignore_index=True,
@@ -2577,6 +2676,9 @@ def run_fig2_gui(args) -> None:
     scale_summary_var = tk.StringVar(
         value="HT/Qz² automatic scale\nA = pending\nfit window: 5 < Qz/Qc < 10\nMAD = pending"
     )
+    thickness_summary_var = tk.StringVar(
+        value=thickness_summary_text(resolve_common_thickness_for_args(args))
+    )
     curve_visible_vars = {
         label: tk.BooleanVar(value=DEFAULT_GUI_CURVE_VISIBILITY[label]) for label in GUI_CURVE_ORDER
     }
@@ -2689,6 +2791,13 @@ def run_fig2_gui(args) -> None:
     def _refresh_parameter_readouts() -> None:
         for name, variable, digits in parameter_readout_specs:
             _update_readout(name, variable.get(), digits)
+        _refresh_thickness_summary()
+
+    def _refresh_thickness_summary() -> None:
+        preview_args = state.updated_args(current_args)
+        thickness_summary_var.set(
+            thickness_summary_text(resolve_common_thickness_for_args(preview_args))
+        )
 
     def _capture_state_from_vars() -> None:
         for attr, variable in state_var_specs:
@@ -2744,6 +2853,9 @@ def run_fig2_gui(args) -> None:
             if syncing:
                 return
             _update_readout(name, variable.get(), digits)
+            if name == "thickness":
+                _capture_state_from_vars()
+                _refresh_thickness_summary()
             _schedule_live_recompute()
 
         return _handler
@@ -2792,6 +2904,9 @@ def run_fig2_gui(args) -> None:
             _expand_scale_to_value(name, value)
         _set_vars_silently(((variable, value),))
         _update_readout(name, variable.get(), digits)
+        if name == "thickness":
+            _capture_state_from_vars()
+            _refresh_thickness_summary()
         _schedule_live_recompute()
 
     def _apply_qc_entry(
@@ -3356,9 +3471,15 @@ def run_fig2_gui(args) -> None:
             name, variable, digits, expand_scale=True
         ),
     )
+    ttk.Label(
+        sample_geometry_section,
+        textvariable=thickness_summary_var,
+        justify="left",
+        anchor="w",
+    ).grid(row=1, column=0, columnspan=3, sticky="ew", pady=(6, 2))
     _add_slider(
         parent=sample_geometry_section,
-        row=1,
+        row=2,
         name="top_roughness",
         label="σt (Å)",
         variable=top_roughness_var,
@@ -3370,7 +3491,7 @@ def run_fig2_gui(args) -> None:
     )
     _add_slider(
         parent=sample_geometry_section,
-        row=2,
+        row=3,
         name="bottom_roughness",
         label="σb (Å)",
         variable=bottom_roughness_var,
@@ -3406,6 +3527,10 @@ def main(argv=None):
     if args.gui:
         run_fig2_gui(args)
         return
+
+    warning = thickness_warning_text(resolve_common_thickness_for_args(args))
+    if warning is not None:
+        print(warning)
 
     if args.from_csv:
         curves = load_curves_from_csv(Path(args.from_csv), args)

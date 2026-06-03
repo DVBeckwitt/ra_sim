@@ -26,6 +26,18 @@ def load_script_module():
     return module
 
 
+def _record_stack_thicknesses(module, monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    recorded: list[float] = []
+    original_stack = module.make_air_film_substrate_stack
+
+    def _recording_stack(args, *, thickness_angstrom):
+        recorded.append(float(thickness_angstrom))
+        return original_stack(args, thickness_angstrom=thickness_angstrom)
+
+    monkeypatch.setattr(module, "make_air_film_substrate_stack", _recording_stack)
+    return recorded
+
+
 def test_table_defaults_match_attached_parameters() -> None:
     module = load_script_module()
 
@@ -187,6 +199,190 @@ def test_stitch_scale_path_does_not_use_peak_fitting() -> None:
 
     assert "pseudo_voigt" not in source
     assert "curve_fit" not in source
+
+
+def test_common_thickness_50nm_bi2se3_matches_parratt_and_ht() -> None:
+    module = load_script_module()
+
+    thickness = module.resolve_common_thickness(
+        thickness_nm=50.0,
+        c_angstrom=28.6360,
+        stack_layers=0,
+    )
+
+    assert isinstance(thickness, module.ThicknessResolution)
+    assert thickness.target_thickness_angstrom == pytest.approx(500.0)
+    assert thickness.stack_layers == 17
+    assert thickness.effective_thickness_angstrom == pytest.approx(17 * 28.6360)
+    assert thickness.effective_thickness_nm == pytest.approx(48.6812)
+    assert thickness.fringe_period_L == pytest.approx(1.0 / 17.0)
+    assert thickness.thickness_mismatch_angstrom == pytest.approx(17 * 28.6360 - 500.0)
+    assert thickness.thickness_mismatch_percent == pytest.approx(
+        100.0 * (17 * 28.6360 - 500.0) / 500.0
+    )
+
+
+def test_thickness_summary_reports_effective_stack_and_period() -> None:
+    module = load_script_module()
+
+    text = module.thickness_summary_text(
+        module.resolve_common_thickness(
+            thickness_nm=50.0,
+            c_angstrom=28.6360,
+            stack_layers=0,
+        )
+    )
+
+    assert "target d = 50.00 nm" in text
+    assert "N = 17" in text
+    assert "effective d = 48.68 nm" in text
+    assert "fringe period" in text
+
+
+def test_thickness_warning_reports_nominal_effective_mismatch() -> None:
+    module = load_script_module()
+
+    warning = module.thickness_warning_text(
+        module.resolve_common_thickness(
+            thickness_nm=50.0,
+            c_angstrom=28.6360,
+            stack_layers=0,
+        )
+    )
+    quiet = module.thickness_warning_text(
+        module.resolve_common_thickness(
+            thickness_nm=17 * 28.6360 / 10.0,
+            c_angstrom=28.6360,
+            stack_layers=0,
+        )
+    )
+
+    assert warning is not None
+    assert "target thickness 50.000 nm maps to N=17 repeats" in warning
+    assert "Parratt thickness is synchronized to HT: 48.681 nm" in warning
+    assert quiet is None
+
+
+def test_explicit_stack_layers_override_target_thickness_rounding() -> None:
+    module = load_script_module()
+
+    thickness = module.resolve_common_thickness(
+        thickness_nm=50.0,
+        c_angstrom=28.6360,
+        stack_layers=18,
+    )
+
+    assert thickness.stack_layers == 18
+    assert thickness.effective_thickness_angstrom == pytest.approx(18 * 28.6360)
+
+
+def test_parratt_stack_uses_effective_thickness_not_nominal() -> None:
+    module = load_script_module()
+    args = module.parse_args(["--thickness-nm", "50", "--c-angstrom", "28.636"])
+    thickness = module.resolve_common_thickness(
+        thickness_nm=args.thickness_nm,
+        c_angstrom=args.c_angstrom,
+        stack_layers=args.stack_layers,
+    )
+
+    layers = module.make_air_film_substrate_stack(
+        args,
+        thickness_angstrom=thickness.effective_thickness_angstrom,
+    )
+
+    assert layers[1].thickness_angstrom == pytest.approx(thickness.effective_thickness_angstrom)
+    assert layers[1].thickness_angstrom != pytest.approx(500.0)
+
+
+def test_fringe_periods_match_when_thickness_is_synchronized() -> None:
+    module = load_script_module()
+    thickness = module.resolve_common_thickness(
+        thickness_nm=50.0,
+        c_angstrom=28.6360,
+        stack_layers=0,
+    )
+
+    assert thickness.fringe_period_L_parratt == pytest.approx(thickness.fringe_period_L)
+    assert thickness.fringe_period_L_parratt == pytest.approx(28.6360 / (17 * 28.6360))
+
+
+def test_compute_curves_uses_common_effective_thickness_for_ht_and_parratt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_script_module()
+    ht_stack_layers: list[int] = []
+    parratt_thicknesses = _record_stack_thicknesses(module, monkeypatch)
+
+    def _fake_ht_module(**kwargs):
+        ht_stack_layers.append(int(kwargs["stack_layers"]))
+        l_max = float(kwargs["L_max"])
+        return {(0, 0): {"L": np.linspace(0.0, l_max, 400), "I": np.ones(400)}}
+
+    monkeypatch.setattr(module, "import_ht_module", lambda _repo_root: _fake_ht_module)
+    args = module.parse_args(
+        [
+            "--thickness-nm",
+            "50",
+            "--c-angstrom",
+            "28.636",
+            "--L-min",
+            "0",
+            "--L-max",
+            "1",
+            "--L-step",
+            "0.2",
+            "--bandwidth-fwhm",
+            "0",
+            "--n-wavelength-samples",
+            "1",
+            "--divergence-fwhm-deg",
+            "0",
+            "--n-divergence-samples",
+            "1",
+            "--fit-x-min-q-over-qc",
+            "0.1",
+            "--fit-x-max-q-over-qc",
+            "20",
+        ]
+    )
+
+    curves = module.compute_curves(args)
+
+    assert ht_stack_layers == [17]
+    assert parratt_thicknesses == pytest.approx([17 * 28.636])
+    assert curves["target_thickness_nm"].iloc[0] == pytest.approx(50.0)
+    assert curves["effective_thickness_nm"].iloc[0] == pytest.approx(17 * 28.636 / 10.0)
+    assert curves["stack_layers"].iloc[0] == 17
+    assert curves["fringe_period_L_ht"].iloc[0] == pytest.approx(1.0 / 17.0)
+    assert curves["fringe_period_L_parratt"].iloc[0] == pytest.approx(1.0 / 17.0)
+
+
+def test_average_pure_parratt_for_L_uses_effective_thickness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_script_module()
+    parratt_thicknesses = _record_stack_thicknesses(module, monkeypatch)
+
+    args = module.parse_args(
+        [
+            "--thickness-nm",
+            "50",
+            "--c-angstrom",
+            "28.636",
+            "--bandwidth-fwhm",
+            "0",
+            "--n-wavelength-samples",
+            "1",
+            "--divergence-fwhm-deg",
+            "0",
+            "--n-divergence-samples",
+            "1",
+        ]
+    )
+
+    module.average_pure_parratt_for_L(np.array([0.0, 0.2, 0.4]), args)
+
+    assert parratt_thicknesses == pytest.approx([17 * 28.636])
 
 
 def test_ht_over_q2_positive_qz_division_masks_zero_qz() -> None:
@@ -873,12 +1069,27 @@ def test_write_stitch_diagnostics_reports_residual_warning(tmp_path, capsys) -> 
             "visible_L_max",
             "scale_grid_L_min",
             "scale_grid_L_max",
+            "target_thickness_nm",
+            "effective_thickness_nm",
+            "target_thickness_angstrom",
+            "effective_thickness_angstrom",
+            "thickness_mismatch_angstrom",
+            "thickness_mismatch_percent",
+            "stack_layers",
+            "c_angstrom",
+            "fringe_period_L_ht",
+            "fringe_period_L_parratt",
         ]
     ).issubset(diagnostics.columns)
     assert diagnostics["n_fit_points"].iloc[0] == 4
     assert diagnostics["mad_log10_residual"].iloc[0] > 0.3
     assert diagnostics["stitch_cut_q_over_qc"].iloc[0] == pytest.approx(5.0)
     assert diagnostics["scale_method"].iloc[0] == "log-median"
+    assert diagnostics["stack_layers"].iloc[0] == 17
+    assert diagnostics["effective_thickness_angstrom"].iloc[0] == pytest.approx(17 * 28.636)
+    assert diagnostics["fringe_period_L_ht"].iloc[0] == pytest.approx(
+        diagnostics["fringe_period_L_parratt"].iloc[0]
+    )
     assert "visual handoff" in capsys.readouterr().out
 
 
@@ -1179,30 +1390,51 @@ def test_compute_curves_includes_bare_structure_without_changing_pure_parratt_fo
     assert "scale_estimate = estimate_ht_q2_scale_for_args(" in source
     assert "ht_over_q2 = scale_estimate.scale * ht_over_q2_values" in source
     assert "normalized_positive_curve(ht_over_q2)" not in source
-    assert '"label": HT_STRUCTURE_LABEL' in source
+    assert "_curve_frame(HT_STRUCTURE_LABEL" in source
     assert '"label": HT_OVER_Q2_LABEL' in source
     assert "pure_parratt_lam += weight * Rp\n" in source
     assert "pure_parratt[:] += contribution.pure_parratt" in source
     assert "pure_parratt += weight * Rp * S" not in source
 
 
-def test_load_curves_from_csv_recognizes_bare_ht_structure_term(tmp_path) -> None:
+def test_load_curves_from_csv_recognizes_bare_ht_structure_term(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     module = load_script_module()
     csv_path = tmp_path / "curves.csv"
     qz = np.concatenate(([0.0], module.DEFAULTS.qc_inv_angstrom * np.linspace(5.1, 9.9, 12)))
+    l_values = module.L_from_qz(qz, module.DEFAULTS.c_angstrom)
     structure = np.concatenate(([1.0], np.linspace(0.8, 0.3, 12)))
-    pure = np.concatenate(([1.0], 2.0 * structure[1:] / qz[1:] ** 2))
+    csv_pure = np.full_like(qz, 123.0)
+    recomputed_pure = np.linspace(1.0, 0.25, qz.size)
+
+    def _fake_pure_parratt(l_nom, _args):
+        return np.interp(l_nom, l_values, recomputed_pure)
+
+    monkeypatch.setattr(module, "average_pure_parratt_for_L", _fake_pure_parratt)
     pd.DataFrame(
         {
-            "L": module.L_from_qz(qz, module.DEFAULTS.c_angstrom),
+            "L": l_values,
             "Qz_Ainv": qz,
             "S_HT0": structure,
-            "Parratt_reflectivity": pure,
+            "Parratt_reflectivity": csv_pure,
         }
     ).to_csv(csv_path, index=False)
 
     curves = module.load_curves_from_csv(
-        csv_path, module.parse_args(["--ht-structure-scale", "3", "--L-max", "3"])
+        csv_path,
+        module.parse_args(
+            [
+                "--ht-structure-scale",
+                "3",
+                "--L-max",
+                "3",
+                "--scale-mode",
+                "manual",
+                "--manual-stitch-scale",
+                "1",
+            ]
+        ),
     )
 
     labels = set(curves["label"])
@@ -1212,9 +1444,12 @@ def test_load_curves_from_csv_recognizes_bare_ht_structure_term(tmp_path) -> Non
 
     ht_structure = curves[curves["label"] == module.HT_STRUCTURE_LABEL]["intensity"]
     assert ht_structure.max() == pytest.approx(3.0)
+    parratt = curves[curves["label"] == module.PURE_PARRATT_LABEL].sort_values("L")
+    assert parratt["intensity"].to_numpy() == pytest.approx(recomputed_pure)
+    assert not np.allclose(parratt["intensity"].to_numpy(), csv_pure)
     ht_over_q2 = curves[curves["label"] == module.HT_OVER_Q2_LABEL].sort_values("L")
     assert np.isnan(ht_over_q2["intensity"].iloc[0])
-    assert ht_over_q2["intensity"].iloc[1] == pytest.approx(pure[1])
+    assert ht_over_q2["intensity"].iloc[1] == pytest.approx(structure[1] / qz[1] ** 2)
 
 
 def test_load_curves_from_csv_can_emit_stitch_curves(tmp_path) -> None:
@@ -1507,6 +1742,9 @@ def test_gui_launcher_uses_tkagg_ttk_and_background_compute() -> None:
         "CPU workers",
         "HT/Qz² automatic scale",
         "fit window: 5 < Qz/Qc < 10",
+        "thickness_summary_var",
+        "thickness_summary_text",
+        "resolve_common_thickness_for_args",
         "stitch_cut_mode_var",
         "best-continuous",
         "Cut Qz/Qc",
