@@ -212,6 +212,50 @@ def _provider_coverage_deps(
     )
 
 
+def _dynamic_trial_deps(
+    *,
+    simulated_peaks_for_params=None,
+    last_simulation_diagnostics=None,
+    project_source_rows_for_current_view=None,
+):
+    return geometry_fit_dataset.GeometryDynamicTrialDeps(
+        cache_jsonable=_cache_jsonable,
+        normalize_source_coverage_key=_provider_coverage_key,
+        source_coverage_alias_keys=_provider_coverage_alias_keys,
+        source_coverage_key_payload=_provider_coverage_payload,
+        group_identity=lambda entry: _stable_group_identity(entry.get("q_group_key"))
+        if isinstance(entry, Mapping)
+        else None,
+        stable_group_identity=_stable_group_identity,
+        group_identity_is_q_group=lambda value: isinstance(value, tuple)
+        and len(value) >= 4
+        and str(value[0]) == "q_group",
+        normalized_hkl=_normalized_hkl,
+        source_branch_index=_source_branch_index,
+        caked_angle_pair=lambda row, *, x_keys, y_keys: next(
+            (
+                (float(row[x_key]), float(row[y_key]))
+                for x_key, y_key in zip(x_keys, y_keys, strict=True)
+                if isinstance(row, Mapping)
+                and row.get(x_key) is not None
+                and row.get(y_key) is not None
+            ),
+            None,
+        ),
+        point_list=_point_list,
+        put_simulated_point_fields=_put_simulated_point_fields,
+        coerce_nonnegative_index=_coerce_nonnegative_index,
+        finite_float=finite_float,
+        source_row_reuses_manual_caked_target=lambda _target, _row: False,
+        simulated_peaks_for_params=simulated_peaks_for_params,
+        last_simulation_diagnostics=last_simulation_diagnostics,
+        project_source_rows_for_current_view=(
+            project_source_rows_for_current_view or (lambda rows: rows)
+        ),
+        zero_qr_coverage_branch_slot="00l_collapsed",
+    )
+
+
 def _coerce_nonnegative_index(value):
     try:
         index = int(value)
@@ -728,6 +772,328 @@ def test_augment_source_rows_with_provider_coverage_records_missing_dynamic_tria
         }
     ]
     assert diagnostics["missing_dynamic_trial_source_row_count"] == 1
+
+
+def test_trial_row_is_dynamic_rejects_saved_source_coverage() -> None:
+    dynamic_row = {
+        "source_kind": "sim_visual_caked_deg",
+        "actual_source": "sim_visual_caked_deg",
+        "projection_frame": "caked_display",
+        "coordinate_provenance": "trial_geometry_projection",
+        "is_dynamic_trial_row": True,
+    }
+    saved_row = {
+        **dynamic_row,
+        "row_origin": "manual_picker_saved_source_coverage",
+    }
+
+    assert geometry_fit_dataset._trial_row_is_dynamic(dynamic_row) is True
+    assert geometry_fit_dataset._trial_row_is_dynamic(saved_row) is False
+
+
+def test_trial_stage_summary_counts_dynamic_stale_and_missing_required_pairs() -> None:
+    selected_inputs = [
+        {
+            "entry": {
+                "pair_id": "dyn",
+                "hkl": (1, 1, 0),
+                "source_branch_index": 0,
+                "q_group_key": ("q_group", "primary", 1, 10),
+            }
+        },
+        {
+            "entry": {
+                "pair_id": "stale",
+                "hkl": (1, 1, 0),
+                "source_branch_index": 1,
+                "q_group_key": ("q_group", "primary", 1, 10),
+            }
+        },
+        {
+            "entry": {
+                "pair_id": "missing",
+                "hkl": (2, 0, 0),
+                "source_branch_index": 0,
+                "q_group_key": ("q_group", "primary", 2, 20),
+            }
+        },
+    ]
+    rows = [
+        {
+            "hkl": (1, 1, 0),
+            "source_branch_index": 0,
+            "q_group_key": ("q_group", "primary", 1, 10),
+            "actual_source": "sim_visual_caked_deg",
+            "source_kind": "sim_visual_caked_deg",
+            "projection_frame": "caked_display",
+            "coordinate_provenance": "trial_geometry_projection",
+            "is_dynamic_trial_row": True,
+        },
+        {
+            "hkl": (1, 1, 0),
+            "source_branch_index": 1,
+            "q_group_key": ("q_group", "primary", 1, 10),
+            "actual_source": "sim_visual_caked_deg",
+            "source_kind": "sim_visual_caked_deg",
+            "projection_frame": "caked_display",
+            "coordinate_provenance": "stale_saved_projection",
+        },
+    ]
+
+    summary = geometry_fit_dataset._trial_stage_summary(
+        "after_mark",
+        rows,
+        selected_entry_inputs=selected_inputs,
+        background_idx=4,
+        deps=_dynamic_trial_deps(),
+    )
+
+    assert summary["row_count"] == 2
+    assert summary["required_pair_count"] == 3
+    assert summary["dynamic_required_pair_count"] == 1
+    assert summary["stale_required_pair_count"] == 1
+    assert summary["missing_required_pair_count"] == 1
+    assert [row["drop_reason"] for row in summary["per_required_pair"]] == [
+        None,
+        "stale_qr_coordinate_provenance",
+        "missing_dynamic_trial_source_row",
+    ]
+
+
+def test_mark_dynamic_trial_source_rows_sets_caked_dynamic_metadata() -> None:
+    rows = geometry_fit_dataset._mark_dynamic_trial_source_rows(
+        [
+            {
+                "hkl": (1, 1, 0),
+                "caked_x": 14.0,
+                "caked_y": -22.0,
+            }
+        ],
+        deps=_dynamic_trial_deps(),
+    )
+
+    assert rows == [
+        {
+            "hkl": (1, 1, 0),
+            "caked_x": 14.0,
+            "caked_y": -22.0,
+            "source_kind": "sim_visual_caked_deg",
+            "actual_source": "sim_visual_caked_deg",
+            "expected_source": "sim_visual_caked_deg",
+            "projection_frame": "caked_display",
+            "coordinate_provenance": "trial_geometry_projection",
+            "is_dynamic_trial_row": True,
+            "simulated_two_theta_deg": 14.0,
+            "simulated_phi_deg": -22.0,
+            "sim_visual_caked_deg": (14.0, -22.0),
+            "sim_visual_deg": (14.0, -22.0),
+            "sim_caked": (14.0, -22.0),
+        }
+    ]
+
+
+def test_trial_candidate_sort_key_prefers_exact_target_identity() -> None:
+    target = {
+        "hkl": (1, 1, 0),
+        "source_reflection_index": 3,
+        "source_table_index": 1,
+        "source_row_index": 9,
+        "source_peak_index": 0,
+        "manual_selected_simulated_point": (30.0, 40.0),
+    }
+    target_key = (
+        (1, 1, 0),
+        0,
+        ("q_group", "primary", 1, 10),
+    )
+    exact_row = {
+        **target,
+        "q_group_key": ("q_group", "primary", 1, 10),
+        "source_branch_index": 0,
+        "sim_visual_caked_deg": (100.0, 100.0),
+    }
+    nearby_row = {
+        "hkl": (1, 1, 0),
+        "q_group_key": ("q_group", "primary", 1, 10),
+        "source_branch_index": 0,
+        "sim_visual_caked_deg": (30.0, 40.0),
+    }
+
+    exact_key = geometry_fit_dataset._trial_candidate_sort_key(
+        target,
+        target_key,
+        exact_row,
+        4,
+        deps=_dynamic_trial_deps(),
+    )
+    nearby_key = geometry_fit_dataset._trial_candidate_sort_key(
+        target,
+        target_key,
+        nearby_row,
+        1,
+        deps=_dynamic_trial_deps(),
+    )
+
+    assert exact_key < nearby_key
+
+
+def test_build_dynamic_trial_completion_row_materializes_required_pair() -> None:
+    row, reason = geometry_fit_dataset._build_dynamic_trial_completion_row(
+        {
+            "pair_id": "required",
+            "hkl": (1, 1, 0),
+            "source_branch_index": 0,
+            "q_group_key": ("q_group", "primary", 1, 10),
+            "source_table_index": 8,
+        },
+        ((1, 1, 0), 0, ("q_group", "primary", 1, 10)),
+        active_params={"a": 3.0, "c": 5.0, "lambda": 1.0},
+        candidate_rows=[
+            {
+                "hkl": (1, 1, 0),
+                "source_branch_index": 1,
+                "q_group_key": ("q_group", "primary", 1, 10),
+                "actual_source": "sim_visual_caked_deg",
+                "source_kind": "sim_visual_caked_deg",
+                "projection_frame": "caked_display",
+                "coordinate_provenance": "trial_geometry_projection",
+                "is_dynamic_trial_row": True,
+                "caked_x": 30.0,
+                "caked_y": 12.5,
+            }
+        ],
+        background_idx=7,
+        deps=_dynamic_trial_deps(),
+    )
+
+    assert reason == "mirrored_dynamic_q_group_branch"
+    assert row is not None
+    assert row["background_index"] == 7
+    assert row["pair_id"] == "required"
+    assert row["dynamic_completion_reason"] == "mirrored_dynamic_q_group_branch"
+    assert row["physical_branch_slot"] == 0
+    assert row["source_branch_index"] == 0
+    assert row["source_table_index"] == 8
+    assert row["source_coverage_aliases"] == [
+        {
+            "hkl": (1, 1, 0),
+            "branch_slot": 0,
+            "branch_index": 0,
+            "q_group_key": ("q_group", "primary", 1, 10),
+        }
+    ]
+    assert row["phi_deg"] == pytest.approx(-12.5)
+
+
+def test_build_dynamic_trial_completion_row_reports_missing_caked_point() -> None:
+    row, reason = geometry_fit_dataset._build_dynamic_trial_completion_row(
+        {
+            "hkl": (1, 1, 0),
+            "source_branch_index": 0,
+            "q_group_key": ("q_group", "primary", 1, 10),
+        },
+        ((1, 1, 0), 0, ("q_group", "primary", 1, 10)),
+        active_params={"a": 3.0, "c": 5.0, "lambda": 1.0},
+        candidate_rows=[],
+        background_idx=0,
+        deps=_dynamic_trial_deps(),
+    )
+
+    assert row is None
+    assert reason == "missing_dynamic_sibling_branch"
+
+
+def test_supplement_dynamic_trial_rows_from_candidate_pool_adds_missing_required_pair() -> None:
+    selected_inputs = [
+        {
+            "entry": {
+                "pair_id": "required",
+                "hkl": (1, 1, 0),
+                "source_branch_index": 0,
+                "q_group_key": ("q_group", "primary", 1, 10),
+                "manual_selected_simulated_point": (12.0, 4.0),
+            }
+        }
+    ]
+
+    supplemental, diagnostics = (
+        geometry_fit_dataset._supplement_dynamic_trial_rows_from_candidate_pool(
+            [],
+            active_params={"a": 3.0, "c": 5.0, "lambda": 1.0},
+            selected_entry_inputs=selected_inputs,
+            background_idx=2,
+            deps=_dynamic_trial_deps(
+                simulated_peaks_for_params=lambda _params, prefer_cache=False: [
+                    {
+                        "hkl": (1, 1, 0),
+                        "source_branch_index": 0,
+                        "q_group_key": ("q_group", "primary", 1, 10),
+                        "caked_x": 12.0,
+                        "caked_y": 4.0,
+                    }
+                ]
+            ),
+        )
+    )
+
+    assert len(supplemental) == 1
+    assert supplemental[0]["pair_id"] == "required"
+    assert supplemental[0]["background_index"] == 2
+    assert supplemental[0]["fit_qr_branch_key"] == {
+        "q_group_key": ["q_group", "primary", 1, 10],
+        "hkl": [1, 1, 0],
+        "physical_branch_slot": 0,
+        "source_branch_index": 0,
+        "source_peak_index": None,
+    }
+    assert diagnostics["attempted"] is True
+    assert diagnostics["candidate_row_count"] == 1
+    assert diagnostics["supplemental_row_count"] == 1
+    assert diagnostics["missing_before_count"] == 1
+    assert diagnostics["missing_after_count"] == 0
+
+
+def test_supplement_dynamic_trial_rows_from_candidate_pool_sets_fit_qr_branch_key() -> None:
+    supplemental, diagnostics = (
+        geometry_fit_dataset._supplement_dynamic_trial_rows_from_candidate_pool(
+            [],
+            active_params={"a": 3.0, "c": 5.0, "lambda": 1.0},
+            selected_entry_inputs=[
+                {
+                    "entry": {
+                        "pair_id": "required",
+                        "hkl": (1, 1, 0),
+                        "source_branch_index": 0,
+                        "q_group_key": ("q_group", "primary", 1, 10),
+                    }
+                }
+            ],
+            background_idx=3,
+            deps=_dynamic_trial_deps(
+                simulated_peaks_for_params=lambda _params, prefer_cache=False: [
+                    {
+                        "hkl": (1, 1, 0),
+                        "source_branch_index": 0,
+                        "source_peak_index": 2,
+                        "q_group_key": ("q_group", "primary", 1, 10),
+                        "caked_x": 25.0,
+                        "caked_y": 6.0,
+                    }
+                ]
+            ),
+        )
+    )
+
+    assert len(supplemental) == 1
+    assert supplemental[0]["fit_qr_branch_key"] == {
+        "q_group_key": ["q_group", "primary", 1, 10],
+        "hkl": [1, 1, 0],
+        "physical_branch_slot": 0,
+        "source_branch_index": 0,
+        "source_peak_index": 2,
+    }
+    assert diagnostics["candidate_row_count"] == 1
+    assert diagnostics["missing_after_count"] == 0
 
 
 def test_augment_source_rows_with_provider_coverage_records_point_missing_when_provider_row_unavailable() -> None:
