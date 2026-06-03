@@ -91,6 +91,127 @@ def _collect(
     )
 
 
+def _stable_group_identity(value):
+    if isinstance(value, Mapping):
+        return tuple((str(key), _stable_group_identity(item)) for key, item in value.items())
+    if isinstance(value, list):
+        return tuple(_stable_group_identity(item) for item in value)
+    return tuple(value) if isinstance(value, tuple) else value
+
+
+def _provider_coverage_key(entry):
+    if not isinstance(entry, Mapping):
+        return None
+    hkl = entry.get("normalized_hkl", entry.get("hkl"))
+    if not isinstance(hkl, (list, tuple)) or len(hkl) < 3:
+        return None
+    branch = entry.get("physical_branch_slot", entry.get("source_branch_index"))
+    try:
+        branch = int(branch)
+    except Exception:
+        branch = None
+    if branch not in {0, 1}:
+        branch = None
+    return (
+        tuple(int(value) for value in hkl[:3]),
+        branch,
+        _stable_group_identity(entry.get("q_group_key")),
+    )
+
+
+def _provider_coverage_payload(key):
+    if key is None:
+        return None
+    return {
+        "hkl": tuple(int(value) for value in key[0]),
+        "branch_slot": key[1],
+        "branch_index": int(key[1]) if key[1] in {0, 1} else None,
+        "q_group_key": key[2],
+    }
+
+
+def _provider_coverage_alias_keys(entry):
+    keys = set()
+    direct_key = _provider_coverage_key(entry)
+    if direct_key is not None:
+        keys.add(direct_key)
+    if isinstance(entry, Mapping):
+        for alias in entry.get("source_coverage_aliases") or ():
+            alias_key = _provider_coverage_key(alias)
+            if alias_key is not None:
+                keys.add(alias_key)
+    return keys
+
+
+def _cache_jsonable(value):
+    if isinstance(value, Mapping):
+        return {str(key): _cache_jsonable(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_cache_jsonable(item) for item in value]
+    if isinstance(value, list):
+        return [_cache_jsonable(item) for item in value]
+    return value
+
+
+def _point_list(point):
+    if not isinstance(point, (list, tuple)) or len(point) < 2:
+        return None
+    try:
+        return [float(point[0]), float(point[1])]
+    except Exception:
+        return None
+
+
+def _put_simulated_point_fields(entry, point, frame):
+    if frame == "caked_2theta_phi":
+        entry["simulated_two_theta_deg"] = float(point[0])
+        entry["simulated_phi_deg"] = float(point[1])
+
+
+def _provider_coverage_deps(
+    *,
+    provider_backed_source_row_for_target=None,
+    source_coverage_filter_diagnostics=None,
+):
+    return geometry_fit_dataset.GeometryProviderCoverageDeps(
+        normalize_source_coverage_key=_provider_coverage_key,
+        source_coverage_alias_keys=_provider_coverage_alias_keys,
+        source_coverage_key_payload=_provider_coverage_payload,
+        source_coverage_filter_diagnostics=(
+            source_coverage_filter_diagnostics or (lambda _rows: {})
+        ),
+        cache_jsonable=_cache_jsonable,
+        point_list=_point_list,
+        normalize_point_frame=lambda frame: str(frame or "unknown"),
+        put_simulated_point_fields=_put_simulated_point_fields,
+        coerce_nonnegative_index=lambda value: int(value)
+        if value is not None and int(value) >= 0
+        else None,
+        normalized_hkl=lambda value: tuple(int(item) for item in value[:3])
+        if isinstance(value, (list, tuple)) and len(value) >= 3
+        else None,
+        source_branch_index=lambda entry: (
+            int(entry["source_branch_index"])
+            if isinstance(entry, Mapping)
+            and entry.get("source_branch_index") in {0, 1, "0", "1"}
+            else None
+        ),
+        stable_group_identity=_stable_group_identity,
+        group_identity=lambda entry: _stable_group_identity(entry.get("q_group_key"))
+        if isinstance(entry, Mapping)
+        else None,
+        group_identity_is_q_group=lambda value: isinstance(value, tuple)
+        and len(value) >= 4
+        and str(value[0]) == "q_group",
+        source_row_reuses_manual_caked_target=lambda _target, _row: False,
+        provider_backed_source_row_for_target=(
+            provider_backed_source_row_for_target or (lambda **_kwargs: None)
+        ),
+        pairs_use_caked_fit_space=lambda _entries: False,
+        zero_qr_coverage_branch_slot="00l_collapsed",
+    )
+
+
 def test_geometry_fit_dataset_module_keeps_internal_import_boundary() -> None:
     source = Path(geometry_fit_dataset.__file__).read_text(encoding="utf-8")
 
@@ -217,3 +338,262 @@ def test_collect_geometry_manual_dataset_inputs_ignores_caked_pick_callback_erro
     snapshot = _collect(rows=[{"id": "pair"}], pick_uses_caked_space=_pick_uses_caked_space)
 
     assert snapshot.use_caked_display is False
+
+
+def test_augment_source_rows_with_provider_coverage_materializes_missing_provider_row() -> None:
+    provider_calls: list[dict[str, object]] = []
+
+    def _provider_row_for_target(*, pair_idx, entry, raw_saved_entry):
+        provider_calls.append(
+            {
+                "pair_idx": pair_idx,
+                "entry": dict(entry),
+                "raw_saved_entry": dict(raw_saved_entry or {}),
+            }
+        )
+        return {
+            "row_origin": "manual_picker_saved_source_coverage",
+            "provider_backed_live_source_row": True,
+            "hkl": tuple(entry["hkl"]),
+            "source_branch_index": int(entry["source_branch_index"]),
+            "q_group_key": tuple(entry["q_group_key"]),
+            "display_col": 12.0,
+            "display_row": 13.0,
+        }
+
+    rows, diagnostics = geometry_fit_dataset.augment_source_rows_with_provider_coverage(
+        [],
+        {},
+        selected_entry_inputs=[
+            {
+                "entry": {
+                    "hkl": (1, 1, 0),
+                    "source_branch_index": 1,
+                    "q_group_key": ("q_group", "primary", 1, 10),
+                },
+                "raw_saved_entry": {"saved": True},
+            }
+        ],
+        selected_entries=[
+            {
+                "hkl": (1, 1, 0),
+                "source_branch_index": 1,
+                "q_group_key": ("q_group", "primary", 1, 10),
+            }
+        ],
+        manual_picker_truth_by_order={},
+        background_idx=0,
+        use_caked_display=False,
+        deps=_provider_coverage_deps(
+            provider_backed_source_row_for_target=_provider_row_for_target
+        ),
+    )
+
+    assert provider_calls == [
+        {
+            "pair_idx": 0,
+            "entry": {
+                "hkl": (1, 1, 0),
+                "source_branch_index": 1,
+                "q_group_key": ("q_group", "primary", 1, 10),
+            },
+            "raw_saved_entry": {"saved": True},
+        }
+    ]
+    assert len(rows) == 1
+    assert rows[0]["provider_backed_live_source_row"] is True
+    assert diagnostics["source_coverage_materialization"] == {
+        "provider_backed_row_count": 1,
+        "provider_backed_fresh_row_count": 0,
+        "point_missing_count": 0,
+        "saved_coordinate_materialization_allowed": True,
+        "provider_backed_keys": [
+            {
+                "hkl": (1, 1, 0),
+                "branch_slot": 1,
+                "branch_index": 1,
+                "q_group_key": ("q_group", "primary", 1, 10),
+            }
+        ],
+        "point_missing": [],
+    }
+
+
+def test_augment_source_rows_with_provider_coverage_promotes_fresh_row_when_provider_required() -> None:
+    rows, diagnostics = geometry_fit_dataset.augment_source_rows_with_provider_coverage(
+        [
+            {
+                "hkl": (1, 1, 0),
+                "source_branch_index": 1,
+                "source_table_index": 4,
+                "source_row_index": 8,
+                "source_peak_index": 99,
+                "q_group_key": ("q_group", "primary", 1, 10),
+                "display_col": 21.0,
+                "display_row": 22.0,
+            }
+        ],
+        {},
+        selected_entry_inputs=[
+            {
+                "entry": {
+                    "hkl": (1, 1, 0),
+                    "source_branch_index": 1,
+                    "source_table_index": 4,
+                    "source_row_index": 8,
+                    "source_peak_index": 3,
+                    "q_group_key": ("q_group", "primary", 1, 10),
+                    "manual_selected_simulated_point": (21.0, 22.0),
+                },
+                "raw_saved_entry": {},
+            }
+        ],
+        selected_entries=[
+            {
+                "hkl": (1, 1, 0),
+                "source_branch_index": 1,
+                "q_group_key": ("q_group", "primary", 1, 10),
+            }
+        ],
+        manual_picker_truth_by_order={},
+        background_idx=2,
+        use_caked_display=True,
+        deps=_provider_coverage_deps(),
+        require_provider_backed_rows=True,
+    )
+
+    assert len(rows) == 1
+    promoted = rows[0]
+    assert promoted["provider_backed_live_source_row"] is True
+    assert promoted["provider_backed_live_source_row_reason"] == (
+        "geometry_fit_dataset_required_source_coverage"
+    )
+    assert promoted["trial_source_peak_index"] == 99
+    assert promoted["source_peak_index"] == 3
+    assert promoted["source_kind"] == "sim_visual_caked_deg"
+    assert promoted["actual_source"] == "sim_visual_caked_deg"
+    assert promoted["projection_frame"] == "caked_display"
+    assert promoted["coordinate_provenance"] == "trial_geometry_projection"
+    assert promoted["is_dynamic_trial_row"] is True
+    assert promoted["background_index"] == 2
+    assert promoted["overlay_match_index"] == 0
+    assert diagnostics["source_coverage_materialization"][
+        "provider_backed_fresh_row_count"
+    ] == 1
+
+
+def test_augment_source_rows_with_provider_coverage_records_missing_dynamic_trial_when_materialization_disabled() -> None:
+    provider_calls: list[dict[str, object]] = []
+
+    rows, diagnostics = geometry_fit_dataset.augment_source_rows_with_provider_coverage(
+        [],
+        {},
+        selected_entry_inputs=[
+            {
+                "entry": {
+                    "hkl": (1, 1, 0),
+                    "source_branch_index": 0,
+                    "q_group_key": ("q_group", "primary", 1, 10),
+                },
+                "raw_saved_entry": {},
+            }
+        ],
+        selected_entries=[],
+        manual_picker_truth_by_order={},
+        background_idx=0,
+        use_caked_display=False,
+        deps=_provider_coverage_deps(
+            provider_backed_source_row_for_target=lambda **kwargs: provider_calls.append(
+                dict(kwargs)
+            )
+        ),
+        allow_saved_coordinate_materialization=False,
+    )
+
+    assert rows == []
+    assert provider_calls == []
+    assert diagnostics["source_coverage_materialization"]["point_missing"] == [
+        {
+            "pair_index": 0,
+            "target_key": {
+                "hkl": (1, 1, 0),
+                "branch_slot": 0,
+                "branch_index": 0,
+                "q_group_key": ("q_group", "primary", 1, 10),
+            },
+            "reason": "missing_dynamic_trial_source_row",
+        }
+    ]
+    assert diagnostics["missing_dynamic_trial_source_row_count"] == 1
+
+
+def test_augment_source_rows_with_provider_coverage_records_point_missing_when_provider_row_unavailable() -> None:
+    rows, diagnostics = geometry_fit_dataset.augment_source_rows_with_provider_coverage(
+        [],
+        {},
+        selected_entry_inputs=[
+            {
+                "entry": {
+                    "hkl": (1, 1, 0),
+                    "source_branch_index": 0,
+                    "q_group_key": ("q_group", "primary", 1, 10),
+                },
+                "raw_saved_entry": {},
+            }
+        ],
+        selected_entries=[],
+        manual_picker_truth_by_order={},
+        background_idx=0,
+        use_caked_display=False,
+        deps=_provider_coverage_deps(),
+    )
+
+    assert rows == []
+    assert diagnostics["source_coverage_materialization"]["point_missing"] == [
+        {
+            "pair_index": 0,
+            "target_key": {
+                "hkl": (1, 1, 0),
+                "branch_slot": 0,
+                "branch_index": 0,
+                "q_group_key": ("q_group", "primary", 1, 10),
+            },
+            "reason": "coverage_source_present_point_missing",
+        }
+    ]
+    assert diagnostics["coverage_source_present_point_missing_count"] == 1
+
+
+def test_augment_source_rows_with_provider_coverage_updates_targeted_performance_gate() -> None:
+    coverage_diagnostics = {
+        "candidate_rows_after_hkl_filter": 2,
+        "missing_required_branch_group_keys": [{"hkl": (1, 1, 0)}],
+    }
+
+    rows, diagnostics = geometry_fit_dataset.augment_source_rows_with_provider_coverage(
+        [
+            {
+                "hkl": (1, 1, 0),
+                "source_branch_index": 0,
+                "q_group_key": ("q_group", "primary", 1, 10),
+            }
+        ],
+        {"targeted_performance_gate": {"existing": True}},
+        selected_entry_inputs=[],
+        selected_entries=[],
+        manual_picker_truth_by_order={},
+        background_idx=0,
+        use_caked_display=False,
+        deps=_provider_coverage_deps(
+            source_coverage_filter_diagnostics=lambda _rows: coverage_diagnostics
+        ),
+    )
+
+    assert len(rows) == 1
+    assert diagnostics["candidate_rows_after_hkl_filter"] == 2
+    assert diagnostics["missing_required_branch_group_keys"] == [{"hkl": (1, 1, 0)}]
+    assert diagnostics["targeted_performance_gate"] == {
+        "existing": True,
+        "candidate_rows_after_hkl_filter": 2,
+        "missing_required_branch_group_keys": [{"hkl": (1, 1, 0)}],
+    }

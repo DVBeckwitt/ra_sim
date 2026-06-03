@@ -13,8 +13,8 @@ Refactor the geometry-fit runtime, dataset, source-row, coordinate, and optimize
 
 ## Slice status
 
-Status: G1 dataset input-normalization extraction implemented, post-review ordering fix applied, and validated; ready for next-slice planning
-Bug/error/feature status: Patch F0 audited `_run_async_geometry_fit_worker_job()` after E8 and deleted proven-dead worker-context alias assignments. Patch F0.1 then inlined the remaining one-use worker-context method aliases that were only wrapper glue. Patch F0.2 fixed the stale import-safe guard that still expected the deleted `_rebuild_source_rows_for_background_worker` alias. Patch F1 moved caked-storage event emission and non-gating caked-view task support into `GeometryFitWorkerContext` and deleted the corresponding runtime-local helpers and dependency callback seam. The post-F1 cleanup renamed two unused local unpack placeholders in the runtime wrapper to `_` without changing calls, call order, side effects, or behavior. Patch G0 added characterization coverage for `build_geometry_manual_fit_dataset()` public payload keys, detector-space objective selection, and caked-objective locked-Qr handoff audit fields before extracting dataset helpers. Patch G1 moved dataset input normalization only into `ra_sim/gui/geometry_fit_dataset.py`: caked-display input selection, enabled manual-pair filtering, manual-entry refresh snapshots, source labels, required-pair callback payload shape, manual picker truth rows, theta/base parameter copies, and reference scalar extraction. The post-review fix restored the original `load_background_by_index()` before manual-entry refresh/truth callback ordering and added regression coverage for failed background loads. Provider coverage, source candidate resolution, dynamic trial rows, caked dynamic reanchor, final dataset assembly, source-row rebuild, worker/runtime, optimizer, saved-state, CLI/env/debug behavior, UI behavior, solver math, and diagnostic log fields did not move.
+Status: G2 provider coverage augmentation extraction implemented and validated; ready for next-slice planning
+Bug/error/feature status: Patch F0 audited `_run_async_geometry_fit_worker_job()` after E8 and deleted proven-dead worker-context alias assignments. Patch F0.1 then inlined the remaining one-use worker-context method aliases that were only wrapper glue. Patch F0.2 fixed the stale import-safe guard that still expected the deleted `_rebuild_source_rows_for_background_worker` alias. Patch F1 moved caked-storage event emission and non-gating caked-view task support into `GeometryFitWorkerContext` and deleted the corresponding runtime-local helpers and dependency callback seam. The post-F1 cleanup renamed two unused local unpack placeholders in the runtime wrapper to `_` without changing calls, call order, side effects, or behavior. Patch G0 added characterization coverage for `build_geometry_manual_fit_dataset()` public payload keys, detector-space objective selection, and caked-objective locked-Qr handoff audit fields before extracting dataset helpers. Patch G1 moved dataset input normalization only into `ra_sim/gui/geometry_fit_dataset.py`: caked-display input selection, enabled manual-pair filtering, manual-entry refresh snapshots, source labels, required-pair callback payload shape, manual picker truth rows, theta/base parameter copies, and reference scalar extraction. Patch G1 post-review restored the original `load_background_by_index()` before manual-entry refresh/truth callback ordering. Patch G2 moved provider coverage augmentation, fresh-row matching, and fresh-row promotion into `ra_sim/gui/geometry_fit_dataset.py` behind an injected dependency contract. Source candidate resolution, dynamic trial rows, caked dynamic reanchor, final dataset assembly, source-row rebuild, worker/runtime, optimizer, saved-state, CLI/env/debug behavior, UI behavior, solver math, and diagnostic log fields did not move.
 Compatibility status: `ra_sim.gui.geometry_fit` remains the compatibility surface for moved contracts, and existing monkeypatch paths used by optimizer and caked reanchor tests remain available.
 Migration/deprecation status: no public API is deprecated or removed. The new modules are internal extraction targets for the strangler refactor.
 Shipping status: no runtime rollout or feature flag is needed because behavior is preserved behind existing public wrappers. Rollback is a normal commit revert.
@@ -113,6 +113,42 @@ Deprecation/migration status: no public API, artifact schema, config key,
 command, saved-state field, or compatibility surface is deprecated or
 migrated.
 
+## Patch G2 provider coverage augmentation handoff
+
+What was done: moved provider coverage augmentation from the local
+`build_geometry_manual_fit_dataset()` helper into
+`augment_source_rows_with_provider_coverage()` in
+`ra_sim/gui/geometry_fit_dataset.py`. The moved behavior includes provider-row
+materialization bookkeeping, fresh-row scoring and unique selection,
+fresh-row promotion, locked identity field preservation, caked dynamic-row
+metadata on promoted rows, point-missing diagnostics, and targeted performance
+gate diagnostic updates.
+
+Bug/error/feature status: this is an internal refactor slice. It preserves
+dataset payload keys, nested `spec` keys, provider coverage diagnostics,
+caked handoff audit rows, solver inputs, saved-state behavior, CLI/env/debug
+behavior, UI callbacks, and diagnostic log fields. Source candidate resolution,
+dynamic trial row construction, caked dynamic reanchor, final dataset assembly,
+worker/runtime code, and optimizer code remain in `geometry_fit.py`.
+
+Interface/API status: no public API changed. The new
+`GeometryProviderCoverageDeps` dataclass is an internal module-boundary
+contract so the dataset helper stays import-clean and does not depend on
+`geometry_fit.py`, runtime, worker, optimizer, Tk, Matplotlib, or saved-state
+modules.
+
+CI/shipping status: direct provider coverage helper tests, the full
+`build_geometry_manual_fit_dataset` selector, the GUI workflow
+caked/dataset/locked-Qr/coordinate/optimizer route pack, the geometry fitting
+caked route pack, compileall, and Ruff on touched files passed. No CI config,
+dependency, release-version, rollout, feature flag, migration, or launch work
+is needed for this slice. `python -m ra_sim.dev check` remains blocked only by
+pre-existing formatter drift in unrelated files.
+
+Deprecation/migration status: no public API, artifact schema, config key,
+command, saved-state field, or compatibility surface is deprecated or
+migrated.
+
 ## Current state
 
 - Added canonical snapshot normalization for geometry-fit comparison tests.
@@ -138,6 +174,10 @@ migrated.
   final dataset assembly remain in `ra_sim/gui/geometry_fit.py`.
 - Patch G1 post-review fix restored background-load-before-refresh callback
   ordering and pinned that failure behavior with a workflow regression test.
+- Patch G2 moved provider coverage augmentation, fresh-row matching, and
+  fresh-row promotion into `ra_sim/gui/geometry_fit_dataset.py`; source
+  candidate resolution, dynamic trial rows, caked dynamic reanchor, and final
+  dataset assembly remain in `ra_sim/gui/geometry_fit.py`.
 - Fixed snapshot normalization to fail closed when any normalized mapping keys collide, including typed aliases such as `0` versus `"int:0"` and unstable timestamp-like string keys.
 - Removed the unused snapshot JSON helper.
 - Added a caked projection-authority snapshot that pins exact-projector use over stale saved caked aliases.
@@ -995,6 +1035,12 @@ Current validation status:
   `load_failure_precedes_refresh_and_truth` workflow regression, full
   `build_geometry_manual_fit_dataset` selector, direct helper tests, compileall,
   Ruff on touched files, and `git diff --check`.
+- Patch G2 validation passed: direct provider coverage helper tests, full
+  `build_geometry_manual_fit_dataset` selector, GUI workflow
+  caked/dataset/locked-Qr/coordinate/optimizer route pack, geometry fitting
+  caked route pack, compileall, Ruff on touched files, and `git diff --check`.
+  `python -m ra_sim.dev check` remains blocked only by pre-existing formatter
+  drift in unrelated files.
 - `python -m ra_sim.dev check` remains blocked only by the documented pre-existing formatting drift above.
 - No generated artifacts, raw data, local config, notebook output, dependency changes, release version changes, or public migration files are included.
 
