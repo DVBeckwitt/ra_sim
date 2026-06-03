@@ -49,8 +49,9 @@ All important numerical values are centralized in DEFAULTS and exposed as CLI op
 from __future__ import annotations
 
 import argparse
+import os
 import sys
-import warnings
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -97,7 +98,7 @@ class Defaults:
 
     # Plot range.
     L_min: float = 0.0
-    L_max: float = 0.50
+    L_max: float = 10.0
     L_step: float = 0.0005
 
     # Avoid division by zero for Born asymptote. This is only a plotting floor.
@@ -110,27 +111,55 @@ class Defaults:
 
 
 DEFAULTS = Defaults()
+DEFAULT_WORKERS = "1"
+
+
+@dataclass(frozen=True)
+class ScaleEstimate:
+    scale: float
+    n_fit_points: int
+    median_log10_residual: float
+    mad_log10_residual: float
+    fit_x_min_q_over_qc: float
+    fit_x_max_q_over_qc: float
+    bragg_centers_L: tuple[float, ...]
+    bragg_half_width_L: float
+
+
+@dataclass(frozen=True)
+class WavelengthContribution:
+    structure: np.ndarray
+    ht_over_q2: np.ndarray
+    ht_over_q2_weight: np.ndarray
+    born: np.ndarray
+    fresnel: np.ndarray
+    parratt_env: np.ndarray
+    pure_parratt: np.ndarray
+    raw_miceli_ht_over_q2: np.ndarray | None = None
+    raw_miceli_ht_over_q2_weight: np.ndarray | None = None
+
 
 DEFAULT_Y_MIN_LOG10 = -12.0
 DEFAULT_Y_MAX_LOG10 = 30.0
 DEFAULT_BRAGG_MARKER_L = (3.0, 6.0, 9.0)
-DEFAULT_AUTOFIT_L_MIN = 1.0
-DEFAULT_AUTOFIT_L_MAX = 10.0
-DEFAULT_AUTOFIT_PEAK_CENTERS = (3.0, 6.0, 9.0)
-DEFAULT_AUTOFIT_PEAK_HALF_WIDTH = 0.35
 DEFAULT_STITCH_X1_Q_OVER_QC = 2.0
 DEFAULT_STITCH_X2_Q_OVER_QC = 5.0
+DEFAULT_STITCH_CUT_SEARCH_MIN_Q_OVER_QC = 3.0
+DEFAULT_STITCH_CUT_SEARCH_MAX_Q_OVER_QC = 6.0
 DEFAULT_STITCH_FIT_X_MIN_Q_OVER_QC = 5.0
 DEFAULT_STITCH_FIT_X_MAX_Q_OVER_QC = 10.0
 DEFAULT_STITCH_EXCLUDE_CENTERS_L = (3.0, 6.0, 9.0)
 DEFAULT_STITCH_EXCLUDE_HALF_WIDTH_L = 0.35
+DEFAULT_STITCH_MAX_ABS_LOG10_JUMP = 0.08
+DEFAULT_STITCH_MIN_CONTINUOUS_WIDTH_Q_OVER_QC = 0.25
+DEFAULT_STITCH_MIN_CONTINUOUS_POINTS = 10
 
 HT_STRUCTURE_LABEL = "HT structure term p=0"
-HT_OVER_Q2_LABEL = "HT structure term p=0 over Qz^2"
+HT_OVER_Q2_LABEL = "Scaled HT/Qz^2, automatic A"
 STITCH_UNSCALED_HT_OVER_Q2_LABEL = "Unscaled HT/Qz^2"
-STITCH_SCALED_HT_OVER_Q2_LABEL = "Scaled HT/Qz^2"
-STITCHED_PARRATT_HT_OVER_Q2_LABEL = "Stitched Parratt + HT/Qz^2"
-STITCH_WEIGHT_LABEL = "Stitch weight"
+STITCH_SCALED_HT_OVER_Q2_LABEL = HT_OVER_Q2_LABEL
+STITCHED_PARRATT_HT_OVER_Q2_LABEL = "Piecewise Parratt | HT/Qz^2"
+LEGACY_STITCH_WEIGHT_LABEL = "Handoff morph window"
 BORN_HT_LABEL = "Born-scaled HT p=0"
 FRESNEL_HT_LABEL = "Fresnel-corrected HT p=0"
 PARRATT_ENV_HT_LABEL = "Parratt-envelope HT p=0"
@@ -153,7 +182,6 @@ STITCH_DIAGNOSTIC_CURVE_ORDER = (
     STITCH_UNSCALED_HT_OVER_Q2_LABEL,
     STITCH_SCALED_HT_OVER_Q2_LABEL,
     STITCHED_PARRATT_HT_OVER_Q2_LABEL,
-    STITCH_WEIGHT_LABEL,
 )
 DEFAULT_GUI_VISIBLE_CURVE_LABELS = (
     HT_STRUCTURE_LABEL,
@@ -172,11 +200,9 @@ DEFAULT_GUI_CURVE_VISIBILITY = {
 
 FIG2_CURVE_DISPLAY_LABELS = {
     HT_STRUCTURE_LABEL: r"$S_{\mathrm{HT},0}(L)$",
-    HT_OVER_Q2_LABEL: r"$S_{\mathrm{HT},0}(L) / Q_z^2$",
+    HT_OVER_Q2_LABEL: r"Scaled $S_{\mathrm{HT},0}(L) / Q_z^2$, automatic $A$",
     STITCH_UNSCALED_HT_OVER_Q2_LABEL: r"Unscaled $S_{\mathrm{HT},0}(L) / Q_z^2$",
-    STITCH_SCALED_HT_OVER_Q2_LABEL: r"Scaled $S_{\mathrm{HT},0}(L) / Q_z^2$",
-    STITCHED_PARRATT_HT_OVER_Q2_LABEL: r"Stitched $R_{\mathrm{Parratt}} + S_{\mathrm{HT},0}/Q_z^2$",
-    STITCH_WEIGHT_LABEL: "Stitch weight",
+    STITCHED_PARRATT_HT_OVER_Q2_LABEL: r"Piecewise $R_{\mathrm{Parratt}}\ |\ S_{\mathrm{HT},0}/Q_z^2$",
     BORN_HT_LABEL: r"$\left(Q_c / 2Q_z\right)^4 S_{\mathrm{HT},0}(L)$",
     FRESNEL_HT_LABEL: r"$R_F(Q_z) S_{\mathrm{HT},0}(L)$",
     PARRATT_ENV_HT_LABEL: r"$R_{\mathrm{Parratt}}(Q_z) S_{\mathrm{HT},0}(L)$",
@@ -190,7 +216,6 @@ FIG2_CURVE_STYLE = {
     STITCH_UNSCALED_HT_OVER_Q2_LABEL: dict(color="#56B4E9", linestyle=":", linewidth=1.3),
     STITCH_SCALED_HT_OVER_Q2_LABEL: dict(color="#0072B2", linestyle="--", linewidth=1.8),
     STITCHED_PARRATT_HT_OVER_Q2_LABEL: dict(color="#009E73", linestyle="-", linewidth=2.1),
-    STITCH_WEIGHT_LABEL: dict(color="#E69F00", linestyle="-.", linewidth=1.4),
     BORN_HT_LABEL: dict(color="#0072B2", linestyle="-", linewidth=1.8),
     FRESNEL_HT_LABEL: dict(color="#D55E00", linestyle="--", linewidth=1.8),
     PARRATT_ENV_HT_LABEL: dict(color="#009E73", linestyle="-.", linewidth=1.8),
@@ -243,49 +268,419 @@ def bragg_exclusion_mask(
     return mask
 
 
-def fit_log_median_scale(model: np.ndarray, target: np.ndarray, mask: np.ndarray) -> float:
-    model_values = np.asarray(model, dtype=float)
-    target_values = np.asarray(target, dtype=float)
-    mask_values = np.asarray(mask, dtype=bool)
+def median_and_mad(values: np.ndarray) -> tuple[float, float]:
+    values = np.asarray(values, dtype=float)
+    if values.size == 0:
+        return float("nan"), float("nan")
+    median = float(np.median(values))
+    return median, float(np.median(np.abs(values - median)))
+
+
+def log10_ratio_and_mask(
+    numerator: np.ndarray,
+    denominator: np.ndarray,
+    *finite_arrays: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    numerator_values = np.asarray(numerator, dtype=float)
+    denominator_values = np.asarray(denominator, dtype=float)
     valid = (
-        mask_values
+        np.isfinite(numerator_values)
+        & np.isfinite(denominator_values)
+        & (numerator_values > 0.0)
+        & (denominator_values > 0.0)
+    )
+    for array in finite_arrays:
+        valid &= np.isfinite(np.asarray(array, dtype=float))
+
+    ratio = np.full_like(numerator_values, np.nan, dtype=float)
+    ratio[valid] = np.log10(numerator_values[valid] / denominator_values[valid])
+    return ratio, valid
+
+
+def worker_count_arg(value: str) -> str:
+    text = str(value).strip().lower()
+    if text == "auto":
+        return text
+    try:
+        workers = int(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("--workers must be a positive integer or 'auto'.") from exc
+    if workers < 1:
+        raise argparse.ArgumentTypeError("--workers must be a positive integer or 'auto'.")
+    return str(workers)
+
+
+def available_cpu_count() -> int:
+    process_cpu_count = getattr(os, "process_cpu_count", None)
+    count = process_cpu_count() if process_cpu_count is not None else os.cpu_count()
+    return max(1, int(count or 1))
+
+
+def resolve_worker_count(workers: str, *, n_jobs: int) -> int:
+    jobs = max(1, int(n_jobs))
+    text = worker_count_arg(workers)
+    if text == "auto":
+        return min(jobs, available_cpu_count())
+    return min(jobs, int(text))
+
+
+def positive_rounded_int(value: float) -> int:
+    return max(1, int(round(float(value))))
+
+
+def _scale_fit_mask(
+    L: np.ndarray,
+    qz: np.ndarray,
+    qc: float,
+    ht_over_q2: np.ndarray,
+    pure_parratt: np.ndarray,
+    *,
+    fit_x_min_q_over_qc: float,
+    fit_x_max_q_over_qc: float,
+    bragg_centers_L: tuple[float, ...],
+    bragg_half_width_L: float,
+) -> np.ndarray:
+    l_values = np.asarray(L, dtype=float)
+    qz_values = np.asarray(qz, dtype=float)
+    model_values = np.asarray(ht_over_q2, dtype=float)
+    target_values = np.asarray(pure_parratt, dtype=float)
+    qz_over_qc = qz_values / float(qc)
+    return (
+        (qz_over_qc > float(fit_x_min_q_over_qc))
+        & (qz_over_qc < float(fit_x_max_q_over_qc))
+        & bragg_exclusion_mask(
+            l_values,
+            centers=tuple(float(center) for center in bragg_centers_L),
+            half_width=float(bragg_half_width_L),
+        )
         & np.isfinite(model_values)
         & np.isfinite(target_values)
+        & np.isfinite(qz_over_qc)
         & (model_values > 0.0)
         & (target_values > 0.0)
     )
-    if np.count_nonzero(valid) < 4:
-        raise ValueError("Not enough valid points for scale estimate.")
-    return float(np.exp(np.median(np.log(target_values[valid]) - np.log(model_values[valid]))))
 
 
-def smooth_stitch_weight(
+def _summarize_ht_q2_scale(
+    *,
+    L: np.ndarray,
+    qz: np.ndarray,
+    qc: float,
+    ht_over_q2: np.ndarray,
+    pure_parratt: np.ndarray,
+    scale: float,
+    fit_x_min_q_over_qc: float,
+    fit_x_max_q_over_qc: float,
+    bragg_centers_L: tuple[float, ...],
+    bragg_half_width_L: float,
+) -> ScaleEstimate:
+    model_values = np.asarray(ht_over_q2, dtype=float)
+    target_values = np.asarray(pure_parratt, dtype=float)
+    mask_values = _scale_fit_mask(
+        L,
+        qz,
+        qc,
+        model_values,
+        target_values,
+        fit_x_min_q_over_qc=fit_x_min_q_over_qc,
+        fit_x_max_q_over_qc=fit_x_max_q_over_qc,
+        bragg_centers_L=bragg_centers_L,
+        bragg_half_width_L=bragg_half_width_L,
+    )
+    if np.count_nonzero(mask_values) < 10:
+        raise ValueError("Need at least ten finite positive points for HT/Qz² scale estimate.")
+    residual = np.log10(float(scale) * model_values[mask_values] / target_values[mask_values])
+    median_residual, mad_residual = median_and_mad(residual)
+    return ScaleEstimate(
+        scale=float(scale),
+        n_fit_points=int(np.count_nonzero(mask_values)),
+        median_log10_residual=median_residual,
+        mad_log10_residual=mad_residual,
+        fit_x_min_q_over_qc=float(fit_x_min_q_over_qc),
+        fit_x_max_q_over_qc=float(fit_x_max_q_over_qc),
+        bragg_centers_L=tuple(float(center) for center in bragg_centers_L),
+        bragg_half_width_L=float(bragg_half_width_L),
+    )
+
+
+def _known_ht_q2_scale_estimate(
+    *,
+    L: np.ndarray,
+    qz: np.ndarray,
+    qc: float,
+    ht_over_q2: np.ndarray,
+    pure_parratt: np.ndarray,
+    scale: float,
+    fit_x_min_q_over_qc: float,
+    fit_x_max_q_over_qc: float,
+    bragg_centers_L: tuple[float, ...],
+    bragg_half_width_L: float,
+) -> ScaleEstimate:
+    try:
+        return _summarize_ht_q2_scale(
+            L=L,
+            qz=qz,
+            qc=qc,
+            ht_over_q2=ht_over_q2,
+            pure_parratt=pure_parratt,
+            scale=scale,
+            fit_x_min_q_over_qc=fit_x_min_q_over_qc,
+            fit_x_max_q_over_qc=fit_x_max_q_over_qc,
+            bragg_centers_L=bragg_centers_L,
+            bragg_half_width_L=bragg_half_width_L,
+        )
+    except ValueError:
+        return ScaleEstimate(
+            scale=float(scale),
+            n_fit_points=0,
+            median_log10_residual=float("nan"),
+            mad_log10_residual=float("nan"),
+            fit_x_min_q_over_qc=float(fit_x_min_q_over_qc),
+            fit_x_max_q_over_qc=float(fit_x_max_q_over_qc),
+            bragg_centers_L=tuple(float(center) for center in bragg_centers_L),
+            bragg_half_width_L=float(bragg_half_width_L),
+        )
+
+
+def estimate_ht_q2_scale(
+    *,
+    L: np.ndarray,
+    qz: np.ndarray,
+    qc: float,
+    ht_over_q2: np.ndarray,
+    pure_parratt: np.ndarray,
+    fit_x_min_q_over_qc: float = DEFAULT_STITCH_FIT_X_MIN_Q_OVER_QC,
+    fit_x_max_q_over_qc: float = DEFAULT_STITCH_FIT_X_MAX_Q_OVER_QC,
+    bragg_centers_L: tuple[float, ...] = DEFAULT_STITCH_EXCLUDE_CENTERS_L,
+    bragg_half_width_L: float = DEFAULT_STITCH_EXCLUDE_HALF_WIDTH_L,
+) -> ScaleEstimate:
+    model_values = np.asarray(ht_over_q2, dtype=float)
+    target_values = np.asarray(pure_parratt, dtype=float)
+    mask_values = _scale_fit_mask(
+        L,
+        qz,
+        qc,
+        model_values,
+        target_values,
+        fit_x_min_q_over_qc=fit_x_min_q_over_qc,
+        fit_x_max_q_over_qc=fit_x_max_q_over_qc,
+        bragg_centers_L=bragg_centers_L,
+        bragg_half_width_L=bragg_half_width_L,
+    )
+    if np.count_nonzero(mask_values) < 10:
+        raise ValueError("Need at least ten finite positive points for HT/Qz² scale estimate.")
+    scale = float(
+        np.exp(np.median(np.log(target_values[mask_values]) - np.log(model_values[mask_values])))
+    )
+    return _summarize_ht_q2_scale(
+        L=L,
+        qz=qz,
+        qc=qc,
+        ht_over_q2=model_values,
+        pure_parratt=target_values,
+        scale=scale,
+        fit_x_min_q_over_qc=fit_x_min_q_over_qc,
+        fit_x_max_q_over_qc=fit_x_max_q_over_qc,
+        bragg_centers_L=bragg_centers_L,
+        bragg_half_width_L=bragg_half_width_L,
+    )
+
+
+def interpolate_log_jump(
+    low_curve: np.ndarray,
+    high_curve: np.ndarray,
     qz_over_qc: np.ndarray,
-    x1: float = DEFAULT_STITCH_X1_Q_OVER_QC,
-    x2: float = DEFAULT_STITCH_X2_Q_OVER_QC,
-) -> np.ndarray:
-    left = float(x1)
-    right = float(x2)
-    if right <= left:
-        raise ValueError("stitch-x2-q-over-qc must be larger than stitch-x1-q-over-qc.")
+    x_cut: float,
+) -> float:
+    low = np.asarray(low_curve, dtype=float)
+    high = np.asarray(high_curve, dtype=float)
     x = np.asarray(qz_over_qc, dtype=float)
-    weight = np.ones_like(x, dtype=float)
-    weight[x >= right] = 0.0
-    mid = (x > left) & (x < right)
-    weight[mid] = 0.5 * (1.0 + np.cos(np.pi * (x[mid] - left) / (right - left)))
-    return weight
+    log_ratio, valid = log10_ratio_and_mask(high, low, x)
+    if not np.any(valid):
+        return float("nan")
+
+    x_valid = x[valid]
+    log_ratio = log_ratio[valid]
+    order = np.argsort(x_valid)
+    x_sorted = x_valid[order]
+    ratio_sorted = log_ratio[order]
+    unique_x, unique_index = np.unique(x_sorted, return_index=True)
+    unique_ratio = ratio_sorted[unique_index]
+    if unique_x.size == 1:
+        return float(unique_ratio[0])
+    return float(np.interp(float(x_cut), unique_x, unique_ratio))
 
 
-def log_blend(
-    low_q_curve: np.ndarray,
-    high_q_curve: np.ndarray,
-    weight: np.ndarray,
-    floor: float = 1.0e-300,
-) -> np.ndarray:
-    low = np.maximum(np.asarray(low_q_curve, dtype=float), float(floor))
-    high = np.maximum(np.asarray(high_q_curve, dtype=float), float(floor))
-    blend_weight = np.asarray(weight, dtype=float)
-    return np.exp(blend_weight * np.log(low) + (1.0 - blend_weight) * np.log(high))
+def contiguous_true_segments(mask: np.ndarray) -> list[tuple[int, int]]:
+    mask_values = np.asarray(mask, dtype=bool)
+    edges = np.diff(np.r_[False, mask_values, False].astype(int))
+    starts = np.flatnonzero(edges == 1)
+    stops = np.flatnonzero(edges == -1)
+    return list(zip(starts.tolist(), stops.tolist()))
+
+
+def choose_continuous_stitch_region(
+    L: np.ndarray,
+    qz_over_qc: np.ndarray,
+    low_curve: np.ndarray,
+    high_curve: np.ndarray,
+    *,
+    search_min: float = DEFAULT_STITCH_CUT_SEARCH_MIN_Q_OVER_QC,
+    search_max: float = DEFAULT_STITCH_CUT_SEARCH_MAX_Q_OVER_QC,
+    max_abs_log10_jump: float = DEFAULT_STITCH_MAX_ABS_LOG10_JUMP,
+    min_width_q_over_qc: float = DEFAULT_STITCH_MIN_CONTINUOUS_WIDTH_Q_OVER_QC,
+    min_points: int = DEFAULT_STITCH_MIN_CONTINUOUS_POINTS,
+    exclude_centers: tuple[float, ...] = DEFAULT_STITCH_EXCLUDE_CENTERS_L,
+    exclude_half_width: float = DEFAULT_STITCH_EXCLUDE_HALF_WIDTH_L,
+) -> dict[str, float | int | bool]:
+    l_values = np.asarray(L, dtype=float)
+    x_values = np.asarray(qz_over_qc, dtype=float)
+    low = np.asarray(low_curve, dtype=float)
+    high = np.asarray(high_curve, dtype=float)
+    ratio, _ = log10_ratio_and_mask(high, low, x_values)
+    valid = (
+        (x_values >= float(search_min))
+        & (x_values <= float(search_max))
+        & bragg_exclusion_mask(
+            l_values,
+            centers=tuple(float(center) for center in exclude_centers),
+            half_width=float(exclude_half_width),
+        )
+        & np.isfinite(ratio)
+        & (np.abs(ratio) <= float(max_abs_log10_jump))
+    )
+
+    candidates = []
+    for start, stop in contiguous_true_segments(valid):
+        width = float(x_values[stop - 1] - x_values[start])
+        n_points = int(stop - start)
+        if n_points < int(min_points) or width < float(min_width_q_over_qc):
+            continue
+
+        local = ratio[start:stop]
+        _, local_mad = median_and_mad(local)
+        score = float(np.median(np.abs(local)) + 0.5 * local_mad)
+        best_idx = start + int(np.argmin(np.abs(local)))
+        candidates.append((score, -width, start, stop, best_idx))
+
+    if not candidates:
+        raise ValueError(
+            "No continuous stitch region found. The Parratt and HT/Qz² branches do not "
+            "dovetail with one scale factor in the selected search window."
+        )
+
+    score, negative_width, start, stop, best_idx = sorted(candidates)[0]
+    width = -float(negative_width)
+    return {
+        "continuous_region_found": True,
+        "x_cut": float(x_values[best_idx]),
+        "L_cut": float(l_values[best_idx]),
+        "continuous_region_x1_q_over_qc": float(x_values[start]),
+        "continuous_region_x2_q_over_qc": float(x_values[stop - 1]),
+        "continuous_region_L1": float(l_values[start]),
+        "continuous_region_L2": float(l_values[stop - 1]),
+        "continuous_region_width_q_over_qc": width,
+        "continuous_region_points": int(stop - start),
+        "continuous_region_score": float(score),
+        "max_abs_log10_jump_allowed": float(max_abs_log10_jump),
+        "log10_jump_at_cut": float(ratio[best_idx]),
+    }
+
+
+def choose_stitch_cut(
+    L: np.ndarray,
+    qz_over_qc: np.ndarray,
+    low_curve: np.ndarray,
+    high_curve: np.ndarray,
+    *,
+    mode: str = "fixed",
+    fixed_x_cut: float = DEFAULT_STITCH_X2_Q_OVER_QC,
+    search_min: float = DEFAULT_STITCH_CUT_SEARCH_MIN_Q_OVER_QC,
+    search_max: float = DEFAULT_STITCH_CUT_SEARCH_MAX_Q_OVER_QC,
+    max_abs_log10_jump: float = DEFAULT_STITCH_MAX_ABS_LOG10_JUMP,
+    min_width_q_over_qc: float = DEFAULT_STITCH_MIN_CONTINUOUS_WIDTH_Q_OVER_QC,
+    min_points: int = DEFAULT_STITCH_MIN_CONTINUOUS_POINTS,
+    exclude_centers: tuple[float, ...] = DEFAULT_STITCH_EXCLUDE_CENTERS_L,
+    exclude_half_width: float = DEFAULT_STITCH_EXCLUDE_HALF_WIDTH_L,
+) -> float:
+    if mode == "fixed":
+        return float(fixed_x_cut)
+    if mode == "best-continuous":
+        return float(
+            choose_continuous_stitch_region(
+                L,
+                qz_over_qc,
+                low_curve,
+                high_curve,
+                search_min=search_min,
+                search_max=search_max,
+                max_abs_log10_jump=max_abs_log10_jump,
+                min_width_q_over_qc=min_width_q_over_qc,
+                min_points=min_points,
+                exclude_centers=exclude_centers,
+                exclude_half_width=exclude_half_width,
+            )["x_cut"]
+        )
+    if mode != "best-match":
+        raise ValueError(f"Unknown stitch cut mode: {mode}")
+
+    l_values = np.asarray(L, dtype=float)
+    x_values = np.asarray(qz_over_qc, dtype=float)
+    low = np.asarray(low_curve, dtype=float)
+    high = np.asarray(high_curve, dtype=float)
+    log_ratio, ratio_mask = log10_ratio_and_mask(high, low, x_values)
+    mask = (
+        (x_values >= float(search_min))
+        & (x_values <= float(search_max))
+        & bragg_exclusion_mask(
+            l_values,
+            centers=tuple(float(center) for center in exclude_centers),
+            half_width=float(exclude_half_width),
+        )
+        & ratio_mask
+    )
+    if not np.any(mask):
+        raise ValueError("No valid points for best-match stitch cut.")
+
+    score = np.abs(log_ratio[mask])
+    x_candidates = x_values[mask]
+    return float(x_candidates[int(np.argmin(score))])
+
+
+def _empty_continuous_region_metadata(args) -> dict[str, float | int | bool]:
+    return {
+        "continuous_region_found": False,
+        "continuous_region_x1_q_over_qc": np.nan,
+        "continuous_region_x2_q_over_qc": np.nan,
+        "continuous_region_L1": np.nan,
+        "continuous_region_L2": np.nan,
+        "continuous_region_width_q_over_qc": np.nan,
+        "continuous_region_points": 0,
+        "continuous_region_score": np.nan,
+        "max_abs_log10_jump_allowed": float(args.max_abs_log10_jump_allowed),
+    }
+
+
+def hard_piecewise_stitch(
+    low_curve: np.ndarray,
+    high_curve: np.ndarray,
+    qz_over_qc: np.ndarray,
+    *,
+    x_cut: float,
+) -> tuple[np.ndarray, dict[str, float | bool]]:
+    low = np.asarray(low_curve, dtype=float)
+    high = np.asarray(high_curve, dtype=float)
+    x = np.asarray(qz_over_qc, dtype=float)
+    cut = float(x_cut)
+    if not np.isfinite(cut):
+        raise ValueError("stitch cut must be finite.")
+    jump = interpolate_log_jump(low, high, x, cut)
+    return np.where(x <= cut, low, high), {
+        "used_morph": False,
+        "x1": cut,
+        "x2": cut,
+        "log10_jump_at_cut": jump,
+    }
 
 
 def validated_l_limits(
@@ -363,8 +758,11 @@ class Fig2GuiParameterState:
     n_wavelength_samples: float
     divergence_fwhm_deg: float
     n_divergence_samples: float
-    ht_structure_scale: float
-    ht_over_q2_scale: float
+    cpu_workers: float
+    stitch_cut_mode: str
+    stitch_cut_q_over_qc: float
+    cut_search_min_q_over_qc: float
+    cut_search_max_q_over_qc: float
 
     @classmethod
     def from_args(cls, args) -> "Fig2GuiParameterState":
@@ -380,8 +778,11 @@ class Fig2GuiParameterState:
             n_wavelength_samples=float(args.n_wavelength_samples),
             divergence_fwhm_deg=float(args.divergence_fwhm_deg),
             n_divergence_samples=float(args.n_divergence_samples),
-            ht_structure_scale=float(args.ht_structure_scale),
-            ht_over_q2_scale=float(args.ht_over_q2_scale),
+            cpu_workers=float(resolve_worker_count(args.workers, n_jobs=args.n_wavelength_samples)),
+            stitch_cut_mode=str(args.stitch_cut_mode),
+            stitch_cut_q_over_qc=float(args.stitch_cut_q_over_qc),
+            cut_search_min_q_over_qc=float(args.cut_search_min_q_over_qc),
+            cut_search_max_q_over_qc=float(args.cut_search_max_q_over_qc),
         )
 
     def sync_density_from_qc(self, material_kind: str) -> None:
@@ -416,11 +817,14 @@ class Fig2GuiParameterState:
         updated.top_roughness_angstrom = float(self.top_roughness_angstrom)
         updated.bottom_roughness_angstrom = float(self.bottom_roughness_angstrom)
         updated.bandwidth_fwhm = float(self.bandwidth_percent) / 100.0
-        updated.n_wavelength_samples = max(1, int(round(float(self.n_wavelength_samples))))
+        updated.n_wavelength_samples = positive_rounded_int(self.n_wavelength_samples)
         updated.divergence_fwhm_deg = float(self.divergence_fwhm_deg)
-        updated.n_divergence_samples = max(1, int(round(float(self.n_divergence_samples))))
-        updated.ht_structure_scale = float(self.ht_structure_scale)
-        updated.ht_over_q2_scale = float(self.ht_over_q2_scale)
+        updated.n_divergence_samples = positive_rounded_int(self.n_divergence_samples)
+        updated.workers = str(positive_rounded_int(self.cpu_workers))
+        updated.stitch_cut_mode = str(self.stitch_cut_mode)
+        updated.stitch_cut_q_over_qc = float(self.stitch_cut_q_over_qc)
+        updated.cut_search_min_q_over_qc = float(self.cut_search_min_q_over_qc)
+        updated.cut_search_max_q_over_qc = float(self.cut_search_max_q_over_qc)
         return updated
 
 
@@ -641,81 +1045,6 @@ def divergence_safe_ht_over_q2_average(
     return out
 
 
-def pseudo_voigt_profile(
-    L: np.ndarray,
-    center: float,
-    amplitude: float,
-    width: float,
-    eta: float,
-) -> np.ndarray:
-    width = max(float(width), np.finfo(float).eps)
-    mixing = float(np.clip(eta, 0.0, 1.0))
-    x = (np.asarray(L, dtype=np.float64) - float(center)) / width
-    gaussian = np.exp(-0.5 * x**2)
-    lorentzian = 1.0 / (1.0 + x**2)
-    return float(amplitude) * ((1.0 - mixing) * gaussian + mixing * lorentzian)
-
-
-def fit_pseudo_voigt_peak_sum(
-    L: np.ndarray,
-    observed: np.ndarray,
-    background: np.ndarray,
-    *,
-    peak_centers: tuple[float, ...] = DEFAULT_AUTOFIT_PEAK_CENTERS,
-    peak_half_width: float = DEFAULT_AUTOFIT_PEAK_HALF_WIDTH,
-) -> np.ndarray:
-    from scipy.optimize import OptimizeWarning, curve_fit
-
-    l_values = np.asarray(L, dtype=np.float64)
-    observed_values = np.asarray(observed, dtype=np.float64)
-    background_values = np.asarray(background, dtype=np.float64)
-    peak_sum = np.zeros_like(l_values, dtype=np.float64)
-
-    for center in peak_centers:
-        center = float(center)
-        local = (
-            (l_values >= center - peak_half_width)
-            & (l_values <= center + peak_half_width)
-            & np.isfinite(l_values)
-            & np.isfinite(observed_values)
-            & np.isfinite(background_values)
-        )
-        if np.count_nonzero(local) < 5:
-            continue
-
-        local_l = l_values[local]
-        residual = np.maximum(observed_values[local] - background_values[local], 0.0)
-        amplitude0 = float(np.nanmax(residual))
-        if not np.isfinite(amplitude0) or amplitude0 <= 0.0:
-            continue
-
-        def _model(x, amplitude, peak_center, width, eta):
-            return pseudo_voigt_profile(x, peak_center, amplitude, width, eta)
-
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", OptimizeWarning)
-                params, _cov = curve_fit(
-                    _model,
-                    local_l,
-                    residual,
-                    p0=(amplitude0, center, 0.08, 0.5),
-                    bounds=(
-                        (0.0, center - 0.15, 0.01, 0.0),
-                        (np.inf, center + 0.15, peak_half_width, 1.0),
-                    ),
-                    method="trf",
-                    maxfev=5000,
-                )
-        except (RuntimeError, ValueError):
-            continue
-
-        amplitude, peak_center, width, eta = params
-        peak_sum += pseudo_voigt_profile(l_values, peak_center, amplitude, width, eta)
-
-    return peak_sum
-
-
 def _curve_grid_for_label(curves: pd.DataFrame, label: str) -> pd.DataFrame:
     sub = curves[curves["label"] == label]
     if len(sub) == 0:
@@ -758,21 +1087,111 @@ def stitch_fit_mask(L: np.ndarray, qz: np.ndarray, args) -> np.ndarray:
     )
 
 
-def stitch_fit_l_limits(args) -> tuple[float, float]:
-    fit_qz_min = float(args.fit_x_min_q_over_qc) * float(args.qc_inv_angstrom)
-    fit_qz_max = float(args.fit_x_max_q_over_qc) * float(args.qc_inv_angstrom)
-    return validated_l_limits(
-        L_from_qz(fit_qz_min, args.c_angstrom),
-        L_from_qz(fit_qz_max, args.c_angstrom),
+def needs_ht_q2_scale(args, visible_labels: set[str] | None = None) -> bool:
+    labels = (
+        set(curve_labels_for_plot_mode(args)) if visible_labels is None else set(visible_labels)
     )
+    return (
+        getattr(args, "plot_mode", "fig2") in {"stitch", "stitch-diagnostics"}
+        or HT_OVER_Q2_LABEL in labels
+        or STITCHED_PARRATT_HT_OVER_Q2_LABEL in labels
+    )
+
+
+def estimate_ht_q2_scale_for_args(
+    L: np.ndarray,
+    qz: np.ndarray,
+    ht_over_q2: np.ndarray,
+    pure_parratt: np.ndarray,
+    args,
+) -> ScaleEstimate:
+    fit_centers = parse_float_list(args.fit_exclude_centers_L)
+    if args.scale_mode in {"manual", "miceli-cell"}:
+        scale = float(args.manual_stitch_scale) if args.scale_mode == "manual" else 1.0
+        return _known_ht_q2_scale_estimate(
+            L=L,
+            qz=qz,
+            qc=float(args.qc_inv_angstrom),
+            ht_over_q2=ht_over_q2,
+            pure_parratt=pure_parratt,
+            scale=scale,
+            fit_x_min_q_over_qc=float(args.fit_x_min_q_over_qc),
+            fit_x_max_q_over_qc=float(args.fit_x_max_q_over_qc),
+            bragg_centers_L=fit_centers,
+            bragg_half_width_L=float(args.fit_exclude_half_width_L),
+        )
+    if args.scale_mode == "log-median":
+        return estimate_ht_q2_scale(
+            L=L,
+            qz=qz,
+            qc=float(args.qc_inv_angstrom),
+            ht_over_q2=ht_over_q2,
+            pure_parratt=pure_parratt,
+            fit_x_min_q_over_qc=float(args.fit_x_min_q_over_qc),
+            fit_x_max_q_over_qc=float(args.fit_x_max_q_over_qc),
+            bragg_centers_L=fit_centers,
+            bragg_half_width_L=float(args.fit_exclude_half_width_L),
+        )
+    raise ValueError(f"Unknown scale mode: {args.scale_mode}")
+
+
+def scale_estimate_metadata(
+    estimate: ScaleEstimate,
+    args,
+    *,
+    scale_grid_l_min: float,
+    scale_grid_l_max: float,
+) -> dict[str, object]:
+    visible_l_min, visible_l_max = validated_l_limits(args.L_min, args.L_max)
+    return {
+        "scale_method": "log-median" if args.scale_mode == "log-median" else str(args.scale_mode),
+        "scale_mode": args.scale_mode,
+        "scale_A": float(estimate.scale),
+        "fit_x_min_q_over_qc": float(estimate.fit_x_min_q_over_qc),
+        "fit_x_max_q_over_qc": float(estimate.fit_x_max_q_over_qc),
+        "fit_exclude_centers_L": ",".join(f"{value:g}" for value in estimate.bragg_centers_L),
+        "fit_exclude_half_width_L": float(estimate.bragg_half_width_L),
+        "n_fit_points": int(estimate.n_fit_points),
+        "median_log10_residual": float(estimate.median_log10_residual),
+        "mad_log10_residual": float(estimate.mad_log10_residual),
+        "visible_L_min": visible_l_min,
+        "visible_L_max": visible_l_max,
+        "scale_grid_L_min": float(scale_grid_l_min),
+        "scale_grid_L_max": float(scale_grid_l_max),
+    }
+
+
+def q_over_qc_l_limits(args, x_min: float, x_max: float) -> tuple[float, float]:
+    qz_min = float(x_min) * float(args.qc_inv_angstrom)
+    qz_max = float(x_max) * float(args.qc_inv_angstrom)
+    return validated_l_limits(
+        L_from_qz(qz_min, args.c_angstrom),
+        L_from_qz(qz_max, args.c_angstrom),
+    )
+
+
+def stitch_fit_l_limits(args) -> tuple[float, float]:
+    return q_over_qc_l_limits(args, args.fit_x_min_q_over_qc, args.fit_x_max_q_over_qc)
+
+
+def stitch_cut_search_l_limits(args) -> tuple[float, float]:
+    return q_over_qc_l_limits(args, args.cut_search_min_q_over_qc, args.cut_search_max_q_over_qc)
 
 
 def compute_l_grid_limits(args) -> tuple[float, float]:
     visible_l_min, visible_l_max = validated_l_limits(args.L_min, args.L_max)
-    if stitch_requested(args) and args.scale_mode == "log-median":
+    l_min = visible_l_min
+    l_max = visible_l_max
+    needs_stitch = stitch_requested(args)
+    if needs_ht_q2_scale(args) and args.scale_mode == "log-median":
         fit_l_min, fit_l_max = stitch_fit_l_limits(args)
-        return min(visible_l_min, fit_l_min), max(visible_l_max, fit_l_max)
-    return visible_l_min, visible_l_max
+        l_min = min(l_min, fit_l_min)
+        l_max = max(l_max, fit_l_max)
+    if needs_stitch and args.stitch_cut_mode in {"best-match", "best-continuous"}:
+        search_l_min, search_l_max = stitch_cut_search_l_limits(args)
+        l_min = min(l_min, search_l_min)
+        l_max = max(l_max, search_l_max)
+    return l_min, l_max
 
 
 def raw_miceli_stitch_requested(args) -> bool:
@@ -786,6 +1205,8 @@ def build_stitch_curve_frames(
     normalized_ht_over_q2: np.ndarray,
     raw_miceli_ht_over_q2: np.ndarray | None,
     args,
+    *,
+    scale_estimate: ScaleEstimate | None = None,
 ) -> list[pd.DataFrame]:
     l_values = np.asarray(L, dtype=float)
     qz_values = np.asarray(qz, dtype=float)
@@ -801,25 +1222,83 @@ def build_stitch_curve_frames(
         raise ValueError(f"Unknown stitch branch: {args.stitch_branch}")
 
     qz_over_qc = qz_values / float(args.qc_inv_angstrom)
-    fit_mask = stitch_fit_mask(l_values, qz_values, args)
-    if args.scale_mode == "manual":
-        stitch_scale = float(args.manual_stitch_scale)
-    elif args.scale_mode == "miceli-cell":
-        stitch_scale = 1.0
-    elif args.scale_mode == "log-median":
-        stitch_scale = fit_log_median_scale(stitch_high_unscaled, pure_values, fit_mask)
-    else:
-        raise ValueError(f"Unknown scale mode: {args.scale_mode}")
+    if scale_estimate is None:
+        scale_estimate = estimate_ht_q2_scale_for_args(
+            l_values,
+            qz_values,
+            stitch_high_unscaled,
+            pure_values,
+            args,
+        )
 
-    scaled_ht_over_q2 = stitch_scale * stitch_high_unscaled
-    stitch_weight = smooth_stitch_weight(
+    scaled_ht_over_q2 = scale_estimate.scale * stitch_high_unscaled
+    continuous_metadata = _empty_continuous_region_metadata(args)
+    if args.stitch_cut_mode == "best-continuous":
+        continuous_metadata = choose_continuous_stitch_region(
+            l_values,
+            qz_over_qc,
+            pure_values,
+            scaled_ht_over_q2,
+            search_min=float(args.cut_search_min_q_over_qc),
+            search_max=float(args.cut_search_max_q_over_qc),
+            max_abs_log10_jump=float(args.max_abs_log10_jump_allowed),
+            min_width_q_over_qc=float(args.min_continuous_width_q_over_qc),
+            min_points=int(args.min_continuous_points),
+            exclude_centers=parse_float_list(args.fit_exclude_centers_L),
+            exclude_half_width=float(args.fit_exclude_half_width_L),
+        )
+        x_cut = float(continuous_metadata["x_cut"])
+    else:
+        x_cut = choose_stitch_cut(
+            l_values,
+            qz_over_qc,
+            pure_values,
+            scaled_ht_over_q2,
+            mode=args.stitch_cut_mode,
+            fixed_x_cut=float(args.stitch_cut_q_over_qc),
+            search_min=float(args.cut_search_min_q_over_qc),
+            search_max=float(args.cut_search_max_q_over_qc),
+            max_abs_log10_jump=float(args.max_abs_log10_jump_allowed),
+            min_width_q_over_qc=float(args.min_continuous_width_q_over_qc),
+            min_points=int(args.min_continuous_points),
+            exclude_centers=parse_float_list(args.fit_exclude_centers_L),
+            exclude_half_width=float(args.fit_exclude_half_width_L),
+        )
+    stitched, stitch_meta = hard_piecewise_stitch(
+        pure_values,
+        scaled_ht_over_q2,
         qz_over_qc,
-        x1=float(args.stitch_x1_q_over_qc),
-        x2=float(args.stitch_x2_q_over_qc),
+        x_cut=x_cut,
     )
-    stitched = log_blend(pure_values, scaled_ht_over_q2, stitch_weight)
-    return [
-        pd.DataFrame(
+    metadata = scale_estimate_metadata(
+        scale_estimate,
+        args,
+        scale_grid_l_min=float(np.nanmin(l_values)),
+        scale_grid_l_max=float(np.nanmax(l_values)),
+    )
+    metadata.update(
+        {
+            "stitch_cut_mode": args.stitch_cut_mode,
+            "stitch_cut_q_over_qc": x_cut,
+            "stitch_cut_L": L_from_qz(
+                float(x_cut) * float(args.qc_inv_angstrom),
+                args.c_angstrom,
+            ),
+            "morph_x1_q_over_qc": float(stitch_meta["x1"]),
+            "morph_x2_q_over_qc": float(stitch_meta["x2"]),
+            "used_morph": bool(stitch_meta["used_morph"]),
+            "log10_jump_at_cut": float(stitch_meta["log10_jump_at_cut"]),
+            **continuous_metadata,
+        }
+    )
+
+    frames = []
+    for label, intensity in (
+        (STITCH_UNSCALED_HT_OVER_Q2_LABEL, stitch_high_unscaled),
+        (STITCH_SCALED_HT_OVER_Q2_LABEL, scaled_ht_over_q2),
+        (STITCHED_PARRATT_HT_OVER_Q2_LABEL, stitched),
+    ):
+        frame = pd.DataFrame(
             {
                 "L": l_values,
                 "Qz_Ainv": qz_values,
@@ -827,13 +1306,19 @@ def build_stitch_curve_frames(
                 "label": label,
             }
         )
-        for label, intensity in (
-            (STITCH_UNSCALED_HT_OVER_Q2_LABEL, stitch_high_unscaled),
-            (STITCH_SCALED_HT_OVER_Q2_LABEL, scaled_ht_over_q2),
-            (STITCHED_PARRATT_HT_OVER_Q2_LABEL, stitched),
-            (STITCH_WEIGHT_LABEL, stitch_weight),
-        )
-    ]
+        for key, value in metadata.items():
+            frame[key] = value
+        frames.append(frame)
+    return frames
+
+
+def _curve_metadata_value(grid: pd.DataFrame, name: str, default):
+    if name not in grid.columns:
+        return default
+    values = grid[name].dropna()
+    if len(values) == 0:
+        return default
+    return values.iloc[0]
 
 
 def write_stitch_diagnostics(curves: pd.DataFrame, args, out_dir: Path) -> Path:
@@ -846,20 +1331,9 @@ def write_stitch_diagnostics(curves: pd.DataFrame, args, out_dir: Path) -> Path:
     pure_interp = np.interp(scaled_l, pure_l, pure_y)
     unscaled_interp = np.interp(scaled_l, unscaled_l, unscaled_y)
     fit_mask = stitch_fit_mask(scaled_l, qz_values, args)
-    valid_residual = (
-        fit_mask
-        & np.isfinite(scaled_y)
-        & np.isfinite(pure_interp)
-        & (scaled_y > 0.0)
-        & (pure_interp > 0.0)
-    )
-    residual = np.log10(scaled_y[valid_residual] / pure_interp[valid_residual])
-    if residual.size == 0:
-        median_residual = np.nan
-        mad_residual = np.nan
-    else:
-        median_residual = float(np.median(residual))
-        mad_residual = float(np.median(np.abs(residual - median_residual)))
+    residual_grid, residual_mask = log10_ratio_and_mask(scaled_y, pure_interp)
+    valid_residual = fit_mask & residual_mask
+    median_residual, mad_residual = median_and_mad(residual_grid[valid_residual])
     valid_scale = (
         fit_mask
         & np.isfinite(scaled_y)
@@ -872,22 +1346,124 @@ def write_stitch_diagnostics(curves: pd.DataFrame, args, out_dir: Path) -> Path:
         if np.any(valid_scale)
         else np.nan
     )
+    qz_over_qc = qz_values / float(args.qc_inv_angstrom)
+    stitch_cut_q_over_qc = float(
+        _curve_metadata_value(
+            scaled_grid,
+            "stitch_cut_q_over_qc",
+            getattr(args, "stitch_cut_q_over_qc", args.stitch_x2_q_over_qc),
+        )
+    )
+    stitch_cut_l = float(
+        _curve_metadata_value(
+            scaled_grid,
+            "stitch_cut_L",
+            L_from_qz(stitch_cut_q_over_qc * float(args.qc_inv_angstrom), args.c_angstrom),
+        )
+    )
+    log10_jump_at_cut = float(
+        _curve_metadata_value(
+            scaled_grid,
+            "log10_jump_at_cut",
+            interpolate_log_jump(pure_interp, scaled_y, qz_over_qc, stitch_cut_q_over_qc),
+        )
+    )
     diagnostics = pd.DataFrame(
         [
             {
                 "material": args.material,
                 "stitch_branch": args.stitch_branch,
+                "stitch_cut_mode": _curve_metadata_value(
+                    scaled_grid, "stitch_cut_mode", getattr(args, "stitch_cut_mode", "fixed")
+                ),
+                "stitch_cut_q_over_qc": stitch_cut_q_over_qc,
+                "stitch_cut_L": stitch_cut_l,
+                "morph_x1_q_over_qc": stitch_cut_q_over_qc,
+                "morph_x2_q_over_qc": stitch_cut_q_over_qc,
+                "used_morph": False,
+                "scale_method": _curve_metadata_value(
+                    scaled_grid,
+                    "scale_method",
+                    "log-median" if args.scale_mode == "log-median" else args.scale_mode,
+                ),
                 "scale_mode": args.scale_mode,
+                "scale_A": float(_curve_metadata_value(scaled_grid, "scale_A", stitch_scale)),
                 "stitch_scale": stitch_scale,
-                "fit_x_min_q_over_qc": args.fit_x_min_q_over_qc,
-                "fit_x_max_q_over_qc": args.fit_x_max_q_over_qc,
+                "fit_x_min_q_over_qc": float(
+                    _curve_metadata_value(
+                        scaled_grid, "fit_x_min_q_over_qc", args.fit_x_min_q_over_qc
+                    )
+                ),
+                "fit_x_max_q_over_qc": float(
+                    _curve_metadata_value(
+                        scaled_grid, "fit_x_max_q_over_qc", args.fit_x_max_q_over_qc
+                    )
+                ),
                 "stitch_x1_q_over_qc": args.stitch_x1_q_over_qc,
                 "stitch_x2_q_over_qc": args.stitch_x2_q_over_qc,
-                "fit_exclude_centers_L": args.fit_exclude_centers_L,
-                "fit_exclude_half_width_L": args.fit_exclude_half_width_L,
-                "n_fit_points": int(np.count_nonzero(valid_residual)),
-                "median_log10_residual": median_residual,
-                "mad_log10_residual": mad_residual,
+                "fit_exclude_centers_L": _curve_metadata_value(
+                    scaled_grid, "fit_exclude_centers_L", args.fit_exclude_centers_L
+                ),
+                "fit_exclude_half_width_L": float(
+                    _curve_metadata_value(
+                        scaled_grid,
+                        "fit_exclude_half_width_L",
+                        args.fit_exclude_half_width_L,
+                    )
+                ),
+                "n_fit_points": int(
+                    _curve_metadata_value(
+                        scaled_grid, "n_fit_points", int(np.count_nonzero(valid_residual))
+                    )
+                ),
+                "median_log10_residual": float(
+                    _curve_metadata_value(scaled_grid, "median_log10_residual", median_residual)
+                ),
+                "mad_log10_residual": float(
+                    _curve_metadata_value(scaled_grid, "mad_log10_residual", mad_residual)
+                ),
+                "log10_jump_at_cut": log10_jump_at_cut,
+                "continuous_region_found": bool(
+                    _curve_metadata_value(scaled_grid, "continuous_region_found", False)
+                ),
+                "continuous_region_x1_q_over_qc": float(
+                    _curve_metadata_value(scaled_grid, "continuous_region_x1_q_over_qc", np.nan)
+                ),
+                "continuous_region_x2_q_over_qc": float(
+                    _curve_metadata_value(scaled_grid, "continuous_region_x2_q_over_qc", np.nan)
+                ),
+                "continuous_region_width_q_over_qc": float(
+                    _curve_metadata_value(scaled_grid, "continuous_region_width_q_over_qc", np.nan)
+                ),
+                "continuous_region_points": int(
+                    _curve_metadata_value(scaled_grid, "continuous_region_points", 0)
+                ),
+                "continuous_region_score": float(
+                    _curve_metadata_value(scaled_grid, "continuous_region_score", np.nan)
+                ),
+                "max_abs_log10_jump_allowed": float(
+                    _curve_metadata_value(
+                        scaled_grid,
+                        "max_abs_log10_jump_allowed",
+                        args.max_abs_log10_jump_allowed,
+                    )
+                ),
+                "visible_L_min": float(
+                    _curve_metadata_value(scaled_grid, "visible_L_min", args.L_min)
+                ),
+                "visible_L_max": float(
+                    _curve_metadata_value(scaled_grid, "visible_L_max", args.L_max)
+                ),
+                "scale_grid_L_min": float(
+                    _curve_metadata_value(
+                        scaled_grid, "scale_grid_L_min", float(np.nanmin(scaled_l))
+                    )
+                ),
+                "scale_grid_L_max": float(
+                    _curve_metadata_value(
+                        scaled_grid, "scale_grid_L_max", float(np.nanmax(scaled_l))
+                    )
+                ),
             }
         ]
     )
@@ -895,10 +1471,11 @@ def write_stitch_diagnostics(curves: pd.DataFrame, args, out_dir: Path) -> Path:
     out_path = out_dir / "stitch_diagnostics.csv"
     out_dir.mkdir(parents=True, exist_ok=True)
     diagnostics.to_csv(out_path, index=False)
-    if np.isfinite(mad_residual) and mad_residual > 0.3:
+    diagnostic_mad = float(diagnostics["mad_log10_residual"].iloc[0])
+    if np.isfinite(diagnostic_mad) and diagnostic_mad > 0.3:
         print(
-            "WARNING: scaled HT/Qz^2 does not overlap pure Parratt well in the chosen "
-            "window; stitch is a visual composite, not a strong physical dovetail."
+            "WARNING: HT/Qz^2 does not overlap Parratt well in the chosen scale window. "
+            "The stitch is a visual handoff, not a strong physical dovetail."
         )
     return out_path
 
@@ -906,6 +1483,7 @@ def write_stitch_diagnostics(curves: pd.DataFrame, args, out_dir: Path) -> Path:
 def write_stitch_diagnostic_plot(curves: pd.DataFrame, args, out_dir: Path) -> Path:
     import matplotlib.pyplot as plt
 
+    scaled_grid = _curve_grid_for_label(curves, STITCH_SCALED_HT_OVER_Q2_LABEL)
     pure_l, pure_y = _curve_arrays_for_label(curves, PURE_PARRATT_LABEL)
     unscaled_l, unscaled_y = _curve_arrays_for_label(curves, STITCH_UNSCALED_HT_OVER_Q2_LABEL)
     scaled_l, scaled_y = _curve_arrays_for_label(curves, STITCH_SCALED_HT_OVER_Q2_LABEL)
@@ -917,6 +1495,14 @@ def write_stitch_diagnostic_plot(curves: pd.DataFrame, args, out_dir: Path) -> P
         np.isfinite(scaled_y) & np.isfinite(pure_interp) & (scaled_y > 0.0) & (pure_interp > 0.0)
     )
     np.divide(scaled_y, pure_interp, out=ratio, where=valid_ratio)
+    stitch_cut_q_over_qc = float(
+        _curve_metadata_value(
+            scaled_grid,
+            "stitch_cut_q_over_qc",
+            getattr(args, "stitch_cut_q_over_qc", args.stitch_x2_q_over_qc),
+        )
+    )
+    cut_l = L_from_qz(stitch_cut_q_over_qc * float(args.qc_inv_angstrom), args.c_angstrom)
 
     out_dir = Path(out_dir)
     out_path = out_dir / "fig_stitch_scale_diagnostic.png"
@@ -929,6 +1515,7 @@ def write_stitch_diagnostic_plot(curves: pd.DataFrame, args, out_dir: Path) -> P
         (stitched_l, stitched_y, STITCHED_PARRATT_HT_OVER_Q2_LABEL),
     ):
         ax.plot(l_values, intensity, label=FIG2_CURVE_DISPLAY_LABELS[label])
+    ax.axvline(cut_l, color="0.15", linestyle="--", linewidth=1.1, label="Handoff cut")
     fit_l_min, fit_l_max = stitch_fit_l_limits(args)
     ax.axvspan(fit_l_min, fit_l_max, color="0.8", alpha=0.25, label="Scale window")
     for center in parse_float_list(args.fit_exclude_centers_L):
@@ -945,6 +1532,7 @@ def write_stitch_diagnostic_plot(curves: pd.DataFrame, args, out_dir: Path) -> P
 
     ratio_ax.plot(scaled_l, ratio, color="#D55E00", label=r"Scaled HT/$R_P$")
     ratio_ax.axhline(1.0, color="0.3", linestyle=":", linewidth=1.0)
+    ratio_ax.axvline(cut_l, color="0.15", linestyle="--", linewidth=1.1)
     ratio_ax.set_yscale("log")
     ratio_ax.set_xlabel(r"$L$ (r.l.u.)")
     ratio_ax.set_ylabel("Ratio")
@@ -953,119 +1541,6 @@ def write_stitch_diagnostic_plot(curves: pd.DataFrame, args, out_dir: Path) -> P
     fig.savefig(out_path, dpi=args.dpi)
     plt.close(fig)
     return out_path
-
-
-def curves_span_l_range(
-    curves: pd.DataFrame,
-    l_min: float,
-    l_max: float,
-    *,
-    labels: tuple[str, ...] = (HT_OVER_Q2_LABEL, PURE_PARRATT_LABEL),
-) -> bool:
-    tolerance = max(1.0e-9, abs(float(l_max) - float(l_min)) * 1.0e-10)
-    for label in labels:
-        try:
-            l_values, _intensity = _curve_arrays_for_label(curves, label)
-        except ValueError:
-            return False
-        finite_l = l_values[np.isfinite(l_values)]
-        if finite_l.size == 0:
-            return False
-        if (
-            float(np.nanmin(finite_l)) - tolerance > l_min
-            or float(np.nanmax(finite_l)) + tolerance < l_max
-        ):
-            return False
-    return True
-
-
-def autofit_args_for_l_range(
-    args,
-    fit_l_min: float = DEFAULT_AUTOFIT_L_MIN,
-    fit_l_max: float = DEFAULT_AUTOFIT_L_MAX,
-):
-    fit_args = argparse.Namespace(**vars(args))
-    fit_args.L_min, fit_args.L_max = validated_l_limits(fit_l_min, fit_l_max)
-    fit_args.from_csv = None
-    return fit_args
-
-
-def _least_squares_scale(model: np.ndarray, target: np.ndarray) -> float:
-    model = np.asarray(model, dtype=np.float64)
-    target = np.asarray(target, dtype=np.float64)
-    valid = np.isfinite(model) & np.isfinite(target) & (model > 0.0) & (target > 0.0)
-    if np.count_nonzero(valid) < 2:
-        raise ValueError("Need at least two finite positive points for HT/Qz² auto-fit.")
-    model = model[valid]
-    target = target[valid]
-    denominator = float(np.sum(model**2))
-    if denominator <= 0.0:
-        raise ValueError("HT/Qz² auto-fit denominator is zero.")
-    scale = float(np.sum(model * target) / denominator)
-    if not np.isfinite(scale) or scale <= 0.0:
-        raise ValueError("HT/Qz² auto-fit produced a non-positive scale.")
-    return scale
-
-
-def fit_ht_over_q2_scale_to_parratt(
-    curves: pd.DataFrame,
-    *,
-    current_scale: float = 1.0,
-    fit_l_min: float = DEFAULT_AUTOFIT_L_MIN,
-    fit_l_max: float = DEFAULT_AUTOFIT_L_MAX,
-    peak_centers: tuple[float, ...] = DEFAULT_AUTOFIT_PEAK_CENTERS,
-    peak_half_width: float = DEFAULT_AUTOFIT_PEAK_HALF_WIDTH,
-) -> float:
-    current_scale = float(current_scale)
-    if not np.isfinite(current_scale) or current_scale <= 0.0:
-        raise ValueError("Current HT/Qz² scale must be positive for auto-fit.")
-
-    ht_l, ht_y = _curve_arrays_for_label(curves, HT_OVER_Q2_LABEL)
-    parratt_l, parratt_y = _curve_arrays_for_label(curves, PURE_PARRATT_LABEL)
-    if not curves_span_l_range(curves, fit_l_min, fit_l_max):
-        raise ValueError(
-            f"Auto-fit requires curves spanning {fit_l_min:.1f} <= L <= {fit_l_max:.1f}."
-        )
-
-    in_range = (ht_l >= fit_l_min) & (ht_l <= fit_l_max)
-    l_fit = ht_l[in_range]
-    ht_fit = ht_y[in_range] / current_scale
-    parratt_fit = np.interp(l_fit, parratt_l, parratt_y)
-    finite = np.isfinite(l_fit) & np.isfinite(ht_fit) & np.isfinite(parratt_fit)
-    finite &= ht_fit > 0.0
-    finite &= parratt_fit > 0.0
-    if np.count_nonzero(finite) < 10:
-        raise ValueError("Need at least ten finite positive points for HT/Qz² auto-fit.")
-
-    l_fit = l_fit[finite]
-    ht_fit = ht_fit[finite]
-    parratt_fit = parratt_fit[finite]
-
-    peak_excluded = np.ones_like(l_fit, dtype=bool)
-    for center in peak_centers:
-        peak_excluded &= np.abs(l_fit - float(center)) > peak_half_width
-    background_mask = (
-        peak_excluded if np.count_nonzero(peak_excluded) >= 10 else np.ones_like(l_fit, dtype=bool)
-    )
-    preliminary_scale = _least_squares_scale(ht_fit[background_mask], parratt_fit[background_mask])
-    background_in_ht_units = parratt_fit / preliminary_scale
-    fitted_peaks = fit_pseudo_voigt_peak_sum(
-        l_fit,
-        ht_fit,
-        background_in_ht_units,
-        peak_centers=peak_centers,
-        peak_half_width=peak_half_width,
-    )
-    ht_without_peaks = np.maximum(ht_fit - fitted_peaks, 0.0)
-    peak_subtracted_valid = (
-        np.isfinite(ht_without_peaks)
-        & np.isfinite(parratt_fit)
-        & (ht_without_peaks > 0.0)
-        & (parratt_fit > 0.0)
-    )
-    if np.count_nonzero(peak_subtracted_valid) < 2:
-        return preliminary_scale
-    return _least_squares_scale(ht_without_peaks, parratt_fit)
 
 
 def find_repo_root(start: Path) -> Path:
@@ -1187,37 +1662,47 @@ def load_curves_from_csv(path: Path, args) -> pd.DataFrame:
             f"Columns: {list(df.columns)}"
         )
 
-    if not any((p["label"].iloc[0] == HT_OVER_Q2_LABEL) for p in parts):
+    ht_over_q2_parts = [p for p in parts if p["label"].iloc[0] == HT_OVER_Q2_LABEL]
+    parts = [
+        p
+        for p in parts
+        if p["label"].iloc[0]
+        not in {
+            HT_OVER_Q2_LABEL,
+            STITCH_UNSCALED_HT_OVER_Q2_LABEL,
+            STITCHED_PARRATT_HT_OVER_Q2_LABEL,
+            LEGACY_STITCH_WEIGHT_LABEL,
+        }
+    ]
+    if ht_over_q2_parts:
+        unscaled_ht_grid = (
+            pd.concat(ht_over_q2_parts, ignore_index=True)
+            .drop_duplicates(subset=["L", "Qz_Ainv"])
+            .sort_values("L")
+        )
+    else:
+        unscaled_ht_grid = None
         for part in parts:
             if part["label"].iloc[0] != HT_STRUCTURE_LABEL:
                 continue
             grid = part.drop_duplicates(subset=["L", "Qz_Ainv"]).sort_values("L")
-            parts.append(
-                pd.DataFrame(
-                    {
-                        "L": grid["L"].to_numpy(),
-                        "Qz_Ainv": grid["Qz_Ainv"].to_numpy(),
-                        "intensity": ht_over_q2_positive_qz_division(
-                            np.asarray(grid["intensity"], dtype=float),
-                            np.asarray(grid["Qz_Ainv"], dtype=float),
-                            qz_min=float(args.qz_floor_for_born),
-                            scale=float(args.ht_over_q2_scale),
-                        ),
-                        "label": HT_OVER_Q2_LABEL,
-                    }
-                )
+            unscaled_ht_grid = pd.DataFrame(
+                {
+                    "L": grid["L"].to_numpy(),
+                    "Qz_Ainv": grid["Qz_Ainv"].to_numpy(),
+                    "intensity": ht_over_q2_positive_qz_division(
+                        np.asarray(grid["intensity"], dtype=float),
+                        np.asarray(grid["Qz_Ainv"], dtype=float),
+                        qz_min=float(args.qz_floor_for_born),
+                    ),
+                    "label": STITCH_UNSCALED_HT_OVER_Q2_LABEL,
+                }
             )
             break
-
-    for part in parts:
-        if part["label"].iloc[0] == HT_STRUCTURE_LABEL:
-            part["intensity"] = part["intensity"] * float(args.ht_structure_scale)
 
     if not any((p["label"].iloc[0] == PURE_PARRATT_LABEL) for p in parts):
         # Compute it on the grid from the loaded CSV.
         grid = df[["L", "Qz_Ainv"]].drop_duplicates().sort_values("L")
-        if args.L_max is not None:
-            grid = grid[grid["L"] <= float(args.L_max)]
         R = average_pure_parratt_for_L(grid["L"].to_numpy(), args)
         parts.append(
             pd.DataFrame(
@@ -1230,27 +1715,63 @@ def load_curves_from_csv(path: Path, args) -> pd.DataFrame:
             )
         )
 
-    out = pd.concat(parts, ignore_index=True)
-    if args.L_max is not None:
-        out = out[out["L"] <= float(args.L_max)].copy()
-    if stitch_requested(args) and STITCHED_PARRATT_HT_OVER_Q2_LABEL not in set(out["label"]):
-        ht_grid = (
-            out[out["label"] == HT_OVER_Q2_LABEL]
-            .drop_duplicates(subset=["L", "Qz_Ainv"])
-            .sort_values("L")
+    if unscaled_ht_grid is not None:
+        pure_l, pure_y = _curve_arrays_for_label(
+            pd.concat(parts, ignore_index=True), PURE_PARRATT_LABEL
         )
+        pure_interp = np.interp(
+            np.asarray(unscaled_ht_grid["L"], dtype=float),
+            pure_l,
+            pure_y,
+        )
+        scale_estimate = estimate_ht_q2_scale_for_args(
+            np.asarray(unscaled_ht_grid["L"], dtype=float),
+            np.asarray(unscaled_ht_grid["Qz_Ainv"], dtype=float),
+            np.asarray(unscaled_ht_grid["intensity"], dtype=float),
+            pure_interp,
+            args,
+        )
+        scaled_ht_grid = pd.DataFrame(
+            {
+                "L": unscaled_ht_grid["L"].to_numpy(),
+                "Qz_Ainv": unscaled_ht_grid["Qz_Ainv"].to_numpy(),
+                "intensity": scale_estimate.scale
+                * np.asarray(unscaled_ht_grid["intensity"], dtype=float),
+                "label": HT_OVER_Q2_LABEL,
+            }
+        )
+        scale_metadata = scale_estimate_metadata(
+            scale_estimate,
+            args,
+            scale_grid_l_min=float(np.nanmin(unscaled_ht_grid["L"])),
+            scale_grid_l_max=float(np.nanmax(unscaled_ht_grid["L"])),
+        )
+        for key, value in scale_metadata.items():
+            scaled_ht_grid[key] = value
+        if not stitch_requested(args):
+            parts.append(scaled_ht_grid)
+
+    for part in parts:
+        if part["label"].iloc[0] == HT_STRUCTURE_LABEL:
+            part["intensity"] = part["intensity"] * float(args.ht_structure_scale)
+
+    out = pd.concat(parts, ignore_index=True)
+    if stitch_requested(args) and STITCHED_PARRATT_HT_OVER_Q2_LABEL not in set(out["label"]):
+        if unscaled_ht_grid is None:
+            raise ValueError("CSV does not include or imply an HT/Qz² curve for stitching.")
         pure_l, pure_y = _curve_arrays_for_label(out, PURE_PARRATT_LABEL)
-        pure_interp = np.interp(np.asarray(ht_grid["L"], dtype=float), pure_l, pure_y)
+        pure_interp = np.interp(np.asarray(unscaled_ht_grid["L"], dtype=float), pure_l, pure_y)
         out = pd.concat(
             [
                 out,
                 *build_stitch_curve_frames(
-                    np.asarray(ht_grid["L"], dtype=float),
-                    np.asarray(ht_grid["Qz_Ainv"], dtype=float),
+                    np.asarray(unscaled_ht_grid["L"], dtype=float),
+                    np.asarray(unscaled_ht_grid["Qz_Ainv"], dtype=float),
                     pure_interp,
-                    np.asarray(ht_grid["intensity"], dtype=float),
+                    np.asarray(unscaled_ht_grid["intensity"], dtype=float),
                     None,
                     args,
+                    scale_estimate=scale_estimate,
                 ),
             ],
             ignore_index=True,
@@ -1329,7 +1850,12 @@ def compute_curves(args) -> pd.DataFrame:
         stack_layers = max(1, int(round(args.thickness_nm * 10.0 / args.c_angstrom)))
 
     L_grid_min, L_grid_max = compute_l_grid_limits(args)
-    L_nom = np.arange(L_grid_min, L_grid_max + 0.5 * args.L_step, args.L_step)
+    l_step = float(args.L_step)
+    if needs_ht_q2_scale(args):
+        fit_l_min, fit_l_max = stitch_fit_l_limits(args)
+        fit_width = max(fit_l_max - fit_l_min, 1.0e-6)
+        l_step = min(l_step, fit_width / 50.0)
+    L_nom = np.arange(L_grid_min, L_grid_max + 0.5 * l_step, l_step)
     qz_nom = qz_from_L(L_nom, args.c_angstrom)
     compute_raw_miceli_branch = raw_miceli_stitch_requested(args)
 
@@ -1384,7 +1910,7 @@ def compute_curves(args) -> pd.DataFrame:
 
     theta_nom = np.arcsin(np.clip(qz_nom * args.lambda0_angstrom / (4.0 * np.pi), 0.0, 1.0))
 
-    for lam_j, w_lam in zip(lambda_samples, lambda_weights):
+    def _compute_wavelength_contribution(lam_j: float, w_lam: float) -> WavelengthContribution:
         if cached_ht is None:
             L_dense, I_dense = simulate_ht_p0_dense(
                 ht_Iinf_dict=ht_Iinf_dict,
@@ -1400,6 +1926,11 @@ def compute_curves(args) -> pd.DataFrame:
         else:
             L_dense, I_dense = cached_ht
 
+        structure_lam = np.zeros_like(L_nom, dtype=float)
+        born_lam = np.zeros_like(L_nom, dtype=float)
+        fresnel_lam = np.zeros_like(L_nom, dtype=float)
+        parratt_env_lam = np.zeros_like(L_nom, dtype=float)
+        pure_parratt_lam = np.zeros_like(L_nom, dtype=float)
         I0 = stable_zero_reference(L_dense, I_dense)
         ht_structure_samples = []
         raw_ht_samples = [] if compute_raw_miceli_branch else None
@@ -1425,11 +1956,11 @@ def compute_curves(args) -> pd.DataFrame:
             Rf = fresnel_reflectivity_single_interface(qz_safe, args.qc_inv_angstrom)
             Rp = parratt_reflectivity(qz_safe, layers, wavelength_angstrom=float(lam_j))
 
-            structure += weight * S
-            born += weight * born_fresnel_asymptote(qz_safe, args.qc_inv_angstrom) * S
-            fresnel += weight * Rf * S
-            parratt_env += weight * Rp * S
-            pure_parratt += weight * Rp
+            structure_lam += weight * S
+            born_lam += weight * born_fresnel_asymptote(qz_safe, args.qc_inv_angstrom) * S
+            fresnel_lam += weight * Rf * S
+            parratt_env_lam += weight * Rp * S
+            pure_parratt_lam += weight * Rp
 
         ht_over_q2_lam = divergence_safe_ht_over_q2_average(
             np.vstack(ht_structure_samples),
@@ -1437,9 +1968,14 @@ def compute_curves(args) -> pd.DataFrame:
             divergence_weights,
             qz_min=float(args.qz_floor_for_born),
         )
+        ht_over_q2_sum_lam = np.zeros_like(L_nom, dtype=float)
+        ht_over_q2_weight_lam = np.zeros_like(L_nom, dtype=float)
         valid_ht = np.isfinite(ht_over_q2_lam)
-        ht_over_q2[valid_ht] += float(w_lam) * ht_over_q2_lam[valid_ht]
-        ht_over_q2_weight[valid_ht] += float(w_lam)
+        ht_over_q2_sum_lam[valid_ht] += float(w_lam) * ht_over_q2_lam[valid_ht]
+        ht_over_q2_weight_lam[valid_ht] += float(w_lam)
+
+        raw_miceli_sum_lam = None
+        raw_miceli_weight_lam = None
         if compute_raw_miceli_branch:
             raw_miceli_ht_over_q2_lam = divergence_safe_ht_over_q2_average(
                 miceli_scale * np.vstack(raw_ht_samples),
@@ -1447,11 +1983,53 @@ def compute_curves(args) -> pd.DataFrame:
                 divergence_weights,
                 qz_min=float(args.qz_floor_for_born),
             )
+            raw_miceli_sum_lam = np.zeros_like(L_nom, dtype=float)
+            raw_miceli_weight_lam = np.zeros_like(L_nom, dtype=float)
             valid_raw_ht = np.isfinite(raw_miceli_ht_over_q2_lam)
-            raw_miceli_ht_over_q2[valid_raw_ht] += (
+            raw_miceli_sum_lam[valid_raw_ht] += (
                 float(w_lam) * raw_miceli_ht_over_q2_lam[valid_raw_ht]
             )
-            raw_miceli_ht_over_q2_weight[valid_raw_ht] += float(w_lam)
+            raw_miceli_weight_lam[valid_raw_ht] += float(w_lam)
+
+        return WavelengthContribution(
+            structure=structure_lam,
+            ht_over_q2=ht_over_q2_sum_lam,
+            ht_over_q2_weight=ht_over_q2_weight_lam,
+            born=born_lam,
+            fresnel=fresnel_lam,
+            parratt_env=parratt_env_lam,
+            pure_parratt=pure_parratt_lam,
+            raw_miceli_ht_over_q2=raw_miceli_sum_lam,
+            raw_miceli_ht_over_q2_weight=raw_miceli_weight_lam,
+        )
+
+    def _add_contribution(contribution: WavelengthContribution) -> None:
+        structure[:] += contribution.structure
+        ht_over_q2[:] += contribution.ht_over_q2
+        ht_over_q2_weight[:] += contribution.ht_over_q2_weight
+        born[:] += contribution.born
+        fresnel[:] += contribution.fresnel
+        parratt_env[:] += contribution.parratt_env
+        pure_parratt[:] += contribution.pure_parratt
+        if compute_raw_miceli_branch:
+            raw_miceli_ht_over_q2[:] += contribution.raw_miceli_ht_over_q2
+            raw_miceli_ht_over_q2_weight[:] += contribution.raw_miceli_ht_over_q2_weight
+
+    def _compute_wavelength_job(sample: tuple[float, float]) -> WavelengthContribution:
+        lam_j, w_lam = sample
+        return _compute_wavelength_contribution(float(lam_j), float(w_lam))
+
+    def _add_contributions(contributions) -> None:
+        for contribution in contributions:
+            _add_contribution(contribution)
+
+    wavelength_jobs = list(zip(lambda_samples, lambda_weights))
+    worker_count = resolve_worker_count(args.workers, n_jobs=len(wavelength_jobs))
+    if worker_count == 1:
+        _add_contributions(map(_compute_wavelength_job, wavelength_jobs))
+    else:
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            _add_contributions(executor.map(_compute_wavelength_job, wavelength_jobs))
 
     ht_over_q2_values = np.full_like(ht_over_q2, np.nan, dtype=float)
     np.divide(
@@ -1460,7 +2038,20 @@ def compute_curves(args) -> pd.DataFrame:
         out=ht_over_q2_values,
         where=ht_over_q2_weight > 0.0,
     )
-    ht_over_q2 = ht_over_q2_values * float(args.ht_over_q2_scale)
+    scale_estimate = estimate_ht_q2_scale_for_args(
+        L_nom,
+        qz_nom,
+        ht_over_q2_values,
+        pure_parratt,
+        args,
+    )
+    ht_over_q2 = scale_estimate.scale * ht_over_q2_values
+    scale_metadata = scale_estimate_metadata(
+        scale_estimate,
+        args,
+        scale_grid_l_min=float(np.nanmin(L_nom)),
+        scale_grid_l_max=float(np.nanmax(L_nom)),
+    )
     raw_miceli_ht_over_q2_values = None
     if compute_raw_miceli_branch:
         raw_miceli_ht_over_q2_values = np.full_like(raw_miceli_ht_over_q2, np.nan, dtype=float)
@@ -1480,7 +2071,20 @@ def compute_curves(args) -> pd.DataFrame:
             ht_over_q2_values,
             raw_miceli_ht_over_q2_values,
             args,
+            scale_estimate=scale_estimate if args.stitch_branch == "normalized-ht-q2" else None,
         )
+
+    ht_over_q2_frame = pd.DataFrame(
+        {
+            "L": L_nom,
+            "Qz_Ainv": qz_nom,
+            "intensity": ht_over_q2,
+            "label": HT_OVER_Q2_LABEL,
+        }
+    )
+    for key, value in scale_metadata.items():
+        ht_over_q2_frame[key] = value
+    ht_over_q2_frames = [] if stitch_requested(args) else [ht_over_q2_frame]
 
     return pd.concat(
         [
@@ -1492,14 +2096,7 @@ def compute_curves(args) -> pd.DataFrame:
                     "label": HT_STRUCTURE_LABEL,
                 }
             ),
-            pd.DataFrame(
-                {
-                    "L": L_nom,
-                    "Qz_Ainv": qz_nom,
-                    "intensity": ht_over_q2,
-                    "label": HT_OVER_Q2_LABEL,
-                }
-            ),
+            *ht_over_q2_frames,
             pd.DataFrame(
                 {"L": L_nom, "Qz_Ainv": qz_nom, "intensity": born, "label": BORN_HT_LABEL}
             ),
@@ -1709,6 +2306,12 @@ def parse_args(argv=None):
     parser.add_argument("--n-wavelength-samples", type=int, default=d.n_wavelength_samples)
     parser.add_argument("--divergence-fwhm-deg", type=float, default=d.divergence_fwhm_deg)
     parser.add_argument("--n-divergence-samples", type=int, default=d.n_divergence_samples)
+    parser.add_argument(
+        "--workers",
+        type=worker_count_arg,
+        default=DEFAULT_WORKERS,
+        help="CPU workers for independent wavelength samples; use 1 for serial or auto to cap at available CPUs.",
+    )
     parser.add_argument("--ht-structure-scale", type=float, default=d.ht_structure_scale)
     parser.add_argument("--ht-over-q2-scale", type=float, default=d.ht_over_q2_scale)
 
@@ -1743,13 +2346,53 @@ def parse_args(argv=None):
         "--stitch-x1-q-over-qc",
         type=float,
         default=DEFAULT_STITCH_X1_Q_OVER_QC,
-        help="Low-Q stitch transition start in Qz/Qc.",
+        help="Legacy low-Q stitch transition start recorded in diagnostics.",
     )
     parser.add_argument(
         "--stitch-x2-q-over-qc",
         type=float,
         default=DEFAULT_STITCH_X2_Q_OVER_QC,
-        help="High-Q stitch transition end in Qz/Qc.",
+        help="Hard stitch switch point in Qz/Qc; lower values use Parratt, this value and higher use HT.",
+    )
+    parser.add_argument(
+        "--stitch-cut-q-over-qc",
+        type=float,
+        default=None,
+        help="Explicit Parratt-to-HT/Qz^2 handoff point in Qz/Qc.",
+    )
+    parser.add_argument(
+        "--stitch-cut-mode",
+        choices=["fixed", "best-match", "best-continuous"],
+        default="best-continuous",
+        help=(
+            "Use a fixed cut, a pointwise closest match, or the best continuous "
+            "Parratt/HT overlap interval in the search window."
+        ),
+    )
+    parser.add_argument(
+        "--cut-search-min-q-over-qc",
+        type=float,
+        default=DEFAULT_STITCH_CUT_SEARCH_MIN_Q_OVER_QC,
+    )
+    parser.add_argument(
+        "--cut-search-max-q-over-qc",
+        type=float,
+        default=DEFAULT_STITCH_CUT_SEARCH_MAX_Q_OVER_QC,
+    )
+    parser.add_argument(
+        "--max-abs-log10-jump-allowed",
+        type=float,
+        default=DEFAULT_STITCH_MAX_ABS_LOG10_JUMP,
+    )
+    parser.add_argument(
+        "--min-continuous-width-q-over-qc",
+        type=float,
+        default=DEFAULT_STITCH_MIN_CONTINUOUS_WIDTH_Q_OVER_QC,
+    )
+    parser.add_argument(
+        "--min-continuous-points",
+        type=int,
+        default=DEFAULT_STITCH_MIN_CONTINUOUS_POINTS,
     )
     parser.add_argument(
         "--stitch-branch",
@@ -1810,6 +2453,8 @@ def parse_args(argv=None):
     )
 
     args = parser.parse_args(raw_argv)
+    if args.stitch_cut_q_over_qc is None:
+        args.stitch_cut_q_over_qc = float(args.stitch_x2_q_over_qc)
     if args.bragg_view:
         args.show_bragg_markers = True
         if not _argv_has_option(raw_argv, "--L-min"):
@@ -1836,7 +2481,6 @@ def run_fig2_gui(args) -> None:
     current_curves = None
     syncing = False
     compute_gate = LiveComputeGate()
-    auto_fit_generation = 0
 
     root.columnconfigure(1, weight=1)
     root.rowconfigure(0, weight=1)
@@ -1882,10 +2526,11 @@ def run_fig2_gui(args) -> None:
     view_axes_section = _add_section(control_body, "Axes and limits", 0)
     curve_visibility_section = _add_section(control_body, "Displayed curves", 1)
     curve_scale_section = _add_section(control_body, "Scale factors", 2)
-    beam_bandwidth_section = _add_section(control_body, "Spectral bandwidth", 3)
-    beam_divergence_section = _add_section(control_body, "Angular divergence", 4)
-    sample_material_section = _add_section(control_body, "Film and substrate", 5)
-    sample_geometry_section = _add_section(control_body, "Film geometry", 6)
+    stitch_handoff_section = _add_section(control_body, "Stitch handoff", 3)
+    beam_bandwidth_section = _add_section(control_body, "Spectral bandwidth", 4)
+    beam_divergence_section = _add_section(control_body, "Angular divergence", 5)
+    sample_material_section = _add_section(control_body, "Film and substrate", 6)
+    sample_geometry_section = _add_section(control_body, "Film geometry", 7)
 
     figure_frame = ttk.Frame(root, padding=(0, 10, 12, 12))
     figure_frame.grid(row=0, column=1, sticky="nsew")
@@ -1924,7 +2569,14 @@ def run_fig2_gui(args) -> None:
     n_wavelength_samples_var = tk.DoubleVar(value=state.n_wavelength_samples)
     divergence_fwhm_deg_var = tk.DoubleVar(value=state.divergence_fwhm_deg)
     n_divergence_samples_var = tk.DoubleVar(value=state.n_divergence_samples)
-    ht_over_q2_scale_var = tk.DoubleVar(value=state.ht_over_q2_scale)
+    cpu_workers_var = tk.DoubleVar(value=state.cpu_workers)
+    stitch_cut_mode_var = tk.StringVar(value=state.stitch_cut_mode)
+    stitch_cut_var = tk.DoubleVar(value=state.stitch_cut_q_over_qc)
+    cut_search_min_var = tk.DoubleVar(value=state.cut_search_min_q_over_qc)
+    cut_search_max_var = tk.DoubleVar(value=state.cut_search_max_q_over_qc)
+    scale_summary_var = tk.StringVar(
+        value="HT/Qz² automatic scale\nA = pending\nfit window: 5 < Qz/Qc < 10\nMAD = pending"
+    )
     curve_visible_vars = {
         label: tk.BooleanVar(value=DEFAULT_GUI_CURVE_VISIBILITY[label]) for label in GUI_CURVE_ORDER
     }
@@ -1943,7 +2595,10 @@ def run_fig2_gui(args) -> None:
         ("n_wavelength_samples", n_wavelength_samples_var, 0),
         ("divergence_fwhm_deg", divergence_fwhm_deg_var, 3),
         ("n_divergence_samples", n_divergence_samples_var, 0),
-        ("ht_over_q2_scale", ht_over_q2_scale_var, 3),
+        ("cpu_workers", cpu_workers_var, 0),
+        ("stitch_cut", stitch_cut_var, 2),
+        ("cut_search_min", cut_search_min_var, 2),
+        ("cut_search_max", cut_search_max_var, 2),
     )
     state_var_specs = (
         ("film_qc_inv_angstrom", film_qc_var),
@@ -1957,8 +2612,12 @@ def run_fig2_gui(args) -> None:
         ("n_wavelength_samples", n_wavelength_samples_var),
         ("divergence_fwhm_deg", divergence_fwhm_deg_var),
         ("n_divergence_samples", n_divergence_samples_var),
-        ("ht_over_q2_scale", ht_over_q2_scale_var),
+        ("cpu_workers", cpu_workers_var),
+        ("stitch_cut_q_over_qc", stitch_cut_var),
+        ("cut_search_min_q_over_qc", cut_search_min_var),
+        ("cut_search_max_q_over_qc", cut_search_max_var),
     )
+    option_var_specs = (("stitch_cut_mode", stitch_cut_mode_var),)
 
     def _set_status(message: str) -> None:
         status_var.set(message)
@@ -2021,7 +2680,10 @@ def run_fig2_gui(args) -> None:
         entry.bind("<FocusOut>", _apply_entry)
 
     def _sync_parameter_vars_from_state() -> None:
-        _set_vars_silently((variable, getattr(state, attr)) for attr, variable in state_var_specs)
+        _set_vars_silently(
+            (variable, getattr(state, attr))
+            for attr, variable in (*state_var_specs, *option_var_specs)
+        )
         _refresh_parameter_readouts()
 
     def _refresh_parameter_readouts() -> None:
@@ -2031,6 +2693,8 @@ def run_fig2_gui(args) -> None:
     def _capture_state_from_vars() -> None:
         for attr, variable in state_var_specs:
             setattr(state, attr, float(variable.get()))
+        for attr, variable in option_var_specs:
+            setattr(state, attr, str(variable.get()))
 
     def _set_vars_silently(pairs) -> None:
         nonlocal syncing
@@ -2083,6 +2747,26 @@ def run_fig2_gui(args) -> None:
             _schedule_live_recompute()
 
         return _handler
+
+    def _on_option_parameter_changed(_event=None) -> None:
+        if syncing:
+            return
+        _capture_state_from_vars()
+        _schedule_live_recompute()
+
+    def _add_option_combo(
+        *, parent, row: int, label: str, variable, values: tuple[str, ...]
+    ) -> None:
+        ttk.Label(parent, text=label).grid(row=row, column=0, sticky="w", pady=(4, 0))
+        combo = ttk.Combobox(
+            parent,
+            textvariable=variable,
+            values=values,
+            state="readonly",
+            width=18,
+        )
+        combo.grid(row=row, column=1, columnspan=2, sticky="ew", pady=(4, 0))
+        combo.bind("<<ComboboxSelected>>", _on_option_parameter_changed)
 
     def _apply_l_entry(name: str, variable, digits: int) -> None:
         value = _entry_value_or_restore(name, variable, digits)
@@ -2209,6 +2893,34 @@ def run_fig2_gui(args) -> None:
     def _stitch_curve_missing(curves: pd.DataFrame) -> bool:
         return STITCHED_PARRATT_HT_OVER_Q2_LABEL not in set(curves["label"])
 
+    def _update_scale_summary(curves: pd.DataFrame) -> None:
+        try:
+            scaled_grid = _curve_grid_for_label(curves, STITCH_SCALED_HT_OVER_Q2_LABEL)
+        except ValueError:
+            scale_summary_var.set(
+                "HT/Qz² automatic scale\nA = unavailable\nfit window: 5 < Qz/Qc < 10\nMAD = unavailable"
+            )
+            return
+        scale_a = _curve_metadata_value(scaled_grid, "scale_A", np.nan)
+        fit_min = _curve_metadata_value(
+            scaled_grid,
+            "fit_x_min_q_over_qc",
+            DEFAULT_STITCH_FIT_X_MIN_Q_OVER_QC,
+        )
+        fit_max = _curve_metadata_value(
+            scaled_grid,
+            "fit_x_max_q_over_qc",
+            DEFAULT_STITCH_FIT_X_MAX_Q_OVER_QC,
+        )
+        mad = _curve_metadata_value(scaled_grid, "mad_log10_residual", np.nan)
+        n_fit = _curve_metadata_value(scaled_grid, "n_fit_points", 0)
+        scale_summary_var.set(
+            "HT/Qz² automatic scale\n"
+            f"A = {float(scale_a):.4g}\n"
+            f"fit window: {float(fit_min):g} < Qz/Qc < {float(fit_max):g}\n"
+            f"MAD = {float(mad):.3g}; n = {int(n_fit)}"
+        )
+
     def _on_curve_visibility_changed() -> None:
         if current_curves is None:
             _set_status("Curve visibility will apply after curves load.")
@@ -2218,83 +2930,6 @@ def run_fig2_gui(args) -> None:
             return
         _draw_curves(current_curves, current_args)
         _set_status("Updated curve visibility.")
-
-    def _auto_fit_ht_over_q2_scale() -> None:
-        _capture_state_from_vars()
-        source_args = state.updated_args(current_args)
-        source_args.L_min, source_args.L_max = validated_l_limits(l_min_var.get(), l_max_var.get())
-        source_args.from_csv = None
-
-        if current_curves is None or not curves_span_l_range(
-            current_curves,
-            DEFAULT_AUTOFIT_L_MIN,
-            DEFAULT_AUTOFIT_L_MAX,
-        ):
-            _start_auto_fit_ht_over_q2_scale(source_args)
-            return
-
-        try:
-            fitted_scale = fit_ht_over_q2_scale_to_parratt(
-                current_curves,
-                current_scale=ht_over_q2_scale_var.get(),
-            )
-        except ValueError as exc:
-            _set_status(f"Auto-fit HT/Qz² failed: {exc}")
-            return
-
-        _finish_auto_fit_ht_over_q2_scale(None, fitted_scale)
-
-    def _start_auto_fit_ht_over_q2_scale(source_args) -> None:
-        nonlocal auto_fit_generation
-        auto_fit_generation += 1
-        generation = auto_fit_generation
-        fit_args = autofit_args_for_l_range(source_args)
-        _set_save_enabled(False)
-        _set_status("Auto-fitting HT/Qz² scale...")
-
-        def _worker() -> None:
-            try:
-                fit_curves = _load_or_compute(fit_args)
-                fitted_scale = fit_ht_over_q2_scale_to_parratt(
-                    fit_curves,
-                    current_scale=fit_args.ht_over_q2_scale,
-                )
-            except Exception as exc:
-                root.after(
-                    0,
-                    lambda exc=exc, generation=generation: _finish_auto_fit_ht_over_q2_scale_error(
-                        generation, exc
-                    ),
-                )
-                return
-            root.after(
-                0,
-                lambda generation=generation, fitted_scale=fitted_scale: (
-                    _finish_auto_fit_ht_over_q2_scale(generation, fitted_scale)
-                ),
-            )
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def _finish_auto_fit_ht_over_q2_scale(
-        generation: int | None,
-        fitted_scale: float,
-    ) -> None:
-        if generation is not None and generation != auto_fit_generation:
-            return
-        _set_save_enabled(True)
-        if "ht_over_q2_scale" in scales:
-            _expand_scale_to_value("ht_over_q2_scale", fitted_scale)
-        _set_vars_silently(((ht_over_q2_scale_var, fitted_scale),))
-        _update_readout("ht_over_q2_scale", fitted_scale, 3)
-        _set_status(f"Auto-fit HT/Qz² scale = {fitted_scale:.4g}.")
-        _schedule_live_recompute()
-
-    def _finish_auto_fit_ht_over_q2_scale_error(generation: int, exc: Exception) -> None:
-        if generation != auto_fit_generation:
-            return
-        _set_save_enabled(True)
-        _set_status(f"Auto-fit HT/Qz² failed: {exc}")
 
     def _set_save_enabled(enabled: bool) -> None:
         save_button.configure(state="normal" if enabled else "disabled")
@@ -2332,6 +2967,7 @@ def run_fig2_gui(args) -> None:
         if should_draw:
             current_args = draw_args
             current_curves = curves
+            _update_scale_summary(curves)
             _draw_curves(curves, draw_args)
         if next_compute is not None:
             next_generation, next_args = next_compute
@@ -2552,26 +3188,62 @@ def run_fig2_gui(args) -> None:
             pady=(0, 4),
         )
 
-    _add_slider(
-        parent=curve_scale_section,
+    ttk.Label(
+        curve_scale_section,
+        textvariable=scale_summary_var,
+        justify="left",
+        anchor="w",
+    ).grid(row=0, column=0, columnspan=3, sticky="ew")
+
+    _add_option_combo(
+        parent=stitch_handoff_section,
         row=0,
-        name="ht_over_q2_scale",
-        label="HT / Qz² scale",
-        variable=ht_over_q2_scale_var,
-        from_=0.0,
+        label="Cut mode",
+        variable=stitch_cut_mode_var,
+        values=("best-continuous", "fixed", "best-match"),
+    )
+    _add_slider(
+        parent=stitch_handoff_section,
+        row=1,
+        name="stitch_cut",
+        label="Cut Qz/Qc",
+        variable=stitch_cut_var,
+        from_=1.0,
         to=10.0,
-        digits=3,
-        command=_on_plain_parameter_changed("ht_over_q2_scale", ht_over_q2_scale_var, 3),
+        digits=2,
+        command=_on_plain_parameter_changed("stitch_cut", stitch_cut_var, 2),
         entry_command=lambda name, variable, digits: _apply_plain_entry(
             name, variable, digits, expand_scale=True
         ),
     )
-    ttk.Button(
-        curve_scale_section,
-        text="Auto-fit HT/Qz²",
-        command=_auto_fit_ht_over_q2_scale,
-    ).grid(row=1, column=0, columnspan=3, sticky="ew", pady=(8, 0))
-
+    _add_slider(
+        parent=stitch_handoff_section,
+        row=2,
+        name="cut_search_min",
+        label="Search min Qz/Qc",
+        variable=cut_search_min_var,
+        from_=1.0,
+        to=10.0,
+        digits=2,
+        command=_on_plain_parameter_changed("cut_search_min", cut_search_min_var, 2),
+        entry_command=lambda name, variable, digits: _apply_plain_entry(
+            name, variable, digits, expand_scale=True
+        ),
+    )
+    _add_slider(
+        parent=stitch_handoff_section,
+        row=3,
+        name="cut_search_max",
+        label="Search max Qz/Qc",
+        variable=cut_search_max_var,
+        from_=1.0,
+        to=10.0,
+        digits=2,
+        command=_on_plain_parameter_changed("cut_search_max", cut_search_max_var, 2),
+        entry_command=lambda name, variable, digits: _apply_plain_entry(
+            name, variable, digits, expand_scale=True
+        ),
+    )
     _add_slider(
         parent=beam_bandwidth_section,
         row=0,
@@ -2620,6 +3292,20 @@ def run_fig2_gui(args) -> None:
         to=501.0,
         digits=0,
         command=_on_plain_parameter_changed("n_divergence_samples", n_divergence_samples_var, 0),
+        entry_command=lambda name, variable, digits: _apply_plain_entry(
+            name, variable, digits, expand_scale=True
+        ),
+    )
+    _add_slider(
+        parent=beam_divergence_section,
+        row=2,
+        name="cpu_workers",
+        label="CPU workers",
+        variable=cpu_workers_var,
+        from_=1.0,
+        to=float(max(1, available_cpu_count())),
+        digits=0,
+        command=_on_plain_parameter_changed("cpu_workers", cpu_workers_var, 0),
         entry_command=lambda name, variable, digits: _apply_plain_entry(
             name, variable, digits, expand_scale=True
         ),

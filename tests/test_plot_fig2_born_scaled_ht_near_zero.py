@@ -42,6 +42,7 @@ def test_table_defaults_match_attached_parameters() -> None:
     assert module.DEFAULTS.n_divergence_samples == 50
     assert module.DEFAULTS.ht_structure_scale == pytest.approx(1.0)
     assert module.DEFAULTS.ht_over_q2_scale == pytest.approx(1.0)
+    assert module.DEFAULTS.L_max == pytest.approx(10.0)
 
 
 def test_curve_contract_includes_bare_ht_structure_term() -> None:
@@ -71,7 +72,7 @@ def test_curve_contract_includes_bare_ht_structure_term() -> None:
         r"$S_{\mathrm{HT},0}(L)$"
     )
     assert module.FIG2_CURVE_DISPLAY_LABELS[module.HT_OVER_Q2_LABEL] == (
-        r"$S_{\mathrm{HT},0}(L) / Q_z^2$"
+        r"Scaled $S_{\mathrm{HT},0}(L) / Q_z^2$, automatic $A$"
     )
     assert module.HT_STRUCTURE_LABEL in module.FIG2_CURVE_STYLE
     assert module.HT_OVER_Q2_LABEL in module.FIG2_CURVE_STYLE
@@ -128,160 +129,64 @@ def _synthetic_stitch_curves(
                 (module.STITCH_UNSCALED_HT_OVER_Q2_LABEL, unscaled),
                 (module.STITCH_SCALED_HT_OVER_Q2_LABEL, scaled),
                 (module.STITCHED_PARRATT_HT_OVER_Q2_LABEL, stitched),
-                (module.STITCH_WEIGHT_LABEL, weight),
+                (module.LEGACY_STITCH_WEIGHT_LABEL, weight),
             )
         ],
         ignore_index=True,
     )
 
 
-def test_fit_ht_over_q2_scale_to_parratt_matches_smooth_synthetic_curve() -> None:
+def test_estimate_ht_q2_scale_uses_log_median_and_bragg_masks() -> None:
     module = load_script_module()
-    l_values = np.linspace(1.0, 10.0, 300)
-    parratt = 1.0 / (1.0 + 0.25 * (l_values - 1.0))
-    ht_base = parratt / 2.5
-    curves = _synthetic_ht_parratt_curves(module, l_values, ht_base, parratt)
+    x = np.linspace(5.1, 9.9, 60)
+    qz = module.DEFAULTS.qc_inv_angstrom * x
+    l_values = np.linspace(1.0, 2.0, 60)
+    ht_over_q2 = np.linspace(0.2, 2.0, 60)
+    pure = 2.5 * ht_over_q2
+    l_values[10] = 3.0
+    l_values[20] = 6.0
+    pure[[10, 20]] = 1.0e9
 
-    fitted_scale = module.fit_ht_over_q2_scale_to_parratt(curves)
-
-    assert fitted_scale == pytest.approx(2.5, rel=1e-6)
-
-
-def test_fit_ht_over_q2_scale_removes_pseudo_voigt_peaks_before_scaling() -> None:
-    module = load_script_module()
-    l_values = np.linspace(1.0, 10.0, 1801)
-    parratt = 1.0 / (1.0 + 0.18 * (l_values - 1.0))
-    expected_scale = 1.7
-    ht_base = parratt / expected_scale
-    peak_sum = sum(
-        module.pseudo_voigt_profile(l_values, center, 1.2, 0.08, 0.35) for center in (3.0, 6.0, 9.0)
-    )
-    curves = _synthetic_ht_parratt_curves(module, l_values, ht_base + peak_sum, parratt)
-
-    fitted_scale = module.fit_ht_over_q2_scale_to_parratt(curves)
-
-    uncorrected_scale = np.sum((ht_base + peak_sum) * parratt) / np.sum((ht_base + peak_sum) ** 2)
-    assert abs(fitted_scale - expected_scale) < abs(uncorrected_scale - expected_scale)
-    assert fitted_scale == pytest.approx(expected_scale, rel=0.08)
-
-
-def test_fit_ht_over_q2_scale_falls_back_when_peak_subtraction_consumes_background(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    module = load_script_module()
-    l_values = np.linspace(1.0, 10.0, 300)
-    parratt = 1.0 / (1.0 + 0.2 * (l_values - 1.0))
-    expected_scale = 2.5
-    ht_base = parratt / expected_scale
-    curves = _synthetic_ht_parratt_curves(module, l_values, ht_base, parratt)
-
-    def _consume_background(*args, **kwargs):
-        _l_values, observed, _background = args[:3]
-        return np.asarray(observed, dtype=np.float64) * 1.1
-
-    monkeypatch.setattr(module, "fit_pseudo_voigt_peak_sum", _consume_background)
-
-    fitted_scale = module.fit_ht_over_q2_scale_to_parratt(curves)
-
-    assert fitted_scale == pytest.approx(expected_scale, rel=1e-6)
-
-
-def test_fit_ht_over_q2_scale_accounts_for_current_curve_scale() -> None:
-    module = load_script_module()
-    l_values = np.linspace(1.0, 10.0, 300)
-    parratt = 1.0 / (1.0 + 0.2 * (l_values - 1.0))
-    expected_scale = 2.0
-    current_scale = 4.0
-    stored_ht = (parratt / expected_scale) * current_scale
-    curves = _synthetic_ht_parratt_curves(module, l_values, stored_ht, parratt)
-
-    fitted_scale = module.fit_ht_over_q2_scale_to_parratt(curves, current_scale=current_scale)
-
-    assert fitted_scale == pytest.approx(expected_scale, rel=1e-6)
-
-
-def test_fit_ht_over_q2_scale_requires_full_l_range() -> None:
-    module = load_script_module()
-    l_values = np.linspace(0.0, 0.5, 50)
-    curves = _synthetic_ht_parratt_curves(
-        module,
-        l_values,
-        np.ones_like(l_values),
-        np.ones_like(l_values),
+    estimate = module.estimate_ht_q2_scale(
+        L=l_values,
+        qz=qz,
+        qc=module.DEFAULTS.qc_inv_angstrom,
+        ht_over_q2=ht_over_q2,
+        pure_parratt=pure,
+        bragg_centers_L=(3.0, 6.0),
+        bragg_half_width_L=0.05,
     )
 
-    with pytest.raises(ValueError, match="1.0 <= L <= 10.0"):
-        module.fit_ht_over_q2_scale_to_parratt(curves)
+    assert isinstance(estimate, module.ScaleEstimate)
+    assert estimate.scale == pytest.approx(2.5)
+    assert estimate.n_fit_points == 58
+    assert estimate.fit_x_min_q_over_qc == pytest.approx(5.0)
+    assert estimate.fit_x_max_q_over_qc == pytest.approx(10.0)
+    assert estimate.mad_log10_residual == pytest.approx(0.0)
 
 
-def test_curves_span_l_range_detects_autofit_window() -> None:
+def test_estimate_ht_q2_scale_requires_enough_valid_points() -> None:
     module = load_script_module()
-    narrow_l = np.linspace(0.0, 0.5, 50)
-    wide_l = np.linspace(1.0, 10.0, 300)
+    x = np.linspace(5.1, 9.9, 9)
+    qz = module.DEFAULTS.qc_inv_angstrom * x
+    l_values = np.linspace(1.0, 2.0, 9)
 
-    narrow_curves = _synthetic_ht_parratt_curves(
-        module,
-        narrow_l,
-        np.ones_like(narrow_l),
-        np.ones_like(narrow_l),
-    )
-    wide_curves = _synthetic_ht_parratt_curves(
-        module,
-        wide_l,
-        np.ones_like(wide_l),
-        np.ones_like(wide_l),
-    )
-
-    assert not module.curves_span_l_range(narrow_curves, 1.0, 10.0)
-    assert module.curves_span_l_range(wide_curves, 1.0, 10.0)
+    with pytest.raises(ValueError, match="Need at least ten finite positive points"):
+        module.estimate_ht_q2_scale(
+            L=l_values,
+            qz=qz,
+            qc=module.DEFAULTS.qc_inv_angstrom,
+            ht_over_q2=np.ones_like(l_values),
+            pure_parratt=np.ones_like(l_values),
+        )
 
 
-def test_curves_span_l_range_allows_float_grid_endpoint_roundoff() -> None:
+def test_stitch_scale_path_does_not_use_peak_fitting() -> None:
     module = load_script_module()
-    l_values = np.arange(1.0, 10.0 + 0.5 * 0.0005, 0.0005)
-    curves = _synthetic_ht_parratt_curves(
-        module,
-        l_values,
-        np.ones_like(l_values),
-        np.ones_like(l_values),
-    )
+    source = inspect.getsource(module.build_stitch_curve_frames)
 
-    assert l_values[-1] < 10.0
-    assert module.curves_span_l_range(curves, 1.0, 10.0)
-
-
-def test_autofit_args_for_l_range_clones_args_without_changing_visible_range() -> None:
-    module = load_script_module()
-    args = module.parse_args(["--from-csv", "curves.csv", "--L-min", "0", "--L-max", "0.5"])
-
-    fit_args = module.autofit_args_for_l_range(args, 1.0, 10.0)
-
-    assert fit_args.L_min == pytest.approx(1.0)
-    assert fit_args.L_max == pytest.approx(10.0)
-    assert fit_args.from_csv is None
-    assert args.L_min == pytest.approx(0.0)
-    assert args.L_max == pytest.approx(0.5)
-    assert args.from_csv == "curves.csv"
-
-
-def test_fit_pseudo_voigt_peak_sum_uses_parratt_background() -> None:
-    module = load_script_module()
-    l_values = np.linspace(2.5, 3.5, 501)
-    background = 0.4 + 0.02 * (l_values - 3.0)
-    peak = module.pseudo_voigt_profile(l_values, 3.0, 0.9, 0.07, 0.4)
-    observed = background + peak
-
-    fitted_peak = module.fit_pseudo_voigt_peak_sum(
-        l_values,
-        observed,
-        background,
-        peak_centers=(3.0,),
-    )
-
-    before = np.mean((observed - background) ** 2)
-    after = np.mean((observed - fitted_peak - background) ** 2)
-    assert np.all(fitted_peak >= 0.0)
-    assert after < before * 0.05
+    assert "pseudo_voigt" not in source
+    assert "curve_fit" not in source
 
 
 def test_ht_over_q2_positive_qz_division_masks_zero_qz() -> None:
@@ -343,24 +248,115 @@ def test_stitch_helper_math_contract() -> None:
     )
     assert mask.tolist() == [False, False, True, True, False]
 
-    model = np.array([1.0, 2.0, 4.0, 8.0])
-    target = 3.5 * model
-    assert module.fit_log_median_scale(model, target, np.ones_like(model, dtype=bool)) == (
-        pytest.approx(3.5)
+    out, meta = module.hard_piecewise_stitch(
+        np.ones(5),
+        10.0 * np.ones(5),
+        np.array([1.0, 2.0, 3.5, 5.0, 6.0]),
+        x_cut=5.0,
+    )
+    assert out.tolist() == [1.0, 1.0, 1.0, 1.0, 10.0]
+    assert meta["used_morph"] is False
+
+
+def test_piecewise_stitch_is_exact_on_both_sides() -> None:
+    module = load_script_module()
+    x = np.array([1.0, 4.9, 5.0, 5.1, 9.0])
+    low = np.ones_like(x)
+    high = 10.0 * np.ones_like(x)
+
+    out, meta = module.hard_piecewise_stitch(
+        low,
+        high,
+        x,
+        x_cut=5.0,
     )
 
-    x = np.array([1.0, 2.0, 3.5, 5.0, 6.0])
-    weight = module.smooth_stitch_weight(x, x1=2.0, x2=5.0)
-    assert weight[0] == pytest.approx(1.0)
-    assert weight[1] == pytest.approx(1.0)
-    assert 0.0 < weight[2] < 1.0
-    assert weight[3] == pytest.approx(0.0)
-    assert weight[4] == pytest.approx(0.0)
+    assert np.allclose(out[x <= 5.0], low[x <= 5.0])
+    assert np.allclose(out[x > 5.0], high[x > 5.0])
+    assert not meta["used_morph"]
+    assert meta["x1"] == pytest.approx(5.0)
+    assert meta["x2"] == pytest.approx(5.0)
 
-    low = np.array([1.0, 10.0])
-    high = np.array([100.0, 1000.0])
-    assert np.allclose(module.log_blend(low, high, np.ones(2)), low)
-    assert np.allclose(module.log_blend(low, high, np.zeros(2)), high)
+
+def test_choose_stitch_cut_best_match_avoids_bragg_mask() -> None:
+    module = load_script_module()
+    L = np.array([2.8, 3.0, 4.0, 5.0])
+    x = np.array([4.0, 5.0, 6.0, 7.0])
+    low = np.ones_like(x)
+    high = np.array([1.01, 1.0, 1.5, 2.0])
+
+    x_cut = module.choose_stitch_cut(
+        L,
+        x,
+        low,
+        high,
+        mode="best-match",
+        search_min=3.0,
+        search_max=7.0,
+        exclude_centers=(3.0,),
+        exclude_half_width=0.35,
+    )
+
+    assert x_cut != 5.0
+    assert x_cut == pytest.approx(6.0)
+
+
+def test_contiguous_true_segments_finds_runs() -> None:
+    module = load_script_module()
+
+    segments = module.contiguous_true_segments(
+        np.array([False, True, True, False, True, False, True, True])
+    )
+
+    assert segments == [(1, 3), (4, 5), (6, 8)]
+
+
+def test_best_continuous_cut_rejects_single_point_match() -> None:
+    module = load_script_module()
+    x = np.linspace(3.0, 6.0, 31)
+    L = np.linspace(1.0, 2.0, x.size)
+    low = np.ones_like(x)
+    high = np.full_like(x, 10.0)
+    high[15] = 1.0
+
+    with pytest.raises(ValueError, match="No continuous stitch region"):
+        module.choose_continuous_stitch_region(
+            L,
+            x,
+            low,
+            high,
+            max_abs_log10_jump=0.08,
+            min_width_q_over_qc=0.25,
+            min_points=5,
+        )
+
+
+def test_best_continuous_cut_finds_interval() -> None:
+    module = load_script_module()
+    x = np.linspace(3.0, 6.0, 61)
+    L = np.linspace(1.0, 2.0, x.size)
+    low = np.ones_like(x)
+    high = np.full_like(x, 5.0)
+    interval = (x >= 4.0) & (x <= 4.7)
+    high[interval] = 10.0 ** (0.02 * np.sin(np.linspace(0.0, np.pi, interval.sum())))
+
+    cut = module.choose_continuous_stitch_region(
+        L,
+        x,
+        low,
+        high,
+        max_abs_log10_jump=0.08,
+        min_width_q_over_qc=0.25,
+        min_points=5,
+    )
+
+    assert cut["continuous_region_found"] is True
+    assert 4.0 <= cut["x_cut"] <= 4.7
+    assert 4.0 <= cut["continuous_region_x1_q_over_qc"] <= cut["x_cut"]
+    assert cut["x_cut"] <= cut["continuous_region_x2_q_over_qc"] <= 4.7
+    assert cut["continuous_region_width_q_over_qc"] >= 0.25
+    assert cut["continuous_region_points"] >= 5
+    assert abs(cut["log10_jump_at_cut"]) <= 0.08
 
 
 def test_stitch_cli_defaults_and_choices() -> None:
@@ -369,11 +365,17 @@ def test_stitch_cli_defaults_and_choices() -> None:
     default_args = module.parse_args([])
     assert default_args.plot_mode == "fig2"
     assert not default_args.stitch
+    assert default_args.stitch_cut_mode == "best-continuous"
+    assert default_args.stitch_cut_q_over_qc == pytest.approx(5.0)
     assert default_args.stitch_x1_q_over_qc == pytest.approx(2.0)
     assert default_args.stitch_x2_q_over_qc == pytest.approx(5.0)
     assert default_args.stitch_branch == "normalized-ht-q2"
     assert default_args.scale_mode == "log-median"
     assert default_args.fit_exclude_centers_L == "3,6,9"
+    assert default_args.max_abs_log10_jump_allowed == pytest.approx(0.08)
+    assert default_args.min_continuous_width_q_over_qc == pytest.approx(0.25)
+    assert default_args.min_continuous_points == 10
+    assert default_args.workers == "1"
 
     stitch_args = module.parse_args(
         [
@@ -384,12 +386,47 @@ def test_stitch_cli_defaults_and_choices() -> None:
             "manual",
             "--manual-stitch-scale",
             "2.5",
+            "--stitch-cut-mode",
+            "best-match",
+            "--max-abs-log10-jump-allowed",
+            "0.12",
+            "--min-continuous-width-q-over-qc",
+            "0.4",
+            "--min-continuous-points",
+            "7",
+            "--workers",
+            "4",
         ]
     )
     assert stitch_args.stitch
     assert stitch_args.plot_mode == "stitch"
     assert stitch_args.scale_mode == "manual"
     assert stitch_args.manual_stitch_scale == pytest.approx(2.5)
+    assert stitch_args.stitch_cut_mode == "best-match"
+    assert stitch_args.max_abs_log10_jump_allowed == pytest.approx(0.12)
+    assert stitch_args.min_continuous_width_q_over_qc == pytest.approx(0.4)
+    assert stitch_args.min_continuous_points == 7
+    assert stitch_args.workers == "4"
+
+    auto_args = module.parse_args(["--workers", "auto"])
+    assert auto_args.workers == "auto"
+
+    legacy_cut_args = module.parse_args(["--stitch-x2-q-over-qc", "6.25"])
+    assert legacy_cut_args.stitch_cut_q_over_qc == pytest.approx(6.25)
+
+
+def test_worker_count_parser_and_resolver() -> None:
+    module = load_script_module()
+
+    assert module.resolve_worker_count("1", n_jobs=20) == 1
+    assert module.resolve_worker_count("4", n_jobs=20) == 4
+    assert module.resolve_worker_count("999", n_jobs=3) == 3
+    assert module.resolve_worker_count("auto", n_jobs=2) <= 2
+    assert module.resolve_worker_count("auto", n_jobs=0) == 1
+
+    for invalid in ("0", "-2", "abc", ""):
+        with pytest.raises(SystemExit):
+            module.parse_args(["--workers", invalid])
 
 
 def test_default_stitch_computes_hidden_fit_grid(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -404,6 +441,8 @@ def test_default_stitch_computes_hidden_fit_grid(monkeypatch: pytest.MonkeyPatch
         [
             "--plot-mode",
             "stitch",
+            "--L-max",
+            "0.5",
             "--L-step",
             "0.1",
             "--bandwidth-fwhm",
@@ -417,11 +456,47 @@ def test_default_stitch_computes_hidden_fit_grid(monkeypatch: pytest.MonkeyPatch
         ]
     )
 
-    curves = module.compute_curves(args)
-    stitch_l = curves[curves["label"] == module.STITCHED_PARRATT_HT_OVER_Q2_LABEL]["L"]
+    l_min, l_max = module.compute_l_grid_limits(args)
 
-    assert module.STITCHED_PARRATT_HT_OVER_Q2_LABEL in set(curves["label"])
-    assert stitch_l.max() > args.L_max
+    assert l_min == pytest.approx(args.L_min)
+    assert l_max > args.L_max
+    with pytest.raises(ValueError, match="No continuous stitch region"):
+        module.compute_curves(args)
+
+
+def test_best_match_stitch_cut_computes_hidden_search_grid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_script_module()
+
+    def _fake_ht_module(**kwargs):
+        l_max = float(kwargs["L_max"])
+        return {(0, 0): {"L": np.linspace(0.0, l_max, 200), "I": np.ones(200)}}
+
+    monkeypatch.setattr(module, "import_ht_module", lambda _repo_root: _fake_ht_module)
+    args = module.parse_args(
+        [
+            "--stitch",
+            "--stitch-cut-mode",
+            "best-match",
+            "--scale-mode",
+            "manual",
+            "--L-min",
+            "0.0",
+            "--L-max",
+            "0.5",
+            "--cut-search-min-q-over-qc",
+            "3.0",
+            "--cut-search-max-q-over-qc",
+            "6.0",
+        ]
+    )
+
+    curves = module.compute_curves(args)
+    stitched = curves[curves["label"] == module.STITCHED_PARRATT_HT_OVER_Q2_LABEL]
+
+    assert len(stitched) > 0
+    assert stitched["L"].max() > args.L_max
 
 
 def test_compute_curves_ht_over_q2_avoids_clipped_zero_divergence_artifact(
@@ -503,12 +578,72 @@ def test_compute_curves_skips_raw_miceli_branch_unless_requested(
                 "--stitch",
                 "--stitch-branch",
                 "raw-miceli-ht-q2",
+                "--stitch-cut-mode",
+                "fixed",
                 "--scale-mode",
                 "manual",
             ]
         )
     )
     assert len(calls) == 2
+
+
+def test_compute_curves_parallel_workers_match_serial_and_use_executor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_script_module()
+
+    def _fake_ht_module(**kwargs):
+        l_max = float(kwargs["L_max"])
+        l_values = np.linspace(0.0, l_max, 300)
+        return {(0, 0): {"L": l_values, "I": 1.0 + 0.2 * l_values}}
+
+    executor_calls: list[int] = []
+    real_executor = module.ThreadPoolExecutor
+
+    class RecordingExecutor(real_executor):
+        def __init__(self, *args, **kwargs):
+            executor_calls.append(int(kwargs["max_workers"]))
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(module, "import_ht_module", lambda _repo_root: _fake_ht_module)
+    monkeypatch.setattr(module, "ThreadPoolExecutor", RecordingExecutor)
+    common_args = [
+        "--L-min",
+        "0.0",
+        "--L-max",
+        "1.0",
+        "--L-step",
+        "0.2",
+        "--bandwidth-fwhm",
+        "0.02",
+        "--n-wavelength-samples",
+        "3",
+        "--divergence-fwhm-deg",
+        "0.2",
+        "--n-divergence-samples",
+        "3",
+        "--fit-x-min-q-over-qc",
+        "0.1",
+        "--fit-x-max-q-over-qc",
+        "20",
+    ]
+
+    serial = module.compute_curves(module.parse_args([*common_args, "--workers", "1"]))
+    assert executor_calls == []
+    parallel = module.compute_curves(module.parse_args([*common_args, "--workers", "2"]))
+
+    assert executor_calls == [2]
+    serial = serial.sort_values(["label", "L"]).reset_index(drop=True)
+    parallel = parallel.sort_values(["label", "L"]).reset_index(drop=True)
+    assert serial[["label", "L", "Qz_Ainv"]].equals(parallel[["label", "L", "Qz_Ainv"]])
+    assert np.allclose(
+        serial["intensity"].to_numpy(),
+        parallel["intensity"].to_numpy(),
+        rtol=1.0e-10,
+        atol=1.0e-12,
+        equal_nan=True,
+    )
 
 
 def test_stitch_curves_are_emitted_and_match_endpoints(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -523,10 +658,8 @@ def test_stitch_curves_are_emitted_and_match_endpoints(monkeypatch: pytest.Monke
             "--stitch",
             "--plot-mode",
             "stitch",
-            "--scale-mode",
-            "manual",
-            "--manual-stitch-scale",
-            "2.0",
+            "--stitch-cut-mode",
+            "fixed",
             "--L-min",
             "0.2",
             "--L-max",
@@ -549,21 +682,127 @@ def test_stitch_curves_are_emitted_and_match_endpoints(monkeypatch: pytest.Monke
     assert module.STITCH_UNSCALED_HT_OVER_Q2_LABEL in labels
     assert module.STITCH_SCALED_HT_OVER_Q2_LABEL in labels
     assert module.STITCHED_PARRATT_HT_OVER_Q2_LABEL in labels
-    assert module.STITCH_WEIGHT_LABEL in labels
+    assert module.LEGACY_STITCH_WEIGHT_LABEL not in labels
 
+    parratt = curves[curves["label"] == module.PURE_PARRATT_LABEL].sort_values("L")
+    unscaled = curves[curves["label"] == module.STITCH_UNSCALED_HT_OVER_Q2_LABEL].sort_values("L")
+    scaled = curves[curves["label"] == module.STITCH_SCALED_HT_OVER_Q2_LABEL].sort_values("L")
+    stitched = curves[curves["label"] == module.STITCHED_PARRATT_HT_OVER_Q2_LABEL].sort_values("L")
+    x_cut = float(stitched["stitch_cut_q_over_qc"].iloc[0])
+    qz_over_qc = stitched["Qz_Ainv"].to_numpy() / args.qc_inv_angstrom
+    scale_a = float(stitched["scale_A"].iloc[0])
+    expected = np.where(
+        qz_over_qc <= x_cut,
+        parratt["intensity"].to_numpy(),
+        scaled["intensity"].to_numpy(),
+    )
+
+    assert scale_a > 0.0
+    assert np.allclose(
+        scaled["intensity"].to_numpy(),
+        scale_a * unscaled["intensity"].to_numpy(),
+        equal_nan=True,
+    )
+    assert np.allclose(stitched["intensity"].to_numpy(), expected, equal_nan=True)
+    assert stitched["used_morph"].iloc[0] == np.False_
+
+
+def test_build_stitch_curve_frames_records_continuous_region_metadata() -> None:
+    module = load_script_module()
+    x = np.linspace(3.0, 6.0, 61)
+    qz = module.DEFAULTS.qc_inv_angstrom * x
+    L = module.L_from_qz(qz, module.DEFAULTS.c_angstrom)
+    pure = np.ones_like(x)
+    ht = np.full_like(x, 5.0)
+    interval = (x >= 4.0) & (x <= 4.7)
+    ht[interval] = 1.0
+    args = module.parse_args(
+        [
+            "--stitch",
+            "--scale-mode",
+            "manual",
+            "--manual-stitch-scale",
+            "1.0",
+            "--stitch-cut-mode",
+            "best-continuous",
+            "--min-continuous-points",
+            "5",
+        ]
+    )
+
+    frames = module.build_stitch_curve_frames(L, qz, pure, ht, None, args)
+    stitched = next(
+        frame
+        for frame in frames
+        if frame["label"].iloc[0] == module.STITCHED_PARRATT_HT_OVER_Q2_LABEL
+    )
+
+    assert stitched["continuous_region_found"].iloc[0] == np.True_
+    assert stitched["continuous_region_x1_q_over_qc"].iloc[0] == pytest.approx(4.0)
+    assert stitched["continuous_region_x2_q_over_qc"].iloc[0] == pytest.approx(4.7)
+    assert stitched["continuous_region_width_q_over_qc"].iloc[0] >= 0.25
+    assert stitched["continuous_region_points"].iloc[0] >= 5
+    assert stitched["max_abs_log10_jump_allowed"].iloc[0] == pytest.approx(0.08)
+    assert abs(stitched["log10_jump_at_cut"].iloc[0]) <= 0.08
+
+
+def test_stitched_curve_stays_hard_piecewise_when_handoff_jumps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = load_script_module()
+
+    def _fake_ht_module(**_kwargs):
+        return {(0, 0): {"L": np.linspace(0.0, 4.0, 41), "I": np.ones(41)}}
+
+    monkeypatch.setattr(module, "import_ht_module", lambda _repo_root: _fake_ht_module)
+    args = module.parse_args(
+        [
+            "--stitch",
+            "--plot-mode",
+            "stitch",
+            "--stitch-cut-mode",
+            "fixed",
+            "--scale-mode",
+            "manual",
+            "--manual-stitch-scale",
+            "2.0",
+            "--L-min",
+            "0.2",
+            "--L-max",
+            "3.0",
+            "--L-step",
+            "0.25",
+            "--bandwidth-fwhm",
+            "0",
+            "--n-wavelength-samples",
+            "1",
+            "--divergence-fwhm-deg",
+            "0",
+            "--n-divergence-samples",
+            "1",
+        ]
+    )
+
+    curves = module.compute_curves(args)
     parratt = curves[curves["label"] == module.PURE_PARRATT_LABEL].sort_values("L")
     scaled = curves[curves["label"] == module.STITCH_SCALED_HT_OVER_Q2_LABEL].sort_values("L")
     stitched = curves[curves["label"] == module.STITCHED_PARRATT_HT_OVER_Q2_LABEL].sort_values("L")
-    weight = curves[curves["label"] == module.STITCH_WEIGHT_LABEL].sort_values("L")
 
-    weights = weight["intensity"].to_numpy()
-    low_index = int(np.flatnonzero(np.isclose(weights, 1.0))[0])
-    high_index = int(np.flatnonzero(np.isclose(weights, 0.0))[0])
-    assert stitched["intensity"].iloc[low_index] == pytest.approx(
-        parratt["intensity"].iloc[low_index]
+    x = stitched["Qz_Ainv"].to_numpy() / args.qc_inv_angstrom
+    x_cut = float(stitched["stitch_cut_q_over_qc"].iloc[0])
+    low_side = x <= x_cut
+    high_side = x > x_cut
+
+    assert stitched["used_morph"].iloc[0] == np.False_
+    assert np.allclose(
+        stitched["intensity"].to_numpy()[low_side],
+        parratt["intensity"].to_numpy()[low_side],
+        equal_nan=True,
     )
-    assert stitched["intensity"].iloc[high_index] == pytest.approx(
-        scaled["intensity"].iloc[high_index]
+    assert np.allclose(
+        stitched["intensity"].to_numpy()[high_side],
+        scaled["intensity"].to_numpy()[high_side],
+        equal_nan=True,
     )
 
 
@@ -580,7 +819,7 @@ def test_curve_labels_for_plot_modes() -> None:
         module.parse_args(["--plot-mode", "stitch-diagnostics"])
     )
     assert module.STITCH_UNSCALED_HT_OVER_Q2_LABEL in diagnostic_labels
-    assert module.STITCH_WEIGHT_LABEL in diagnostic_labels
+    assert module.LEGACY_STITCH_WEIGHT_LABEL not in diagnostic_labels
 
 
 def test_write_stitch_diagnostics_reports_residual_warning(tmp_path, capsys) -> None:
@@ -606,16 +845,41 @@ def test_write_stitch_diagnostics_reports_residual_warning(tmp_path, capsys) -> 
         [
             "material",
             "stitch_branch",
+            "stitch_cut_mode",
+            "stitch_cut_q_over_qc",
+            "stitch_cut_L",
+            "morph_x1_q_over_qc",
+            "morph_x2_q_over_qc",
+            "used_morph",
+            "scale_method",
             "scale_mode",
-            "stitch_scale",
+            "scale_A",
+            "fit_x_min_q_over_qc",
+            "fit_x_max_q_over_qc",
+            "fit_exclude_centers_L",
+            "fit_exclude_half_width_L",
             "n_fit_points",
             "median_log10_residual",
             "mad_log10_residual",
+            "log10_jump_at_cut",
+            "continuous_region_found",
+            "continuous_region_x1_q_over_qc",
+            "continuous_region_x2_q_over_qc",
+            "continuous_region_width_q_over_qc",
+            "continuous_region_points",
+            "continuous_region_score",
+            "max_abs_log10_jump_allowed",
+            "visible_L_min",
+            "visible_L_max",
+            "scale_grid_L_min",
+            "scale_grid_L_max",
         ]
     ).issubset(diagnostics.columns)
     assert diagnostics["n_fit_points"].iloc[0] == 4
     assert diagnostics["mad_log10_residual"].iloc[0] > 0.3
-    assert "visual composite" in capsys.readouterr().out
+    assert diagnostics["stitch_cut_q_over_qc"].iloc[0] == pytest.approx(5.0)
+    assert diagnostics["scale_method"].iloc[0] == "log-median"
+    assert "visual handoff" in capsys.readouterr().out
 
 
 def test_write_stitch_diagnostic_plot_creates_file(tmp_path) -> None:
@@ -712,8 +976,7 @@ def test_gui_parameter_state_updates_args_with_thickness_in_angstrom() -> None:
     state.n_wavelength_samples = 123.0
     state.divergence_fwhm_deg = 0.75
     state.n_divergence_samples = 99.0
-    state.ht_structure_scale = 4.0
-    state.ht_over_q2_scale = 3.5
+    state.cpu_workers = 6.0
     state.sync_density_from_qc("film")
     updated = state.updated_args(args)
 
@@ -724,8 +987,12 @@ def test_gui_parameter_state_updates_args_with_thickness_in_angstrom() -> None:
     assert updated.n_wavelength_samples == 123
     assert updated.divergence_fwhm_deg == pytest.approx(0.75)
     assert updated.n_divergence_samples == 99
-    assert updated.ht_structure_scale == pytest.approx(4.0)
-    assert updated.ht_over_q2_scale == pytest.approx(3.5)
+    assert updated.workers == "6"
+
+    auto_state = module.Fig2GuiParameterState.from_args(
+        module.parse_args(["--workers", "auto", "--n-wavelength-samples", "2"])
+    )
+    assert 1.0 <= auto_state.cpu_workers <= 2.0
 
 
 def test_gui_parameter_state_can_sync_qc_from_density() -> None:
@@ -905,31 +1172,37 @@ def test_compute_curves_includes_bare_structure_without_changing_pure_parratt_fo
 
     assert "structure = np.zeros_like" in source
     assert "ht_over_q2 = np.zeros_like" in source
-    assert "structure += weight * S" in source
+    assert "structure_lam += weight * S" in source
+    assert "structure[:] += contribution.structure" in source
     assert "divergence_safe_ht_over_q2_average" in source
     assert "ht_over_q2 += weight * S / qz_safe**2" not in source
-    assert "ht_over_q2 = ht_over_q2_values * float(args.ht_over_q2_scale)" in source
+    assert "scale_estimate = estimate_ht_q2_scale_for_args(" in source
+    assert "ht_over_q2 = scale_estimate.scale * ht_over_q2_values" in source
     assert "normalized_positive_curve(ht_over_q2)" not in source
     assert '"label": HT_STRUCTURE_LABEL' in source
     assert '"label": HT_OVER_Q2_LABEL' in source
-    assert "pure_parratt += weight * Rp\n" in source
+    assert "pure_parratt_lam += weight * Rp\n" in source
+    assert "pure_parratt[:] += contribution.pure_parratt" in source
     assert "pure_parratt += weight * Rp * S" not in source
 
 
 def test_load_curves_from_csv_recognizes_bare_ht_structure_term(tmp_path) -> None:
     module = load_script_module()
     csv_path = tmp_path / "curves.csv"
+    qz = np.concatenate(([0.0], module.DEFAULTS.qc_inv_angstrom * np.linspace(5.1, 9.9, 12)))
+    structure = np.concatenate(([1.0], np.linspace(0.8, 0.3, 12)))
+    pure = np.concatenate(([1.0], 2.0 * structure[1:] / qz[1:] ** 2))
     pd.DataFrame(
         {
-            "L": [0.0, 0.1],
-            "Qz_Ainv": [0.0, 0.02],
-            "S_HT0": [1.0, 0.8],
-            "Parratt_reflectivity": [1.0, 0.9],
+            "L": module.L_from_qz(qz, module.DEFAULTS.c_angstrom),
+            "Qz_Ainv": qz,
+            "S_HT0": structure,
+            "Parratt_reflectivity": pure,
         }
     ).to_csv(csv_path, index=False)
 
     curves = module.load_curves_from_csv(
-        csv_path, module.parse_args(["--ht-structure-scale", "3", "--ht-over-q2-scale", "2"])
+        csv_path, module.parse_args(["--ht-structure-scale", "3", "--L-max", "3"])
     )
 
     labels = set(curves["label"])
@@ -941,7 +1214,7 @@ def test_load_curves_from_csv_recognizes_bare_ht_structure_term(tmp_path) -> Non
     assert ht_structure.max() == pytest.approx(3.0)
     ht_over_q2 = curves[curves["label"] == module.HT_OVER_Q2_LABEL].sort_values("L")
     assert np.isnan(ht_over_q2["intensity"].iloc[0])
-    assert ht_over_q2["intensity"].iloc[1] == pytest.approx(0.8 / 0.02**2 * 2.0)
+    assert ht_over_q2["intensity"].iloc[1] == pytest.approx(pure[1])
 
 
 def test_load_curves_from_csv_can_emit_stitch_curves(tmp_path) -> None:
@@ -964,6 +1237,8 @@ def test_load_curves_from_csv_can_emit_stitch_curves(tmp_path) -> None:
                 "--from-csv",
                 str(csv_path),
                 "--stitch",
+                "--stitch-cut-mode",
+                "fixed",
                 "--scale-mode",
                 "manual",
                 "--manual-stitch-scale",
@@ -974,6 +1249,17 @@ def test_load_curves_from_csv_can_emit_stitch_curves(tmp_path) -> None:
 
     assert module.STITCH_SCALED_HT_OVER_Q2_LABEL in set(curves["label"])
     assert module.STITCHED_PARRATT_HT_OVER_Q2_LABEL in set(curves["label"])
+    parratt = curves[curves["label"] == module.PURE_PARRATT_LABEL].sort_values("L")
+    scaled = curves[curves["label"] == module.STITCH_SCALED_HT_OVER_Q2_LABEL].sort_values("L")
+    stitched = curves[curves["label"] == module.STITCHED_PARRATT_HT_OVER_Q2_LABEL].sort_values("L")
+    x_cut = float(stitched["stitch_cut_q_over_qc"].iloc[0])
+    qz_over_qc = stitched["Qz_Ainv"].to_numpy() / module.DEFAULTS.qc_inv_angstrom
+    expected = np.where(
+        qz_over_qc <= x_cut,
+        parratt["intensity"].to_numpy(),
+        scaled["intensity"].to_numpy(),
+    )
+    assert np.allclose(stitched["intensity"].to_numpy(), expected, equal_nan=True)
 
 
 def test_apply_l_limits_updates_axis_without_recompute() -> None:
@@ -1162,6 +1448,15 @@ def test_gui_launcher_uses_tkagg_ttk_and_background_compute() -> None:
         "pending_recompute_id",
         "for index, label in enumerate(FIG2_CURVE_ORDER)",
         "HT structure scale",
+        "Auto-fit HT/Qz²",
+        "def _auto_fit_ht_over_q2_scale",
+        "def _finish_auto_fit_ht_over_q2_scale",
+        "def _start_auto_fit_ht_over_q2_scale",
+        "autofit_args_for_l_range",
+        "fit_ht_over_q2_scale_to_parratt",
+        "HT / Qz² scale",
+        "Morph width Qz/Qc",
+        "Max hard jump log10",
         "ttk.Notebook",
         'text="View"',
         'text="Curves"',
@@ -1180,14 +1475,17 @@ def test_gui_launcher_uses_tkagg_ttk_and_background_compute() -> None:
         "Axes and limits",
         "Displayed curves",
         "Scale factors",
+        "Stitch handoff",
         "Spectral bandwidth",
         "Angular divergence",
         "Film and substrate",
         "Film geometry",
         "ttk.Scale",
         "ttk.Entry",
+        "ttk.Combobox",
         '"<Return>"',
         '"<FocusOut>"',
+        '"<<ComboboxSelected>>"',
         "threading.Thread",
         ".after(",
         "is_current",
@@ -1205,15 +1503,16 @@ def test_gui_launcher_uses_tkagg_ttk_and_background_compute() -> None:
         "Divergence FWHM (deg)",
         "n_divergence_samples",
         "Divergence samples",
-        "ht_over_q2_scale",
-        "HT / Qz² scale",
-        "Auto-fit HT/Qz²",
-        "def _auto_fit_ht_over_q2_scale",
-        "def _finish_auto_fit_ht_over_q2_scale",
-        "def _start_auto_fit_ht_over_q2_scale",
-        "curves_span_l_range",
-        "autofit_args_for_l_range",
-        "fit_ht_over_q2_scale_to_parratt",
+        "cpu_workers",
+        "CPU workers",
+        "HT/Qz² automatic scale",
+        "fit window: 5 < Qz/Qc < 10",
+        "stitch_cut_mode_var",
+        "best-continuous",
+        "Cut Qz/Qc",
+        "Search min Qz/Qc",
+        "Search max Qz/Qc",
+        "def _on_option_parameter_changed",
         "Film ρ (e/Å³)",
         "Substrate ρ (e/Å³)",
         "σt (Å)",
@@ -1256,7 +1555,7 @@ def test_stitched_gui_visibility_recomputes_when_curve_is_missing() -> None:
     source = inspect.getsource(module.run_fig2_gui)
 
     handler = source.split("def _on_curve_visibility_changed", 1)[1].split(
-        "def _auto_fit_ht_over_q2_scale", 1
+        "def _on_option_parameter_changed", 1
     )[0]
 
     assert "_stitch_curve_visible()" in handler
