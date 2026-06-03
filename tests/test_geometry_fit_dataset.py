@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from ra_sim.gui import geometry_fit_dataset
@@ -254,6 +255,118 @@ def _dynamic_trial_deps(
         ),
         zero_qr_coverage_branch_slot="00l_collapsed",
     )
+
+
+class _FakeCakedBundle:
+    def __init__(
+        self,
+        *,
+        radial_deg=(1.0, 2.0),
+        gui_azimuth_deg=(-1.0, 1.0),
+        raw_azimuth_deg=(-2.0, 2.0),
+        lut=None,
+    ):
+        self.radial_deg = np.asarray(radial_deg, dtype=np.float64)
+        self.gui_azimuth_deg = np.asarray(gui_azimuth_deg, dtype=np.float64)
+        self.raw_azimuth_deg = np.asarray(raw_azimuth_deg, dtype=np.float64)
+        self.lut = lut if lut is not None else object()
+
+
+def _dynamic_reanchor_deps(
+    *,
+    float64_vector=None,
+    resolve_dynamic_reanchor_caked_bundle=None,
+    fit_detector_coords_to_native_detector_coords=None,
+    native_detector_coords_to_caked_display_coords=None,
+    integrate_detector_to_cake_lut=None,
+    prepare_gui_phi_display=None,
+    caked_axis_to_image_index=None,
+    geometry_manual_refine_preview_point=None,
+):
+    return geometry_fit_dataset.GeometryDynamicReanchorDeps(
+        float64_vector=(
+            float64_vector
+            or (lambda axis: np.asarray(axis, dtype=np.float64).reshape(-1))
+        ),
+        projection_signature=lambda payload: (
+            "sig",
+            tuple(sorted((str(key), value) for key, value in dict(payload).items())),
+        )
+        if isinstance(payload, Mapping)
+        else ("sig", payload),
+        exact_caked_bundle_param_payload=lambda params: {
+            "theta_initial": dict(params or {}).get("theta_initial")
+        },
+        transform_driven_param_payload=lambda params: {
+            "theta_initial": dict(params or {}).get("theta_initial")
+        },
+        resolve_dynamic_reanchor_caked_bundle=(
+            resolve_dynamic_reanchor_caked_bundle or (lambda **_kwargs: None)
+        ),
+        fit_detector_coords_to_native_detector_coords=(
+            fit_detector_coords_to_native_detector_coords
+            or (lambda col, row, **_kwargs: (float(col), float(row)))
+        ),
+        native_detector_coords_to_caked_display_coords=(
+            native_detector_coords_to_caked_display_coords
+            or (lambda col, row, **_kwargs: (float(col) + 10.0, float(row) - 10.0))
+        ),
+        cake_bundle_signature=lambda bundle, *, local_params=None: {
+            "bundle": id(bundle),
+            "theta_initial": dict(local_params or {}).get("theta_initial"),
+        },
+        integrate_detector_to_cake_lut=(
+            integrate_detector_to_cake_lut
+            or (lambda detector, radial, raw_azimuth, lut: (detector, radial, raw_azimuth, lut))
+        ),
+        prepare_gui_phi_display=(
+            prepare_gui_phi_display
+            or (
+                lambda result: (
+                    np.asarray(result[0], dtype=np.float64),
+                    np.asarray(result[1], dtype=np.float64),
+                    np.asarray(result[2], dtype=np.float64),
+                )
+            )
+        ),
+        caked_axis_to_image_index=(
+            caked_axis_to_image_index
+            or (lambda value, axis: float(np.searchsorted(np.asarray(axis), value)))
+        ),
+        geometry_manual_refine_preview_point=(
+            geometry_manual_refine_preview_point
+            or (lambda _entry, raw_col, raw_row, **_kwargs: (float(raw_col), float(raw_row)))
+        ),
+        match_simulated_peaks_to_peak_context=lambda *_args, **_kwargs: None,
+        finite_float=finite_float,
+        bundle_type=_FakeCakedBundle,
+    )
+
+
+def _dynamic_reanchor_state(**overrides):
+    values = {
+        "params_i": {"theta_initial": 5.0},
+        "theta_base": 1.0,
+        "native_shape": (4, 5),
+        "backend_shape": (4, 5),
+        "radial_axis": np.asarray([1.0, 2.0], dtype=np.float64),
+        "azimuth_axis": np.asarray([-1.0, 1.0], dtype=np.float64),
+        "raw_azimuth_axis": np.asarray([-2.0, 2.0], dtype=np.float64),
+        "transform_bundle": _FakeCakedBundle(),
+        "exact_bundle_cache": {},
+        "native_background_shape": (4, 5),
+        "orientation_choice": "none",
+        "native_mapper": None,
+        "fallback_native_mapper": None,
+        "match_config": {"window": 3},
+        "detector_background_context": {"space": "detector"},
+        "caked_background_context": {"space": "caked"},
+        "detector_image": np.ones((2, 2), dtype=np.float64),
+        "caked_background": np.ones((2, 2), dtype=np.float64),
+        "caked_view_ready": True,
+    }
+    values.update(overrides)
+    return geometry_fit_dataset.GeometryDynamicReanchorState(**values)
 
 
 def _coerce_nonnegative_index(value):
@@ -1094,6 +1207,459 @@ def test_supplement_dynamic_trial_rows_from_candidate_pool_sets_fit_qr_branch_ke
     }
     assert diagnostics["candidate_row_count"] == 1
     assert diagnostics["missing_after_count"] == 0
+
+
+def test_dynamic_reanchor_axis_cache_signature_rejects_invalid_axis() -> None:
+    deps = _dynamic_reanchor_deps(float64_vector=lambda _axis: None)
+
+    assert (
+        geometry_fit_dataset._dynamic_reanchor_axis_cache_signature(
+            ["not", "numeric"],
+            deps=deps,
+        )
+        is None
+    )
+
+
+def test_dynamic_reanchor_axis_cache_signature_includes_size_edges_dtype_and_digest() -> None:
+    deps = _dynamic_reanchor_deps()
+
+    signature = geometry_fit_dataset._dynamic_reanchor_axis_cache_signature(
+        [1.0, 2.0, 3.0],
+        deps=deps,
+    )
+    changed_signature = geometry_fit_dataset._dynamic_reanchor_axis_cache_signature(
+        [1.0, 2.0, 4.0],
+        deps=deps,
+    )
+
+    assert signature is not None
+    assert signature[:4] == (3, 1.0, 3.0, "float64")
+    assert isinstance(signature[4], str)
+    assert len(signature[4]) == 40
+    assert changed_signature != signature
+
+
+def test_dynamic_reanchor_bundle_cache_key_includes_shape_axes_and_param_signature() -> None:
+    deps = _dynamic_reanchor_deps()
+    state = _dynamic_reanchor_state(
+        native_shape=(8, 9),
+        radial_axis=np.asarray([10.0, 20.0], dtype=np.float64),
+        azimuth_axis=np.asarray([-5.0, 5.0], dtype=np.float64),
+        raw_azimuth_axis=np.asarray([-7.0, 7.0], dtype=np.float64),
+    )
+
+    key = geometry_fit_dataset._dynamic_reanchor_bundle_cache_key(
+        {"theta_initial": 12.0},
+        state=state,
+        deps=deps,
+    )
+
+    assert key[0] == "exact_caked_bundle"
+    assert key[1] == (8, 9)
+    assert key[2][:4] == (2, 10.0, 20.0, "float64")
+    assert key[3][:4] == (2, -5.0, 5.0, "float64")
+    assert key[4][:4] == (2, -7.0, 7.0, "float64")
+    assert key[5] == ("sig", (("theta_initial", 12.0),))
+
+
+def test_resolve_dynamic_reanchor_cached_caked_bundle_reuses_cached_bundle() -> None:
+    deps = _dynamic_reanchor_deps(
+        resolve_dynamic_reanchor_caked_bundle=lambda **_kwargs: pytest.fail(
+            "cached bundle should not call resolver"
+        )
+    )
+    state = _dynamic_reanchor_state()
+    expected_bundle = _FakeCakedBundle()
+    cache_key = geometry_fit_dataset._dynamic_reanchor_bundle_cache_key(
+        {"theta_initial": 5.0},
+        state=state,
+        deps=deps,
+    )
+    state.exact_bundle_cache[cache_key] = expected_bundle
+
+    bundle = geometry_fit_dataset._resolve_dynamic_reanchor_cached_caked_bundle(
+        {"theta_initial": 5.0},
+        state=state,
+        deps=deps,
+        prefer_rebuild_bundle=True,
+    )
+
+    assert bundle is expected_bundle
+
+
+def test_resolve_dynamic_reanchor_cached_caked_bundle_rebuilds_without_prior_transform() -> None:
+    calls = []
+    expected_bundle = _FakeCakedBundle()
+
+    def _resolver(**kwargs):
+        calls.append(dict(kwargs))
+        return expected_bundle
+
+    deps = _dynamic_reanchor_deps(resolve_dynamic_reanchor_caked_bundle=_resolver)
+    state = _dynamic_reanchor_state(transform_bundle=_FakeCakedBundle())
+
+    bundle = geometry_fit_dataset._resolve_dynamic_reanchor_cached_caked_bundle(
+        {"theta_initial": 8.0},
+        state=state,
+        deps=deps,
+        prefer_rebuild_bundle=True,
+    )
+
+    assert bundle is expected_bundle
+    assert len(calls) == 1
+    assert calls[0]["detector_shape"] == (4, 5)
+    assert calls[0]["transform_bundle"] is None
+    assert calls[0]["params"] == {"theta_initial": 8.0}
+    assert len(state.exact_bundle_cache) == 1
+
+
+def test_project_detector_points_with_active_caked_bundle_rejects_shape_mismatch() -> None:
+    projection = geometry_fit_dataset._project_detector_points_with_active_caked_bundle(
+        [1.0, 2.0],
+        [1.0],
+        local_params={"theta_initial": 5.0},
+        anchor_kind="simulated",
+        input_frame="native_detector",
+        prefer_rebuild_bundle=False,
+        state=_dynamic_reanchor_state(),
+        deps=_dynamic_reanchor_deps(),
+    )
+
+    assert projection["valid"] is False
+    assert projection["invalid_reason"] == "shape_mismatch"
+    assert projection["fit_space_source"] == "invalid_dataset_fit_space_projector"
+    assert projection["input_frame"] == "native_detector"
+    assert np.asarray(projection["two_theta_deg"]).shape == (2,)
+
+
+def test_project_detector_points_with_active_caked_bundle_rejects_nonfinite_detector_coords() -> None:
+    projection = geometry_fit_dataset._project_detector_points_with_active_caked_bundle(
+        [math.nan],
+        [1.0],
+        local_params={"theta_initial": 5.0},
+        anchor_kind="simulated",
+        input_frame="native_detector",
+        prefer_rebuild_bundle=False,
+        state=_dynamic_reanchor_state(),
+        deps=_dynamic_reanchor_deps(),
+    )
+
+    assert projection["valid"] is False
+    assert projection["invalid_reason"] == "nonfinite_detector_coords"
+    assert projection["native_frame_conversion_count"] == 0
+
+
+def test_project_detector_points_with_active_caked_bundle_preserves_fit_detector_failure_reason() -> None:
+    projection = geometry_fit_dataset._project_detector_points_with_active_caked_bundle(
+        [2.0],
+        [3.0],
+        local_params={"theta_initial": 5.0},
+        anchor_kind="simulated",
+        input_frame="fit_detector",
+        prefer_rebuild_bundle=False,
+        state=_dynamic_reanchor_state(),
+        deps=_dynamic_reanchor_deps(
+            fit_detector_coords_to_native_detector_coords=lambda *_args, **_kwargs: None
+        ),
+    )
+
+    assert projection["valid"] is False
+    assert projection["invalid_reason"] == "fit_detector_to_native_failed"
+    assert projection["native_frame_conversion_source"] == "fit_detector_to_native_detector"
+    assert projection["native_frame_conversion_count"] == 1
+
+
+def test_project_detector_points_with_active_caked_bundle_reports_missing_exact_bundle() -> None:
+    projection = geometry_fit_dataset._project_detector_points_with_active_caked_bundle(
+        [2.0],
+        [3.0],
+        local_params={"theta_initial": 5.0},
+        anchor_kind="simulated",
+        input_frame="native_detector",
+        prefer_rebuild_bundle=False,
+        state=_dynamic_reanchor_state(),
+        deps=_dynamic_reanchor_deps(resolve_dynamic_reanchor_caked_bundle=lambda **_kwargs: None),
+    )
+
+    assert projection["valid"] is False
+    assert projection["invalid_reason"] == "missing_exact_caked_bundle"
+    assert projection["native_frame_conversion_source"] == "identity_native_detector"
+    assert projection["native_frame_conversion_count"] == 0
+
+
+def test_project_detector_points_with_active_caked_bundle_projects_native_detector_points() -> None:
+    bundle = _FakeCakedBundle()
+    projection = geometry_fit_dataset._project_detector_points_with_active_caked_bundle(
+        [2.0, 4.0],
+        [3.0, 5.0],
+        local_params={"theta_initial": 7.0},
+        anchor_kind="simulated",
+        input_frame="native_detector",
+        prefer_rebuild_bundle=False,
+        state=_dynamic_reanchor_state(params_i={"theta_initial": 5.0}),
+        deps=_dynamic_reanchor_deps(
+            resolve_dynamic_reanchor_caked_bundle=lambda **_kwargs: bundle,
+            native_detector_coords_to_caked_display_coords=(
+                lambda col, row, **_kwargs: (float(col) + 10.0, float(row) - 10.0)
+            ),
+        ),
+    )
+
+    assert projection["valid"] is True
+    assert projection["invalid_reason"] is None
+    np.testing.assert_allclose(projection["two_theta_deg"], [14.0, 16.0])
+    np.testing.assert_allclose(projection["phi_deg"], [-7.0, -5.0])
+    np.testing.assert_allclose(projection["native_cols"], [2.0, 4.0])
+    np.testing.assert_allclose(projection["native_rows"], [3.0, 5.0])
+    assert projection["fit_space_source"] == "dataset_fit_space_projector"
+    assert projection["input_frame"] == "native_detector"
+    assert projection["fit_space_projector_kind"] == "exact_caked_bundle"
+    assert projection["fit_space_local_params_signature"] == (
+        "sig",
+        (("theta_initial", 7.0),),
+    )
+    assert projection["native_frame_conversion_source"] == "identity_native_detector"
+    assert projection["native_frame_conversion_count"] == 0
+    assert projection["caked_projection_source"] == "fit_space_projector_native_detector"
+    assert projection["theta_initial_adjustment_applied_deg"] == pytest.approx(2.0)
+
+
+def test_sim_caked_image_builder_rejects_invalid_detector_image() -> None:
+    result = geometry_fit_dataset._sim_caked_image_builder(
+        object(),
+        local_params={"theta_initial": 5.0},
+        axes_only=False,
+        state=_dynamic_reanchor_state(),
+        deps=_dynamic_reanchor_deps(),
+    )
+
+    assert result == {
+        "available": False,
+        "unavailable_reason": "detector_image_invalid",
+        "detector_simulation_signature": "unavailable",
+    }
+
+
+def test_sim_caked_image_builder_reports_missing_bundle() -> None:
+    result = geometry_fit_dataset._sim_caked_image_builder(
+        np.ones((2, 2), dtype=np.float64),
+        local_params={"theta_initial": 6.0},
+        axes_only=False,
+        state=_dynamic_reanchor_state(),
+        deps=_dynamic_reanchor_deps(resolve_dynamic_reanchor_caked_bundle=lambda **_kwargs: None),
+    )
+
+    assert result is not None
+    assert result["available"] is False
+    assert result["unavailable_reason"] == "missing_exact_caked_bundle"
+    assert result["detector_simulation_signature"] != "unavailable"
+    assert result["fit_space_local_params_signature"] == (
+        "sig",
+        (("theta_initial", 6.0),),
+    )
+
+
+def test_sim_caked_image_builder_axes_only_returns_axes_and_signatures() -> None:
+    bundle = _FakeCakedBundle(
+        radial_deg=(11.0, 12.0),
+        gui_azimuth_deg=(-3.0, 3.0),
+        raw_azimuth_deg=(-4.0, 4.0),
+    )
+
+    result = geometry_fit_dataset._sim_caked_image_builder(
+        np.ones((2, 2), dtype=np.float64),
+        local_params={"theta_initial": 7.0},
+        axes_only=True,
+        state=_dynamic_reanchor_state(),
+        deps=_dynamic_reanchor_deps(resolve_dynamic_reanchor_caked_bundle=lambda **_kwargs: bundle),
+    )
+
+    assert result is not None
+    assert result["available"] is True
+    assert result["axes_only"] is True
+    assert result["image"] is None
+    np.testing.assert_allclose(result["radial_axis"], [11.0, 12.0])
+    np.testing.assert_allclose(result["azimuth_axis"], [-3.0, 3.0])
+    np.testing.assert_allclose(result["raw_azimuth_axis"], [-4.0, 4.0])
+    assert result["detector_simulation_signature"] == "axes_only"
+    assert result["caked_simulation_signature"] == "axes_only"
+    assert result["source_rows_rebuilt_or_reused"] == "axes_reused_for_trial_params"
+    assert result["reuse_valid_for_same_params_signature"] is True
+
+
+def test_sim_caked_image_builder_reports_integration_exception() -> None:
+    bundle = _FakeCakedBundle()
+
+    def _raise_integration(*_args):
+        raise RuntimeError("boom")
+
+    result = geometry_fit_dataset._sim_caked_image_builder(
+        np.ones((2, 2), dtype=np.float64),
+        local_params={"theta_initial": 8.0},
+        axes_only=False,
+        state=_dynamic_reanchor_state(),
+        deps=_dynamic_reanchor_deps(
+            resolve_dynamic_reanchor_caked_bundle=lambda **_kwargs: bundle,
+            integrate_detector_to_cake_lut=_raise_integration,
+        ),
+    )
+
+    assert result is not None
+    assert result["available"] is False
+    assert result["unavailable_reason"] == "sim_caked_integration_exception:RuntimeError"
+    assert result["detector_simulation_signature"] != "unavailable"
+    assert result["cake_bundle_signature"]["bundle"] == id(bundle)
+
+
+def test_sim_caked_image_builder_returns_caked_image_payload() -> None:
+    bundle = _FakeCakedBundle(
+        radial_deg=(1.0, 2.0),
+        gui_azimuth_deg=(-1.0, 1.0),
+        raw_azimuth_deg=(-2.0, 2.0),
+    )
+
+    def _integrate(detector, radial, raw_azimuth, _lut):
+        return np.asarray(detector, dtype=np.float64) + 2.0, radial, raw_azimuth
+
+    def _prepare(result):
+        return result[0], np.asarray([3.0, 4.0]), np.asarray([-5.0, 5.0])
+
+    result = geometry_fit_dataset._sim_caked_image_builder(
+        np.ones((2, 2), dtype=np.float64),
+        local_params={"theta_initial": 9.0},
+        axes_only=False,
+        state=_dynamic_reanchor_state(),
+        deps=_dynamic_reanchor_deps(
+            resolve_dynamic_reanchor_caked_bundle=lambda **_kwargs: bundle,
+            integrate_detector_to_cake_lut=_integrate,
+            prepare_gui_phi_display=_prepare,
+        ),
+    )
+
+    assert result is not None
+    assert result["available"] is True
+    np.testing.assert_allclose(result["image"], np.full((2, 2), 3.0))
+    np.testing.assert_allclose(result["radial_axis"], [3.0, 4.0])
+    np.testing.assert_allclose(result["azimuth_axis"], [-5.0, 5.0])
+    np.testing.assert_allclose(result["raw_azimuth_axis"], [-2.0, 2.0])
+    assert result["detector_simulation_signature"] != "unavailable"
+    assert result["caked_simulation_signature"] != "unavailable"
+    assert result["fit_space_local_params_signature"] == (
+        "sig",
+        (("theta_initial", 9.0),),
+    )
+    assert result["source_rows_rebuilt_or_reused"] == "rebuilt_for_trial_params"
+    assert result["reuse_valid_for_same_params_signature"] is True
+
+
+def test_dynamic_reanchor_callback_returns_none_for_invalid_measured_entry() -> None:
+    result = geometry_fit_dataset._dynamic_reanchor_callback(
+        None,
+        (1.0, 2.0),
+        local_params={"theta_initial": 5.0},
+        state=_dynamic_reanchor_state(),
+        deps=_dynamic_reanchor_deps(),
+    )
+
+    assert result is None
+
+
+def test_dynamic_reanchor_callback_returns_none_for_invalid_simulated_point() -> None:
+    result = geometry_fit_dataset._dynamic_reanchor_callback(
+        {"background_detector_x": 1.0, "background_detector_y": 2.0},
+        (math.nan, 2.0),
+        local_params={"theta_initial": 5.0},
+        state=_dynamic_reanchor_state(),
+        deps=_dynamic_reanchor_deps(),
+    )
+
+    assert result is None
+
+
+def test_dynamic_reanchor_callback_uses_detector_reanchor_without_caked_bundle() -> None:
+    captured = []
+
+    def _refine(entry, raw_col, raw_row, **kwargs):
+        captured.append((dict(entry), float(raw_col), float(raw_row), dict(kwargs)))
+        return float(raw_col) + 0.25, float(raw_row) - 0.5
+
+    result = geometry_fit_dataset._dynamic_reanchor_callback(
+        {
+            "pair_id": "detector",
+            "background_detector_x": 12.0,
+            "background_detector_y": 34.0,
+        },
+        (3.0, 4.0),
+        local_params={"theta_initial": 5.0},
+        state=_dynamic_reanchor_state(caked_view_ready=False),
+        deps=_dynamic_reanchor_deps(geometry_manual_refine_preview_point=_refine),
+    )
+
+    assert result is not None
+    assert result["x"] == pytest.approx(12.25)
+    assert result["y"] == pytest.approx(33.5)
+    assert result["detector_x"] == pytest.approx(12.25)
+    assert result["detector_y"] == pytest.approx(33.5)
+    assert math.isnan(result["background_two_theta_deg"])
+    assert math.isnan(result["background_phi_deg"])
+    seed_entry, raw_col, raw_row, kwargs = captured[0]
+    assert seed_entry["pair_id"] == "detector"
+    assert seed_entry["sim_col"] == 3.0
+    assert seed_entry["sim_row"] == 4.0
+    assert raw_col == 12.0
+    assert raw_row == 34.0
+    assert kwargs["use_caked_space"] is False
+    assert kwargs["cache_data"]["background_context"] == {"space": "detector"}
+
+
+def test_dynamic_reanchor_callback_uses_caked_reanchor_when_bundle_ready() -> None:
+    bundle = _FakeCakedBundle(radial_deg=(10.0, 20.0), gui_azimuth_deg=(-10.0, 10.0))
+    captured = []
+
+    def _refine(entry, raw_col, raw_row, **kwargs):
+        captured.append((dict(entry), float(raw_col), float(raw_row), dict(kwargs)))
+        return float(raw_col) + 0.5, float(raw_row) - 0.25
+
+    result = geometry_fit_dataset._dynamic_reanchor_callback(
+        {
+            "pair_id": "caked",
+            "caked_x": 21.0,
+            "caked_y": -4.0,
+            "background_detector_x": 1.0,
+            "background_detector_y": 2.0,
+        },
+        (2.0, 3.0),
+        local_params={"theta_initial": 5.0},
+        state=_dynamic_reanchor_state(
+            radial_axis=np.asarray([10.0, 20.0], dtype=np.float64),
+            azimuth_axis=np.asarray([-10.0, 10.0], dtype=np.float64),
+            caked_view_ready=True,
+        ),
+        deps=_dynamic_reanchor_deps(
+            resolve_dynamic_reanchor_caked_bundle=lambda **_kwargs: bundle,
+            geometry_manual_refine_preview_point=_refine,
+        ),
+    )
+
+    assert result == {
+        "background_two_theta_deg": 21.5,
+        "background_phi_deg": -4.25,
+        "fit_space_anchor_override": True,
+        "measured_reanchor_motion_px": 0.0,
+    }
+    seed_entry, raw_col, raw_row, kwargs = captured[0]
+    assert seed_entry["pair_id"] == "caked"
+    assert seed_entry["sim_col"] == 12.0
+    assert seed_entry["sim_row"] == -7.0
+    assert seed_entry["sim_col_global"] == 12.0
+    assert seed_entry["sim_row_global"] == -7.0
+    assert math.isfinite(seed_entry["sim_col_local"])
+    assert math.isfinite(seed_entry["sim_row_local"])
+    assert raw_col == 21.0
+    assert raw_row == -4.0
+    assert kwargs["use_caked_space"] is True
+    assert kwargs["cache_data"]["background_context"] == {"space": "caked"}
 
 
 def test_augment_source_rows_with_provider_coverage_records_point_missing_when_provider_row_unavailable() -> None:
