@@ -67,6 +67,9 @@ QR_DISABLE_EARLY_HANDOFF_ENV = "RA_SIM_QR_DISABLE_EARLY_HANDOFF"
 QR_PREDICTION_ROLE_OBJECTIVE_TRIAL = "objective_trial"
 QR_PREDICTION_ROLE_FINAL_DYNAMIC = "final_dynamic_prediction"
 QR_PREDICTION_ROLE_DIAGNOSTIC_LOCKED_FALLBACK = "diagnostic_locked_fallback"
+_PROVIDER_LOCAL_BRANCH_DYNAMIC_REANCHOR_PREDICTION_SOURCE = (
+    "dynamic_trial_simulation:locked_manual_qr_provider_local_branch_dynamic_reanchor_projection"
+)
 QR_DYNAMIC_PREDICTION_UNAVAILABLE = "dynamic_prediction_unavailable"
 MANUAL_QR_DYNAMIC_PREDICTION_UNAVAILABLE = "manual_qr_dynamic_prediction_unavailable"
 OBJECTIVE_INSENSITIVE_TO_ACTIVE_PARAMS = "objective_insensitive_to_active_params"
@@ -7576,60 +7579,16 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             and np.isfinite(sim_two_theta_arr[0])
             and np.isfinite(sim_phi_arr[0])
         ):
-            dynamic_reanchor_projection_source = (
-                "provider_local_branch_dynamic_reanchor_projection"
-            )
-            projected_caked = [
-                float(sim_two_theta_arr[0]),
-                float(sim_phi_arr[0]),
-            ]
-            fit_prediction = dict(fit_prediction)
-            fit_prediction.update(
-                {
-                    "available": True,
-                    "unavailable_reason": None,
-                    "dynamic_prediction_unavailable_reason": None,
-                    "prediction_source": dynamic_reanchor_projection_source,
-                    "fit_prediction_source": dynamic_reanchor_projection_source,
-                    "prediction_role": QR_PREDICTION_ROLE_OBJECTIVE_TRIAL,
-                    "fit_prediction_is_dynamic": True,
-                    "fit_prediction_is_dynamic_candidate": True,
-                    "fit_prediction_resolver_function": dynamic_reanchor_projection_source,
-                    "resolution_reason": str(sim_reason),
-                    "sim_nominal_detector_px": [float(sim_col), float(sim_row)],
-                    "sim_nominal_detector_display_px": [float(sim_col), float(sim_row)],
-                    "sim_nominal_detector_native_px": [float(sim_col), float(sim_row)],
-                    "sim_refined_detector_native_px": [float(sim_col), float(sim_row)],
-                    "fit_prediction_detector_native_px": [float(sim_col), float(sim_row)],
-                    "fit_prediction_detector_display_px": [float(sim_col), float(sim_row)],
-                    "final_prediction_detector_native_px": [float(sim_col), float(sim_row)],
-                    "final_prediction_detector_display_px": [float(sim_col), float(sim_row)],
-                    "sim_nominal_projection_input_px": [float(sim_col), float(sim_row)],
-                    "sim_nominal_projection_input_frame": str(sim_input_frame),
-                    "sim_nominal_caked_deg": list(projected_caked),
-                    "sim_refined_caked_deg": list(projected_caked),
-                    "fit_prediction_caked_deg": list(projected_caked),
-                    "predicted_caked_deg": list(projected_caked),
-                    "objective_sim_caked_deg": list(projected_caked),
-                    "optimizer_simulated_source_two_theta_phi": list(projected_caked),
-                    "fit_prediction_caked_authority": dynamic_reanchor_projection_source,
-                    "sim_refined_caked_authority": dynamic_reanchor_projection_source,
-                    "optimizer_source_source": dynamic_reanchor_projection_source,
-                    "objective_source_authority": dynamic_reanchor_projection_source,
-                    "source_authority_match": True,
-                    "projection_meta": dict(simulated_projection_meta),
-                    "params_signature": _fit_prediction_trial_params_signature(local),
-                    "simulation_cache_signature": _fit_prediction_array_signature(sim_buffer),
-                    "detector_simulation_signature": _fit_prediction_array_signature(sim_buffer),
-                    "source_rows_rebuilt_or_reused": None,
-                    "reuse_valid_for_same_params_signature": None,
-                    "stale_prediction_cache_used_for_trial_params": False,
-                    "used_sim_nominal_caked_for_objective": False,
-                    "used_sim_refined_caked": True,
-                    "used_exact_projector": bool(
-                        simulated_projection_meta.get("valid", False)
-                    ),
-                }
+            fit_prediction = _provider_local_branch_dynamic_reanchor_fit_prediction(
+                fit_prediction,
+                sim_col=sim_col,
+                sim_row=sim_row,
+                sim_input_frame=sim_input_frame,
+                projected_caked=(sim_two_theta_arr[0], sim_phi_arr[0]),
+                sim_reason=sim_reason,
+                simulated_projection_meta=simulated_projection_meta,
+                local=local,
+                sim_buffer=sim_buffer,
             )
 
         if pending_reanchor_acceptance and event is not None:
@@ -17636,6 +17595,85 @@ def _fit_prediction_trial_params_signature(trial_params: Mapping[str, object] | 
     names = sorted(set(active_names).union(name for name in geometry_names if name in trial_params))
     payload = {name: trial_params.get(name) for name in names}
     return _fit_prediction_signature(payload)
+
+
+def _provider_local_branch_dynamic_reanchor_fit_prediction(
+    fit_prediction: Mapping[str, object],
+    *,
+    sim_col: object,
+    sim_row: object,
+    sim_input_frame: object,
+    projected_caked: Sequence[object],
+    sim_reason: object,
+    simulated_projection_meta: Mapping[str, object],
+    local: Mapping[str, object],
+    sim_buffer: object,
+) -> Dict[str, object]:
+    source = _PROVIDER_LOCAL_BRANCH_DYNAMIC_REANCHOR_PREDICTION_SOURCE
+    detector_px = [float(sim_col), float(sim_row)]
+    projected_caked_values = list(projected_caked)
+    caked_deg = [float(projected_caked_values[0]), float(projected_caked_values[1])]
+    projection_meta = (
+        dict(simulated_projection_meta)
+        if isinstance(simulated_projection_meta, Mapping)
+        else {}
+    )
+    payload = dict(fit_prediction)
+    payload.update(
+        {
+            "available": True,
+            "unavailable_reason": None,
+            "dynamic_prediction_unavailable_reason": None,
+            "prediction_source": source,
+            "fit_prediction_source": source,
+            "prediction_role": QR_PREDICTION_ROLE_OBJECTIVE_TRIAL,
+            "fit_prediction_is_dynamic": True,
+            "fit_prediction_is_dynamic_candidate": True,
+            "fit_prediction_resolver_function": source,
+            "resolution_reason": str(sim_reason),
+            "sim_nominal_projection_input_frame": str(sim_input_frame),
+            "source_authority_match": True,
+            "projection_meta": projection_meta,
+            "params_signature": _fit_prediction_trial_params_signature(local),
+            "simulation_cache_signature": _fit_prediction_array_signature(sim_buffer),
+            "detector_simulation_signature": _fit_prediction_array_signature(sim_buffer),
+            "source_rows_rebuilt_or_reused": None,
+            "reuse_valid_for_same_params_signature": None,
+            "stale_prediction_cache_used_for_trial_params": False,
+            "used_sim_nominal_caked_for_objective": False,
+            "used_sim_refined_caked": True,
+            "used_exact_projector": bool(projection_meta.get("valid", False)),
+        }
+    )
+    for key in (
+        "sim_nominal_detector_px",
+        "sim_nominal_detector_display_px",
+        "sim_nominal_detector_native_px",
+        "sim_refined_detector_native_px",
+        "fit_prediction_detector_native_px",
+        "fit_prediction_detector_display_px",
+        "final_prediction_detector_native_px",
+        "final_prediction_detector_display_px",
+        "sim_nominal_projection_input_px",
+    ):
+        payload[key] = list(detector_px)
+    for key in (
+        "sim_nominal_caked_deg",
+        "sim_refined_caked_deg",
+        "fit_prediction_caked_deg",
+        "predicted_caked_deg",
+        "objective_sim_caked_deg",
+        "optimizer_simulated_source_two_theta_phi",
+    ):
+        payload[key] = list(caked_deg)
+    for key in (
+        "fit_prediction_caked_authority",
+        "sim_refined_caked_authority",
+        "optimizer_source_source",
+        "objective_source_authority",
+    ):
+        payload[key] = source
+    return payload
 
 
 def _geometry_objective_signature_for_dataset(

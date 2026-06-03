@@ -21184,6 +21184,8 @@ def _verify_geometry_fit_sweep_apply_contract(combo_result: Mapping[str, object]
         combo_result,
         "visual_objective_surface_mismatch_count",
     )
+    if visual_mismatch is None:
+        raise ValueError("sweep_result_visual_objective_mismatch")
     if visual_mismatch != 0 and not _geometry_fit_visual_surface_mismatch_diagnostic_only(
         combo_result
     ):

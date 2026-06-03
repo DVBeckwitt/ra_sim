@@ -13905,6 +13905,13 @@ def test_dynamic_reanchor_recovers_stale_peak_index_by_provider_branch(
     assert diagnostics[0]["resolution_reason"] == (
         "provider_local_branch_recovered_stale_peak_index"
     )
+    source = opt._PROVIDER_LOCAL_BRANCH_DYNAMIC_REANCHOR_PREDICTION_SOURCE
+    assert diagnostics[0]["prediction_source"] == source
+    assert diagnostics[0]["fit_prediction_source"] == source
+    assert diagnostics[0]["prediction_role"] == opt.QR_PREDICTION_ROLE_OBJECTIVE_TRIAL
+    assert diagnostics[0]["fit_prediction_is_dynamic"] is True
+    assert diagnostics[0]["fit_prediction_caked_authority"] == source
+    assert diagnostics[0]["objective_source_authority"] == source
 
 
 def test_dynamic_reanchor_aggregate_trace_reindexes_events_by_dataset() -> None:
@@ -20777,6 +20784,38 @@ def test_parameter_combo_result_rejects_visual_mismatch_with_saved_objective_sou
     assert result["status"] == "rejected"
     assert "visual_objective_surface_mismatch" in result["failure_reasons"]
     assert result["would_update_geometry"] is False
+
+
+@pytest.mark.parametrize(
+    ("dynamic_source", "expected_row_count", "expected_complete"),
+    [
+        (
+            opt._PROVIDER_LOCAL_BRANCH_DYNAMIC_REANCHOR_PREDICTION_SOURCE,
+            2,
+            True,
+        ),
+        (
+            "provider_local_branch_dynamic_reanchor_projection",
+            0,
+            False,
+        ),
+    ],
+)
+def test_provider_local_dynamic_reanchor_source_classifies_locked_qr_coverage(
+    dynamic_source,
+    expected_row_count,
+    expected_complete,
+) -> None:
+    coverage = geometry_fit._geometry_fit_dynamic_objective_trial_locked_qr_coverage(
+        _visual_mismatch_dynamic_combo_contract(
+            expected_locked_qr_rows=2,
+            dynamic_locked_qr_rows=2,
+            dynamic_source=dynamic_source,
+        )
+    )
+
+    assert coverage["dynamic_objective_trial_locked_qr_row_count"] == expected_row_count
+    assert coverage["dynamic_objective_trial_coverage_complete"] is expected_complete
 
 
 def test_sweep_combo_acceptance_requires_rms_and_max_thresholds() -> None:
@@ -33480,6 +33519,45 @@ def test_apply_sweep_result_allows_visual_mismatch_for_dynamic_authority_clean_f
 
     assert result.applied is True
     assert gamma_var.get() == 1.2
+
+
+@pytest.mark.parametrize(
+    "visual_mismatch_count",
+    [
+        None,
+        0.0,
+        "1",
+    ],
+)
+def test_apply_sweep_result_rejects_dynamic_visual_mismatch_with_malformed_count(
+    tmp_path,
+    visual_mismatch_count,
+) -> None:
+    state_path, combo_result_path, _accepted_overlay_path = (
+        _write_apply_sweep_combo_for_atomic_tests(
+            tmp_path,
+            active_vars=["gamma"],
+            result_variables={"gamma": 1.2},
+            result_overrides=_visual_mismatch_dynamic_combo_contract(
+                expected_locked_qr_rows=2,
+                dynamic_locked_qr_rows=2,
+            ),
+        )
+    )
+    combo_result = json.loads(combo_result_path.read_text(encoding="utf-8"))
+    if visual_mismatch_count is None:
+        combo_result.pop("visual_objective_surface_mismatch_count")
+    else:
+        combo_result["visual_objective_surface_mismatch_count"] = visual_mismatch_count
+    combo_result_path.write_text(json.dumps(combo_result), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="sweep_result_visual_objective_mismatch"):
+        geometry_fit.apply_geometry_fit_sweep_result(
+            combo_result_path=combo_result_path,
+            current_state_path=state_path,
+            approved_excluded_pair_ids=["bg0:pair20"],
+            var_map={"gamma": _DummyVar(0.0)},
+        )
 
 
 def test_apply_sweep_result_rejects_visual_mismatch_without_locked_qr_source(
