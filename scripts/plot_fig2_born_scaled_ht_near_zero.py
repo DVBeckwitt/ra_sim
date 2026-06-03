@@ -160,6 +160,15 @@ DEFAULT_GUI_VISIBLE_CURVE_LABELS = (
     HT_OVER_Q2_LABEL,
     PURE_PARRATT_LABEL,
 )
+GUI_CURVE_ORDER = (
+    HT_STRUCTURE_LABEL,
+    HT_OVER_Q2_LABEL,
+    PURE_PARRATT_LABEL,
+    STITCHED_PARRATT_HT_OVER_Q2_LABEL,
+)
+DEFAULT_GUI_CURVE_VISIBILITY = {
+    label: label in DEFAULT_GUI_VISIBLE_CURVE_LABELS for label in GUI_CURVE_ORDER
+}
 
 FIG2_CURVE_DISPLAY_LABELS = {
     HT_STRUCTURE_LABEL: r"$S_{\mathrm{HT},0}(L)$",
@@ -1533,7 +1542,11 @@ def draw_fig2_curves(
     ax, curves: pd.DataFrame, args, *, visible_curve_labels=None, use_log_y_axis: bool = True
 ) -> None:
     visible_labels = None if visible_curve_labels is None else set(visible_curve_labels)
-    ordered_labels = curve_labels_for_plot_mode(args)
+    ordered_labels = list(curve_labels_for_plot_mode(args))
+    if visible_curve_labels is not None:
+        for label in visible_curve_labels:
+            if label in FIG2_CURVE_STYLE and label not in ordered_labels:
+                ordered_labels.append(label)
     for label in ordered_labels:
         if visible_labels is not None and label not in visible_labels:
             continue
@@ -1913,7 +1926,7 @@ def run_fig2_gui(args) -> None:
     n_divergence_samples_var = tk.DoubleVar(value=state.n_divergence_samples)
     ht_over_q2_scale_var = tk.DoubleVar(value=state.ht_over_q2_scale)
     curve_visible_vars = {
-        label: tk.BooleanVar(value=True) for label in DEFAULT_GUI_VISIBLE_CURVE_LABELS
+        label: tk.BooleanVar(value=DEFAULT_GUI_CURVE_VISIBILITY[label]) for label in GUI_CURVE_ORDER
     }
 
     readouts: dict[str, tk.StringVar] = {}
@@ -2167,9 +2180,10 @@ def run_fig2_gui(args) -> None:
         _set_status("Updated visible Y range.")
 
     def _selected_curve_labels() -> tuple[str, ...]:
-        return tuple(
-            label for label in DEFAULT_GUI_VISIBLE_CURVE_LABELS if curve_visible_vars[label].get()
-        )
+        return tuple(label for label in GUI_CURVE_ORDER if curve_visible_vars[label].get())
+
+    def _stitch_curve_visible() -> bool:
+        return curve_visible_vars[STITCHED_PARRATT_HT_OVER_Q2_LABEL].get()
 
     def _draw_curves(curves: pd.DataFrame, draw_args) -> None:
         nonlocal current_axis
@@ -2192,9 +2206,15 @@ def run_fig2_gui(args) -> None:
         _draw_curves(current_curves, current_args)
         _set_status("Updated Y-axis scale.")
 
+    def _stitch_curve_missing(curves: pd.DataFrame) -> bool:
+        return STITCHED_PARRATT_HT_OVER_Q2_LABEL not in set(curves["label"])
+
     def _on_curve_visibility_changed() -> None:
         if current_curves is None:
             _set_status("Curve visibility will apply after curves load.")
+            return
+        if _stitch_curve_visible() and _stitch_curve_missing(current_curves):
+            _schedule_live_recompute()
             return
         _draw_curves(current_curves, current_args)
         _set_status("Updated curve visibility.")
@@ -2318,6 +2338,9 @@ def run_fig2_gui(args) -> None:
             _start_compute(next_args, "Computing latest slider value...", next_generation)
             return
         if should_draw:
+            if _stitch_curve_visible() and _stitch_curve_missing(curves):
+                _schedule_live_recompute()
+                return
             _set_save_enabled(True)
             _set_status("Curves updated.")
 
@@ -2337,6 +2360,7 @@ def run_fig2_gui(args) -> None:
         updated = state.updated_args(current_args)
         updated.L_min, updated.L_max = validated_l_limits(l_min_var.get(), l_max_var.get())
         updated.from_csv = None
+        updated.stitch = _stitch_curve_visible()
         next_compute = compute_gate.request_live_compute(updated)
         if next_compute is None:
             _set_status("Parameter changed. Latest slider value queued...")
@@ -2361,8 +2385,8 @@ def run_fig2_gui(args) -> None:
         current_args.y_min = default_args.y_min
         current_args.y_max = default_args.y_max
         y_log_var.set(True)
-        for variable in curve_visible_vars.values():
-            variable.set(True)
+        for label, variable in curve_visible_vars.items():
+            variable.set(DEFAULT_GUI_CURVE_VISIBILITY[label])
         _refresh_l_readouts()
         _refresh_y_readouts()
         _schedule_live_recompute()
@@ -2513,7 +2537,7 @@ def run_fig2_gui(args) -> None:
     curve_button_frame.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(4, 0))
     for column in range(2):
         curve_button_frame.columnconfigure(column, weight=1)
-    for index, label in enumerate(DEFAULT_GUI_VISIBLE_CURVE_LABELS):
+    for index, label in enumerate(GUI_CURVE_ORDER):
         ttk.Checkbutton(
             curve_button_frame,
             text=label,

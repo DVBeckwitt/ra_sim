@@ -55,6 +55,18 @@ def test_curve_contract_includes_bare_ht_structure_term() -> None:
         module.HT_OVER_Q2_LABEL,
         module.PURE_PARRATT_LABEL,
     )
+    assert module.GUI_CURVE_ORDER == (
+        module.HT_STRUCTURE_LABEL,
+        module.HT_OVER_Q2_LABEL,
+        module.PURE_PARRATT_LABEL,
+        module.STITCHED_PARRATT_HT_OVER_Q2_LABEL,
+    )
+    assert module.DEFAULT_GUI_CURVE_VISIBILITY == {
+        module.HT_STRUCTURE_LABEL: True,
+        module.HT_OVER_Q2_LABEL: True,
+        module.PURE_PARRATT_LABEL: True,
+        module.STITCHED_PARRATT_HT_OVER_Q2_LABEL: False,
+    }
     assert module.FIG2_CURVE_DISPLAY_LABELS[module.HT_STRUCTURE_LABEL] == (
         r"$S_{\mathrm{HT},0}(L)$"
     )
@@ -1067,6 +1079,77 @@ def test_draw_fig2_curves_leaves_ht_over_q2_nan_as_plot_gap() -> None:
     assert plotted[parratt_label][0] > 0.0
 
 
+def test_draw_fig2_curves_can_show_optional_stitched_curve() -> None:
+    module = load_script_module()
+    plotted: list[str] = []
+
+    class DummySecondaryAxis:
+        def set_xlabel(self, _label: str) -> None:
+            return
+
+    class DummyAxis:
+        def plot(self, _x, _y, *, label: str, **_kwargs) -> None:
+            plotted.append(label)
+
+        def axvline(self, *_args, **_kwargs) -> None:
+            return
+
+        def set_xlim(self, *_args) -> None:
+            return
+
+        def set_yscale(self, *_args) -> None:
+            return
+
+        def set_ylim(self, *_args) -> None:
+            return
+
+        def set_xlabel(self, *_args) -> None:
+            return
+
+        def set_ylabel(self, *_args) -> None:
+            return
+
+        def set_title(self, *_args) -> None:
+            return
+
+        def secondary_xaxis(self, *_args, **_kwargs):
+            return DummySecondaryAxis()
+
+        def grid(self, *_args, **_kwargs) -> None:
+            return
+
+        def legend(self, *_args, **_kwargs) -> None:
+            return
+
+    l_values = np.array([0.1, 0.2])
+    curves = pd.concat(
+        [
+            pd.DataFrame(
+                {
+                    "L": l_values,
+                    "Qz_Ainv": module.qz_from_L(l_values, module.DEFAULTS.c_angstrom),
+                    "intensity": np.ones_like(l_values),
+                    "label": label,
+                }
+            )
+            for label in (
+                *module.DEFAULT_GUI_VISIBLE_CURVE_LABELS,
+                module.STITCHED_PARRATT_HT_OVER_Q2_LABEL,
+            )
+        ],
+        ignore_index=True,
+    )
+
+    module.draw_fig2_curves(
+        DummyAxis(),
+        curves,
+        module.parse_args([]),
+        visible_curve_labels=module.GUI_CURVE_ORDER,
+    )
+
+    assert module.FIG2_CURVE_DISPLAY_LABELS[module.STITCHED_PARRATT_HT_OVER_Q2_LABEL] in plotted
+
+
 def test_gui_launcher_uses_tkagg_ttk_and_background_compute() -> None:
     module = load_script_module()
     source = inspect.getsource(module.run_fig2_gui)
@@ -1138,14 +1221,18 @@ def test_gui_launcher_uses_tkagg_ttk_and_background_compute() -> None:
         "expanded_slider_bounds(from_, to, variable.get())",
         "Curve visibility",
         "curve_visible_vars",
-        "DEFAULT_GUI_VISIBLE_CURVE_LABELS",
+        "GUI_CURVE_ORDER",
+        "DEFAULT_GUI_CURVE_VISIBILITY",
         "ttk.Checkbutton",
-        "for index, label in enumerate(DEFAULT_GUI_VISIBLE_CURVE_LABELS)",
+        "for index, label in enumerate(GUI_CURVE_ORDER)",
         "visible_curve_labels=_selected_curve_labels()",
         "y_log_var",
         "Log Y axis",
         "use_log_y_axis=y_log_var.get()",
         "def _on_y_scale_changed",
+        "def _stitch_curve_visible",
+        "STITCHED_PARRATT_HT_OVER_Q2_LABEL",
+        "updated.stitch = _stitch_curve_visible()",
     )
     for snippet in required_snippets:
         assert snippet in source
@@ -1162,6 +1249,33 @@ def test_l_range_gui_callback_recomputes_but_y_range_callback_is_axis_only() -> 
 
     assert "_schedule_live_recompute()" in l_handler
     assert "_schedule_live_recompute()" not in y_handler
+
+
+def test_stitched_gui_visibility_recomputes_when_curve_is_missing() -> None:
+    module = load_script_module()
+    source = inspect.getsource(module.run_fig2_gui)
+
+    handler = source.split("def _on_curve_visibility_changed", 1)[1].split(
+        "def _auto_fit_ht_over_q2_scale", 1
+    )[0]
+
+    assert "_stitch_curve_visible()" in handler
+    assert "_stitch_curve_missing(current_curves)" in handler
+    assert "_schedule_live_recompute()" in handler
+    assert "_draw_curves(current_curves, current_args)" in handler
+
+
+def test_stitched_gui_visibility_recomputes_after_initial_compute_if_missing() -> None:
+    module = load_script_module()
+    source = inspect.getsource(module.run_fig2_gui)
+
+    finish_handler = source.split("def _finish_compute_success", 1)[1].split(
+        "def _finish_compute_error", 1
+    )[0]
+
+    assert "_stitch_curve_visible()" in finish_handler
+    assert "_stitch_curve_missing(curves)" in finish_handler
+    assert "_schedule_live_recompute()" in finish_handler
 
 
 def test_live_compute_gate_marks_old_generation_stale() -> None:
