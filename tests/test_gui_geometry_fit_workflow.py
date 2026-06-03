@@ -27740,6 +27740,19 @@ def test_rebuild_geometry_fit_source_rows_emits_stage_callback_for_accepted_live
     )
 
     assert result.rebuild_source == "live_runtime_cache"
+    assert result.rebuild_attempts == ["live_runtime_cache"]
+    expected_rows = [{**live_rows[0], "background_index": 0}]
+    assert result.stored_rows == expected_rows
+    assert result.projected_rows == expected_rows
+    validation = result.metadata["live_runtime_cache_validation"]
+    assert validation["valid"] is True
+    assert validation["resolved_pairs"][0]["pair_id"] == "bg0:pair0"
+    assert result.metadata["preflight_mode"] == "manual_geometry_targeted"
+    assert result.metadata["required_branch_group_keys"] == [((1, 0, 0), 1, ("q", 1))]
+    assert result.diagnostics["created_from"] == "live_runtime_cache"
+    assert result.diagnostics["raw_peak_count"] == 1
+    assert result.diagnostics["projected_peak_count"] == 1
+    assert result.diagnostics["rebuild_attempts"] == ["live_runtime_cache"]
     assert [stage for stage, _payload in stage_events] == [
         "source_cache_target_collection_start",
         "source_cache_target_collection_ready",
@@ -28726,6 +28739,16 @@ def test_current_hit_table_cache_used_after_observed_miss_sequence_before_fresh_
 
     assert result.rebuild_source == "current_hit_table_cache"
     assert build_calls == ["current"]
+    assert result.source_reflection_indices == [7]
+    assert len(result.intersection_cache or []) == 1
+    validation = result.metadata["current_hit_table_cache_validation"]
+    assert validation["valid"] is True
+    assert validation["resolved_pairs"][0]["pair_id"] == "bg1:pair0"
+    assert result.metadata["preflight_mode"] == "manual_geometry_targeted"
+    assert result.metadata["required_branch_group_keys"] == [((1, 0, 0), 1, ("q", 1))]
+    assert result.diagnostics["created_from"] == "current_hit_table_cache"
+    assert result.diagnostics["source_rows_projected_for_rebinding"] == 1
+    assert result.diagnostics["full_source_rows_projected_for_rebinding"] is False
     stages = [stage for stage, _payload in stage_events]
     for required_stage in [
         "source_cache_preflight_lookup_start",
@@ -30960,10 +30983,15 @@ def test_targeted_fallback_filters_before_expansion_when_simulator_filter_not_su
         stage_callback=lambda stage, payload: stage_events.append((str(stage), dict(payload))),
     )
 
-    assert build_kwargs["required_branch_group_keys"] == [((1, 0, 0), 1, ("q", 1))]
+    expected_required_branch_keys = [((1, 0, 0), 1, ("q", 1))]
+    assert build_kwargs["required_branch_group_keys"] == expected_required_branch_keys
+    assert result.rebuild_source == "fresh_simulation"
     assert [(row["hkl"], row.get("source_branch_index")) for row in result.stored_rows] == [
         ((1, 0, 0), 1),
     ]
+    assert result.metadata["preflight_mode"] == "manual_geometry_targeted"
+    assert result.metadata["required_branch_group_keys"] == expected_required_branch_keys
+    assert result.diagnostics["created_from"] == "fresh_simulation"
     assert result.diagnostics["targeted_simulation_fallback_reason"] == (
         "simulator_filter_not_supported"
     )

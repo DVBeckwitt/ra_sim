@@ -3970,6 +3970,23 @@ def test_runtime_impl_worker_geometry_fit_rebuilds_source_rows_on_demand() -> No
     assert "Geometry fit preflight timed out" in required_helper_source
 
 
+def test_geometry_fit_source_row_rebuild_remains_local_for_h0_contract_guard() -> None:
+    source_path = GUI_SOURCE_ROOT / "geometry_fit.py"
+    extracted_path = GUI_SOURCE_ROOT / "geometry_fit_source_rows.py"
+    source = _source_text(source_path)
+    tree = ast.parse(source)
+
+    assert not extracted_path.exists()
+    assert "import geometry_fit_source_rows" not in source
+    assert "from .geometry_fit_source_rows" not in source
+    assert "from ra_sim.gui import geometry_fit_source_rows" not in source
+    assert any(
+        isinstance(node, ast.FunctionDef)
+        and node.name == "rebuild_geometry_fit_source_rows"
+        for node in tree.body
+    )
+
+
 def test_runtime_impl_keeps_qr_overlay_live_during_background_updates() -> None:
     source = _source_text(RUNTIME_SESSION_SOURCE_PATH)
 
