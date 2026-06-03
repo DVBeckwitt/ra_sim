@@ -7,6 +7,7 @@
 
 - **Simulation performance**
   - Added an off-by-default Parratt low-Q stitch simulation option for finite-stack HT `00L` rods, using the active CIF-derived optical constants and lattice `c` spacing.
+  - Added a standalone Fig. 2 HT/Parratt explorer script with live GUI parameter controls, curve visibility controls, divergence-safe `HT/Qz^2`, and stitched Parratt-to-HT diagnostics. Fixed the stitch mode so its scale-fit overlap is computed on an internal grid when the visible `L` range is too narrow, and skipped the raw Miceli branch unless that stitch branch is selected.
   - Made exact complex-`k` slab optics the supported path for new GUI, CLI, and headless simulation runs; non-exact optics selections are rejected before simulation or fitting work starts.
   - Removed stale fast-optics cleanup residue, legacy geometry/mosaic fitter dead paths, remaining uncalled mosaic-shape ROI scaffolding, generated geometry ladder artifacts, package-local zip output, and obsolete one-shot debug scripts; generated ladder output is now ignored and exact-only validation remains the supported path.
   - Fixed exact external exit projection so non-propagating air exits are rejected when `k_parallel > k0`, and changed zero sample thickness to disable explicit Beer-path attenuation instead of applying hidden evanescent penetration-depth factors.
