@@ -5,7 +5,7 @@ Type: bug
 Owner: -
 Issue: none
 Priority: p1
-Last updated: 2026-05-07
+Last updated: 2026-05-28
 
 ## Summary
 
@@ -45,17 +45,75 @@ pickable without falling back to primary or packaged 6H rows.
 
 ## Bug / error / feature status
 
+- 2026-05-27 detector background-click patch: fixed the regression where a
+  selected single Qr/Qz group could fail to start manual placement when warm
+  detector-picker cache rows still contained additional groups. Fallback
+  selection now scopes candidates to the active grouped cache first, then the
+  listed Qr/Qz group keys if no active grouped scope is available. The same
+  detector-view release is preserved for local background-peak refinement, and
+  branch assignment remains based on the refined background point.
+- 2026-05-27 same-branch replacement patch: fixed the follow-up regression
+  where the second manual background click could be forced onto the remaining
+  Qr/Qz branch. Normal manual placement now assigns the refined click against
+  all candidates in the selected group, so clicking near an already-pending
+  branch replaces that branch and keeps the session open until the operator
+  clicks the other branch.
+- 2026-05-27 stale-release coordinate patch: fixed manual point placement
+  after Qr/Qz selection zoom so detector and caked release events prefer the
+  current cursor pixels when backend `xdata`/`ydata` still reflect an older
+  view. The refiner now receives the actual release position while normal
+  data-coordinate events continue to use the existing fallback path.
+- 2026-05-27 shipping review follow-up: tightened the geometry-fit apply gate
+  so the diagnostic-only visual/objective mismatch bypass requires explicit
+  locked-manual-Qr dynamic rows, and removed the incomplete committed Bi2Se3
+  saved-state artifact in favor of synthesizing that regression state from the
+  existing repo `new4.json` fixture.
+- 2026-05-28 review cleanup: removed the stale test-only
+  `place_current_release` session field from the detector single-group fallback
+  regression. Production already uses `_manual_pick_skip_release_once` and
+  release-event coordinates for this flow, so no behavior, public API, saved
+  state, config, or operator workflow changed.
+- 2026-05-28 workflow/shipping closure: the review cleanup is committed on
+  `codex/manual-qr-background-fallback` as `686b1711`, with this docs-only
+  status follow-up recording the final rollout posture. CI automation was not
+  changed; local `python -m ra_sim.dev check` remains the gate for this patch
+  class.
 - Bug status: fixed for saved GUI states that contain nonempty
   `state.geometry.q_group_rows` and empty `state.geometry.peak_records`,
   including PbI2 `disordered_phase` rows produced by the modified-CIF disorder
   technique.
+- Error status: the specific "No Qr/Qz set found" miss is no longer expected
+  for one active selected Qr/Qz group when extra stale detector-picker cache
+  groups are present.
+- Error status: repeat clicks near the same selected branch are no longer
+  expected to auto-complete the group by assigning the unclicked branch.
+- Error status: clicked background points are no longer expected to refine from
+  the repeated zoom anchor when release pixels are available after the view
+  changes.
+- Error status: ordinary dynamic branch rows are no longer allowed to mask a
+  `visual_objective_surface_mismatch_count` apply failure; only explicit
+  locked-manual-Qr dynamic objective rows can mark that mismatch
+  diagnostic-only.
+- Artifact status: no new Bi2Se3 saved-state JSON is tracked; the regression
+  builds the minimal state at test time to avoid stale or unavailable
+  background-image paths.
 - Error status: the specific no-detector-source-rows warning is no longer
   expected for those imported states after restore when source rows or stored
   generated-disordered hit tables are available.
-- Feature status: no new operator-facing feature, schema migration, or public
-  API. This is compatibility hardening for existing saved GUI states.
+- Feature status: no new operator-facing feature, schema migration, public API,
+  dependency, CI workflow, or deprecation/migration path. This is compatibility
+  hardening for existing manual Qr/Qz background picking and saved GUI states.
 - Launch status: focused runtime/import gates passed locally. Rollback is a
-  normal revert of the source-row restore fix.
+  normal revert of the source-row restore fix or this detector background-click
+  patch.
+- Review cleanup status: complete. The manual-pick coordinate fix and
+  single-group fallback regression remain covered without legacy
+  `place_current_release` fixture state.
+- Migration/deprecation status: no active consumer migration is required. The
+  removed field was test-only dead fixture state, not saved data or a public
+  runtime contract.
+- Rollback status: revert the review-cleanup docs/test commits if needed; no
+  database, artifact schema, or feature-flag rollback is involved.
 
 ## Next actions
 
@@ -66,6 +124,22 @@ pickable without falling back to primary or packaged 6H rows.
 
 ## Validation
 
+- `pytest -q tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_toggle_selection_at_starts_single_active_group_from_background_click tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_toggle_selection_at_fallback_uses_single_listed_group tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_single_group_background_click_uses_refined_peak_for_branch_assignment tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_toggle_selection_at_rejects_background_click_with_multiple_active_groups tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_toggle_selection_at_starts_two_branch_session_for_qr_qz_group tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_toggle_selection_at_tags_clicked_seed_within_group tests/test_gui_canvas_interactions.py::test_canvas_detector_view_single_group_fallback_places_on_release tests/test_gui_canvas_interactions.py::test_canvas_first_manual_pick_click_does_not_immediately_place_background_point tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_place_selection_at_uses_refined_click_nearest_candidate tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_place_selection_at_uses_refined_click_branch_representative tests/test_manual_geometry_selection_helpers.py::test_caked_background_branch_association_uses_refined_peak_before_save`:
+  11 passed.
+- `pytest -q tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_place_selection_at_same_branch_click_replaces_pending_entry tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_single_group_background_click_uses_refined_peak_for_branch_assignment tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_place_selection_at_uses_refined_click_nearest_candidate tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_place_selection_at_uses_refined_click_branch_representative tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_place_selection_at_refines_with_background_click_seed tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_toggle_selection_at_starts_saved_background_peak_move_mode tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_place_selection_at_applies_saved_pair_refinement_callback tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_toggle_selection_at_starts_single_active_group_from_background_click tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_toggle_selection_at_fallback_uses_single_listed_group tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_toggle_selection_at_rejects_background_click_with_multiple_active_groups`:
+  10 passed.
+- `pytest -q tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_auto_add_q_group_peaks_refines_enabled_groups tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_auto_add_q_group_peaks_uses_refined_sim_seed tests/test_manual_geometry_selection_helpers.py::test_auto_add_branch_pair_restraint_does_not_change_manual_click_behavior tests/test_manual_geometry_selection_helpers.py::test_geometry_manual_auto_add_q_group_peaks_discards_incomplete_groups`:
+  4 passed.
+- `pytest -q tests/test_gui_canvas_interactions.py`: 52 passed.
+- `pytest -q tests/test_gui_canvas_interactions.py`: 55 passed.
+- `python -m pytest tests/test_gui_canvas_interactions.py::test_canvas_detector_view_single_group_fallback_places_on_next_release tests/test_gui_canvas_interactions.py::test_canvas_detector_manual_release_uses_event_data_coordinates tests/test_gui_canvas_interactions.py::test_canvas_detector_manual_release_falls_back_to_pixels_without_event_data`:
+  3 passed.
+- `python -m ra_sim.dev check`: passed; 296 fast tests passed, ruff and mypy
+  gates clean.
+- `ruff check ra_sim/gui/canvas_interactions.py tests/test_gui_canvas_interactions.py`:
+  passed.
+- `ruff check ra_sim/gui/manual_geometry.py tests/test_manual_geometry_selection_helpers.py tests/test_gui_canvas_interactions.py`:
+  passed.
 - `python -m pytest tests/test_manual_geometry_selection_helpers.py::test_build_geometry_manual_pick_cache_rebuilds_detector_rows_for_listed_sf_groups tests/test_manual_geometry_selection_helpers.py::test_caked_qr_picker_starts_sf_detector_fallback_group_with_variable_count -ra`:
   passed.
 - `python -m pytest tests/test_gui_runtime_import_safe.py::test_manual_pick_cache_coverage_rebuild_bypasses_partial_snapshot tests/test_gui_runtime_import_safe.py::test_geometry_source_snapshot_signature_tracks_sf_picker_inventory -ra`:

@@ -2339,51 +2339,55 @@ def test_finite_stack_controls_store_vars_bindings_and_helper_updates(
         parent=object(),
         view_state=view_state,
         finite_stack=True,
-        stack_layers=64,
+        film_thickness_nm=50.0,
+        stack_layers=17,
         phi_l_divisor=3.5,
         phase_delta_expression="2*pi*L/3",
         on_toggle_finite_stack=lambda: calls.append("toggle"),
-        on_layer_slider=lambda value: calls.append(("slider", value)),
-        on_commit_layer_entry=lambda _event: calls.append("layers"),
+        on_thickness_slider=lambda value: calls.append(("slider", value)),
+        on_commit_thickness_entry=lambda _event: calls.append("thickness"),
         on_commit_phi_l_divisor_entry=lambda _event: calls.append("phi"),
         on_commit_phase_delta_expression_entry=lambda _event: calls.append("phase"),
     )
 
     assert isinstance(view_state.frame, _FakeFrame)
     assert view_state.finite_stack_var.get() is True
-    assert view_state.stack_layers_var.get() == 64
-    assert view_state.layers_entry_var.get() == "64"
+    assert view_state.stack_layers_var.get() == 17
+    assert view_state.film_thickness_nm_var.get() == 50.0
+    assert view_state.film_thickness_entry_var.get() == "50"
     assert view_state.phi_l_divisor_var.get() == 3.5
     assert view_state.phi_l_divisor_entry_var.get() == "3.5"
     assert view_state.phase_delta_expr_var.get() == "2*pi*L/3"
     assert view_state.phase_delta_entry_var.get() == "2*pi*L/3"
     assert _FakeCheckbutton.created[0].kwargs["text"] == "Finite Stack"
-    assert _FakeScale.created[0].kwargs["variable"] is view_state.stack_layers_var
+    assert any(label.text == "Film thickness (nm):" for label in _FakeLabel.created)
+    assert _FakeScale.created[0].kwargs["variable"] is view_state.film_thickness_nm_var
+    assert _FakeScale.created[0].kwargs["resolution"] == 0.1
 
-    views.set_finite_stack_layer_controls_enabled(view_state, enabled=False)
-    assert view_state.layers_scale.state == tk.DISABLED
-    assert view_state.layers_entry.state == tk.DISABLED
+    views.set_finite_stack_thickness_controls_enabled(view_state, enabled=False)
+    assert view_state.film_thickness_scale.state == tk.DISABLED
+    assert view_state.film_thickness_entry.state == tk.DISABLED
 
-    views.set_finite_stack_layer_controls_enabled(view_state, enabled=True)
-    assert view_state.layers_scale.state == tk.NORMAL
-    assert view_state.layers_entry.state == tk.NORMAL
+    views.set_finite_stack_thickness_controls_enabled(view_state, enabled=True)
+    assert view_state.film_thickness_scale.state == tk.NORMAL
+    assert view_state.film_thickness_entry.state == tk.NORMAL
 
-    views.ensure_finite_stack_layer_scale_max(view_state, 1200)
-    assert view_state.layers_scale.cget("to") == 1200
+    views.ensure_finite_stack_thickness_scale_max(view_state, 1200.0)
+    assert view_state.film_thickness_scale.cget("to") == 1200.0
 
-    views.set_finite_stack_layer_entry_text(view_state, "72")
+    views.set_finite_stack_thickness_entry_text(view_state, "72")
     views.set_finite_stack_phi_l_divisor_entry_text(view_state, "4")
     views.set_finite_stack_phase_delta_entry_text(view_state, "L/2")
-    assert view_state.layers_entry_var.get() == "72"
+    assert view_state.film_thickness_entry_var.get() == "72"
     assert view_state.phi_l_divisor_entry_var.get() == "4"
     assert view_state.phase_delta_entry_var.get() == "L/2"
 
     _FakeCheckbutton.created[0].command()
-    view_state.layers_entry.bindings["<Return>"](None)
-    view_state.layers_entry.bindings["<FocusOut>"](None)
+    view_state.film_thickness_entry.bindings["<Return>"](None)
+    view_state.film_thickness_entry.bindings["<FocusOut>"](None)
     view_state.phi_l_divisor_entry.bindings["<Return>"](None)
     view_state.phase_delta_entry.bindings["<FocusOut>"](None)
-    assert calls == ["toggle", "layers", "layers", "phi", "phase"]
+    assert calls == ["toggle", "thickness", "thickness", "phi", "phase"]
 
 
 def test_stacking_parameter_panels_and_slider_refs_are_stored(monkeypatch) -> None:

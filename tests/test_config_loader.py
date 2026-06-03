@@ -294,6 +294,11 @@ def test_repo_instrument_defaults_weight_p0_fully_by_default() -> None:
     instrument_path = Path(__file__).resolve().parents[1] / "config" / "instrument.yaml"
     instrument = yaml.safe_load(instrument_path.read_text(encoding="utf-8"))
 
+    assert instrument["instrument"]["hendricks_teller"]["default_p"] == [
+        0.0,
+        0.99,
+        0.5,
+    ]
     assert instrument["instrument"]["hendricks_teller"]["default_w"] == [
         100.0,
         0.0,

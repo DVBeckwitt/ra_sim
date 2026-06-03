@@ -409,13 +409,29 @@ def _event_inside_axis_pixels(axis: Any, event: Any) -> bool:
 def _manual_pick_click_coords(
     bindings: CanvasInteractionBindings,
     event: Any,
+    *,
+    prefer_pixel_anchor: bool = False,
 ) -> tuple[float, float] | None:
-    if not _event_has_axis_data(bindings, event):
+    # MouseEvent.xdata/ydata are the authoritative axes coordinates; x/y
+    # pixel fallback is only for events that cannot provide data coordinates.
+    point = _event_axis_data_anchor(bindings.axis, event)
+    if point is None and prefer_pixel_anchor and _event_inside_axis_pixels(bindings.axis, event):
+        limits = _current_live_limits(bindings)
+        if limits is not None:
+            point = _event_axis_fraction_anchor(
+                bindings.axis,
+                event,
+                xlim=limits[0],
+                ylim=limits[1],
+            )
+
+    if point is None:
         return None
+
     col, row = bindings.clamp_to_axis_view(
         bindings.axis,
-        float(event.xdata),
-        float(event.ydata),
+        float(point[0]),
+        float(point[1]),
     )
     if _runtime_caked_view_enabled(bindings):
         # The live caked view exposes angular coordinates; bind them explicitly
@@ -536,7 +552,11 @@ def _finish_manual_drag_move(
     if not _manual_drag_move_active(bindings):
         return False
     _set_manual_drag_move_active(bindings, False)
-    manual_pick_coords = _manual_pick_click_coords(bindings, event)
+    manual_pick_coords = _manual_pick_click_coords(
+        bindings,
+        event,
+        prefer_pixel_anchor=True,
+    )
     if manual_pick_coords is not None and bool(bindings.manual_pick_session_active()):
         bindings.place_geometry_manual_selection_at(
             float(manual_pick_coords[0]),
@@ -1257,7 +1277,11 @@ def handle_runtime_canvas_release(
                 if _manual_pick_skip_release_once(bindings):
                     _set_manual_pick_skip_release_once(bindings, False)
                     return True
-                manual_pick_coords = _manual_pick_click_coords(bindings, event)
+                manual_pick_coords = _manual_pick_click_coords(
+                    bindings,
+                    event,
+                    prefer_pixel_anchor=True,
+                )
                 if manual_pick_coords is not None:
                     bindings.place_geometry_manual_selection_at(
                         float(manual_pick_coords[0]),
@@ -1266,7 +1290,11 @@ def handle_runtime_canvas_release(
                 return True
             if not _manual_pick_zoom_active(bindings):
                 return True
-            manual_pick_coords = _manual_pick_click_coords(bindings, event)
+            manual_pick_coords = _manual_pick_click_coords(
+                bindings,
+                event,
+                prefer_pixel_anchor=True,
+            )
             if manual_pick_coords is not None:
                 bindings.place_geometry_manual_selection_at(
                     float(manual_pick_coords[0]),

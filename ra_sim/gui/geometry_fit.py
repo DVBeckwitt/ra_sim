@@ -20897,6 +20897,142 @@ def _geometry_fit_sweep_int(combo_result: Mapping[str, object], key: str) -> int
     return None
 
 
+def _geometry_fit_prediction_row_key(row: Mapping[str, object]) -> tuple[object, ...]:
+    pair_id = str(row.get("pair_id") or "").strip()
+    if pair_id:
+        return ("pair_id", pair_id)
+    return (
+        "source",
+        repr(row.get("q_group_key")),
+        repr(row.get("hkl")),
+        row.get("source_branch_index"),
+        row.get("source_table_index"),
+        row.get("source_row_index"),
+        row.get("source_peak_index"),
+    )
+
+
+def _geometry_fit_sweep_dynamic_value_is_yes(value: object) -> bool:
+    if value is True:
+        return True
+    return str(value).strip().lower() in {"1", "true", "yes"}
+
+
+def _geometry_fit_dynamic_objective_trial_locked_qr_coverage(
+    payload: Mapping[str, object],
+) -> dict[str, object]:
+    def _rows_from(value: object) -> list[Mapping[str, object]]:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+            return []
+        return [row for row in value if isinstance(row, Mapping)]
+
+    expected = _geometry_fit_sweep_int(payload, "expected_locked_qr_rows")
+
+    candidate_rows: list[Mapping[str, object]] = []
+    for row_key in (
+        "caked_acceptance_metric_trace_rows",
+        "manual_caked_residual_rows",
+        "worst_angular_residual_rows",
+    ):
+        candidate_rows.extend(_rows_from(payload.get(row_key)))
+    summary = payload.get("point_match_summary")
+    if isinstance(summary, Mapping):
+        if expected is None:
+            expected = _geometry_fit_sweep_int(summary, "expected_locked_qr_rows")
+        for row_key in (
+            "caked_acceptance_metric_trace_rows",
+            "manual_caked_residual_rows",
+            "worst_angular_residual_rows",
+        ):
+            candidate_rows.extend(_rows_from(summary.get(row_key)))
+
+    dynamic_row_keys: set[tuple[object, ...]] = set()
+    saved_source_row_keys: set[tuple[object, ...]] = set()
+    for row in candidate_rows:
+        role = str(row.get("prediction_role") or row.get("fit_prediction_role") or "").strip()
+        if role != "objective_trial":
+            continue
+        source = str(row.get("fit_prediction_source") or row.get("prediction_source") or "")
+        row_key = _geometry_fit_prediction_row_key(row)
+        if source.startswith("locked_manual_qr:saved"):
+            saved_source_row_keys.add(row_key)
+            continue
+        dynamic = _geometry_fit_sweep_dynamic_value_is_yes(
+            row.get("fit_prediction_is_dynamic")
+        ) and source.startswith(("dynamic_trial_simulation", "dynamic_current_simulation"))
+        locked = "locked_manual_qr" in source
+        if dynamic and locked:
+            dynamic_row_keys.add(row_key)
+
+    dynamic_row_key_text = sorted(repr(key) for key in dynamic_row_keys)
+    saved_row_key_text = sorted(repr(key) for key in saved_source_row_keys)
+    if not dynamic_row_key_text:
+        raw_dynamic_keys = payload.get("dynamic_objective_trial_locked_qr_row_keys")
+        if isinstance(raw_dynamic_keys, Sequence) and not isinstance(
+            raw_dynamic_keys,
+            (str, bytes),
+        ):
+            dynamic_row_key_text = sorted(str(key) for key in raw_dynamic_keys)
+    if not saved_row_key_text:
+        raw_saved_keys = payload.get("dynamic_objective_trial_saved_source_row_keys")
+        if isinstance(raw_saved_keys, Sequence) and not isinstance(raw_saved_keys, (str, bytes)):
+            saved_row_key_text = sorted(str(key) for key in raw_saved_keys)
+    saved_source_count = len(saved_row_key_text)
+    if saved_source_count <= 0:
+        saved_source_count_raw = _geometry_fit_sweep_int(
+            payload,
+            "dynamic_objective_trial_saved_source_count",
+        )
+        if saved_source_count_raw is not None:
+            saved_source_count = int(saved_source_count_raw)
+    coverage_complete = bool(
+        expected is not None
+        and int(expected) > 0
+        and len(dynamic_row_key_text) == int(expected)
+        and int(saved_source_count) == 0
+    )
+    return {
+        "expected_locked_qr_rows": int(expected) if expected is not None else None,
+        "dynamic_objective_trial_locked_qr_row_count": int(len(dynamic_row_key_text)),
+        "dynamic_objective_trial_locked_qr_row_keys": dynamic_row_key_text,
+        "dynamic_objective_trial_saved_source_count": int(saved_source_count),
+        "dynamic_objective_trial_saved_source_row_keys": saved_row_key_text,
+        "dynamic_objective_trial_coverage_complete": bool(coverage_complete),
+        "dynamic_objective_trial_coverage_evidence_available": bool(
+            candidate_rows or dynamic_row_key_text or saved_source_count
+        ),
+    }
+
+
+def _geometry_fit_visual_surface_mismatch_diagnostic_only(
+    payload: Mapping[str, object],
+) -> bool:
+    status = str(payload.get("status") or "").strip()
+    if status and status != "accepted":
+        return False
+    if "full_fit_success" in payload and bool(payload.get("full_fit_success")) is not True:
+        return False
+    metric_space = str(
+        payload.get("acceptance_metric_space") or payload.get("objective_space") or ""
+    ).strip()
+    if metric_space != "caked_deg":
+        return False
+    if _geometry_fit_sweep_int(payload, "source_authority_mismatch_count") != 0:
+        return False
+    for key in ("failure_class", "failure_classification", "rejection_reason"):
+        if str(payload.get(key) or "").strip():
+            return False
+    dynamic_failure = str(payload.get("dynamic_angular_failure_classification") or "").strip()
+    if dynamic_failure and dynamic_failure not in {
+        "accepted",
+        "already_aligned",
+        "within_acceptance",
+    }:
+        return False
+    coverage = _geometry_fit_dynamic_objective_trial_locked_qr_coverage(payload)
+    return bool(coverage.get("dynamic_objective_trial_coverage_complete", False))
+
+
 def _resolve_geometry_fit_sweep_accepted_overlay_source(
     combo_result: Mapping[str, object],
     *,
@@ -21044,7 +21180,13 @@ def _verify_geometry_fit_sweep_apply_contract(combo_result: Mapping[str, object]
 
     if _geometry_fit_sweep_int(combo_result, "source_authority_mismatch_count") != 0:
         raise ValueError("sweep_result_source_mismatch")
-    if _geometry_fit_sweep_int(combo_result, "visual_objective_surface_mismatch_count") != 0:
+    visual_mismatch = _geometry_fit_sweep_int(
+        combo_result,
+        "visual_objective_surface_mismatch_count",
+    )
+    if visual_mismatch != 0 and not _geometry_fit_visual_surface_mismatch_diagnostic_only(
+        combo_result
+    ):
         raise ValueError("sweep_result_visual_objective_mismatch")
 
     sensitivity = str(combo_result.get("objective_param_sensitivity_status") or "").strip()

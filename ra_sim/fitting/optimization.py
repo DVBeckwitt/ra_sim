@@ -6629,6 +6629,8 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
             "_qr_fit_prefer_current_hit_tables_for_point_only": bool(qr_fit_point_only_projection),
         }
         if _fixed_manual_qr_pair_requires_shared_resolver(measured_entry):
+            pre_fit_prediction_sim_point = _finite_pair(sim_point)
+            pre_fit_prediction_payload = dict(sim_resolution_payload)
             fit_prediction = _resolve_qr_fit_prediction_from_trial_params(
                 measured_entry,
                 local,
@@ -6642,7 +6644,60 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                 or fit_prediction.get("unavailable_reason")
                 or "fit_prediction_unavailable"
             )
-            if bool(fit_prediction.get("available", False)):
+            fit_prediction_available = bool(fit_prediction.get("available", False))
+            provider_branch_resolution_reason = str(
+                sim_resolution_payload.get("hit_table_resolution_reason")
+                or pre_fit_prediction_payload.get("hit_table_resolution_reason")
+                or pre_fit_prediction_payload.get("resolution_reason")
+                or ""
+            )
+            fit_prediction_unavailable_reason = str(
+                fit_prediction.get("dynamic_prediction_unavailable_reason")
+                or fit_prediction.get("unavailable_reason")
+                or fit_prediction.get("resolution_reason")
+                or ""
+            )
+            recovered_provider_branch_point = (
+                not fit_prediction_available
+                and provider_branch_resolution_reason
+                == "provider_local_branch_recovered_stale_peak_index"
+                and fit_prediction_unavailable_reason
+                == "qr_fit_trial_source_rows_builder_unavailable"
+                and bool(
+                    sim_resolution_payload.get(
+                        "projection_available",
+                        pre_fit_prediction_payload.get("projection_available", False),
+                    )
+                )
+                and bool(
+                    sim_resolution_payload.get(
+                        "projection_finite",
+                        pre_fit_prediction_payload.get("projection_finite", False),
+                    )
+                )
+                and not bool(
+                    sim_resolution_payload.get(
+                        "off_detector",
+                        pre_fit_prediction_payload.get("off_detector", False),
+                    )
+                )
+            )
+            recovered_provider_branch_payload: Dict[str, object] = {}
+            if recovered_provider_branch_point and pre_fit_prediction_sim_point is None:
+                (
+                    pre_fit_prediction_sim_point,
+                    recovered_provider_branch_payload,
+                ) = _resolve_locked_qr_trial_detector_point_from_hit_tables(
+                    measured_entry,
+                    hit_tables=hit_tables,
+                    trusted_full_reflection_local_index_map=full_reflection_local_index_map,
+                )
+                recovered_provider_branch_point = bool(
+                    pre_fit_prediction_sim_point is not None
+                    and str(recovered_provider_branch_payload.get("resolution_reason") or "")
+                    == "provider_local_branch_recovered_stale_peak_index"
+                )
+            if fit_prediction_available:
                 nominal_detector = fit_prediction.get("sim_nominal_detector_px")
                 try:
                     nominal_col = float(np.asarray(nominal_detector, dtype=float).reshape(-1)[0])
@@ -6668,6 +6723,24 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                     sim_point = None
                     sim_reason = "fit_prediction_nominal_detector_unavailable"
                     sim_resolution_payload["resolution_reason"] = str(sim_reason)
+            elif recovered_provider_branch_point:
+                sim_point = pre_fit_prediction_sim_point
+                sim_reason = "provider_local_branch_recovered_stale_peak_index"
+                sim_resolution_payload.update(dict(recovered_provider_branch_payload))
+                sim_resolution_payload["resolution_reason"] = str(sim_reason)
+                sim_resolution_payload["hit_table_resolution_used_for_dynamic_reanchor"] = True
+                for key in (
+                    "projection_available",
+                    "projection_finite",
+                    "off_detector",
+                    "hit_table_row_count",
+                    "valid_row_count",
+                    "requested_source_peak_index",
+                    "requested_source_row_index",
+                    "resolution_subreason",
+                ):
+                    if key in pre_fit_prediction_payload:
+                        sim_resolution_payload[key] = pre_fit_prediction_payload.get(key)
             else:
                 sim_point = None
 
@@ -7493,6 +7566,71 @@ def _evaluate_geometry_fit_dataset_dynamic_point_matches(
                     }
                 )
             continue
+
+        if (
+            isinstance(fit_prediction, Mapping)
+            and not bool(fit_prediction.get("available", False))
+            and bool(sim_resolution_payload.get("hit_table_resolution_used_for_dynamic_reanchor"))
+            and sim_two_theta_arr.size >= 1
+            and sim_phi_arr.size >= 1
+            and np.isfinite(sim_two_theta_arr[0])
+            and np.isfinite(sim_phi_arr[0])
+        ):
+            dynamic_reanchor_projection_source = (
+                "provider_local_branch_dynamic_reanchor_projection"
+            )
+            projected_caked = [
+                float(sim_two_theta_arr[0]),
+                float(sim_phi_arr[0]),
+            ]
+            fit_prediction = dict(fit_prediction)
+            fit_prediction.update(
+                {
+                    "available": True,
+                    "unavailable_reason": None,
+                    "dynamic_prediction_unavailable_reason": None,
+                    "prediction_source": dynamic_reanchor_projection_source,
+                    "fit_prediction_source": dynamic_reanchor_projection_source,
+                    "prediction_role": QR_PREDICTION_ROLE_OBJECTIVE_TRIAL,
+                    "fit_prediction_is_dynamic": True,
+                    "fit_prediction_is_dynamic_candidate": True,
+                    "fit_prediction_resolver_function": dynamic_reanchor_projection_source,
+                    "resolution_reason": str(sim_reason),
+                    "sim_nominal_detector_px": [float(sim_col), float(sim_row)],
+                    "sim_nominal_detector_display_px": [float(sim_col), float(sim_row)],
+                    "sim_nominal_detector_native_px": [float(sim_col), float(sim_row)],
+                    "sim_refined_detector_native_px": [float(sim_col), float(sim_row)],
+                    "fit_prediction_detector_native_px": [float(sim_col), float(sim_row)],
+                    "fit_prediction_detector_display_px": [float(sim_col), float(sim_row)],
+                    "final_prediction_detector_native_px": [float(sim_col), float(sim_row)],
+                    "final_prediction_detector_display_px": [float(sim_col), float(sim_row)],
+                    "sim_nominal_projection_input_px": [float(sim_col), float(sim_row)],
+                    "sim_nominal_projection_input_frame": str(sim_input_frame),
+                    "sim_nominal_caked_deg": list(projected_caked),
+                    "sim_refined_caked_deg": list(projected_caked),
+                    "fit_prediction_caked_deg": list(projected_caked),
+                    "predicted_caked_deg": list(projected_caked),
+                    "objective_sim_caked_deg": list(projected_caked),
+                    "optimizer_simulated_source_two_theta_phi": list(projected_caked),
+                    "fit_prediction_caked_authority": dynamic_reanchor_projection_source,
+                    "sim_refined_caked_authority": dynamic_reanchor_projection_source,
+                    "optimizer_source_source": dynamic_reanchor_projection_source,
+                    "objective_source_authority": dynamic_reanchor_projection_source,
+                    "source_authority_match": True,
+                    "projection_meta": dict(simulated_projection_meta),
+                    "params_signature": _fit_prediction_trial_params_signature(local),
+                    "simulation_cache_signature": _fit_prediction_array_signature(sim_buffer),
+                    "detector_simulation_signature": _fit_prediction_array_signature(sim_buffer),
+                    "source_rows_rebuilt_or_reused": None,
+                    "reuse_valid_for_same_params_signature": None,
+                    "stale_prediction_cache_used_for_trial_params": False,
+                    "used_sim_nominal_caked_for_objective": False,
+                    "used_sim_refined_caked": True,
+                    "used_exact_projector": bool(
+                        simulated_projection_meta.get("valid", False)
+                    ),
+                }
+            )
 
         if pending_reanchor_acceptance and event is not None:
             after_identity = pending_reanchor_after_identity or (

@@ -323,6 +323,11 @@ class FiniteStackControlsViewState:
     frame: Any = None
     finite_stack_var: Any = None
     finite_stack_checkbutton: Any = None
+    thickness_row: Any = None
+    film_thickness_nm_var: Any = None
+    film_thickness_scale: Any = None
+    film_thickness_entry_var: Any = None
+    film_thickness_entry: Any = None
     layers_row: Any = None
     stack_layers_var: Any = None
     layers_scale: Any = None

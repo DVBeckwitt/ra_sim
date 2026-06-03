@@ -43,6 +43,7 @@ ROD_POINTS_PER_GZ_MIN = 10
 ROD_POINTS_PER_GZ_MAX = 2000
 EVENTS_PER_BEAM_PHASE_MIN = 1
 EVENTS_PER_BEAM_PHASE_MAX = 1000
+DEFAULT_FINITE_STACK_FILM_THICKNESS_NM = 50.0
 _SF_PRUNE_RETAIN_BASE = 0.9997
 _SF_PRUNE_RETAIN_MAX = 0.99998
 _SF_PRUNE_RETAIN_MIN = 0.90
@@ -544,6 +545,63 @@ def format_finite_stack_layer_count(value: object) -> str:
     """Format one finite-stack layer count for entry display."""
 
     return str(normalize_finite_stack_layer_count(value, 1))
+
+
+def normalize_finite_stack_thickness_nm(
+    raw_value: object,
+    fallback: object,
+) -> float:
+    """Normalize one finite-stack film-thickness input to a positive nm value."""
+
+    normalized = parse_sampling_float(
+        raw_value,
+        fallback,
+        minimum=None,
+        maximum=None,
+    )
+    if np.isfinite(normalized) and normalized > 0.0:
+        return float(normalized)
+
+    fallback_value = parse_sampling_float(
+        fallback,
+        DEFAULT_FINITE_STACK_FILM_THICKNESS_NM,
+        minimum=None,
+        maximum=None,
+    )
+    if np.isfinite(fallback_value) and fallback_value > 0.0:
+        return float(fallback_value)
+    return float(DEFAULT_FINITE_STACK_FILM_THICKNESS_NM)
+
+
+def format_finite_stack_thickness_nm(value: object) -> str:
+    """Format one finite-stack film thickness for entry display."""
+
+    normalized = normalize_finite_stack_thickness_nm(
+        value,
+        DEFAULT_FINITE_STACK_FILM_THICKNESS_NM,
+    )
+    return f"{normalized:.6g}"
+
+
+def finite_stack_layers_from_thickness_nm(
+    *,
+    film_thickness_nm: object,
+    c_axis_angstrom: object,
+) -> int:
+    """Convert film thickness in nm to the finite-stack layer count."""
+
+    thickness_nm = normalize_finite_stack_thickness_nm(
+        film_thickness_nm,
+        DEFAULT_FINITE_STACK_FILM_THICKNESS_NM,
+    )
+    try:
+        c_axis_value = float(str(c_axis_angstrom).strip().replace(",", ""))
+    except (TypeError, ValueError):
+        c_axis_value = float("nan")
+    if not np.isfinite(c_axis_value) or c_axis_value <= 0.0:
+        return 1
+    layer_spacing_nm = float(c_axis_value) * 0.1
+    return max(1, int(round(thickness_nm / layer_spacing_nm)))
 
 
 def normalize_finite_stack_phase_delta_expression(
